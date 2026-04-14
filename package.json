@@ -1,13 +1,16 @@
 {
-  "name": "redditx-ingest",
-  "version": "1.0.0",
-  "description": "NSFW Media Ingestion & Gallery",
+  "name": "prism",
+  "version": "2.0.0",
+  "description": "PRISM - NSFW Media Discovery Platform",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.18.2"
+    "better-sqlite3": "^11.7.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.18.2",
+    "uuid": "^11.0.5"
   },
   "engines": {
     "node": ">=18.0.0"

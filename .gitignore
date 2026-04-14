@@ -1,3 +1,9 @@
+# Database
+data/
+*.db
+*.db-journal
+*.db-wal
+
 # Logs
 logs
 *.log

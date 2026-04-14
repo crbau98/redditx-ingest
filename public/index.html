@@ -1,0 +1,1372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PRISM - Media Discovery</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ===== DESIGN SYSTEM ===== */
+:root {
+  --bg: #0a0a0f;
+  --surface: #12121a;
+  --surface-2: #1a1a26;
+  --surface-3: #222233;
+  --border: #2a2a3d;
+  --border-hover: #3d3d55;
+  --text: #e8e8f0;
+  --text-muted: #8888a8;
+  --text-faint: #555570;
+  --accent: #8b5cf6;
+  --accent-hover: #7c3aed;
+  --accent-glow: rgba(139, 92, 246, 0.15);
+  --secondary: #06b6d4;
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --gradient: linear-gradient(135deg, #8b5cf6, #06b6d4);
+  --glass: rgba(10, 10, 15, 0.8);
+  --glass-border: rgba(255,255,255,0.06);
+  --radius: 12px;
+  --radius-sm: 8px;
+  --radius-xs: 6px;
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --shadow: 0 8px 32px rgba(0,0,0,0.5);
+  --shadow-lg: 0 16px 64px rgba(0,0,0,0.6);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { background: var(--bg); color: var(--text); font-family: var(--font); min-height: 100vh; overflow-x: hidden; }
+::selection { background: var(--accent); color: #fff; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-hover); }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+button, input, select, textarea { font-family: var(--font); }
+
+/* ===== AGE GATE ===== */
+#age-gate {
+  position: fixed; inset: 0; z-index: 9999;
+  background: var(--bg);
+  display: flex; align-items: center; justify-content: center; flex-direction: column;
+  text-align: center; padding: 24px;
+}
+#age-gate .ag-card {
+  max-width: 420px; width: 100%;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 16px; padding: 48px 36px;
+  box-shadow: var(--shadow-lg);
+}
+#age-gate .ag-logo {
+  font-size: 42px; font-weight: 700; letter-spacing: -1px;
+  background: var(--gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  margin-bottom: 8px;
+}
+#age-gate .ag-sub { font-size: 12px; text-transform: uppercase; letter-spacing: 3px; color: var(--text-muted); margin-bottom: 32px; }
+#age-gate .ag-msg { font-size: 15px; line-height: 1.7; color: var(--text-muted); margin-bottom: 32px; }
+#age-gate .ag-msg strong { color: var(--text); }
+#age-gate .ag-btn {
+  display: inline-block; padding: 14px 48px;
+  background: var(--gradient); color: #fff; font-weight: 600; font-size: 15px;
+  border: none; border-radius: var(--radius-sm); cursor: pointer;
+  transition: all 0.2s; letter-spacing: 0.5px;
+}
+#age-gate .ag-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(139,92,246,0.3); }
+#age-gate .ag-legal { font-size: 11px; color: var(--text-faint); margin-top: 24px; line-height: 1.6; }
+
+/* ===== APP SHELL ===== */
+#app { display: none; }
+
+/* Header */
+.header {
+  position: sticky; top: 0; z-index: 100;
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  background: var(--glass); border-bottom: 1px solid var(--glass-border);
+  padding: 0 32px; height: 64px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.brand { display: flex; align-items: center; gap: 12px; cursor: pointer; }
+.brand h1 {
+  font-size: 24px; font-weight: 700; letter-spacing: -0.5px;
+  background: var(--gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.brand .tag { font-size: 10px; text-transform: uppercase; letter-spacing: 2px; color: var(--text-muted); font-weight: 500; }
+.header-center { flex: 1; max-width: 480px; margin: 0 24px; }
+.search-box {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 0 12px; height: 38px; transition: border-color 0.2s;
+}
+.search-box:focus-within { border-color: var(--accent); }
+.search-box svg { flex-shrink: 0; color: var(--text-muted); }
+.search-box input {
+  flex: 1; background: none; border: none; outline: none;
+  color: var(--text); font-size: 13px;
+}
+.search-box input::placeholder { color: var(--text-faint); }
+.header-right { display: flex; align-items: center; gap: 12px; }
+.icon-btn {
+  width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-radius: var(--radius-xs);
+  background: none; color: var(--text-muted); cursor: pointer; transition: all 0.2s;
+}
+.icon-btn:hover { border-color: var(--accent); color: var(--accent); }
+.icon-btn.active { border-color: var(--accent); color: var(--accent); background: var(--accent-glow); }
+.status-pill {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px;
+  padding: 5px 12px; border-radius: 20px; border: 1px solid var(--border); color: var(--text-muted);
+  transition: all 0.3s;
+}
+.status-pill.running { border-color: var(--success); color: var(--success); box-shadow: 0 0 12px rgba(34,197,94,0.15); }
+.status-pill.paused { border-color: var(--warning); color: var(--warning); }
+
+/* ===== TOOLBAR & STATS ===== */
+.toolbar {
+  display: flex; align-items: center; gap: 12px; padding: 12px 32px;
+  border-bottom: 1px solid var(--border); flex-wrap: wrap;
+}
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 16px; border: 1px solid var(--border); border-radius: var(--radius-xs);
+  background: transparent; color: var(--text-muted); font-size: 12px; font-weight: 500;
+  cursor: pointer; transition: all 0.2s; letter-spacing: 0.3px;
+}
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn-primary {
+  background: var(--gradient); border: none; color: #fff; font-weight: 600;
+}
+.btn-primary:hover { opacity: 0.9; transform: translateY(-1px); box-shadow: 0 4px 16px rgba(139,92,246,0.3); }
+.btn-danger { border-color: var(--danger); color: var(--danger); }
+.btn-danger:hover { background: var(--danger); color: #fff; }
+.btn-success { border-color: var(--success); color: var(--success); }
+.btn-success:hover { background: var(--success); color: #fff; }
+.btn-sm { padding: 5px 10px; font-size: 11px; }
+.divider { width: 1px; height: 24px; background: var(--border); }
+
+select {
+  appearance: none;
+  background: var(--surface-2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%238888a8'/%3E%3C/svg%3E") no-repeat right 10px center;
+  color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-xs);
+  padding: 7px 30px 7px 12px; font-size: 12px; cursor: pointer; transition: border-color 0.2s;
+}
+select:focus { outline: none; border-color: var(--accent); }
+
+.stats-bar {
+  display: flex; gap: 24px; padding: 10px 32px;
+  border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text-muted);
+}
+.stat-item { display: flex; align-items: center; gap: 6px; }
+.stat-item .num { font-weight: 600; font-size: 14px; color: var(--text); font-variant-numeric: tabular-nums; }
+.stat-item .dot { width: 6px; height: 6px; border-radius: 50%; }
+.dot-img { background: var(--accent); }
+.dot-vid { background: var(--secondary); }
+
+/* ===== VIEWS ===== */
+.view { display: none; }
+.view.active { display: block; }
+
+/* ===== MASONRY GALLERY ===== */
+.gallery-wrap { padding: 24px 32px; }
+.gallery { columns: 5 220px; column-gap: 12px; }
+.card {
+  break-inside: avoid; margin-bottom: 12px; border-radius: var(--radius);
+  overflow: hidden; position: relative; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--border);
+  transition: all 0.3s ease;
+}
+.card:hover { transform: translateY(-4px); box-shadow: var(--shadow); border-color: var(--accent); }
+.card img { width: 100%; display: block; transition: opacity 0.4s; min-height: 120px; background: var(--surface-2); }
+.card .overlay {
+  position: absolute; inset: 0;
+  background: linear-gradient(0deg, rgba(0,0,0,0.85) 0%, transparent 50%);
+  opacity: 0; transition: opacity 0.3s; display: flex; flex-direction: column;
+  justify-content: flex-end; padding: 16px;
+}
+.card:hover .overlay { opacity: 1; }
+.card .overlay .card-sub {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px;
+  color: var(--accent); font-weight: 600; margin-bottom: 4px;
+}
+.card .overlay .card-title {
+  font-size: 13px; font-weight: 500; color: #fff; line-height: 1.4;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.card .overlay .card-meta {
+  font-size: 11px; color: var(--text-muted); margin-top: 6px;
+  display: flex; align-items: center; gap: 8px;
+}
+.card .type-badge {
+  position: absolute; top: 10px; left: 10px;
+  font-size: 9px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;
+  padding: 3px 8px; border-radius: 4px;
+  backdrop-filter: blur(8px); background: rgba(0,0,0,0.5);
+  border: 1px solid rgba(255,255,255,0.1); color: var(--text);
+}
+.card .score-badge {
+  position: absolute; top: 10px; right: 10px;
+  font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 4px;
+  backdrop-filter: blur(8px); background: rgba(0,0,0,0.5);
+  border: 1px solid rgba(255,255,255,0.1); color: var(--accent);
+}
+
+/* Skeleton */
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius);
+}
+.skeleton-card { break-inside: avoid; margin-bottom: 12px; border-radius: var(--radius); overflow: hidden; }
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+.sentinel { height: 1px; }
+
+.empty-state {
+  text-align: center; padding: 120px 20px;
+}
+.empty-state h2 {
+  font-size: 28px; font-weight: 700; margin-bottom: 8px;
+  background: var(--gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.empty-state p { color: var(--text-muted); font-size: 14px; max-width: 400px; margin: 0 auto 24px; }
+
+/* ===== LIGHTBOX ===== */
+.lightbox {
+  position: fixed; inset: 0; z-index: 300;
+  background: rgba(0,0,0,0.95); display: none;
+  flex-direction: column; align-items: center;
+  backdrop-filter: blur(8px);
+  overflow-y: auto;
+}
+.lightbox.open { display: flex; }
+.lb-close {
+  position: fixed; top: 20px; right: 28px; z-index: 310;
+  font-size: 24px; color: var(--text-muted); cursor: pointer;
+  width: 40px; height: 40px; display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; border: 1px solid var(--border); transition: all 0.2s;
+  background: rgba(0,0,0,0.5); backdrop-filter: blur(8px);
+}
+.lb-close:hover { color: #fff; border-color: var(--text-muted); }
+.lb-nav {
+  position: fixed; top: 50%; transform: translateY(-50%); z-index: 310;
+  font-size: 28px; color: var(--text-muted); cursor: pointer;
+  width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; border: 1px solid var(--border); transition: all 0.2s;
+  backdrop-filter: blur(8px); background: rgba(0,0,0,0.5);
+}
+.lb-nav:hover { color: #fff; border-color: var(--accent); }
+.lb-prev { left: 20px; }
+.lb-next { right: 20px; }
+.lb-content {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 80px 80px 40px; width: 100%; max-width: 1200px;
+}
+.lb-media { max-width: 100%; max-height: 75vh; object-fit: contain; border-radius: var(--radius); box-shadow: var(--shadow-lg); }
+.lb-info-panel {
+  width: 100%; margin-top: 24px; padding: 24px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.lb-title { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
+.lb-meta { font-size: 13px; color: var(--text-muted); display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 12px; }
+.lb-meta a { color: var(--accent); }
+.lb-ai-desc {
+  font-size: 13px; color: var(--text-muted); padding: 12px; margin-top: 12px;
+  background: var(--surface-2); border-radius: var(--radius-xs); border-left: 3px solid var(--secondary);
+}
+.lb-ai-desc .ai-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--secondary); font-weight: 600; margin-bottom: 4px; }
+.lb-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.lb-tag {
+  font-size: 11px; padding: 3px 10px; border-radius: 20px;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--text-muted);
+  cursor: pointer; transition: all 0.2s;
+}
+.lb-tag:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Related rail */
+.lb-related { width: 100%; margin-top: 24px; }
+.lb-related h4 { font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--text-muted); }
+.related-rail {
+  display: flex; gap: 12px; overflow-x: auto; padding-bottom: 8px;
+}
+.related-card {
+  flex-shrink: 0; width: 160px; border-radius: var(--radius-sm); overflow: hidden;
+  background: var(--surface); border: 1px solid var(--border); cursor: pointer;
+  transition: all 0.2s;
+}
+.related-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.related-card img { width: 100%; height: 120px; object-fit: cover; display: block; }
+.related-card .rc-title { font-size: 11px; padding: 8px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ===== CREATOR PROFILE ===== */
+.creator-view { padding: 32px; max-width: 1200px; margin: 0 auto; }
+.creator-header {
+  display: flex; align-items: center; gap: 24px;
+  padding: 32px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  margin-bottom: 24px;
+}
+.creator-avatar {
+  width: 80px; height: 80px; border-radius: 50%;
+  background: var(--gradient); display: flex; align-items: center; justify-content: center;
+  font-size: 32px; font-weight: 700; color: #fff; flex-shrink: 0;
+}
+.creator-info { flex: 1; }
+.creator-info h2 { font-size: 24px; font-weight: 700; margin-bottom: 4px; }
+.creator-info .handle { font-size: 14px; color: var(--text-muted); margin-bottom: 8px; }
+.creator-info .bio { font-size: 13px; color: var(--text-muted); line-height: 1.6; }
+.creator-badges { display: flex; gap: 8px; margin-top: 8px; }
+.creator-badge {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;
+  padding: 4px 10px; border-radius: 4px;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--text-muted);
+}
+.creator-stats {
+  display: flex; gap: 32px; margin-bottom: 24px;
+}
+.creator-stat { text-align: center; }
+.creator-stat .cs-num { font-size: 24px; font-weight: 700; color: var(--text); }
+.creator-stat .cs-label { font-size: 12px; color: var(--text-muted); }
+.creator-grid { columns: 4 200px; column-gap: 12px; }
+.back-link { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-muted); margin-bottom: 16px; cursor: pointer; }
+.back-link:hover { color: var(--accent); text-decoration: none; }
+
+/* ===== ADMIN PANEL ===== */
+.admin-view { padding: 24px 32px; max-width: 1400px; margin: 0 auto; }
+.admin-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+.admin-header h2 { font-size: 22px; font-weight: 700; }
+.admin-tabs { display: flex; gap: 4px; margin-bottom: 24px; }
+.admin-tab {
+  padding: 10px 20px; font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 1px;
+  color: var(--text-muted); cursor: pointer; border: 1px solid var(--border); border-radius: var(--radius-xs);
+  transition: all 0.2s; background: none;
+}
+.admin-tab:hover { border-color: var(--accent); color: var(--accent); }
+.admin-tab.active { background: var(--accent-glow); border-color: var(--accent); color: var(--accent); }
+.admin-section { display: none; }
+.admin-section.active { display: block; }
+
+/* Dashboard cards */
+.dash-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.dash-card {
+  padding: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.dash-card .dc-num { font-size: 32px; font-weight: 700; color: var(--text); }
+.dash-card .dc-label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
+
+/* Tables */
+.admin-table {
+  width: 100%; border-collapse: collapse; font-size: 13px;
+}
+.admin-table th {
+  text-align: left; padding: 10px 12px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+  color: var(--text-muted); border-bottom: 1px solid var(--border); font-weight: 600;
+}
+.admin-table td {
+  padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--text-muted);
+}
+.admin-table tr:hover td { background: var(--surface-2); }
+
+/* Form elements */
+.form-group { margin-bottom: 16px; }
+.form-group label { display: block; font-size: 12px; font-weight: 500; color: var(--text-muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+.form-input {
+  width: 100%; padding: 10px 14px; background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-xs); color: var(--text); font-size: 13px; transition: border-color 0.2s;
+}
+.form-input:focus { outline: none; border-color: var(--accent); }
+textarea.form-input { min-height: 80px; resize: vertical; }
+
+/* Ingestion config panel */
+.ingest-config {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+  padding: 20px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  margin-bottom: 16px;
+}
+.ingest-controls { display: flex; gap: 8px; margin-bottom: 16px; }
+
+/* Moderation cards */
+.mod-card {
+  display: flex; gap: 16px; padding: 16px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); margin-bottom: 12px; align-items: center;
+}
+.mod-card img { width: 80px; height: 80px; object-fit: cover; border-radius: var(--radius-sm); flex-shrink: 0; }
+.mod-card .mod-info { flex: 1; }
+.mod-card .mod-info h4 { font-size: 14px; margin-bottom: 4px; }
+.mod-card .mod-info p { font-size: 12px; color: var(--text-muted); }
+.mod-actions { display: flex; gap: 6px; }
+
+/* Admin key modal */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 500; background: rgba(0,0,0,0.8);
+  display: none; align-items: center; justify-content: center;
+  backdrop-filter: blur(4px);
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 32px; max-width: 400px; width: 100%;
+}
+.modal h3 { font-size: 18px; margin-bottom: 16px; }
+
+/* ===== ANIMATIONS ===== */
+@keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+.card { animation: fadeUp 0.4s ease both; }
+
+/* ===== RESPONSIVE ===== */
+@media (max-width: 768px) {
+  .header { padding: 0 16px; }
+  .header-center { display: none; }
+  .toolbar, .stats-bar, .gallery-wrap { padding-left: 16px; padding-right: 16px; }
+  .gallery { columns: 2 140px; column-gap: 8px; }
+  .card { margin-bottom: 8px; }
+  .lb-content { padding: 60px 16px 24px; }
+  .lb-nav { display: none; }
+  .creator-header { flex-direction: column; text-align: center; }
+  .creator-grid { columns: 2 140px; }
+  .admin-view { padding: 16px; }
+  .ingest-config { grid-template-columns: 1fr; }
+  .dash-grid { grid-template-columns: repeat(2, 1fr); }
+}
+</style>
+</head>
+<body>
+
+<!-- AGE GATE -->
+<div id="age-gate">
+  <div class="ag-card">
+    <div class="ag-logo">PRISM</div>
+    <div class="ag-sub">Media Discovery</div>
+    <div class="ag-msg">
+      This site contains <strong>explicit adult content</strong> intended for adults <strong>18 years of age or older</strong>.
+      <br><br>
+      By entering, you confirm that you are at least 18 years old and agree to view adult content.
+    </div>
+    <button class="ag-btn" onclick="enterSite()">I am 18+ &mdash; Enter</button>
+    <div class="ag-legal">By entering you confirm that viewing adult content is legal in your jurisdiction.</div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app">
+
+  <!-- HEADER -->
+  <header class="header">
+    <div class="brand" onclick="navigate('gallery')">
+      <h1>PRISM</h1>
+      <span class="tag">Media Discovery</span>
+    </div>
+    <div class="header-center">
+      <div class="search-box">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <input type="text" id="search-input" placeholder="Search media, creators, subreddits..." onkeydown="if(event.key==='Enter')doSearch()">
+      </div>
+    </div>
+    <div class="header-right">
+      <span class="status-pill" id="status-pill">Idle</span>
+      <button class="icon-btn" id="admin-toggle" onclick="toggleAdmin()" title="Admin Panel">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- GALLERY VIEW -->
+  <div id="view-gallery" class="view active">
+    <div class="toolbar">
+      <select id="filter-type" onchange="applyFilters()">
+        <option value="">All Media</option>
+        <option value="image">Images</option>
+        <option value="video">Video</option>
+      </select>
+      <select id="filter-sub" onchange="applyFilters()">
+        <option value="">All Subreddits</option>
+      </select>
+      <select id="filter-sort" onchange="applyFilters()">
+        <option value="recent">Newest</option>
+        <option value="score">Top Score</option>
+        <option value="random">Random</option>
+      </select>
+      <select id="filter-tag" onchange="applyFilters()">
+        <option value="">All Tags</option>
+      </select>
+    </div>
+
+    <div class="stats-bar">
+      <div class="stat-item"><span class="num" id="st-total">0</span> total</div>
+      <div class="stat-item"><span class="dot dot-img"></span><span class="num" id="st-images">0</span> images</div>
+      <div class="stat-item"><span class="dot dot-vid"></span><span class="num" id="st-videos">0</span> video</div>
+    </div>
+
+    <div class="gallery-wrap">
+      <div class="gallery" id="gallery"></div>
+      <div id="gallery-skeleton"></div>
+      <div class="sentinel" id="scroll-sentinel"></div>
+    </div>
+  </div>
+
+  <!-- CREATOR VIEW -->
+  <div id="view-creator" class="view">
+    <div class="creator-view" id="creator-content"></div>
+  </div>
+
+  <!-- ADMIN VIEW -->
+  <div id="view-admin" class="view">
+    <div class="admin-view">
+      <div class="admin-header">
+        <h2>Admin Panel</h2>
+        <a class="back-link" onclick="navigate('gallery')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
+          Back to Gallery
+        </a>
+      </div>
+
+      <div class="admin-tabs">
+        <button class="admin-tab active" onclick="switchAdminTab('dashboard',this)">Dashboard</button>
+        <button class="admin-tab" onclick="switchAdminTab('ingestion',this)">Ingestion</button>
+        <button class="admin-tab" onclick="switchAdminTab('moderation',this)">Moderation</button>
+        <button class="admin-tab" onclick="switchAdminTab('media-mgr',this)">Media</button>
+        <button class="admin-tab" onclick="switchAdminTab('creator-mgr',this)">Creators</button>
+        <button class="admin-tab" onclick="switchAdminTab('settings',this)">Settings</button>
+      </div>
+
+      <!-- Dashboard -->
+      <div id="admin-dashboard" class="admin-section active">
+        <div class="dash-grid" id="dash-cards"></div>
+        <h3 style="font-size:14px;color:var(--text-muted);margin-bottom:12px">Recent Jobs</h3>
+        <table class="admin-table">
+          <thead><tr><th>ID</th><th>Status</th><th>Started</th><th>Items</th></tr></thead>
+          <tbody id="jobs-table"></tbody>
+        </table>
+      </div>
+
+      <!-- Ingestion -->
+      <div id="admin-ingestion" class="admin-section">
+        <div class="ingest-controls">
+          <button class="btn btn-primary" onclick="adminIngestStart()">Start Ingestion</button>
+          <button class="btn" onclick="adminIngestPause()">Pause</button>
+          <button class="btn" onclick="adminIngestResume()">Resume</button>
+          <button class="btn btn-danger" onclick="adminIngestStop()">Stop</button>
+        </div>
+        <div class="ingest-config">
+          <div class="form-group">
+            <label>Subreddits (one per line)</label>
+            <textarea class="form-input" id="ingest-subs" rows="8"></textarea>
+          </div>
+          <div>
+            <div class="form-group">
+              <label>Sort</label>
+              <select id="ingest-sort" class="form-input" style="padding:10px 14px">
+                <option value="hot">Hot</option>
+                <option value="new">New</option>
+                <option value="top">Top</option>
+                <option value="rising">Rising</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Limit per sub</label>
+              <input type="number" class="form-input" id="ingest-limit" value="50" min="1" max="100">
+            </div>
+            <div class="form-group">
+              <label>Min Score</label>
+              <input type="number" class="form-input" id="ingest-minscore" value="0" min="0">
+            </div>
+          </div>
+        </div>
+        <h3 style="font-size:14px;color:var(--text-muted);margin:16px 0 12px">Job History</h3>
+        <table class="admin-table">
+          <thead><tr><th>ID</th><th>Status</th><th>Config</th><th>Stats</th><th>Started</th><th>Completed</th></tr></thead>
+          <tbody id="ingest-jobs-table"></tbody>
+        </table>
+      </div>
+
+      <!-- Moderation -->
+      <div id="admin-moderation" class="admin-section">
+        <div id="mod-queue"></div>
+        <div id="mod-empty" style="display:none" class="empty-state"><h2>Queue Empty</h2><p>No items need moderation right now.</p></div>
+      </div>
+
+      <!-- Media Manager -->
+      <div id="admin-media-mgr" class="admin-section">
+        <div style="display:flex;gap:12px;margin-bottom:16px;align-items:center">
+          <input type="text" class="form-input" id="admin-media-search" placeholder="Search media..." style="max-width:300px" onkeydown="if(event.key==='Enter')loadAdminMedia()">
+          <button class="btn" onclick="loadAdminMedia()">Search</button>
+          <div style="flex:1"></div>
+          <button class="btn btn-success btn-sm" onclick="bulkAction('publish')">Publish Selected</button>
+          <button class="btn btn-sm" onclick="bulkAction('hide')">Hide Selected</button>
+          <button class="btn btn-danger btn-sm" onclick="bulkAction('reject')">Remove Selected</button>
+        </div>
+        <table class="admin-table">
+          <thead><tr><th><input type="checkbox" id="select-all-media" onchange="toggleSelectAll(this)"></th><th>Preview</th><th>Title</th><th>Type</th><th>Sub</th><th>Score</th><th>State</th><th>Actions</th></tr></thead>
+          <tbody id="admin-media-table"></tbody>
+        </table>
+      </div>
+
+      <!-- Creator Manager -->
+      <div id="admin-creator-mgr" class="admin-section">
+        <div style="display:flex;gap:12px;margin-bottom:16px">
+          <input type="text" class="form-input" id="admin-creator-search" placeholder="Search creators..." style="max-width:300px" onkeydown="if(event.key==='Enter')loadAdminCreators()">
+          <button class="btn" onclick="loadAdminCreators()">Search</button>
+        </div>
+        <table class="admin-table">
+          <thead><tr><th>Handle</th><th>Display Name</th><th>Media</th><th>Score</th><th>Scope</th><th>Actions</th></tr></thead>
+          <tbody id="admin-creators-table"></tbody>
+        </table>
+      </div>
+
+      <!-- Settings -->
+      <div id="admin-settings" class="admin-section">
+        <div style="max-width:600px">
+          <div class="form-group">
+            <label>Default Subreddits (JSON array)</label>
+            <textarea class="form-input" id="setting-subs" rows="4"></textarea>
+          </div>
+          <div class="form-group">
+            <label>Admin Key</label>
+            <input type="text" class="form-input" id="setting-admin-key" placeholder="Current key (not shown)">
+          </div>
+          <div class="form-group">
+            <label>Orientation Policy</label>
+            <select class="form-input" id="setting-orientation" style="padding:10px 14px">
+              <option value="strict">Strict (gay only)</option>
+              <option value="moderate">Moderate (gay + uncertain)</option>
+              <option value="permissive">Permissive (all)</option>
+            </select>
+          </div>
+          <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- LIGHTBOX -->
+<div class="lightbox" id="lightbox">
+  <div class="lb-close" onclick="closeLightbox()">&times;</div>
+  <div class="lb-nav lb-prev" onclick="navLightbox(-1)">&#8249;</div>
+  <div class="lb-nav lb-next" onclick="navLightbox(1)">&#8250;</div>
+  <div class="lb-content" id="lb-content"></div>
+</div>
+
+<!-- ADMIN KEY MODAL -->
+<div class="modal-overlay" id="admin-key-modal">
+  <div class="modal">
+    <h3>Admin Access</h3>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">Enter your admin API key to access the admin panel.</p>
+    <div class="form-group">
+      <input type="password" class="form-input" id="admin-key-input" placeholder="Admin API Key" onkeydown="if(event.key==='Enter')submitAdminKey()">
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn" onclick="closeAdminModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitAdminKey()">Enter</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ===== STATE ===== */
+const API = '';
+let state = {
+  media: [],
+  page: 0,
+  loading: false,
+  hasMore: true,
+  currentView: 'gallery',
+  lbIndex: -1,
+  lbItems: [],
+  adminKey: sessionStorage.getItem('prism_admin_key') || '',
+  filters: { type: '', subreddit: '', sort: 'recent', tag: '', q: '' },
+  selectedMedia: new Set()
+};
+
+/* ===== AGE GATE ===== */
+function enterSite() {
+  sessionStorage.setItem('prism_age_verified', '1');
+  document.getElementById('age-gate').style.display = 'none';
+  document.getElementById('app').style.display = '';
+  init();
+}
+
+(function checkAge() {
+  if (sessionStorage.getItem('prism_age_verified') === '1') {
+    document.getElementById('age-gate').style.display = 'none';
+    document.getElementById('app').style.display = '';
+    // defer init to after DOM is ready
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init);
+    } else {
+      init();
+    }
+  }
+})();
+
+/* ===== HELPERS ===== */
+function px(url) {
+  if (!url) return '';
+  if (url.startsWith('/') || url.startsWith('data:')) return url;
+  return API + '/api/proxy?url=' + encodeURIComponent(url);
+}
+
+function mediaSrc(m) {
+  return px(m.preview_url || m.media_url || m.thumbnail_url || '');
+}
+
+function truncate(s, n) {
+  if (!s) return '';
+  return s.length > n ? s.substring(0, n) + '...' : s;
+}
+
+function timeAgo(ts) {
+  if (!ts) return '';
+  const d = new Date(ts + 'Z');
+  const s = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  return Math.floor(s / 86400) + 'd ago';
+}
+
+async function api(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  if (state.adminKey) headers['x-admin-key'] = state.adminKey;
+  const res = await fetch(API + path, { ...opts, headers });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || res.statusText);
+  }
+  return res.json();
+}
+
+/* ===== ROUTING ===== */
+function navigate(view, params) {
+  if (view === 'gallery') {
+    window.location.hash = '#/gallery';
+  } else if (view === 'media') {
+    window.location.hash = '#/media/' + params;
+  } else if (view === 'creator') {
+    window.location.hash = '#/creator/' + params;
+  } else if (view === 'admin') {
+    window.location.hash = '#/admin';
+  }
+}
+
+function handleRoute() {
+  const hash = window.location.hash || '#/gallery';
+  const parts = hash.split('/');
+
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  closeLightbox();
+
+  if (parts[1] === 'media' && parts[2]) {
+    // Open lightbox for this media, show gallery behind
+    document.getElementById('view-gallery').classList.add('active');
+    openLightboxById(parts[2]);
+  } else if (parts[1] === 'creator' && parts[2]) {
+    state.currentView = 'creator';
+    document.getElementById('view-creator').classList.add('active');
+    loadCreator(parts[2]);
+  } else if (parts[1] === 'admin') {
+    state.currentView = 'admin';
+    document.getElementById('view-admin').classList.add('active');
+    loadAdminDashboard();
+  } else {
+    state.currentView = 'gallery';
+    document.getElementById('view-gallery').classList.add('active');
+  }
+}
+
+window.addEventListener('hashchange', handleRoute);
+
+/* ===== INIT ===== */
+let initialized = false;
+function init() {
+  if (initialized) return;
+  initialized = true;
+  loadSubreddits();
+  loadTags();
+  loadStats();
+  loadMedia(true);
+  setupInfiniteScroll();
+  connectSSE();
+  handleRoute();
+  loadDefaultSubs();
+}
+
+/* ===== GALLERY ===== */
+async function loadMedia(reset) {
+  if (state.loading) return;
+  if (!reset && !state.hasMore) return;
+
+  state.loading = true;
+  if (reset) { state.page = 0; state.media = []; state.hasMore = true; document.getElementById('gallery').innerHTML = ''; }
+  showSkeleton(true);
+
+  try {
+    const f = state.filters;
+    let url = `/api/media?page=${state.page}&limit=50&sort=${f.sort}`;
+    if (f.type) url += '&type=' + f.type;
+    if (f.subreddit) url += '&subreddit=' + encodeURIComponent(f.subreddit);
+    if (f.tag) url += '&tag=' + encodeURIComponent(f.tag);
+    if (f.q) url += '&q=' + encodeURIComponent(f.q);
+
+    const data = await api(url);
+    showSkeleton(false);
+
+    if (data.items.length === 0) { state.hasMore = false; if (state.media.length === 0) showEmpty(true); return; }
+    showEmpty(false);
+
+    data.items.forEach(item => {
+      if (!state.media.find(m => m.id === item.id)) {
+        state.media.push(item);
+        renderCard(item);
+      }
+    });
+
+    state.hasMore = data.items.length >= 50;
+    state.page++;
+  } catch (e) {
+    console.error('Failed to load media:', e);
+    showSkeleton(false);
+  } finally {
+    state.loading = false;
+  }
+}
+
+function renderCard(item) {
+  const g = document.getElementById('gallery');
+  const d = document.createElement('div');
+  d.className = 'card';
+  d.dataset.id = item.id;
+  d.style.animationDelay = (Math.random() * 0.15) + 's';
+  d.onclick = () => {
+    state.lbItems = state.media;
+    state.lbIndex = state.media.indexOf(item);
+    navigate('media', item.id);
+  };
+
+  const src = mediaSrc(item);
+  d.innerHTML = `
+    <img src="${src}" loading="lazy" alt="" onerror="this.style.display='none'">
+    <span class="type-badge">${item.media_type || 'media'}</span>
+    <span class="score-badge">${item.score || 0}</span>
+    <div class="overlay">
+      <div class="card-sub">r/${item.subreddit || 'unknown'}</div>
+      <div class="card-title">${truncate(item.title, 80)}</div>
+      <div class="card-meta">
+        <span>${item.author || ''}</span>
+        <span>${timeAgo(item.created_at)}</span>
+      </div>
+    </div>`;
+  g.appendChild(d);
+}
+
+function showSkeleton(show) {
+  const el = document.getElementById('gallery-skeleton');
+  if (show) {
+    let html = '<div class="gallery" style="columns:5 220px;column-gap:12px">';
+    for (let i = 0; i < 15; i++) {
+      const h = 150 + Math.random() * 200;
+      html += `<div class="skeleton-card"><div class="skeleton" style="width:100%;height:${h}px"></div></div>`;
+    }
+    html += '</div>';
+    el.innerHTML = html;
+  } else {
+    el.innerHTML = '';
+  }
+}
+
+function showEmpty(show) {
+  const g = document.getElementById('gallery');
+  if (show && !document.getElementById('empty-msg')) {
+    g.innerHTML = '<div id="empty-msg" class="empty-state"><h2>No Media Yet</h2><p>Start an ingestion from the admin panel to populate the gallery.</p></div>';
+  }
+}
+
+function setupInfiniteScroll() {
+  const sentinel = document.getElementById('scroll-sentinel');
+  if (!sentinel) return;
+  const observer = new IntersectionObserver(entries => {
+    if (entries[0].isIntersecting && !state.loading && state.hasMore) {
+      loadMedia(false);
+    }
+  }, { rootMargin: '400px' });
+  observer.observe(sentinel);
+}
+
+/* ===== FILTERS ===== */
+function applyFilters() {
+  state.filters.type = document.getElementById('filter-type').value;
+  state.filters.subreddit = document.getElementById('filter-sub').value;
+  state.filters.sort = document.getElementById('filter-sort').value;
+  state.filters.tag = document.getElementById('filter-tag').value;
+  loadMedia(true);
+}
+
+function doSearch() {
+  state.filters.q = document.getElementById('search-input').value.trim();
+  navigate('gallery');
+  setTimeout(() => loadMedia(true), 50);
+}
+
+async function loadSubreddits() {
+  try {
+    const subs = await api('/api/subreddits');
+    const sel = document.getElementById('filter-sub');
+    sel.innerHTML = '<option value="">All Subreddits</option>';
+    subs.forEach(s => {
+      const o = document.createElement('option');
+      o.value = s; o.textContent = 'r/' + s;
+      sel.appendChild(o);
+    });
+  } catch (e) { /* ok */ }
+}
+
+async function loadTags() {
+  try {
+    const tags = await api('/api/tags?limit=50');
+    const sel = document.getElementById('filter-tag');
+    sel.innerHTML = '<option value="">All Tags</option>';
+    tags.forEach(t => {
+      const o = document.createElement('option');
+      o.value = t.name; o.textContent = t.name + ' (' + t.usage_count + ')';
+      sel.appendChild(o);
+    });
+  } catch (e) { /* ok */ }
+}
+
+async function loadStats() {
+  try {
+    const s = await api('/api/stats');
+    document.getElementById('st-total').textContent = s.total || 0;
+    document.getElementById('st-images').textContent = s.images || 0;
+    document.getElementById('st-videos').textContent = s.videos || 0;
+    setStatus(s.ingesting ? (s.paused ? 'paused' : 'running') : 'idle');
+  } catch (e) { /* ok */ }
+}
+
+function setStatus(s) {
+  const el = document.getElementById('status-pill');
+  el.textContent = s.charAt(0).toUpperCase() + s.slice(1);
+  el.className = 'status-pill ' + s;
+}
+
+/* ===== SSE ===== */
+function connectSSE() {
+  const es = new EventSource(API + '/api/stream');
+  es.onmessage = function(e) {
+    try {
+      const m = JSON.parse(e.data);
+      if (m.type === 'item') {
+        if (!state.media.find(x => x.id === m.data.id)) {
+          state.media.unshift(m.data);
+          if (state.currentView === 'gallery') {
+            const g = document.getElementById('gallery');
+            const first = g.firstChild;
+            const d = document.createElement('div');
+            d.className = 'card';
+            d.dataset.id = m.data.id;
+            d.onclick = () => {
+              state.lbItems = state.media;
+              state.lbIndex = state.media.indexOf(m.data);
+              navigate('media', m.data.id);
+            };
+            const src = mediaSrc(m.data);
+            d.innerHTML = `
+              <img src="${src}" loading="lazy" alt="" onerror="this.style.display='none'">
+              <span class="type-badge">${m.data.media_type || 'media'}</span>
+              <span class="score-badge">${m.data.score || 0}</span>
+              <div class="overlay">
+                <div class="card-sub">r/${m.data.subreddit || 'unknown'}</div>
+                <div class="card-title">${truncate(m.data.title, 80)}</div>
+                <div class="card-meta"><span>${m.data.author || ''}</span></div>
+              </div>`;
+            if (first) g.insertBefore(d, first); else g.appendChild(d);
+          }
+        }
+      }
+      if (m.type === 'stats') {
+        document.getElementById('st-total').textContent = m.data.total || 0;
+        document.getElementById('st-images').textContent = m.data.images || 0;
+        document.getElementById('st-videos').textContent = m.data.videos || 0;
+      }
+      if (m.type === 'status') setStatus(m.data);
+    } catch (err) { /* ignore parse errors */ }
+  };
+  es.onerror = function() { es.close(); setTimeout(connectSSE, 3000); };
+}
+
+/* ===== LIGHTBOX ===== */
+async function openLightboxById(id) {
+  let item = state.media.find(m => m.id === id);
+  if (!item) {
+    try { item = await api('/api/media/' + id); } catch { return; }
+  }
+  state.lbItems = state.media.length ? state.media : [item];
+  state.lbIndex = state.lbItems.indexOf(item);
+  if (state.lbIndex === -1) { state.lbItems.push(item); state.lbIndex = state.lbItems.length - 1; }
+  renderLightbox(item);
+}
+
+async function renderLightbox(item) {
+  const lb = document.getElementById('lightbox');
+  const content = document.getElementById('lb-content');
+  lb.classList.add('open');
+  document.body.style.overflow = 'hidden';
+
+  const isVideo = item.media_type === 'video';
+  const mediaHtml = isVideo
+    ? `<video class="lb-media" src="${px(item.media_url)}" controls autoplay muted loop></video>`
+    : `<img class="lb-media" src="${px(item.media_url || item.preview_url)}" alt="">`;
+
+  // Fetch related
+  let relatedHtml = '';
+  try {
+    const related = await api('/api/media/' + item.id + '/related?limit=12');
+    if (related.length > 0) {
+      relatedHtml = `<div class="lb-related"><h4>Related</h4><div class="related-rail">
+        ${related.map(r => `<div class="related-card" onclick="event.stopPropagation();navigate('media','${r.id}')">
+          <img src="${mediaSrc(r)}" alt="" loading="lazy" onerror="this.style.display='none'">
+          <div class="rc-title">${truncate(r.title, 40)}</div>
+        </div>`).join('')}
+      </div></div>`;
+    }
+  } catch (e) { /* ok */ }
+
+  const tags = item.tags ? item.tags.map(t => `<span class="lb-tag" onclick="event.stopPropagation();filterByTag('${t.name}')">${t.name}</span>`).join('') : '';
+  const aiDesc = item.ai_description ? `<div class="lb-ai-desc"><div class="ai-label">AI-Generated Description</div>${item.ai_description}</div>` : '';
+
+  content.innerHTML = `
+    ${mediaHtml}
+    <div class="lb-info-panel">
+      <div class="lb-title">${item.title || 'Untitled'}</div>
+      <div class="lb-meta">
+        <span>r/${item.subreddit || 'unknown'}</span>
+        ${item.author ? `<a href="#" onclick="event.preventDefault();event.stopPropagation();closeLightbox();navigate('creator','${item.creator_id || ''}')">${item.author}</a>` : ''}
+        <span>${item.score || 0} pts</span>
+        ${item.source_url ? `<a href="${item.source_url}" target="_blank" rel="noopener">Source</a>` : ''}
+        <span>${timeAgo(item.created_at)}</span>
+      </div>
+      ${item.description ? `<p style="font-size:13px;color:var(--text-muted);margin-bottom:8px">${item.description}</p>` : ''}
+      ${aiDesc}
+      ${tags ? `<div class="lb-tags">${tags}</div>` : ''}
+    </div>
+    ${relatedHtml}`;
+}
+
+function closeLightbox() {
+  document.getElementById('lightbox').classList.remove('open');
+  document.body.style.overflow = '';
+  if (window.location.hash.startsWith('#/media/')) {
+    history.replaceState(null, '', '#/gallery');
+  }
+}
+
+function navLightbox(dir) {
+  const newIdx = state.lbIndex + dir;
+  if (newIdx < 0 || newIdx >= state.lbItems.length) return;
+  state.lbIndex = newIdx;
+  const item = state.lbItems[newIdx];
+  history.replaceState(null, '', '#/media/' + item.id);
+  renderLightbox(item);
+}
+
+document.addEventListener('keydown', function(e) {
+  if (!document.getElementById('lightbox').classList.contains('open')) return;
+  if (e.key === 'Escape') { closeLightbox(); navigate('gallery'); }
+  if (e.key === 'ArrowLeft') navLightbox(-1);
+  if (e.key === 'ArrowRight') navLightbox(1);
+});
+
+function filterByTag(name) {
+  closeLightbox();
+  navigate('gallery');
+  document.getElementById('filter-tag').value = name;
+  state.filters.tag = name;
+  loadMedia(true);
+}
+
+/* ===== CREATOR VIEW ===== */
+async function loadCreator(id) {
+  const el = document.getElementById('creator-content');
+  try {
+    const creator = await api('/api/creators/' + id);
+    const mediaData = await api('/api/media?creator=' + id + '&limit=100');
+
+    const initial = (creator.display_name || creator.primary_handle || '?')[0].toUpperCase();
+    const badges = (creator.sources || []).map(s =>
+      `<span class="creator-badge">${s.source_platform}</span>`
+    ).join('');
+
+    let mediaGrid = '';
+    mediaData.items.forEach(item => {
+      mediaGrid += `<div class="card" onclick="navigate('media','${item.id}')">
+        <img src="${mediaSrc(item)}" loading="lazy" alt="" onerror="this.style.display='none'">
+        <span class="type-badge">${item.media_type}</span>
+        <span class="score-badge">${item.score}</span>
+        <div class="overlay">
+          <div class="card-title">${truncate(item.title, 60)}</div>
+        </div>
+      </div>`;
+    });
+
+    el.innerHTML = `
+      <a class="back-link" onclick="navigate('gallery')">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
+        Back to Gallery
+      </a>
+      <div class="creator-header">
+        <div class="creator-avatar">${initial}</div>
+        <div class="creator-info">
+          <h2>${creator.display_name || creator.primary_handle}</h2>
+          <div class="handle">@${creator.primary_handle}</div>
+          ${creator.bio ? `<div class="bio">${creator.bio}</div>` : ''}
+          <div class="creator-badges">${badges}</div>
+        </div>
+      </div>
+      <div class="creator-stats">
+        <div class="creator-stat"><div class="cs-num">${creator.media_count || 0}</div><div class="cs-label">Media</div></div>
+        <div class="creator-stat"><div class="cs-num">${creator.total_score || 0}</div><div class="cs-label">Total Score</div></div>
+      </div>
+      <div class="creator-grid">${mediaGrid}</div>`;
+  } catch (e) {
+    el.innerHTML = '<div class="empty-state"><h2>Creator Not Found</h2><p>' + e.message + '</p></div>';
+  }
+}
+
+/* ===== ADMIN ===== */
+function toggleAdmin() {
+  if (state.currentView === 'admin') {
+    navigate('gallery');
+    return;
+  }
+  if (!state.adminKey) {
+    document.getElementById('admin-key-modal').classList.add('open');
+    document.getElementById('admin-key-input').focus();
+    return;
+  }
+  navigate('admin');
+}
+
+function submitAdminKey() {
+  state.adminKey = document.getElementById('admin-key-input').value;
+  sessionStorage.setItem('prism_admin_key', state.adminKey);
+  closeAdminModal();
+  navigate('admin');
+}
+
+function closeAdminModal() {
+  document.getElementById('admin-key-modal').classList.remove('open');
+}
+
+function switchAdminTab(tab, el) {
+  document.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.admin-section').forEach(s => s.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('admin-' + tab).classList.add('active');
+
+  if (tab === 'dashboard') loadAdminDashboard();
+  if (tab === 'ingestion') loadAdminIngestion();
+  if (tab === 'moderation') loadAdminModeration();
+  if (tab === 'media-mgr') loadAdminMedia();
+  if (tab === 'creator-mgr') loadAdminCreators();
+  if (tab === 'settings') loadAdminSettings();
+}
+
+async function loadAdminDashboard() {
+  try {
+    const stats = await api('/api/stats');
+    document.getElementById('dash-cards').innerHTML = `
+      <div class="dash-card"><div class="dc-num">${stats.total}</div><div class="dc-label">Total Media</div></div>
+      <div class="dash-card"><div class="dc-num">${stats.creators}</div><div class="dc-label">Creators</div></div>
+      <div class="dash-card"><div class="dc-num">${stats.jobs}</div><div class="dc-label">Jobs Run</div></div>
+      <div class="dash-card"><div class="dc-num">${stats.moderationQueue}</div><div class="dc-label">Mod Queue</div></div>
+    `;
+
+    const jobs = await api('/api/admin/jobs?limit=10');
+    const tbody = document.getElementById('jobs-table');
+    tbody.innerHTML = jobs.map(j => {
+      const s = j.stats ? JSON.parse(j.stats) : {};
+      return `<tr><td style="font-family:monospace;font-size:11px">${j.id.substring(0,8)}</td><td>${j.status}</td><td>${timeAgo(j.started_at)}</td><td>${s.total || 0}</td></tr>`;
+    }).join('');
+  } catch (e) {
+    console.error('Dashboard load failed:', e);
+  }
+}
+
+async function loadAdminIngestion() {
+  try {
+    const jobs = await api('/api/admin/jobs?limit=20');
+    document.getElementById('ingest-jobs-table').innerHTML = jobs.map(j => {
+      const cfg = j.config ? JSON.parse(j.config) : {};
+      const s = j.stats ? JSON.parse(j.stats) : {};
+      return `<tr>
+        <td style="font-family:monospace;font-size:11px">${j.id.substring(0,8)}</td>
+        <td>${j.status}</td>
+        <td style="font-size:11px">${cfg.subs ? cfg.subs.length + ' subs' : ''}</td>
+        <td>${s.total || 0} items</td>
+        <td>${timeAgo(j.started_at)}</td>
+        <td>${j.completed_at ? timeAgo(j.completed_at) : '-'}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) { /* ok */ }
+}
+
+function adminIngestStart() {
+  const subsText = document.getElementById('ingest-subs').value.trim();
+  const subs = subsText ? subsText.split('\n').map(s => s.trim()).filter(Boolean) : undefined;
+  const sort = document.getElementById('ingest-sort').value;
+  const limit = parseInt(document.getElementById('ingest-limit').value) || 50;
+  const minScore = parseInt(document.getElementById('ingest-minscore').value) || 0;
+  api('/api/admin/ingest/start', { method: 'POST', body: JSON.stringify({ subs, sort, limit, minScore }) }).catch(e => alert(e.message));
+}
+
+function adminIngestPause() { api('/api/admin/ingest/pause', { method: 'POST' }).catch(e => alert(e.message)); }
+function adminIngestResume() { api('/api/admin/ingest/resume', { method: 'POST' }).catch(e => alert(e.message)); }
+function adminIngestStop() { api('/api/admin/ingest/stop', { method: 'POST' }).catch(e => alert(e.message)); }
+
+async function loadAdminModeration() {
+  try {
+    const data = await api('/api/admin/moderation/queue');
+    const el = document.getElementById('mod-queue');
+    if (data.items.length === 0) {
+      el.innerHTML = '';
+      document.getElementById('mod-empty').style.display = '';
+      return;
+    }
+    document.getElementById('mod-empty').style.display = 'none';
+    el.innerHTML = data.items.map(m => `
+      <div class="mod-card">
+        <img src="${mediaSrc(m)}" alt="" onerror="this.style.display='none'">
+        <div class="mod-info">
+          <h4>${truncate(m.title, 60)}</h4>
+          <p>r/${m.subreddit} &middot; ${m.author} &middot; Scope: ${m.orientation_scope} &middot; State: ${m.publish_state}</p>
+        </div>
+        <div class="mod-actions">
+          <button class="btn btn-success btn-sm" onclick="moderateItem('${m.id}','approve')">Approve</button>
+          <button class="btn btn-sm" onclick="moderateItem('${m.id}','hide')">Hide</button>
+          <button class="btn btn-danger btn-sm" onclick="moderateItem('${m.id}','reject')">Reject</button>
+        </div>
+      </div>
+    `).join('');
+  } catch (e) { console.error(e); }
+}
+
+async function moderateItem(id, action) {
+  try {
+    await api('/api/admin/media/' + id + '/moderate', { method: 'POST', body: JSON.stringify({ action }) });
+    loadAdminModeration();
+  } catch (e) { alert(e.message); }
+}
+
+async function loadAdminMedia() {
+  try {
+    const q = document.getElementById('admin-media-search').value.trim();
+    const data = await api('/api/media?limit=100' + (q ? '&q=' + encodeURIComponent(q) : '') + '&publishState=');
+    const tbody = document.getElementById('admin-media-table');
+    state.selectedMedia.clear();
+    tbody.innerHTML = data.items.map(m => `
+      <tr>
+        <td><input type="checkbox" class="media-checkbox" value="${m.id}" onchange="toggleMediaSelect('${m.id}',this.checked)"></td>
+        <td><img src="${mediaSrc(m)}" style="width:40px;height:40px;object-fit:cover;border-radius:4px" onerror="this.style.display='none'"></td>
+        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m.title || '-'}</td>
+        <td>${m.media_type}</td>
+        <td>${m.subreddit || '-'}</td>
+        <td>${m.score}</td>
+        <td>${m.publish_state}</td>
+        <td>
+          <button class="btn btn-sm" onclick="navigate('media','${m.id}')">View</button>
+          <button class="btn btn-danger btn-sm" onclick="adminDeleteMedia('${m.id}')">Remove</button>
+        </td>
+      </tr>
+    `).join('');
+  } catch (e) { console.error(e); }
+}
+
+function toggleMediaSelect(id, checked) {
+  if (checked) state.selectedMedia.add(id); else state.selectedMedia.delete(id);
+}
+
+function toggleSelectAll(el) {
+  document.querySelectorAll('.media-checkbox').forEach(cb => {
+    cb.checked = el.checked;
+    toggleMediaSelect(cb.value, el.checked);
+  });
+}
+
+async function bulkAction(action) {
+  if (state.selectedMedia.size === 0) return alert('No items selected');
+  try {
+    await api('/api/admin/media/bulk', { method: 'POST', body: JSON.stringify({ ids: [...state.selectedMedia], action }) });
+    loadAdminMedia();
+  } catch (e) { alert(e.message); }
+}
+
+async function adminDeleteMedia(id) {
+  if (!confirm('Remove this media?')) return;
+  try {
+    await api('/api/admin/media/' + id, { method: 'DELETE' });
+    loadAdminMedia();
+  } catch (e) { alert(e.message); }
+}
+
+async function loadAdminCreators() {
+  try {
+    const q = document.getElementById('admin-creator-search').value.trim();
+    const data = await api('/api/creators?limit=100' + (q ? '&q=' + encodeURIComponent(q) : ''));
+    document.getElementById('admin-creators-table').innerHTML = data.items.map(c => `
+      <tr>
+        <td><a href="#" onclick="event.preventDefault();navigate('creator','${c.id}')">${c.primary_handle}</a></td>
+        <td>${c.display_name || '-'}</td>
+        <td>${c.media_count}</td>
+        <td>${c.total_score}</td>
+        <td>${c.orientation_scope}</td>
+        <td><button class="btn btn-sm" onclick="navigate('creator','${c.id}')">View</button></td>
+      </tr>
+    `).join('');
+  } catch (e) { console.error(e); }
+}
+
+async function loadAdminSettings() {
+  try {
+    const settings = await api('/api/admin/settings');
+    document.getElementById('setting-subs').value = settings.default_subs || '';
+    document.getElementById('setting-orientation').value = settings.orientation_policy || 'strict';
+  } catch (e) { /* ok */ }
+}
+
+async function saveSettings() {
+  try {
+    await api('/api/admin/settings', {
+      method: 'PUT',
+      body: JSON.stringify({
+        default_subs: document.getElementById('setting-subs').value,
+        orientation_policy: document.getElementById('setting-orientation').value
+      })
+    });
+    alert('Settings saved');
+  } catch (e) { alert(e.message); }
+}
+
+async function loadDefaultSubs() {
+  try {
+    const settings = await api('/api/admin/settings');
+    if (settings.default_subs) {
+      document.getElementById('ingest-subs').value = settings.default_subs;
+    }
+  } catch (e) {
+    // Not authed or no settings — fill with defaults
+    document.getElementById('ingest-subs').value = [
+      'gaybrosgonemild','boyswithabs','vlinesabsanddick','gaynsfw','twinks',
+      'massivecocks','hardbodies','gaymuscle','totallystraight','broslikeus',
+      'malepubes','cock','gaybrosgonewild','bulges','jockstraps'
+    ].join('\n');
+  }
+}
+</script>
+</body>
+</html>
