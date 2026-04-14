@@ -84,6 +84,7 @@ button, input, select, textarea { font-family: var(--font); }
 
 /* ===== APP SHELL ===== */
 #app { display: none; }
+#app.visible { display: block; }
 
 /* Header */
 .header {
@@ -230,13 +231,13 @@ select:focus { outline: none; border-color: var(--accent); }
 .sentinel { height: 1px; }
 
 .empty-state {
-  text-align: center; padding: 120px 20px;
+  text-align: center; padding: 120px 20px; column-span: all;
 }
 .empty-state h2 {
   font-size: 28px; font-weight: 700; margin-bottom: 8px;
   background: var(--gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
 }
-.empty-state p { color: var(--text-muted); font-size: 14px; max-width: 400px; margin: 0 auto 24px; }
+.empty-state p { color: var(--text-muted); font-size: 14px; max-width: 400px; margin: 0 auto 24px; line-height: 1.6; }
 
 /* ===== LIGHTBOX ===== */
 .lightbox {
@@ -688,14 +689,14 @@ let state = {
 function enterSite() {
   sessionStorage.setItem('prism_age_verified', '1');
   document.getElementById('age-gate').style.display = 'none';
-  document.getElementById('app').style.display = '';
+  document.getElementById('app').classList.add('visible');
   init();
 }
 
 (function checkAge() {
   if (sessionStorage.getItem('prism_age_verified') === '1') {
     document.getElementById('age-gate').style.display = 'none';
-    document.getElementById('app').style.display = '';
+    document.getElementById('app').classList.add('visible');
     // defer init to after DOM is ready
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', init);
