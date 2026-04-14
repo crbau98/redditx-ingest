@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RedditX - Media Feed</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a0a;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;min-height:100vh}
+.header{background:#111;border-bottom:1px solid #222;padding:12px 24px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
+.header h1{font-size:20px;color:#ff4500}
+.header .status{font-size:13px;padding:4px 12px;border-radius:12px;background:#1a1a1a}
+.controls{display:flex;gap:8px;padding:12px 24px;background:#0f0f0f;border-bottom:1px solid #1a1a1a;flex-wrap:wrap;align-items:center}
+.btn{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;transition:all .2s}
+.btn-run{background:#22c55e;color:#000}.btn-run:hover{background:#16a34a}
+.btn-pause{background:#eab308;color:#000}
+.btn-stop{background:#ef4444;color:#fff}
+.btn-sm{padding:5px 10px;font-size:12px}
+.stats{display:flex;gap:16px;padding:8px 24px;background:#0d0d0d;border-bottom:1px solid #1a1a1a;font-size:13px}
+.stats .stat{display:flex;align-items:center;gap:4px}
+.stats .stat b{color:#ff4500}
+.filters{display:flex;gap:8px;padding:8px 24px;background:#0d0d0d;border-bottom:1px solid #1a1a1a;flex-wrap:wrap}
+.filters select,.filters input{background:#1a1a1a;color:#e0e0e0;border:1px solid #333;border-radius:4px;padding:4px 8px;font-size:12px}
+.tabs{display:flex;gap:0;padding:0 24px;background:#0d0d0d;border-bottom:1px solid #1a1a1a}
+.tab{padding:10px 20px;cursor:pointer;font-size:13px;border-bottom:2px solid transparent;color:#888;transition:all .2s}
+.tab.active{color:#ff4500;border-bottom-color:#ff4500}
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:4px;padding:12px}
+.card{position:relative;aspect-ratio:1;overflow:hidden;border-radius:4px;cursor:pointer;background:#111}
+.card img{width:100%;height:100%;object-fit:cover;transition:transform .3s}
+.card:hover img{transform:scale(1.05)}
+.card .badge{position:absolute;top:6px;left:6px;background:rgba(0,0,0,.7);color:#ff4500;padding:2px 6px;border-radius:3px;font-size:10px;font-weight:600}
+.card .score{position:absolute;bottom:6px;right:6px;background:rgba(0,0,0,.7);color:#fff;padding:2px 6px;border-radius:3px;font-size:10px}
+.card .sub{position:absolute;bottom:6px;left:6px;background:rgba(255,69,0,.8);color:#fff;padding:2px 6px;border-radius:3px;font-size:10px}
+.lightbox{position:fixed;inset:0;background:rgba(0,0,0,.95);z-index:200;display:none;align-items:center;justify-content:center;flex-direction:column}
+.lightbox.open{display:flex}
+.lightbox img{max-width:90vw;max-height:80vh;object-fit:contain;border-radius:8px}
+.lightbox .info{color:#aaa;font-size:13px;margin-top:12px;text-align:center;max-width:600px}
+.lightbox .info a{color:#ff4500}
+.lightbox .close{position:absolute;top:16px;right:24px;font-size:28px;color:#fff;cursor:pointer}
+.lightbox .nav{position:absolute;top:50%;font-size:36px;color:#fff;cursor:pointer;padding:20px;user-select:none}
+.lightbox .nav.prev{left:12px}
+.lightbox .nav.next{right:12px}
+.log-panel{background:#0a0a0a;padding:12px 24px;max-height:60vh;overflow-y:auto;font-family:monospace;font-size:12px;line-height:1.8}
+.log-panel .log-line{border-bottom:1px solid #111;padding:2px 0}
+.log-panel .INFO{color:#60a5fa}
+.log-panel .OK{color:#22c55e}
+.log-panel .WARN{color:#eab308}
+.log-panel .ERR{color:#ef4444}
+.empty{text-align:center;padding:80px 20px;color:#555;font-size:16px}
+.load-more{text-align:center;padding:20px}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>RedditX Media Feed</h1>
+  <span class="status" id="status">Idle</span>
+</div>
+
+<div class="controls">
+  <button class="btn btn-run" onclick="startIngest()">Run Ingestion</button>
+  <button class="btn btn-pause" onclick="pauseIngest()">Pause</button>
+  <button class="btn btn-stop" onclick="stopIngest()">Stop</button>
+</div>
+
+<div class="stats">
+  <div class="stat">Total: <b id="st-total">0</b></div>
+  <div class="stat">Images: <b id="st-images">0</b></div>
+  <div class="stat">Videos: <b id="st-videos">0</b></div>
+  <div class="stat">Dupes: <b id="st-dupes">0</b></div>
+  <div class="stat">Errors: <b id="st-errors">0</b></div>
+</div>
+
+<div class="filters">
+  <select id="filter-sub"><option value="">All Subreddits</option></select>
+  <select id="filter-type">
+    <option value="">All Types</option>
+    <option value="image">Images</option>
+    <option value="video">Videos</option>
+  </select>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('gallery')">Gallery</div>
+  <div class="tab" onclick="switchTab('logs')">Logs</div>
+</div>
+
+<div id="gallery-view">
+  <div class="gallery" id="gallery"></div>
+  <div class="load-more"><button class="btn btn-sm btn-run" onclick="loadMore()">Load More</button></div>
+</div>
+
+<div id="log-view" style="display:none">
+  <div class="log-panel" id="log-panel"></div>
+</div>
+
+<div class="lightbox" id="lightbox">
+  <span class="close" onclick="closeLB()">&times;</span>
+  <span class="nav prev" onclick="navLB(-1)">&#8249;</span>
+  <span class="nav next" onclick="navLB(1)">&#8250;</span>
+  <img id="lb-img" src="" alt="">
+  <div class="info" id="lb-info"></div>
+</div>
+
+<script>
+const BASE = window.location.origin;
+let allItems = [];
+let page = 0;
+let lbIdx = 0;
+let knownSubs = new Set();
+
+function proxyUrl(url) {
+  if (!url) return '';
+  if (url.startsWith('/') || url.startsWith(BASE)) return url;
+  return BASE + '/api/proxy?url=' + encodeURIComponent(url);
+}
+
+function imgSrc(item) {
+  if (item.previewUrl) return proxyUrl(item.previewUrl);
+  if (item.mediaUrl && item.mediaType === 'image') return proxyUrl(item.mediaUrl);
+  if (item.thumbnail && item.thumbnail.startsWith('http')) return proxyUrl(item.thumbnail);
+  return 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect fill="%23222" width="200" height="200"/><text x="50%25" y="50%25" fill="%23555" text-anchor="middle" dy=".3em" font-size="14">No Preview</text></svg>';
+}
+
+function addCard(item) {
+  const g = document.getElementById('gallery');
+  const d = document.createElement('div');
+  d.className = 'card';
+  d.onclick = () => openLB(allItems.indexOf(item));
+  d.innerHTML = `<img src="${imgSrc(item)}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg xmlns=&quot;http://www.w3.org/2000/svg&quot; width=&quot;200&quot; height=&quot;200&quot;><rect fill=&quot;%23222&quot; width=&quot;200&quot; height=&quot;200&quot;/><text x=&quot;50%25&quot; y=&quot;50%25&quot; fill=&quot;%23555&quot; text-anchor=&quot;middle&quot; dy=&quot;.3em&quot; font-size=&quot;14&quot;>Error</text></svg>'">`
+    + `<span class="badge">${item.mediaType}</span>`
+    + `<span class="sub">r/${item.subreddit}</span>`
+    + `<span class="score">${item.score}</span>`;
+  g.appendChild(d);
+
+  if (!knownSubs.has(item.subreddit)) {
+    knownSubs.add(item.subreddit);
+    const sel = document.getElementById('filter-sub');
+    const opt = document.createElement('option');
+    opt.value = item.subreddit; opt.textContent = 'r/' + item.subreddit;
+    sel.appendChild(opt);
+  }
+}
+
+function openLB(idx) {
+  lbIdx = idx;
+  const item = allItems[idx];
+  if (!item) return;
+  document.getElementById('lb-img').src = item.mediaUrl ? proxyUrl(item.mediaUrl) : imgSrc(item);
+  document.getElementById('lb-info').innerHTML = `<b>${item.title}</b><br>r/${item.subreddit} | Score: ${item.score} | <a href="${item.permalink}" target="_blank">Reddit</a>`;
+  document.getElementById('lightbox').classList.add('open');
+}
+
+function closeLB() { document.getElementById('lightbox').classList.remove('open'); }
+function navLB(dir) { openLB(Math.max(0, Math.min(allItems.length - 1, lbIdx + dir))); }
+
+document.addEventListener('keydown', e => {
+  if (!document.getElementById('lightbox').classList.contains('open')) return;
+  if (e.key === 'Escape') closeLB();
+  if (e.key === 'ArrowLeft') navLB(-1);
+  if (e.key === 'ArrowRight') navLB(1);
+});
+
+function switchTab(t) {
+  document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('gallery-view').style.display = t === 'gallery' ? '' : 'none';
+  document.getElementById('log-view').style.display = t === 'logs' ? '' : 'none';
+}
+
+function updateStats(s) {
+  document.getElementById('st-total').textContent = s.total;
+  document.getElementById('st-images').textContent = s.images;
+  document.getElementById('st-videos').textContent = s.videos;
+  document.getElementById('st-dupes').textContent = s.dupes;
+  document.getElementById('st-errors').textContent = s.errors;
+}
+
+function addLog(entry) {
+  const p = document.getElementById('log-panel');
+  const d = document.createElement('div');
+  d.className = 'log-line ' + entry.level;
+  d.textContent = `[${entry.ts.substring(11,19)}] [${entry.level}] ${entry.msg}`;
+  p.appendChild(d);
+  p.scrollTop = p.scrollHeight;
+}
+
+async function startIngest() {
+  document.getElementById('gallery').innerHTML = '';
+  allItems = []; page = 0; knownSubs.clear();
+  document.getElementById('filter-sub').innerHTML = '<option value="">All Subreddits</option>';
+  await fetch(BASE + '/api/ingest/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+}
+async function pauseIngest() { await fetch(BASE + '/api/ingest/pause', { method: 'POST' }); }
+async function stopIngest() { await fetch(BASE + '/api/ingest/stop', { method: 'POST' }); }
+
+async function loadMore() {
+  page++;
+  const sub = document.getElementById('filter-sub').value;
+  const type = document.getElementById('filter-type').value;
+  const res = await fetch(`${BASE}/api/items?page=${page}&limit=50&sub=${sub}&type=${type}`);
+  const data = await res.json();
+  data.items.forEach(item => { if (!allItems.find(i => i.id === item.id)) { allItems.push(item); addCard(item); } });
+}
+
+// Filters
+document.getElementById('filter-sub').addEventListener('change', refilter);
+document.getElementById('filter-type').addEventListener('change', refilter);
+async function refilter() {
+  const sub = document.getElementById('filter-sub').value;
+  const type = document.getElementById('filter-type').value;
+  const res = await fetch(`${BASE}/api/items?page=0&limit=200&sub=${sub}&type=${type}`);
+  const data = await res.json();
+  document.getElementById('gallery').innerHTML = '';
+  allItems = data.items;
+  allItems.forEach(addCard);
+}
+
+// SSE
+function connectSSE() {
+  const es = new EventSource(BASE + '/api/stream');
+  es.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'item') { allItems.push(msg.data); addCard(msg.data); }
+    if (msg.type === 'stats') updateStats(msg.data);
+    if (msg.type === 'log') addLog(msg.data);
+    if (msg.type === 'status') document.getElementById('status').textContent = msg.data.charAt(0).toUpperCase() + msg.data.slice(1);
+  };
+  es.onerror = () => { setTimeout(connectSSE, 3000); es.close(); };
+}
+
+connectSSE();
+fetch(BASE + '/api/status').then(r => r.json()).then(s => {
+  document.getElementById('status').textContent = s.ingesting ? (s.paused ? 'Paused' : 'Running') : 'Idle';
+  updateStats(s.stats);
+  return fetch(BASE + '/api/items?page=0&limit=200');
+}).then(r => r.json()).then(d => { allItems = d.items; d.items.forEach(addCard); });
+</script>
+</body>
+</html>
