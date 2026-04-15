@@ -1,15 +1,21 @@
 {
   "name": "prism",
-  "version": "2.0.0",
-  "description": "PRISM - NSFW Media Discovery Platform",
+  "version": "3.0.0",
+  "description": "PRISM - Advanced NSFW Media Discovery Platform with AI-powered tagging, scheduled ingestion, and modern UI",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "node --watch server.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.7.0",
+    "compression": "^1.7.4",
     "dotenv": "^16.4.7",
     "express": "^4.18.2",
+    "express-rate-limit": "^7.4.1",
+    "helmet": "^8.0.0",
+    "morgan": "^1.10.0",
+    "node-cron": "^3.0.3",
     "uuid": "^11.0.5"
   },
   "engines": {
