@@ -7,15 +7,13 @@ RUN npm ci --production
 
 COPY . .
 
-EXPOSE 3141
+# Create data directory for SQLite
+RUN mkdir -p /data
 
 ENV NODE_ENV=production
-ENV PORT=3141
 ENV DB_PATH=/data/prism.db
 
-VOLUME /data
-
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-  CMD wget -q --spider http://localhost:3141/api/health || exit 1
+# Railway sets PORT dynamically, this is just a default fallback
+EXPOSE ${PORT:-3141}
 
 CMD ["node", "server.js"]
