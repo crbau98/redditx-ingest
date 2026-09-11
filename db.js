@@ -244,8 +244,16 @@ module.exports = {
   deleteMedia(id) { return deleteMedia.run(id); },
 
   listMedia({ page = 0, limit = 50, type, subreddit, creator, tag, sort = 'recent', q, publishState = 'published' } = {}) {
-    let where = ['publish_state = ?'];
-    let params = [publishState];
+    let where = [];
+    let params = [];
+
+    // Empty / 'all' = every non-removed item (admin use); default public is published
+    if (!publishState || publishState === 'all') {
+      where.push("publish_state != 'removed'");
+    } else {
+      where.push('publish_state = ?');
+      params.push(publishState);
+    }
 
     if (type) { where.push('media_type = ?'); params.push(type); }
     if (subreddit) { where.push('subreddit = ?'); params.push(subreddit); }
@@ -261,10 +269,11 @@ module.exports = {
     else if (sort === 'random') orderBy = 'RANDOM()';
     else if (sort === 'oldest') orderBy = 'created_at ASC';
 
-    const countSql = `SELECT COUNT(*) as total FROM media WHERE ${where.join(' AND ')}`;
+    const whereSql = where.length ? where.join(' AND ') : '1=1';
+    const countSql = `SELECT COUNT(*) as total FROM media WHERE ${whereSql}`;
     const total = db.prepare(countSql).get(...params).total;
 
-    const dataSql = `SELECT * FROM media WHERE ${where.join(' AND ')} ORDER BY ${orderBy} LIMIT ? OFFSET ?`;
+    const dataSql = `SELECT * FROM media WHERE ${whereSql} ORDER BY ${orderBy} LIMIT ? OFFSET ?`;
     params.push(limit, page * limit);
     const items = db.prepare(dataSql).all(...params);
 
@@ -274,11 +283,45 @@ module.exports = {
   getRelatedMedia(id, limit = 12) {
     const media = getMediaById.get(id);
     if (!media) return [];
-    return db.prepare(`
-      SELECT * FROM media
-      WHERE id != ? AND publish_state = 'published' AND subreddit = ?
-      ORDER BY score DESC LIMIT ?
-    `).all(id, media.subreddit, limit);
+
+    // Prefer same creator, then shared tags, then same subreddit
+    const byCreator = media.creator_id
+      ? db.prepare(`
+          SELECT * FROM media
+          WHERE id != ? AND publish_state = 'published' AND creator_id = ?
+          ORDER BY score DESC LIMIT ?
+        `).all(id, media.creator_id, limit)
+      : [];
+
+    const seen = new Set(byCreator.map(m => m.id));
+    const remaining = limit - byCreator.length;
+
+    let byTag = [];
+    if (remaining > 0) {
+      byTag = db.prepare(`
+        SELECT m.* FROM media m
+        WHERE m.id != ? AND m.publish_state = 'published'
+          AND m.id IN (
+            SELECT mt2.media_id FROM media_tags mt1
+            JOIN media_tags mt2 ON mt1.tag_id = mt2.tag_id
+            WHERE mt1.media_id = ? AND mt2.media_id != ?
+          )
+        ORDER BY m.score DESC LIMIT ?
+      `).all(id, id, id, remaining).filter(m => !seen.has(m.id));
+      byTag.forEach(m => seen.add(m.id));
+    }
+
+    const still = limit - byCreator.length - byTag.length;
+    let bySub = [];
+    if (still > 0 && media.subreddit) {
+      bySub = db.prepare(`
+        SELECT * FROM media
+        WHERE id != ? AND publish_state = 'published' AND subreddit = ?
+        ORDER BY score DESC LIMIT ?
+      `).all(id, media.subreddit, still * 2).filter(m => !seen.has(m.id)).slice(0, still);
+    }
+
+    return [...byCreator, ...byTag, ...bySub].slice(0, limit);
   },
 
   getSubreddits() {
