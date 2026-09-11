@@ -21,11 +21,12 @@ router.get('/stats', (req, res) => {
 
 // Media list
 router.get('/media', (req, res) => {
-  const { page, limit, type, subreddit, creator, tag, sort, q } = req.query;
+  const { page, limit, type, subreddit, creator, tag, sort, q, publishState } = req.query;
   const result = mediaService.list({
     page: parseInt(page) || 0,
     limit: Math.min(parseInt(limit) || 50, 200),
-    type, subreddit, creator, tag, sort, q
+    type, subreddit, creator, tag, sort, q,
+    ...(publishState !== undefined ? { publishState } : {})
   });
   res.json(result);
 });

@@ -4,15 +4,17 @@ A gay-focused NSFW media discovery platform with Reddit ingestion, SQLite persis
 
 ## Features
 
-- **Media Gallery** - Masonry grid with lazy loading, infinite scroll, filtering, and search
-- **Reddit Ingestion** - Automated media fetching from configurable subreddits via Reddit JSON API
-- **Creator Profiles** - Identity system with multi-platform support
-- **Admin Panel** - Dashboard, ingestion controls, moderation queue, media/creator management
-- **Age Gate** - Session-based age verification interstitial
-- **Real-time Updates** - SSE streaming during ingestion
-- **Media Proxy** - All media proxied through the server for privacy
-- **SQLite Persistence** - All data stored in SQLite via better-sqlite3
-- **Railway Ready** - Dockerfile, health checks, persistent volume support
+- **Media Gallery** — Responsive masonry/grid with lazy loading, infinite scroll, filters, and search
+- **Mobile-first shell** — Bottom navigation, filter drawer, mobile search, swipeable lightbox
+- **Saved collection** — Device-local favorites with heart actions and share links
+- **Creators** — Browse and open creator profiles with media grids
+- **Reddit Ingestion** — Automated media fetching from configurable subreddits
+- **Admin Panel** — Dashboard, ingestion controls, moderation queue, media/creator management
+- **Age Gate** — Session-based age verification interstitial
+- **Real-time Updates** — SSE streaming during ingestion
+- **Media Proxy** — Remote media proxied through the server for privacy
+- **SQLite Persistence** — All data stored in SQLite via better-sqlite3
+- **Railway Ready** — Dockerfile, health checks, persistent volume support
 
 ## Quick Start
 

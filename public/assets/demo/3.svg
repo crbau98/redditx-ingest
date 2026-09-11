@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="820">
+  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#334155"/><stop offset="100%" stop-color="#0F1C24"/>
+  </linearGradient></defs>
+  <rect width="100%" height="100%" fill="url(#g)"/>
+  <text x="50%" y="48%" text-anchor="middle" fill="#E8ECF0" font-family="sans-serif" font-size="42" font-weight="700">PRISM</text>
+  <text x="50%" y="56%" text-anchor="middle" fill="#A5F3FC" font-family="sans-serif" font-size="18">demo 3</text>
+</svg>

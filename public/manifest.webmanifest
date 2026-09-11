@@ -1,0 +1,17 @@
+{
+  "name": "PRISM",
+  "short_name": "PRISM",
+  "description": "Curated adult media discovery",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#E8ECF0",
+  "theme_color": "#0D9488",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

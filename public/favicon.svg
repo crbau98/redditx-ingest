@@ -1,11 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <defs>
-    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#8b5cf6"/>
-      <stop offset="100%" stop-color="#06b6d4"/>
-    </linearGradient>
-  </defs>
-  <polygon points="32,6 58,52 6,52" fill="none" stroke="url(#g)" stroke-width="4" stroke-linejoin="round"/>
-  <line x1="32" y1="22" x2="46" y2="46" stroke="url(#g)" stroke-width="2.5" opacity="0.5"/>
-  <line x1="32" y1="22" x2="22" y2="42" stroke="url(#g)" stroke-width="2" opacity="0.3"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <rect width="64" height="64" rx="14" fill="#0F1C24"/>
+  <path d="M12 44 L32 12 L52 44 Z" stroke="#5EEAD4" stroke-width="3" fill="none"/>
+  <path d="M22 44 L32 26 L42 44" stroke="#0D9488" stroke-width="2.5" fill="none"/>
+  <circle cx="32" cy="38" r="3" fill="#38BDF8"/>
 </svg>
