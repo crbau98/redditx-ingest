@@ -2,19 +2,22 @@ const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { sleep } = require('./fetch');
+const { itemPassesQuality, shouldHideExisting, probeMedia } = require('./media-quality');
 const reddit = require('./sources/reddit');
 const ddg = require('./sources/ddg');
 const x = require('./sources/x');
 const web = require('./sources/web');
+const redgifs = require('./sources/redgifs');
 
 const DEFAULT_SUBS = reddit.DEFAULT_SUBS;
 const GAY_SUBS = new Set(DEFAULT_SUBS.map(s => s.toLowerCase()));
+const DEFAULT_SOURCES = ['reddit', 'x', 'redgifs'];
 
 let ingesting = false;
 let paused = false;
 let currentJobId = null;
 let sseClients = [];
-let stats = { total: 0, images: 0, videos: 0, dupes: 0, errors: 0, bySource: {} };
+let stats = { total: 0, images: 0, videos: 0, dupes: 0, skipped: 0, errors: 0, bySource: {} };
 let logs = [];
 
 function getState() {
@@ -39,7 +42,7 @@ function log(level, msg) {
 }
 
 function bumpSource(source, field) {
-  if (!stats.bySource[source]) stats.bySource[source] = { total: 0, dupes: 0, errors: 0 };
+  if (!stats.bySource[source]) stats.bySource[source] = { total: 0, dupes: 0, skipped: 0, errors: 0 };
   stats.bySource[source][field] = (stats.bySource[source][field] || 0) + 1;
 }
 
@@ -77,8 +80,30 @@ async function waitIfPaused() {
   while (paused && ingesting) await sleep(250);
 }
 
-function persistItem(item, source) {
+async function persistItem(item, source) {
   if (!item || !item.mediaUrl) return false;
+
+  if (/redgifs\.com/i.test(item.mediaUrl) && !/\.(mp4|webm)(\?|$)/i.test(item.mediaUrl)) {
+    const resolved = await redgifs.resolveUrl(item.mediaUrl);
+    if (!resolved) {
+      stats.skipped++;
+      bumpSource(source, 'skipped');
+      return false;
+    }
+    item.mediaUrl = resolved.mediaUrl;
+    item.previewUrl = resolved.previewUrl || item.previewUrl;
+    item.mediaType = resolved.mediaType;
+    if (!item.author || item.author === 'web') item.author = resolved.author;
+  }
+
+  const quality = await itemPassesQuality(item);
+  if (!quality.ok) {
+    stats.skipped++;
+    bumpSource(source, 'skipped');
+    return false;
+  }
+  if (quality.url) item.mediaUrl = quality.url;
+
   const hash = crypto.createHash('md5').update(item.mediaUrl).digest('hex');
   if (db.getMediaByHash(hash)) {
     stats.dupes++;
@@ -152,7 +177,7 @@ async function runReddit(config) {
         if (!ingesting) break;
         await waitIfPaused();
         if ((item.score || 0) < minScore) continue;
-        if (persistItem(item, 'reddit')) {
+        if (await persistItem(item, 'reddit')) {
           count++;
           log('OK', `[reddit ${item.mediaType}] r/${sub}: ${(item.title || '').slice(0, 70)}`);
         }
@@ -184,7 +209,7 @@ async function runQueries(sourceName, harvest, queries, limit) {
       for (const item of result.items || []) {
         if (!ingesting) break;
         await waitIfPaused();
-        if (persistItem(item, sourceName)) {
+        if (await persistItem(item, sourceName)) {
           count++;
           log('OK', `[${sourceName} ${item.mediaType}] ${(item.title || query).slice(0, 70)}`);
         }
@@ -209,19 +234,53 @@ function parseList(value, fallback) {
   return fallback;
 }
 
+async function sweepJunkMedia({ probeImgur = true, limit = 400 } = {}) {
+  let hidden = 0;
+  let checked = 0;
+  let offset = 0;
+  log('INFO', 'Sweeping previously ingested junk (stock, dead Imgur, generic web)...');
+
+  while (checked < limit) {
+    const batch = db.listPublishedMediaPage(offset, 100);
+    if (!batch.length) break;
+    for (const row of batch) {
+      checked++;
+      const quick = shouldHideExisting(row);
+      if (quick.hide) {
+        db.hideMedia(row.id, quick.reason);
+        hidden++;
+        continue;
+      }
+      if (probeImgur && /imgur\.com/i.test(row.media_url || '')) {
+        const probe = await probeMedia(row.media_url, 'image');
+        if (!probe.ok) {
+          db.hideMedia(row.id, probe.reason || 'dead imgur');
+          hidden++;
+        }
+      }
+    }
+    offset += batch.length;
+    if (batch.length < 100) break;
+  }
+
+  log('OK', `Sweep complete: hid ${hidden} of ${checked} items`);
+  return { hidden, checked };
+}
+
 async function runIngestion(config = {}) {
   if (ingesting) return { ok: false, msg: 'Already running' };
 
   ingesting = true;
   paused = false;
-  stats = { total: 0, images: 0, videos: 0, dupes: 0, errors: 0, bySource: {} };
+  stats = { total: 0, images: 0, videos: 0, dupes: 0, skipped: 0, errors: 0, bySource: {} };
   logs = [];
 
-  const sources = parseList(config.sources, ['reddit', 'x', 'ddg', 'web']).map(s => s.toLowerCase());
+  const sources = parseList(config.sources, DEFAULT_SOURCES).map(s => s.toLowerCase());
   const enabled = new Set(sources);
   const queries = parseList(config.queries, ddg.DEFAULT_QUERIES);
   const xQueries = parseList(config.xQueries, x.DEFAULT_QUERIES);
   const webQueries = parseList(config.webQueries, web.DEFAULT_QUERIES);
+  const redgifsQueries = parseList(config.redgifsQueries, redgifs.DEFAULT_QUERIES);
 
   const jobId = uuidv4();
   currentJobId = jobId;
@@ -236,9 +295,11 @@ async function runIngestion(config = {}) {
   broadcast({ type: 'status', data: 'running' });
 
   try {
+    if (config.sweep !== false) await sweepJunkMedia({ probeImgur: true, limit: 500 });
     if (enabled.has('reddit')) await runReddit(config);
-    if (enabled.has('ddg') && ingesting) await runQueries('ddg', ddg.harvestQuery, queries, config.limit || 24);
+    if (enabled.has('redgifs') && ingesting) await runQueries('redgifs', redgifs.harvestQuery, redgifsQueries, config.limit || 24);
     if (enabled.has('x') && ingesting) await runQueries('x', x.harvestQuery, xQueries, config.limit || 20);
+    if (enabled.has('ddg') && ingesting) await runQueries('ddg', ddg.harvestQuery, queries, config.limit || 24);
     if (enabled.has('web') && ingesting) await runQueries('web', web.harvestQuery, webQueries, Math.min(config.limit || 12, 20));
 
     db.updateJob({
@@ -260,7 +321,7 @@ async function runIngestion(config = {}) {
 
   ingesting = false;
   currentJobId = null;
-  log('INFO', `Ingestion complete. New: ${stats.total} · dupes: ${stats.dupes} · errors: ${stats.errors}`);
+  log('INFO', `Ingestion complete. New: ${stats.total} · skipped: ${stats.skipped} · dupes: ${stats.dupes} · errors: ${stats.errors}`);
   broadcast({ type: 'status', data: 'idle' });
   broadcast({ type: 'stats', data: stats });
 }
@@ -287,6 +348,7 @@ function resumeIngestion() {
 
 module.exports = {
   DEFAULT_SUBS,
+  DEFAULT_SOURCES,
   getState,
   setSseClients,
   getSseClients,
@@ -295,5 +357,6 @@ module.exports = {
   runIngestion,
   stopIngestion,
   pauseIngestion,
-  resumeIngestion
+  resumeIngestion,
+  sweepJunkMedia
 };

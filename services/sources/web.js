@@ -1,10 +1,11 @@
 const { fetchText } = require('../fetch');
 const { searchWeb } = require('./ddg');
+const { hostTrusted, hostBlocked, normalizeMediaUrl } = require('../media-quality');
 
 const DEFAULT_QUERIES = [
-  'gay male creator nsfw',
-  'gay onlyfans photos',
-  'gay muscle men gallery'
+  'site:imgur.com gay male creator',
+  'site:redgifs.com gay',
+  'site:erome.com gay male',
 ];
 
 function meta(html, prop) {
@@ -26,22 +27,31 @@ function titleOf(html) {
 }
 
 function guessType(url) {
-  if (/\.(mp4|webm|mov)(\?|$)/i.test(url) || /video/i.test(url)) return 'video';
+  if (/\.(mp4|webm|mov)(\?|$)/i.test(url) || /video|redgifs/i.test(url)) return 'video';
   return 'image';
 }
 
+function hostOf(u) {
+  try { return new URL(u).hostname.toLowerCase().replace(/^www\./, ''); }
+  catch { return ''; }
+}
+
 async function extractMediaFromPage(pageUrl) {
+  if (hostBlocked(hostOf(pageUrl)) && !hostTrusted(hostOf(pageUrl))) return null;
   const html = await fetchText(pageUrl, { maxBytes: 800_000, headers: { Accept: 'text/html' } });
   const image = meta(html, 'og:image') || meta(html, 'twitter:image') || meta(html, 'og:image:url');
   const video = meta(html, 'og:video') || meta(html, 'og:video:url') || meta(html, 'twitter:player:stream');
   const mediaUrl = video || image;
   if (!mediaUrl || !/^https?:/i.test(mediaUrl)) return null;
+  const host = hostOf(mediaUrl);
+  if (hostBlocked(host) || !hostTrusted(host)) return null;
+  const mediaType = video ? 'video' : guessType(mediaUrl);
   return {
     title: meta(html, 'og:title') || titleOf(html),
-    mediaUrl,
+    mediaUrl: normalizeMediaUrl(mediaUrl, mediaType) || mediaUrl,
     previewUrl: image || mediaUrl,
-    mediaType: video ? 'video' : guessType(mediaUrl),
-    author: meta(html, 'og:site_name') || 'web'
+    mediaType,
+    author: meta(html, 'og:site_name') || host.split('.')[0] || 'web'
   };
 }
 

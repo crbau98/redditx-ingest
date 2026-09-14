@@ -1,4 +1,5 @@
 const { fetchJSON } = require('../fetch');
+const { hostTrusted, hostBlocked, normalizeMediaUrl } = require('../media-quality');
 
 const DEFAULT_SUBS = [
   'gaybrosgonemild', 'boyswithabs', 'vlinesabsanddick',
@@ -10,6 +11,11 @@ const DEFAULT_SUBS = [
 
 function decodeAmp(s) {
   return String(s || '').replace(/&amp;/g, '&');
+}
+
+function hostOf(url) {
+  try { return new URL(url).hostname.toLowerCase().replace(/^www\./, ''); }
+  catch { return ''; }
 }
 
 function extractFromListingPost(post) {
@@ -33,13 +39,16 @@ function extractFromListingPost(post) {
   }
 
   const url = decodeAmp(d.url || '');
+  const host = hostOf(url);
+
+  if (hostBlocked(host)) return item;
 
   if (/\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i.test(url) || /i\.redd\.it\//i.test(url)) {
     item.mediaType = 'image';
     item.mediaUrl = url;
-  } else if (/imgur\.com\/\w+$/i.test(url) && !/\/a\//i.test(url)) {
-    item.mediaType = 'image';
-    item.mediaUrl = url.replace(/\/+$/, '') + '.jpg';
+  } else if (/imgur\.com\/\w+/i.test(url) && !/\/(a|gallery)\//i.test(url)) {
+    item.mediaType = /gifv|mp4|webm/i.test(url) ? 'video' : 'image';
+    item.mediaUrl = normalizeMediaUrl(url, item.mediaType) || url;
   } else if (d.is_gallery && d.media_metadata) {
     const first = Object.values(d.media_metadata)[0];
     if (first && first.s) {
@@ -50,14 +59,24 @@ function extractFromListingPost(post) {
     item.mediaType = 'video';
     item.mediaUrl = d.media.reddit_video.fallback_url;
   } else if (/redgifs\.com|gfycat\.com/i.test(url)) {
-    item.mediaType = item.previewUrl ? 'image' : 'video';
-    item.mediaUrl = item.previewUrl || url;
-  } else if (item.previewUrl) {
+    item.mediaType = 'video';
+    item.mediaUrl = url;
+    if (item.previewUrl && !hostTrusted(hostOf(item.previewUrl))) item.previewUrl = null;
+  } else if (/v\.redd\.it\//i.test(url) && d.media && d.media.reddit_video) {
+    item.mediaType = 'video';
+    item.mediaUrl = d.media.reddit_video.fallback_url;
+  }
+
+  // Never keep YouTube/stock/external page thumbnails as the media itself.
+  if (!item.mediaUrl && item.previewUrl && hostTrusted(hostOf(item.previewUrl))) {
     item.mediaType = 'image';
     item.mediaUrl = item.previewUrl;
   }
 
   if (item.thumbnail && !String(item.thumbnail).startsWith('http')) item.thumbnail = null;
+  if (item.mediaUrl && hostBlocked(hostOf(item.mediaUrl))) {
+    item.mediaUrl = null;
+  }
   return item;
 }
 
@@ -82,7 +101,6 @@ async function fetchSub(sub, { sort = 'hot', limit = 50 } = {}) {
   try {
     return await fetchOfficial(sub, sort, limit);
   } catch (e) {
-    // Reddit's public JSON API is routinely 403 without OAuth — archive is the working path.
     const items = await fetchArchive(sub, limit);
     items._via = 'arctic-shift';
     items._officialError = e.message;

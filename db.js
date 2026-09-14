@@ -332,6 +332,29 @@ module.exports = {
     return db.prepare('SELECT * FROM media WHERE hash = ?').get(hash);
   },
 
+  listPublishedMediaPage(offset = 0, limit = 200) {
+    return db.prepare(`
+      SELECT id, title, media_url, preview_url, source_platform, creator_id
+      FROM media
+      WHERE publish_state = 'published'
+      ORDER BY created_at DESC
+      LIMIT ? OFFSET ?
+    `).all(limit, offset);
+  },
+
+  hideMedia(id, reason) {
+    db.prepare("UPDATE media SET publish_state = 'hidden', updated_at = datetime('now') WHERE id = ?").run(id);
+    if (reason) {
+      insertModerationAction.run({
+        target_type: 'media',
+        target_id: id,
+        action: 'hide',
+        reason,
+        actor: 'ingest-quality',
+      });
+    }
+  },
+
   isKnownMediaUrl(url) {
     if (!url) return false;
     const row = db.prepare(
