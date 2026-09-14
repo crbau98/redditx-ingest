@@ -42,6 +42,21 @@ router.post('/ingest/resume', (req, res) => {
   res.json({ ok: true });
 });
 
+router.post('/ingest/sweep', async (req, res) => {
+  if (ingestion.getState().ingesting) {
+    return res.status(409).json({ ok: false, error: 'Ingestion is running' });
+  }
+  try {
+    const result = await ingestion.sweepJunkMedia({
+      probeImgur: req.body?.probeImgur !== false,
+      limit: Math.min(parseInt(req.body?.limit, 10) || 800, 2000),
+    });
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 router.get('/jobs', (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 50, 200);
   res.json(db.getJobs(limit));

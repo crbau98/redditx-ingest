@@ -88,4 +88,19 @@ async function fetchJSON(url, opts = {}) {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-module.exports = { request, fetchText, fetchJSON, sleep, isPrivateHost, DEFAULT_UA };
+function hostnameOf(url) {
+  try { return new URL(url).hostname.toLowerCase(); }
+  catch { return ''; }
+}
+
+async function fetchBuffer(url, opts = {}) {
+  const res = await request(url, opts);
+  return {
+    buffer: res.body,
+    status: res.status,
+    contentType: res.headers['content-type'] || '',
+    url: res.url
+  };
+}
+
+module.exports = { request, fetchText, fetchJSON, fetchBuffer, sleep, isPrivateHost, hostnameOf, DEFAULT_UA };

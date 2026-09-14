@@ -153,12 +153,14 @@
           <button class="btn" type="button" onclick="adminIngestPause()">Pause</button>
           <button class="btn" type="button" onclick="adminIngestResume()">Resume</button>
           <button class="btn btn-danger" type="button" onclick="adminIngestStop()">Stop</button>
+          <button class="btn" type="button" onclick="adminIngestSweep()">Hide junk</button>
         </div>
         <div class="source-pills" id="ingest-sources">
           <label class="chip active"><input type="checkbox" value="reddit" checked> Reddit</label>
           <label class="chip active"><input type="checkbox" value="x" checked> X</label>
-          <label class="chip active"><input type="checkbox" value="ddg" checked> DuckDuckGo</label>
-          <label class="chip active"><input type="checkbox" value="web" checked> Web</label>
+          <label class="chip active"><input type="checkbox" value="redgifs" checked> RedGIFs</label>
+          <label class="chip"><input type="checkbox" value="ddg"> Creator hosts (DDG)</label>
+          <label class="chip"><input type="checkbox" value="web"> Open web</label>
         </div>
         <div class="ingest-config">
           <div class="form-group">
@@ -168,10 +170,9 @@
           <div>
             <div class="form-group">
               <label>Search queries (DDG / web, one per line)</label>
-              <textarea class="form-input" id="ingest-queries" rows="5">gay muscle men
-gay male model nsfw
-gay twink men
-onlyfans gay male</textarea>
+              <textarea class="form-input" id="ingest-queries" rows="5">site:imgur.com gay male nsfw
+site:redgifs.com gay muscle
+site:redgifs.com twink</textarea>
             </div>
             <div class="form-group">
               <label>X queries</label>
@@ -198,7 +199,7 @@ site:twitter.com gay male nsfw</textarea>
             </div>
           </div>
         </div>
-        <pre class="ingest-log" id="ingest-log" aria-live="polite">Ready. Start a scan to pull Reddit, X, DuckDuckGo, and the open web.</pre>
+        <pre class="ingest-log" id="ingest-log" aria-live="polite">Ready. Default scan pulls Reddit, X, and RedGIFs creator media — not stock photo search.</pre>
         <h3 style="font-size:14px;color:var(--muted);margin:16px 0 10px">Job history</h3>
         <div class="table-wrap">
           <table class="admin-table">

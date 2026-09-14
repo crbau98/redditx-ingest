@@ -261,6 +261,7 @@
   }
 
   function renderCard(item, container) {
+    if (/image you are requesting does not exist|no longer available|probably deleted/i.test(item.title || '')) return;
     const d = document.createElement('article');
     d.className = 'media-tile';
     d.dataset.id = item.id;
@@ -269,7 +270,7 @@
     d.setAttribute('aria-label', item.title || 'Open media');
     const favOn = state.favorites.has(item.id);
     d.innerHTML = `
-      <img src="${esc(mediaSrc(item))}" loading="lazy" alt="" onerror="this.style.opacity='0.2'">
+      <img src="${esc(mediaSrc(item))}" loading="lazy" alt="" onerror="this.closest('.media-tile')?.remove()">
       <span class="badge type">${esc(item.media_type || 'media')}</span>
       <span class="badge score">${esc(item.score || 0)}</span>
       <button class="fav-btn ${favOn ? 'on' : ''}" type="button" aria-label="Save" data-fav="${esc(item.id)}">${heartSvg(favOn)}</button>
@@ -823,6 +824,7 @@
         queries: lines('ingest-queries'),
         xQueries: lines('ingest-xqueries'),
         webQueries: lines('ingest-queries'),
+        redgifsQueries: ['gay', 'twink', 'muscle', 'jock'],
         sort: $('ingest-sort').value,
         limit: parseInt($('ingest-limit').value, 10) || 40,
         minScore: parseInt($('ingest-minscore').value, 10) || 0
@@ -843,6 +845,10 @@
   window.adminIngestPause = () => api('/api/admin/ingest/pause', { method: 'POST' }).then(() => toast('Paused')).catch(e => toast(e.message, 'err'));
   window.adminIngestResume = () => api('/api/admin/ingest/resume', { method: 'POST' }).then(() => toast('Resumed', 'ok')).catch(e => toast(e.message, 'err'));
   window.adminIngestStop = () => api('/api/admin/ingest/stop', { method: 'POST' }).then(() => toast('Stopped')).catch(e => toast(e.message, 'err'));
+  window.adminIngestSweep = () => api('/api/admin/ingest/sweep', {
+    method: 'POST',
+    body: JSON.stringify({ probeImgur: true, limit: 800 })
+  }).then((r) => toast(`Hid ${r.hidden || 0} junk items`, 'ok')).catch(e => toast(e.message, 'err'));
 
   async function loadAdminModeration() {
     try {
