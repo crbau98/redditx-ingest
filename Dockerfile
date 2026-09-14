@@ -6,11 +6,7 @@ WORKDIR /app
 RUN apk add --no-cache python3 make g++
 
 COPY package*.json ./
-<<<<<<< HEAD
 RUN npm install --omit=dev
-=======
-RUN npm ci --omit=dev && npm cache clean --force
->>>>>>> origin/cursor/multi-source-ingest-ea38
 
 COPY . .
 
