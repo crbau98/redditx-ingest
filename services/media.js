@@ -28,6 +28,10 @@ module.exports = {
     return db.getSubreddits();
   },
 
+  getSourcePlatforms() {
+    return db.getSourcePlatforms();
+  },
+
   getStats() {
     return db.getStats();
   },

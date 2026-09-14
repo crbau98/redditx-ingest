@@ -4,7 +4,8 @@ const { hostTrusted, hostBlocked, normalizeMediaUrl, looksLikeDirectMedia } = re
 const DEFAULT_QUERIES = [
   'site:imgur.com gay male nsfw',
   'site:redgifs.com gay muscle',
-  'site:redgifs.com twink',
+  'site:redgifs.com gay twink',
+  'site:redgifs.com gay jock',
   'site:i.redd.it gay',
 ];
 

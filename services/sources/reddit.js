@@ -6,7 +6,10 @@ const DEFAULT_SUBS = [
   'gaynsfw', 'twinks', 'massivecocks', 'hardbodies', 'gaymuscle',
   'totallystraight', 'broslikeus', 'malepubes', 'cock',
   'gaybrosgonewild', 'bulges', 'jockstraps', 'gayporn',
-  'ladybonersgw', 'mangonewild', 'otters', 'bearsgonewild'
+  'ladybonersgw', 'mangonewild', 'otters', 'bearsgonewild',
+  'gaygifs', 'gayvids', 'amateur_gays', 'gaybears', 'cubs',
+  'daddygonewild', 'hunggay', 'gaykink', 'malemodelsgw',
+  'gaycreampie', 'boysgonewild',
 ];
 
 function decodeAmp(s) {

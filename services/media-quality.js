@@ -139,6 +139,16 @@ function isJunkTitle(title = '') {
   );
 }
 
+const FEMALE_TAGS = /pussy|boobs|busty|lesbian|milf|\bfemale\b|\bwomen\b|\bgirl\b|\btits\b|\bbreasts\b|\bsolo.?female\b/i;
+const MALE_KEEP = /gay|twink|jock|cock|male|man|boy|otter|bear|muscle|\bdl\b|bro|onlyfans.?male/i;
+
+function looksFemaleTagged(text = '') {
+  const blob = String(text || '');
+  if (!FEMALE_TAGS.test(blob)) return false;
+  if (MALE_KEEP.test(blob) && !/pussy|lesbian|milf|busty/.test(blob)) return false;
+  return true;
+}
+
 function classifyUrl(url) {
   const host = hostOf(url);
   if (hostBlocked(host)) return { ok: false, reason: `blocked host ${host}`, host };
@@ -210,6 +220,8 @@ async function probeMedia(url, type) {
 async function itemPassesQuality(item) {
   if (!item?.mediaUrl) return { ok: false, reason: 'missing media url' };
   if (isJunkTitle(item.title)) return { ok: false, reason: 'junk title' };
+  const orientationBlob = [item.title, item.query, item.author, item.subreddit].filter(Boolean).join(' ');
+  if (looksFemaleTagged(orientationBlob)) return { ok: false, reason: 'female-tagged' };
   const type = item.mediaType || item.type || 'image';
   const host = hostOf(item.mediaUrl);
   if (!hostTrusted(host) && !looksLikeDirectMedia(item.mediaUrl)) {
@@ -239,6 +251,7 @@ module.exports = {
   probeMedia,
   itemPassesQuality,
   isJunkTitle,
+  looksFemaleTagged,
   shouldHideExisting,
   looksLikeDirectMedia,
 };

@@ -23,11 +23,11 @@ router.get('/stats', (req, res) => {
 
 // Media list
 router.get('/media', (req, res) => {
-  const { page, limit, type, subreddit, creator, tag, sort, q, publishState } = req.query;
+  const { page, limit, type, subreddit, source, hasCreator, creator, tag, sort, q, publishState } = req.query;
   const result = mediaService.list({
     page: parseInt(page) || 0,
     limit: Math.min(parseInt(limit) || 50, 200),
-    type, subreddit, creator, tag, sort, q,
+    type, subreddit, source, hasCreator, creator, tag, sort, q,
     ...(publishState !== undefined ? { publishState } : {})
   });
   res.json(result);
@@ -96,6 +96,14 @@ router.get('/tags/:name/media', (req, res) => {
 // Subreddits list
 router.get('/subreddits', (req, res) => {
   res.json(mediaService.getSubreddits());
+});
+
+router.get('/sources', (req, res) => {
+  res.json(mediaService.getSourcePlatforms());
+});
+
+router.get('/ingest-catalog', (req, res) => {
+  res.json(ingestion.catalog.publicCatalog());
 });
 
 // Image/video proxy — allow known CDNs and URLs already ingested

@@ -59,28 +59,38 @@
 
   <!-- GALLERY -->
   <div id="view-gallery" class="view active">
-    <div class="toolbar">
+    <div class="toolbar" role="toolbar" aria-label="Gallery filters">
       <button class="chip mobile-only" type="button" onclick="openFilterDrawer()">Filters</button>
+      <button class="chip" type="button" id="chip-creators" aria-pressed="false" onclick="toggleCreatorBrowse()">Creators only</button>
+      <label class="sr-only" for="filter-type">Media type</label>
       <select id="filter-type" class="filter-select desktop-only" onchange="applyFilters()">
         <option value="">All media</option>
-        <option value="image">Images</option>
-        <option value="video">Video</option>
+        <option value="image">Photos</option>
+        <option value="video">Videos</option>
       </select>
+      <label class="sr-only" for="filter-source">Source</label>
+      <select id="filter-source" class="filter-select desktop-only" onchange="applyFilters()">
+        <option value="">All sources</option>
+      </select>
+      <label class="sr-only" for="filter-sub">Community</label>
       <select id="filter-sub" class="filter-select desktop-only" onchange="applyFilters()">
         <option value="">All communities</option>
       </select>
+      <label class="sr-only" for="filter-sort">Sort</label>
       <select id="filter-sort" class="filter-select" onchange="applyFilters()">
         <option value="recent">Newest</option>
         <option value="score">Top score</option>
         <option value="oldest">Oldest</option>
         <option value="random">Random</option>
       </select>
+      <label class="sr-only" for="filter-tag">Tag</label>
       <select id="filter-tag" class="filter-select desktop-only" onchange="applyFilters()">
         <option value="">All tags</option>
       </select>
       <div class="toolbar-spacer"></div>
+      <button class="chip desktop-only" type="button" onclick="navigate('creators')">Browse creators</button>
       <button class="chip mobile-only" type="button" data-view-toggle onclick="toggleViewMode()">Layout</button>
-      <button class="btn btn-sm" type="button" onclick="clearSearch()">Clear</button>
+      <button class="btn btn-sm" type="button" onclick="clearSearch()">Reset</button>
     </div>
     <div class="stats-bar">
       <div class="stat-item"><span class="num" id="st-total">0</span> total</div>
@@ -101,7 +111,12 @@
   <div id="view-creators" class="view">
     <div class="page-pad">
       <h2 class="section-title">Creators</h2>
-      <p class="section-sub">Profiles built from ingested identities across communities.</p>
+      <p class="section-sub">People, not random posts. Profiles are built from Reddit, X, and RedGIFs identities as media is ingested.</p>
+      <div class="creator-toolbar">
+        <label class="sr-only" for="creator-search">Search creators</label>
+        <input type="search" id="creator-search" class="form-input" placeholder="Search handles…" onkeydown="if(event.key==='Enter')loadCreatorsBrowse()">
+        <button class="btn" type="button" onclick="loadCreatorsBrowse()">Search</button>
+      </div>
       <div id="creators-list"></div>
     </div>
   </div>
@@ -148,62 +163,85 @@
       </div>
 
       <div id="admin-ingestion" class="admin-section">
-        <div class="ingest-controls">
-          <button class="btn btn-primary" type="button" onclick="adminIngestStart()">Start scan</button>
-          <button class="btn" type="button" onclick="adminIngestPause()">Pause</button>
-          <button class="btn" type="button" onclick="adminIngestResume()">Resume</button>
-          <button class="btn btn-danger" type="button" onclick="adminIngestStop()">Stop</button>
-          <button class="btn" type="button" onclick="adminIngestSweep()">Hide junk</button>
+        <div class="ingest-hero">
+          <div>
+            <h3 class="ingest-heading">Creator scan</h3>
+            <p class="section-sub" style="margin:0">Public indexes only: Reddit communities, X posts, RedGIFs. Quality gate blocks stock photos and dead Imgur before anything is published.</p>
+          </div>
+          <div class="ingest-controls">
+            <button class="btn btn-primary" type="button" onclick="adminIngestStart()">Scan all creator sources</button>
+            <button class="btn" type="button" onclick="adminIngestPause()">Pause</button>
+            <button class="btn" type="button" onclick="adminIngestResume()">Resume</button>
+            <button class="btn btn-danger" type="button" onclick="adminIngestStop()">Stop</button>
+            <button class="btn" type="button" onclick="adminIngestSweep()">Sweep junk</button>
+          </div>
         </div>
-        <div class="source-pills" id="ingest-sources">
-          <label class="chip active"><input type="checkbox" value="reddit" checked> Reddit</label>
-          <label class="chip active"><input type="checkbox" value="x" checked> X</label>
-          <label class="chip active"><input type="checkbox" value="redgifs" checked> RedGIFs</label>
-          <label class="chip"><input type="checkbox" value="ddg"> Creator hosts (DDG)</label>
-          <label class="chip"><input type="checkbox" value="web"> Open web</label>
+        <div class="ingest-outcome" id="ingest-outcome" role="status">No scan yet this session.</div>
+        <div class="ingest-progress" id="ingest-progress" hidden>
+          <div><strong id="ip-new">0</strong><span>new</span></div>
+          <div><strong id="ip-skip">0</strong><span>skipped</span></div>
+          <div><strong id="ip-dupe">0</strong><span>dupes</span></div>
+          <div><strong id="ip-sweep">0</strong><span>junk swept</span></div>
+          <div><strong id="ip-err">0</strong><span>errors</span></div>
         </div>
+        <h4 class="ingest-group-label">Suggested query packs</h4>
+        <div class="query-packs" id="query-packs" role="group" aria-label="Query packs"></div>
+        <h4 class="ingest-group-label">Sources</h4>
+        <div class="source-card-grid" id="ingest-sources"></div>
         <div class="ingest-config">
-          <div class="form-group">
-            <label>Reddit communities (one per line)</label>
-            <textarea class="form-input" id="ingest-subs" rows="8"></textarea>
+          <div>
+            <div class="form-group">
+              <label for="ingest-subs">Reddit communities</label>
+              <textarea class="form-input" id="ingest-subs" rows="10"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="ingest-creator-queries">Creator queries (merged into X + RedGIFs)</label>
+              <textarea class="form-input" id="ingest-creator-queries" rows="5"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="ingest-redgifs-users">RedGIFs creator usernames (public, optional)</label>
+              <textarea class="form-input" id="ingest-redgifs-users" rows="3" placeholder="one username per line"></textarea>
+            </div>
           </div>
           <div>
             <div class="form-group">
-              <label>Search queries (DDG / web, one per line)</label>
-              <textarea class="form-input" id="ingest-queries" rows="5">site:imgur.com gay male nsfw
-site:redgifs.com gay muscle
-site:redgifs.com twink</textarea>
+              <label for="ingest-redgifs">RedGIFs search queries</label>
+              <textarea class="form-input" id="ingest-redgifs" rows="5"></textarea>
             </div>
             <div class="form-group">
-              <label>X queries</label>
-              <textarea class="form-input" id="ingest-xqueries" rows="3">site:x.com/status gay muscle
-site:x.com gay muscle
-site:twitter.com gay male nsfw</textarea>
+              <label for="ingest-xqueries">X / Twitter site: queries</label>
+              <textarea class="form-input" id="ingest-xqueries" rows="5"></textarea>
             </div>
             <div class="form-group">
-              <label>Reddit sort</label>
-              <select id="ingest-sort" class="form-input">
-                <option value="hot">Hot</option>
-                <option value="new">New</option>
-                <option value="top">Top</option>
-                <option value="rising">Rising</option>
-              </select>
+              <label for="ingest-queries">Creator-host queries (DDG, optional source)</label>
+              <textarea class="form-input" id="ingest-queries" rows="4"></textarea>
             </div>
-            <div class="form-group">
-              <label>Limit per source / community</label>
-              <input type="number" class="form-input" id="ingest-limit" value="40" min="1" max="100">
-            </div>
-            <div class="form-group">
-              <label>Min Reddit score</label>
-              <input type="number" class="form-input" id="ingest-minscore" value="0" min="0">
+            <div class="form-row">
+              <div class="form-group">
+                <label for="ingest-sort">Reddit sort</label>
+                <select id="ingest-sort" class="form-input">
+                  <option value="hot">Hot</option>
+                  <option value="new">New</option>
+                  <option value="top">Top</option>
+                  <option value="rising">Rising</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="ingest-limit">Limit per source</label>
+                <input type="number" class="form-input" id="ingest-limit" value="40" min="1" max="100">
+              </div>
+              <div class="form-group">
+                <label for="ingest-minscore">Min Reddit score</label>
+                <input type="number" class="form-input" id="ingest-minscore" value="0" min="0">
+              </div>
             </div>
           </div>
         </div>
-        <pre class="ingest-log" id="ingest-log" aria-live="polite">Ready. Default scan pulls Reddit, X, and RedGIFs creator media — not stock photo search.</pre>
+        <pre class="ingest-log" id="ingest-log" aria-live="polite">Ready. Default scan is Reddit + X + RedGIFs — not stock photo search. Paywalled sites are not crawled.</pre>
         <h3 style="font-size:14px;color:var(--muted);margin:16px 0 10px">Job history</h3>
         <div class="table-wrap">
           <table class="admin-table">
-            <thead><tr><th>ID</th><th>Status</th><th>Config</th><th>Stats</th><th>Started</th><th>Completed</th></tr></thead>
+            <thead><tr><th>ID</th><th>Status</th><th>Sources</th><th>Outcome</th><th>Started</th><th>Completed</th></tr></thead>
             <tbody id="ingest-jobs-table"></tbody>
           </table>
         </div>
@@ -248,6 +286,10 @@ site:twitter.com gay male nsfw</textarea>
           <div class="form-group">
             <label>Default subreddits</label>
             <textarea class="form-input" id="setting-subs" rows="4"></textarea>
+          </div>
+          <div class="form-group">
+            <label>Default creator queries</label>
+            <textarea class="form-input" id="setting-creator-queries" rows="4"></textarea>
           </div>
           <div class="form-group">
             <label>Orientation policy</label>
@@ -318,15 +360,19 @@ site:twitter.com gay male nsfw</textarea>
   <div class="filter-panel">
     <h3>Filters</h3>
     <div class="form-group">
-      <label>Type</label>
+      <label for="m-filter-type">Type</label>
       <select id="m-filter-type" class="form-input">
         <option value="">All media</option>
-        <option value="image">Images</option>
-        <option value="video">Video</option>
+        <option value="image">Photos</option>
+        <option value="video">Videos</option>
       </select>
     </div>
     <div class="form-group">
-      <label>Community</label>
+      <label for="m-filter-source">Source</label>
+      <select id="m-filter-source" class="form-input"><option value="">All sources</option></select>
+    </div>
+    <div class="form-group">
+      <label for="m-filter-sub">Community</label>
       <select id="m-filter-sub" class="form-input"><option value="">All communities</option></select>
     </div>
     <div class="form-group">

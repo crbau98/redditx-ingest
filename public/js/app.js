@@ -15,7 +15,7 @@
     lbIndex: -1,
     lbItems: [],
     adminKey: sessionStorage.getItem(ADMIN_KEY) || '',
-    filters: { type: '', subreddit: '', sort: 'recent', tag: '', q: '' },
+    filters: { type: '', subreddit: '', sort: 'recent', tag: '', q: '', source: '', hasCreator: '' },
     selectedMedia: new Set(),
     favorites: loadFavorites(),
     viewMode: localStorage.getItem(VIEW_KEY) || 'masonry',
@@ -170,6 +170,7 @@
     applyViewMode();
     syncFiltersFromUrl();
     loadSubreddits();
+    loadSources();
     loadTags();
     loadStats();
     loadMedia(true);
@@ -185,7 +186,7 @@
     const q = new URLSearchParams(location.hash.split('?')[1] || '');
     // also support query in location.search for shareable links
     const params = new URLSearchParams(location.search);
-    ['type', 'subreddit', 'sort', 'tag', 'q'].forEach(k => {
+    ['type', 'subreddit', 'sort', 'tag', 'q', 'source', 'hasCreator'].forEach(k => {
       const v = params.get(k);
       if (v != null) state.filters[k] = v;
     });
@@ -193,8 +194,10 @@
     if ($('filter-sub')) $('filter-sub').value = state.filters.subreddit;
     if ($('filter-sort')) $('filter-sort').value = state.filters.sort || 'recent';
     if ($('filter-tag')) $('filter-tag').value = state.filters.tag;
+    if ($('filter-source')) $('filter-source').value = state.filters.source;
     if ($('search-input')) $('search-input').value = state.filters.q;
     if ($('m-search-input')) $('m-search-input').value = state.filters.q;
+    syncCreatorChip();
   }
 
   function pushFilterUrl() {
@@ -223,6 +226,8 @@
       let url = `/api/media?page=${state.page}&limit=40&sort=${encodeURIComponent(f.sort || 'recent')}`;
       if (f.type) url += '&type=' + encodeURIComponent(f.type);
       if (f.subreddit) url += '&subreddit=' + encodeURIComponent(f.subreddit);
+      if (f.source) url += '&source=' + encodeURIComponent(f.source);
+      if (f.hasCreator) url += '&hasCreator=1';
       if (f.tag) url += '&tag=' + encodeURIComponent(f.tag);
       if (f.q) url += '&q=' + encodeURIComponent(f.q);
 
@@ -231,7 +236,7 @@
 
       if (!data.items.length) {
         state.hasMore = false;
-        if (!state.media.length) showEmpty(true);
+        if (!state.media.length) showEmpty(true, data.total === 0);
         return;
       }
       showEmpty(false);
@@ -260,6 +265,11 @@
       : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7.2-4.6-9.5-8.2C.5 9.4 2.2 6 5.5 6c1.8 0 3.2 1 4 2.2C10.3 7 11.7 6 13.5 6c3.3 0 5 3.4 3 6.8C19.2 16.4 12 21 12 21z"/></svg>';
   }
 
+  function sourceLabel(p) {
+    const map = { reddit: 'Reddit', x: 'X', redgifs: 'RedGIFs', ddg: 'Host', web: 'Web' };
+    return map[p] || p || '';
+  }
+
   function renderCard(item, container) {
     if (/image you are requesting does not exist|no longer available|probably deleted/i.test(item.title || '')) return;
     const d = document.createElement('article');
@@ -269,15 +279,20 @@
     d.setAttribute('role', 'button');
     d.setAttribute('aria-label', item.title || 'Open media');
     const favOn = state.favorites.has(item.id);
+    const typeLabel = item.media_type === 'video' ? 'Video' : 'Photo';
+    const handle = item.author && item.author !== 'web' ? '@' + item.author : '';
+    const community = item.source_platform === 'reddit' && item.subreddit
+      ? 'r/' + item.subreddit
+      : sourceLabel(item.source_platform);
     d.innerHTML = `
       <img src="${esc(mediaSrc(item))}" loading="lazy" alt="" onerror="this.closest('.media-tile')?.remove()">
-      <span class="badge type">${esc(item.media_type || 'media')}</span>
-      <span class="badge score">${esc(item.score || 0)}</span>
+      <span class="badge type">${esc(typeLabel)}</span>
+      <span class="badge source">${esc(sourceLabel(item.source_platform))}</span>
       <button class="fav-btn ${favOn ? 'on' : ''}" type="button" aria-label="Save" data-fav="${esc(item.id)}">${heartSvg(favOn)}</button>
       <div class="overlay">
-        <div class="card-sub">r/${esc(item.subreddit || 'unknown')}</div>
+        <div class="card-sub ${handle ? 'creator' : ''}">${esc(handle || community)}</div>
         <div class="card-title">${esc(truncate(item.title, 80))}</div>
-        <div class="card-meta"><span>${esc(item.author || '')}</span><span>${esc(timeAgo(item.created_at))}</span></div>
+        <div class="card-meta"><span>${esc(community)}</span><span>${esc(timeAgo(item.created_at))}</span></div>
       </div>`;
     d.addEventListener('click', (e) => {
       if (e.target.closest('[data-fav]')) return;
@@ -311,16 +326,47 @@
     el.innerHTML = html;
   }
 
-  function showEmpty(show) {
+  function showEmpty(show, archiveEmpty) {
     const g = $('gallery');
-    if (show && !g.querySelector('.empty-state')) {
-      g.innerHTML = `<div class="empty-state">
-        <h2>No media yet</h2>
-        <p>Start an ingestion from Admin, or clear filters to see everything in the archive.</p>
-        <button class="btn btn-primary" type="button" onclick="openAdmin()">Open Admin</button>
+    if (!show) return;
+    const filtered = !!(state.filters.type || state.filters.subreddit || state.filters.tag || state.filters.q || state.filters.source || state.filters.hasCreator);
+    if (g.querySelector('.empty-state')) g.querySelector('.empty-state').remove();
+    if (filtered) {
+      g.innerHTML = `<div class="empty-state" role="status">
+        <h2>Nothing matches</h2>
+        <p>No published media for these filters. Reset, or browse by creator instead of random posts.</p>
+        <button class="btn btn-primary" type="button" onclick="clearSearch()">Reset filters</button>
+        <button class="btn" type="button" onclick="navigate('creators')">Browse creators</button>
       </div>`;
+      return;
     }
+    g.innerHTML = `<div class="empty-state" role="status">
+      <h2>${archiveEmpty === false ? 'No media yet' : 'Archive is empty'}</h2>
+      <p>PRISM discovers gay male creator photos and videos from public Reddit, X, and RedGIFs. Nothing is here until you run a scan.</p>
+      <ol class="hint-steps">
+        <li>Open Admin and enter your key</li>
+        <li>Keep Reddit + X + RedGIFs on</li>
+        <li>Tap “Scan all creator sources”</li>
+      </ol>
+      <button class="btn btn-primary" type="button" onclick="openAdmin()">Open Admin to ingest</button>
+    </div>`;
   }
+
+  function syncCreatorChip() {
+    const chip = $('chip-creators');
+    if (!chip) return;
+    const on = !!state.filters.hasCreator;
+    chip.classList.toggle('active', on);
+    chip.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+
+  window.toggleCreatorBrowse = function toggleCreatorBrowse() {
+    state.filters.hasCreator = state.filters.hasCreator ? '' : '1';
+    syncCreatorChip();
+    pushFilterUrl();
+    navigate('gallery');
+    loadMedia(true);
+  };
 
   function setupInfiniteScroll() {
     const sentinel = $('scroll-sentinel');
@@ -335,13 +381,15 @@
   window.applyFilters = function applyFilters() {
     state.filters.type = $('filter-type')?.value || $('m-filter-type')?.value || '';
     state.filters.subreddit = $('filter-sub')?.value || $('m-filter-sub')?.value || '';
+    state.filters.source = $('filter-source')?.value || $('m-filter-source')?.value || '';
     state.filters.sort = $('filter-sort')?.value || $('m-filter-sort')?.value || 'recent';
     state.filters.tag = $('filter-tag')?.value || $('m-filter-tag')?.value || '';
-    // keep mobile/desktop selects in sync
     ['filter-type', 'm-filter-type'].forEach(id => { if ($(id)) $(id).value = state.filters.type; });
     ['filter-sub', 'm-filter-sub'].forEach(id => { if ($(id)) $(id).value = state.filters.subreddit; });
+    ['filter-source', 'm-filter-source'].forEach(id => { if ($(id)) $(id).value = state.filters.source; });
     ['filter-sort', 'm-filter-sort'].forEach(id => { if ($(id)) $(id).value = state.filters.sort; });
     ['filter-tag', 'm-filter-tag'].forEach(id => { if ($(id)) $(id).value = state.filters.tag; });
+    syncCreatorChip();
     pushFilterUrl();
     closeFilterDrawer();
     navigate('gallery');
@@ -360,9 +408,15 @@
   };
 
   window.clearSearch = function clearSearch() {
-    state.filters.q = '';
+    state.filters = { type: '', subreddit: '', sort: 'recent', tag: '', q: '', source: '', hasCreator: '' };
+    ['filter-type', 'm-filter-type', 'filter-sub', 'm-filter-sub', 'filter-tag', 'm-filter-tag', 'filter-source', 'm-filter-source'].forEach(id => {
+      if ($(id)) $(id).value = '';
+    });
+    if ($('filter-sort')) $('filter-sort').value = 'recent';
+    if ($('m-filter-sort')) $('m-filter-sort').value = 'recent';
     if ($('search-input')) $('search-input').value = '';
     if ($('m-search-input')) $('m-search-input').value = '';
+    syncCreatorChip();
     pushFilterUrl();
     loadMedia(true);
   };
@@ -387,6 +441,25 @@
         btn.textContent = state.viewMode === 'grid' ? 'Grid' : 'Masonry';
       }
     });
+  }
+
+  async function loadSources() {
+    try {
+      const sources = await api('/api/sources');
+      ['filter-source', 'm-filter-source'].forEach(id => {
+        const sel = $(id);
+        if (!sel) return;
+        const cur = sel.value;
+        sel.innerHTML = '<option value="">All sources</option>';
+        sources.forEach(s => {
+          const o = document.createElement('option');
+          o.value = s;
+          o.textContent = sourceLabel(s);
+          sel.appendChild(o);
+        });
+        sel.value = cur || state.filters.source;
+      });
+    } catch { /* ok */ }
   }
 
   async function loadSubreddits() {
@@ -489,14 +562,19 @@
   }
 
   /* ===== CREATORS ===== */
-  async function loadCreatorsBrowse() {
+  window.loadCreatorsBrowse = async function loadCreatorsBrowse() {
     const el = $('creators-list');
     el.innerHTML = '<div class="loading-more">Loading creators…</div>';
+    const q = $('creator-search')?.value.trim() || '';
     try {
-      const data = await api('/api/creators?limit=100');
+      const data = await api('/api/creators?limit=100' + (q ? '&q=' + encodeURIComponent(q) : ''));
       state.creators = data.items || [];
       if (!state.creators.length) {
-        el.innerHTML = `<div class="empty-state"><h2>No creators yet</h2><p>Creators appear automatically as media is ingested.</p></div>`;
+        el.innerHTML = `<div class="empty-state" role="status">
+          <h2>${q ? 'No matching creators' : 'No creators yet'}</h2>
+          <p>${q ? 'Try another handle, or reset the search.' : 'Creator profiles appear when ingested media has an author. Run a Reddit / X / RedGIFs scan first.'}</p>
+          ${q ? '' : '<button class="btn btn-primary" type="button" onclick="openAdmin()">Open Admin to ingest</button>'}
+        </div>`;
         return;
       }
       el.innerHTML = `<div class="creator-grid">${state.creators.map(c => {
@@ -572,10 +650,9 @@
           }
         }
         if (m.type === 'stats') {
-          if ($('st-total')) $('st-total').textContent = m.data.total || 0;
-          if ($('st-images')) $('st-images').textContent = m.data.images || 0;
-          if ($('st-videos')) $('st-videos').textContent = m.data.videos || 0;
+          updateIngestProgress(m.data);
         }
+        if (m.type === 'outcome') renderIngestOutcome(m.data);
         if (m.type === 'status') setStatus(m.data);
         if (m.type === 'log') appendIngestLog(m.data);
       } catch { /* ignore */ }
@@ -629,9 +706,10 @@
       : `<span>${esc(item.author || '')}</span>`;
 
     $('lb-sheet').innerHTML = `
+      <div class="lb-kicker">${esc(sourceLabel(item.source_platform))} · ${esc(item.media_type === 'video' ? 'Video' : 'Photo')}</div>
       <div class="lb-title">${esc(item.title || 'Untitled')}</div>
       <div class="lb-meta">
-        <span>r/${esc(item.subreddit || 'unknown')}</span>
+        ${item.source_platform === 'reddit' ? `<span>r/${esc(item.subreddit || 'unknown')}</span>` : `<span>${esc(sourceLabel(item.source_platform))}</span>`}
         ${creatorLink}
         <span>${esc(item.score || 0)} pts</span>
         ${item.source_url ? `<a href="${esc(item.source_url)}" target="_blank" rel="noopener">Source</a>` : ''}
@@ -783,6 +861,7 @@
 
   async function loadAdminIngestion() {
     try {
+      await ensureIngestCatalog();
       const jobs = await api('/api/admin/jobs?limit=20');
       $('ingest-jobs-table').innerHTML = jobs.map(j => {
         const cfg = j.config ? JSON.parse(j.config) : {};
@@ -792,18 +871,77 @@
           <td style="font-family:monospace;font-size:11px">${esc(j.id.slice(0, 8))}</td>
           <td>${esc(j.status)}</td>
           <td style="font-size:11px">${esc(src)}</td>
-          <td>${esc(s.total || 0)} new · ${esc(s.dupes || 0)} dupes</td>
+          <td>${esc(s.total || 0)} new · ${esc(s.skipped || 0)} skipped · ${esc(s.dupes || 0)} dupes · ${esc(s.swept || 0)} swept</td>
           <td>${esc(timeAgo(j.started_at))}</td>
           <td>${j.completed_at ? esc(timeAgo(j.completed_at)) : '—'}</td>
         </tr>`;
-      }).join('');
+      }).join('') || '<tr><td colspan="6">No jobs yet</td></tr>';
       const st = await api('/api/admin/ingest/status');
+      if (st.lastOutcome) renderIngestOutcome(st.lastOutcome);
+      if (st.stats) updateIngestProgress(st.stats);
       if (st.logs && st.logs.length) {
         $('ingest-log').textContent = st.logs.map(l => `[${l.level}] ${l.msg}`).join('\n');
         $('ingest-log').scrollTop = $('ingest-log').scrollHeight;
       }
     } catch { /* ok */ }
   }
+
+  let ingestCatalog = null;
+  let activePack = 'mixed';
+
+  async function ensureIngestCatalog() {
+    if (ingestCatalog) return ingestCatalog;
+    ingestCatalog = await api('/api/ingest-catalog');
+    renderSourceCards(ingestCatalog.sources);
+    renderQueryPacks(ingestCatalog.packs);
+    fillIngestDefaults(ingestCatalog.defaults);
+    return ingestCatalog;
+  }
+
+  function renderSourceCards(sources) {
+    const el = $('ingest-sources');
+    if (!el || el.querySelector('.source-card')) return;
+    el.innerHTML = sources.map(s => `
+      <label class="source-card ${s.defaultOn ? 'on' : ''}">
+        <input type="checkbox" value="${esc(s.id)}" ${s.defaultOn ? 'checked' : ''} onchange="this.closest('.source-card').classList.toggle('on', this.checked)">
+        <div>
+          <div class="src-group">${esc(s.group)}</div>
+          <h4>${esc(s.label)}</h4>
+          <p>${esc(s.blurb)}</p>
+        </div>
+      </label>`).join('');
+  }
+
+  function renderQueryPacks(packs) {
+    const el = $('query-packs');
+    if (!el) return;
+    el.innerHTML = packs.map(p =>
+      `<button type="button" class="chip ${p.id === activePack ? 'active' : ''}" data-pack="${esc(p.id)}" onclick="applyQueryPack('${esc(p.id)}')">${esc(p.label)}</button>`
+    ).join('');
+  }
+
+  function fillIngestDefaults(d) {
+    if ($('ingest-subs') && !$('ingest-subs').value.trim()) $('ingest-subs').value = (d.subs || []).join('\n');
+    if ($('ingest-queries')) $('ingest-queries').value = (d.queries || []).join('\n');
+    if ($('ingest-xqueries')) $('ingest-xqueries').value = (d.xQueries || []).join('\n');
+    if ($('ingest-redgifs')) $('ingest-redgifs').value = (d.redgifsQueries || []).join('\n');
+    if ($('ingest-creator-queries') && !$('ingest-creator-queries').value.trim()) {
+      $('ingest-creator-queries').value = (d.creatorQueries || []).join('\n');
+    }
+  }
+
+  window.applyQueryPack = function applyQueryPack(id) {
+    activePack = id;
+    document.querySelectorAll('#query-packs .chip').forEach(c => c.classList.toggle('active', c.dataset.pack === id));
+    const pack = (ingestCatalog?.packs || []).find(p => p.id === id);
+    if (!pack) return toast('Pack not loaded yet', 'err');
+    if ($('ingest-subs')) $('ingest-subs').value = (pack.reddit || []).join('\n');
+    if ($('ingest-redgifs')) $('ingest-redgifs').value = (pack.redgifs || []).join('\n');
+    if ($('ingest-xqueries')) $('ingest-xqueries').value = (pack.x || []).join('\n');
+    if ($('ingest-queries')) $('ingest-queries').value = (pack.ddg || []).join('\n');
+    if ($('ingest-creator-queries')) $('ingest-creator-queries').value = (pack.creators || []).join('\n');
+    toast(pack.label + ' pack loaded');
+  };
 
   function selectedSources() {
     return [...document.querySelectorAll('#ingest-sources input:checked')].map(i => i.value);
@@ -813,6 +951,24 @@
     return ($(id)?.value || '').split('\n').map(s => s.trim()).filter(Boolean);
   }
 
+  function updateIngestProgress(s) {
+    if (!s) return;
+    const box = $('ingest-progress');
+    if (box) box.hidden = false;
+    if ($('ip-new')) $('ip-new').textContent = s.total || 0;
+    if ($('ip-skip')) $('ip-skip').textContent = s.skipped || 0;
+    if ($('ip-dupe')) $('ip-dupe').textContent = s.dupes || 0;
+    if ($('ip-sweep')) $('ip-sweep').textContent = s.swept || 0;
+    if ($('ip-err')) $('ip-err').textContent = s.errors || 0;
+  }
+
+  function renderIngestOutcome(o) {
+    const el = $('ingest-outcome');
+    if (!el || !o) return;
+    el.classList.add('has-data');
+    el.textContent = `Last job: ${o.newItems || 0} new · ${o.skipped || 0} skipped (quality) · ${o.dupes || 0} already had · ${o.swept || 0} junk hidden · ${o.errors || 0} errors`;
+  }
+
   window.adminIngestStart = function adminIngestStart() {
     const sources = selectedSources();
     if (!sources.length) return toast('Pick at least one source', 'err');
@@ -820,18 +976,22 @@
       method: 'POST',
       body: JSON.stringify({
         sources,
+        queryPack: activePack === 'mixed' ? undefined : activePack,
         subs: lines('ingest-subs'),
         queries: lines('ingest-queries'),
         xQueries: lines('ingest-xqueries'),
         webQueries: lines('ingest-queries'),
-        redgifsQueries: ['gay', 'twink', 'muscle', 'jock'],
+        redgifsQueries: lines('ingest-redgifs'),
+        creatorQueries: lines('ingest-creator-queries'),
+        redgifsUsers: lines('ingest-redgifs-users'),
         sort: $('ingest-sort').value,
         limit: parseInt($('ingest-limit').value, 10) || 40,
         minScore: parseInt($('ingest-minscore').value, 10) || 0
       })
     }).then(() => {
-      toast('Scan started', 'ok');
+      toast('Creator scan started', 'ok');
       $('ingest-log').textContent = '';
+      updateIngestProgress({ total: 0, skipped: 0, dupes: 0, swept: 0, errors: 0 });
     }).catch(e => toast(e.message, 'err'));
   };
 
@@ -952,6 +1112,7 @@
     try {
       const settings = await api('/api/admin/settings');
       $('setting-subs').value = settings.default_subs || '';
+      if ($('setting-creator-queries')) $('setting-creator-queries').value = settings.creator_queries || '';
       $('setting-orientation').value = settings.orientation_policy || 'strict';
     } catch { /* ok */ }
   }
@@ -962,6 +1123,7 @@
         method: 'PUT',
         body: JSON.stringify({
           default_subs: $('setting-subs').value,
+          creator_queries: $('setting-creator-queries')?.value || '',
           orientation_policy: $('setting-orientation').value
         })
       });
@@ -971,14 +1133,28 @@
 
   async function loadDefaultSubs() {
     try {
-      const settings = await api('/api/admin/settings');
+      const settings = await api('/api/admin/settings').catch(() => ({}));
+      const catalog = await api('/api/ingest-catalog').catch(() => null);
+      if (catalog) {
+        ingestCatalog = catalog;
+        renderSourceCards(catalog.sources);
+        renderQueryPacks(catalog.packs);
+        fillIngestDefaults(catalog.defaults);
+      }
       if (settings.default_subs) $('ingest-subs').value = settings.default_subs;
+      if (settings.creator_queries && $('ingest-creator-queries')) {
+        $('ingest-creator-queries').value = settings.creator_queries;
+      }
+      if (settings.redgifs_users && $('ingest-redgifs-users')) {
+        $('ingest-redgifs-users').value = settings.redgifs_users;
+      }
     } catch {
-      $('ingest-subs').value = [
-        'gaybrosgonemild', 'boyswithabs', 'vlinesabsanddick', 'gaynsfw', 'twinks',
-        'massivecocks', 'hardbodies', 'gaymuscle', 'totallystraight', 'broslikeus',
-        'malepubes', 'cock', 'gaybrosgonewild', 'bulges', 'jockstraps'
-      ].join('\n');
+      if ($('ingest-subs') && !$('ingest-subs').value) {
+        $('ingest-subs').value = [
+          'gaybrosgonemild', 'boyswithabs', 'gaynsfw', 'twinks', 'gaymuscle',
+          'gaybrosgonewild', 'otters', 'jockstraps', 'hardbodies'
+        ].join('\n');
+      }
     }
   }
 

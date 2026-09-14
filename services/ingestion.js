@@ -8,6 +8,7 @@ const ddg = require('./sources/ddg');
 const x = require('./sources/x');
 const web = require('./sources/web');
 const redgifs = require('./sources/redgifs');
+const catalog = require('./ingest-catalog');
 
 const DEFAULT_SUBS = reddit.DEFAULT_SUBS;
 const GAY_SUBS = new Set(DEFAULT_SUBS.map(s => s.toLowerCase()));
@@ -17,11 +18,16 @@ let ingesting = false;
 let paused = false;
 let currentJobId = null;
 let sseClients = [];
-let stats = { total: 0, images: 0, videos: 0, dupes: 0, skipped: 0, errors: 0, bySource: {} };
+let stats = emptyStats();
 let logs = [];
+let lastOutcome = null;
+
+function emptyStats() {
+  return { total: 0, images: 0, videos: 0, dupes: 0, skipped: 0, errors: 0, swept: 0, bySource: {} };
+}
 
 function getState() {
-  return { ingesting, paused, stats, currentJobId };
+  return { ingesting, paused, stats, currentJobId, lastOutcome };
 }
 function setSseClients(clients) { sseClients = clients; }
 function getSseClients() { return sseClients; }
@@ -194,6 +200,36 @@ async function runReddit(config) {
   }
 }
 
+async function runRedgifsUsers(users, limit) {
+  log('INFO', `RedGIFs creators: ${users.length} public usernames`);
+  for (const username of users) {
+    if (!ingesting) break;
+    await waitIfPaused();
+    log('INFO', `RedGIFs user: ${username}`);
+    try {
+      const result = await redgifs.harvestUser(username, { limit });
+      if (result.officialError) log('WARN', `RedGIFs @${username}: ${result.officialError}`);
+      let count = 0;
+      for (const item of result.items || []) {
+        if (!ingesting) break;
+        await waitIfPaused();
+        if (await persistItem(item, 'redgifs')) {
+          count++;
+          log('OK', `[redgifs ${item.mediaType}] @${username}: ${(item.title || '').slice(0, 70)}`);
+        }
+        await sleep(30);
+      }
+      log('OK', `RedGIFs @${username}: ${count} new items`);
+    } catch (e) {
+      stats.errors++;
+      bumpSource('redgifs', 'errors');
+      log('ERR', `RedGIFs @${username}: ${e.message}`);
+      broadcast({ type: 'stats', data: stats });
+    }
+    await sleep(250);
+  }
+}
+
 async function runQueries(sourceName, harvest, queries, limit) {
   log('INFO', `${sourceName}: ${queries.length} queries`);
   for (const query of queries) {
@@ -264,6 +300,10 @@ async function sweepJunkMedia({ probeImgur = true, limit = 400 } = {}) {
   }
 
   log('OK', `Sweep complete: hid ${hidden} of ${checked} items`);
+  if (ingesting) {
+    stats.swept = (stats.swept || 0) + hidden;
+    broadcast({ type: 'stats', data: stats });
+  }
   return { hidden, checked };
 }
 
@@ -272,32 +312,63 @@ async function runIngestion(config = {}) {
 
   ingesting = true;
   paused = false;
-  stats = { total: 0, images: 0, videos: 0, dupes: 0, skipped: 0, errors: 0, bySource: {} };
+  stats = emptyStats();
   logs = [];
 
+  const pack = config.queryPack ? catalog.packById(config.queryPack) : null;
   const sources = parseList(config.sources, DEFAULT_SOURCES).map(s => s.toLowerCase());
   const enabled = new Set(sources);
-  const queries = parseList(config.queries, ddg.DEFAULT_QUERIES);
-  const xQueries = parseList(config.xQueries, x.DEFAULT_QUERIES);
-  const webQueries = parseList(config.webQueries, web.DEFAULT_QUERIES);
-  const redgifsQueries = parseList(config.redgifsQueries, redgifs.DEFAULT_QUERIES);
+  const queries = parseList(config.queries, pack ? pack.ddg : ddg.DEFAULT_QUERIES);
+  const creatorQueries = parseList(
+    config.creatorQueries,
+    parseList(db.getSetting('creator_queries'), catalog.DEFAULT_CREATOR_QUERIES),
+  );
+  const xQueries = uniqueList(
+    parseList(config.xQueries, pack ? pack.x : x.DEFAULT_QUERIES),
+    creatorQueries.map((q) => `site:x.com ${q}`),
+  );
+  const webQueries = parseList(config.webQueries, pack ? pack.web : web.DEFAULT_QUERIES);
+  const redgifsQueries = uniqueList(
+    parseList(config.redgifsQueries, pack ? pack.redgifs : redgifs.DEFAULT_QUERIES),
+    creatorQueries,
+  );
+  const redgifsUsers = parseList(
+    config.redgifsUsers,
+    parseList(db.getSetting('redgifs_users'), redgifs.DEFAULT_USERS),
+  );
+  if (pack && (!config.subs || !config.subs.length)) config.subs = pack.reddit;
 
   const jobId = uuidv4();
   currentJobId = jobId;
+  const jobConfig = {
+    ...config,
+    sources: [...enabled],
+    queries,
+    xQueries,
+    webQueries,
+    redgifsQueries,
+    redgifsUsers,
+    creatorQueries,
+    queryPack: config.queryPack || null,
+  };
   db.insertJob({
     id: jobId,
     status: 'running',
-    config: JSON.stringify({ ...config, sources: [...enabled], queries }),
+    config: JSON.stringify(jobConfig),
     started_at: new Date().toISOString()
   });
 
-  log('INFO', `Starting ingestion: ${[...enabled].join(', ')}`);
+  log('INFO', `Starting creator scan: ${[...enabled].join(', ')}${config.queryPack ? ` · pack=${config.queryPack}` : ''}`);
   broadcast({ type: 'status', data: 'running' });
+  broadcast({ type: 'stats', data: stats });
 
   try {
     if (config.sweep !== false) await sweepJunkMedia({ probeImgur: true, limit: 500 });
     if (enabled.has('reddit')) await runReddit(config);
-    if (enabled.has('redgifs') && ingesting) await runQueries('redgifs', redgifs.harvestQuery, redgifsQueries, config.limit || 24);
+    if (enabled.has('redgifs') && ingesting) {
+      await runQueries('redgifs', redgifs.harvestQuery, redgifsQueries, config.limit || 24);
+      if (redgifsUsers.length && ingesting) await runRedgifsUsers(redgifsUsers, config.limit || 24);
+    }
     if (enabled.has('x') && ingesting) await runQueries('x', x.harvestQuery, xQueries, config.limit || 20);
     if (enabled.has('ddg') && ingesting) await runQueries('ddg', ddg.harvestQuery, queries, config.limit || 24);
     if (enabled.has('web') && ingesting) await runQueries('web', web.harvestQuery, webQueries, Math.min(config.limit || 12, 20));
@@ -321,9 +392,36 @@ async function runIngestion(config = {}) {
 
   ingesting = false;
   currentJobId = null;
-  log('INFO', `Ingestion complete. New: ${stats.total} · skipped: ${stats.skipped} · dupes: ${stats.dupes} · errors: ${stats.errors}`);
+  lastOutcome = {
+    jobId,
+    at: new Date().toISOString(),
+    newItems: stats.total,
+    skipped: stats.skipped,
+    dupes: stats.dupes,
+    errors: stats.errors,
+    swept: stats.swept || 0,
+    bySource: stats.bySource,
+  };
+  log('INFO', `Scan complete. New: ${stats.total} · skipped: ${stats.skipped} · dupes: ${stats.dupes} · junk swept: ${stats.swept || 0} · errors: ${stats.errors}`);
   broadcast({ type: 'status', data: 'idle' });
   broadcast({ type: 'stats', data: stats });
+  broadcast({ type: 'outcome', data: lastOutcome });
+}
+
+function uniqueList(...lists) {
+  const seen = new Set();
+  const out = [];
+  for (const list of lists) {
+    for (const raw of list || []) {
+      const value = String(raw).trim();
+      if (!value) continue;
+      const key = value.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(value);
+    }
+  }
+  return out;
 }
 
 function stopIngestion() {
@@ -349,6 +447,7 @@ function resumeIngestion() {
 module.exports = {
   DEFAULT_SUBS,
   DEFAULT_SOURCES,
+  catalog,
   getState,
   setSseClients,
   getSseClients,

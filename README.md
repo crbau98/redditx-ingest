@@ -7,9 +7,9 @@ A gay-focused NSFW media discovery platform with Reddit ingestion, SQLite persis
 - **Media Gallery** — Responsive masonry/grid with lazy loading, infinite scroll, filters, and search
 - **Mobile-first shell** — Bottom navigation, filter drawer, mobile search, swipeable lightbox
 - **Saved collection** — Device-local favorites with heart actions and share links
-- **Creators** — Browse and open creator profiles with media grids
-- **Reddit / X / RedGIFs ingestion** — Pulls creator photos and videos from gay Reddit communities, public X posts, and RedGIFs. Generic Bing/DuckDuckGo image search is off by default because it filled the gallery with stock photos and dead Imgur links.
-- **Quality gate** — Rejects stock/CDN junk, deleted Imgur placeholders, and HTML pages before anything is published. Admin can sweep existing junk.
+- **Creators** — Browse and open creator profiles with media grids. Gallery “Creators only” filter hides anonymous posts.
+- **Reddit / X / RedGIFs ingestion** — Default scan is Reddit gay communities + public X posts + RedGIFs (male-tagged). Optional DDG/web ingest only keeps Imgur, RedGIFs, Reddit, and similar creator hosts — not Bing stock photos. Query packs (Muscle / Twink / Otter / Jock) and a curated creator-query list are in Admin.
+- **Quality gate** — Rejects stock/CDN junk, deleted Imgur placeholders, HTML pages, and clearly female-tagged gifs before anything is published. Admin can sweep existing junk.
 - **Admin Panel** — Dashboard, ingestion controls, live logs, moderation queue, media/creator management
 - **Age Gate** — Session-based age verification interstitial
 - **Real-time Updates** — SSE streaming during ingestion
@@ -77,13 +77,16 @@ Default sources: Reddit (archive fallback when Reddit returns 403), X, and RedGI
 - `GET /api/creators/:id` - Creator profile
 - `GET /api/tags` - List tags
 - `GET /api/subreddits` - List subreddits
+- `GET /api/sources` - Distinct ingest source platforms
+- `GET /api/ingest-catalog` - Public source list and query packs
 - `GET /api/stats` - Public stats
 - `GET /api/proxy?url=` - Media proxy
 - `GET /api/stream` - SSE event stream
 
 ### Admin Endpoints (require `x-admin-key` header)
 
-- `POST /api/admin/ingest/start` — Start a multi-source scan (`sources`, `subs`, `queries`, `xQueries`, `redgifsQueries`, `limit`, `minScore`)
+- `POST /api/admin/ingest/start` — Start a multi-source scan (`sources`, `subs`, `queries`, `xQueries`, `redgifsQueries`, `creatorQueries`, `redgifsUsers`, `queryPack`, `limit`, `minScore`)
+- `GET /api/admin/ingest/catalog` — Source blurbs, query packs, default creator queries
 - `POST /api/admin/ingest/stop` — Stop ingestion
 - `POST /api/admin/ingest/pause` — Pause ingestion
 - `POST /api/admin/ingest/resume` — Resume ingestion

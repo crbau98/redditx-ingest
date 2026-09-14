@@ -2,11 +2,17 @@ const { fetchJSON } = require('../fetch');
 
 const DEFAULT_QUERIES = [
   'gay',
-  'twink',
-  'muscle',
-  'jock',
-  'otter',
+  'gay twink',
+  'gay muscle',
+  'gay jock',
+  'gay otter',
+  'gay couple',
+  'bareback gay',
+  'jockstrap gay',
 ];
+
+/** Optional public RedGIFs usernames (not paywalled). Empty by default; admin can add. */
+const DEFAULT_USERS = [];
 
 let cachedToken = null;
 let tokenExpires = 0;
@@ -83,4 +89,34 @@ async function harvestQuery(query, { limit = 24 } = {}) {
   };
 }
 
-module.exports = { DEFAULT_QUERIES, harvestQuery, resolveUrl, gifIdFromUrl };
+async function harvestUser(username, { limit = 24 } = {}) {
+  const handle = String(username || '').replace(/^@/, '').trim();
+  if (!handle) return { items: [] };
+  const count = Math.min(limit, 80);
+  const paths = [
+    `/v2/users/${encodeURIComponent(handle)}/search?count=${count}&order=new`,
+    `/v2/users/${encodeURIComponent(handle)}/gifs?count=${count}&order=new`,
+  ];
+  let lastErr = null;
+  for (const path of paths) {
+    try {
+      const json = await redgifsJSON(path);
+      const gifs = json.gifs || json.gfycats || [];
+      return {
+        items: gifs.map((gif) => itemFromGif(gif, handle)).filter(Boolean),
+      };
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  return { items: [], officialError: lastErr ? lastErr.message : 'user not found' };
+}
+
+module.exports = {
+  DEFAULT_QUERIES,
+  DEFAULT_USERS,
+  harvestQuery,
+  harvestUser,
+  resolveUrl,
+  gifIdFromUrl,
+};
