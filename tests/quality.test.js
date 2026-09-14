@@ -8,7 +8,8 @@ const {
 } = require('../services/media-quality');
 const catalog = require('../services/ingest-catalog');
 
-assert.ok(hostBlocked('images.unsplash.com'), 'unsplash blocked');
+  assert.ok(hostBlocked('images.unsplash.com'), 'unsplash blocked');
+  assert.ok(hostBlocked('lh3.ggpht.com'), 'google thumbs blocked');
 assert.ok(hostBlocked('onlyfans.com'), 'onlyfans.com blocked');
 assert.ok(hostBlocked('cdn.onlyfans.com'), 'OF CDN blocked');
 assert.ok(hostBlocked('coomer.su'), 'leaked vault blocked');

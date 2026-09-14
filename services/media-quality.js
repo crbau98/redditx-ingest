@@ -47,6 +47,8 @@ const BLOCKED_HOSTS = new Set([
   'encrypted-tbn1.gstatic.com',
   'encrypted-tbn2.gstatic.com',
   'encrypted-tbn3.gstatic.com',
+  'ggpht.com',
+  'googleusercontent.com',
   'bing.com',
   'tse1.mm.bing.net',
   'tse2.mm.bing.net',
