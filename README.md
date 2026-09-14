@@ -83,10 +83,11 @@ Default sources: Reddit (archive fallback when Reddit returns 403), X, and RedGI
 
 ### Admin Endpoints (require `x-admin-key` header)
 
-- `POST /api/admin/ingest/start` — Start a multi-source scan (`sources`, `subs`, `queries`, `xQueries`, `limit`, `minScore`)
+- `POST /api/admin/ingest/start` — Start a multi-source scan (`sources`, `subs`, `queries`, `xQueries`, `redgifsQueries`, `limit`, `minScore`)
 - `POST /api/admin/ingest/stop` — Stop ingestion
 - `POST /api/admin/ingest/pause` — Pause ingestion
 - `POST /api/admin/ingest/resume` — Resume ingestion
+- `POST /api/admin/ingest/sweep` — Hide stock photos, dead Imgur, and other junk already in the gallery
 - `GET /api/admin/ingest/status` — Live job stats + recent logs
 - `GET /api/admin/ingest/logs` — Full in-memory ingest log
 - `GET /api/admin/jobs` - Job history
