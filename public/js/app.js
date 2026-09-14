@@ -562,7 +562,7 @@
   }
 
   /* ===== CREATORS ===== */
-  window.loadCreatorsBrowse = async function loadCreatorsBrowse() {
+  async function loadCreatorsBrowse() {
     const el = $('creators-list');
     el.innerHTML = '<div class="loading-more">Loading creators…</div>';
     const q = $('creator-search')?.value.trim() || '';
@@ -592,6 +592,7 @@
       el.innerHTML = `<div class="empty-state"><h2>Couldn’t load creators</h2><p>${esc(e.message)}</p></div>`;
     }
   }
+  window.loadCreatorsBrowse = loadCreatorsBrowse;
 
   async function loadCreator(id) {
     const el = $('creator-content');
