@@ -1,4 +1,5 @@
 const { fetchJSON } = require('../fetch');
+const { looksFemaleTagged } = require('../media-quality');
 
 const DEFAULT_QUERIES = [
   'gay',
@@ -9,6 +10,8 @@ const DEFAULT_QUERIES = [
   'gay couple',
   'bareback gay',
   'jockstrap gay',
+  'onlyfans gay',
+  'onlyfans male gay',
 ];
 
 /** Optional public RedGIFs usernames (not paywalled). Empty by default; admin can add. */
@@ -40,14 +43,10 @@ function gifIdFromUrl(url) {
   return m ? m[1] : null;
 }
 
-const SKIP_TAGS = /pussy|boobs|busty|lesbian|milf|\bfemale\b|\bwomen\b|\bgirl\b|\btits\b|\bbreasts\b/i;
-const KEEP_TAGS = /gay|twink|jock|cock|male|man|boy|otter|bear|muscle|onlyfans.?male|dl|bro/i;
-
 function gifLooksMale(gif, query) {
   const blob = `${(gif.tags || []).join(' ')} ${gif.userName || ''} ${query || ''}`;
-  if (SKIP_TAGS.test(blob) && !KEEP_TAGS.test(blob)) return false;
-  if (SKIP_TAGS.test(blob) && /busty|pussy|lesbian|milf|boobs/.test(blob) && !/gay|cock|twink|male/.test(blob)) return false;
-  return true;
+  const gayContext = /gay|twink|jock|cock|male|otter|bear|muscle|onlyfans.?male/i.test(blob + ' ' + (query || ''));
+  return !looksFemaleTagged(blob, { gayContext });
 }
 
 function itemFromGif(gif, query) {

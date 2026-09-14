@@ -114,8 +114,12 @@
   };
 
   function setActiveNav(view) {
+    const mapped = view === 'creator' ? 'creators' : view === 'admin' ? 'admin' : view;
     document.querySelectorAll('.bottom-nav button').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.view === view);
+      btn.classList.toggle('active', btn.dataset.view === mapped);
+    });
+    document.querySelectorAll('.header-nav button').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.view === mapped);
     });
   }
 
@@ -284,8 +288,12 @@
     const community = item.source_platform === 'reddit' && item.subreddit
       ? 'r/' + item.subreddit
       : sourceLabel(item.source_platform);
+    const play = item.media_type === 'video'
+      ? `<span class="play-mark" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>`
+      : '';
     d.innerHTML = `
       <img src="${esc(mediaSrc(item))}" loading="lazy" alt="" onerror="this.closest('.media-tile')?.remove()">
+      ${play}
       <span class="badge type">${esc(typeLabel)}</span>
       <span class="badge source">${esc(sourceLabel(item.source_platform))}</span>
       <button class="fav-btn ${favOn ? 'on' : ''}" type="button" aria-label="Save" data-fav="${esc(item.id)}">${heartSvg(favOn)}</button>
@@ -342,11 +350,11 @@
     }
     g.innerHTML = `<div class="empty-state" role="status">
       <h2>${archiveEmpty === false ? 'No media yet' : 'Archive is empty'}</h2>
-      <p>PRISM discovers gay male creator photos and videos from public Reddit, X, and RedGIFs. Nothing is here until you run a scan.</p>
+      <p>PRISM discovers gay male creator photos and videos from public Reddit, X, and RedGIFs. Auto-discover can fill an empty archive with public promo — never paid OnlyFans posts.</p>
       <ol class="hint-steps">
         <li>Open Admin and enter your key</li>
-        <li>Keep Reddit + X + RedGIFs on</li>
-        <li>Tap “Scan all creator sources”</li>
+        <li>Leave Auto discover on (interval or cron)</li>
+        <li>Or tap “Scan all creator sources”</li>
       </ol>
       <button class="btn btn-primary" type="button" onclick="openAdmin()">Open Admin to ingest</button>
     </div>`;
@@ -507,6 +515,7 @@
       if ($('st-videos')) $('st-videos').textContent = s.videos || 0;
       if ($('st-creators')) $('st-creators').textContent = s.creators || 0;
       setStatus(s.ingesting ? (s.paused ? 'paused' : 'running') : 'idle');
+      applyAutoUi(s.auto);
     } catch { /* ok */ }
   }
 
@@ -682,7 +691,7 @@
     const favOn = state.favorites.has(item.id);
     $('lb-stage').innerHTML = isVideo
       ? `<video class="lb-media" src="${esc(px(item.media_url))}" controls autoplay playsinline muted loop></video>`
-      : `<img class="lb-media" src="${esc(px(item.media_url || item.preview_url))}" alt="">`;
+      : `<img class="lb-media" src="${esc(px(item.media_url || item.preview_url))}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('p'),{className:'lb-missing',textContent:'This file is gone.'}))">`;
     $('lb-fav').classList.toggle('on', favOn);
     $('lb-fav').innerHTML = heartSvg(favOn);
 
@@ -880,6 +889,7 @@
       const st = await api('/api/admin/ingest/status');
       if (st.lastOutcome) renderIngestOutcome(st.lastOutcome);
       if (st.stats) updateIngestProgress(st.stats);
+      applyAutoUi(st.auto);
       if (st.logs && st.logs.length) {
         $('ingest-log').textContent = st.logs.map(l => `[${l.level}] ${l.msg}`).join('\n');
         $('ingest-log').scrollTop = $('ingest-log').scrollHeight;
@@ -888,7 +898,33 @@
   }
 
   let ingestCatalog = null;
-  let activePack = 'mixed';
+  let activePack = 'onlyfans';
+  let hydratingAuto = false;
+
+  function applyAutoUi(auto) {
+    if (!auto) return;
+    hydratingAuto = true;
+    if ($('auto-discover-toggle')) $('auto-discover-toggle').checked = !!auto.enabled;
+    if ($('auto-interval') && auto.intervalMinutes) $('auto-interval').value = auto.intervalMinutes;
+    if ($('auto-mode')) {
+      $('auto-mode').textContent = `${auto.mode || 'interval'} · public promo only`;
+    }
+    hydratingAuto = false;
+  }
+
+  window.saveAutoDiscover = function saveAutoDiscover() {
+    if (hydratingAuto) return;
+    api('/api/admin/ingest/auto', {
+      method: 'PUT',
+      body: JSON.stringify({
+        enabled: !!$('auto-discover-toggle')?.checked,
+        intervalMinutes: parseInt($('auto-interval')?.value, 10) || 180
+      })
+    }).then((r) => {
+      applyAutoUi(r.auto);
+      toast(r.auto?.enabled ? 'Auto-discover on' : 'Auto-discover off', 'ok');
+    }).catch((e) => toast(e.message, 'err'));
+  };
 
   async function ensureIngestCatalog() {
     if (ingestCatalog) return ingestCatalog;
@@ -922,12 +958,18 @@
   }
 
   function fillIngestDefaults(d) {
-    if ($('ingest-subs') && !$('ingest-subs').value.trim()) $('ingest-subs').value = (d.subs || []).join('\n');
-    if ($('ingest-queries')) $('ingest-queries').value = (d.queries || []).join('\n');
-    if ($('ingest-xqueries')) $('ingest-xqueries').value = (d.xQueries || []).join('\n');
-    if ($('ingest-redgifs')) $('ingest-redgifs').value = (d.redgifsQueries || []).join('\n');
+    const pack = (ingestCatalog?.packs || []).find(p => p.id === 'onlyfans');
+    const subs = pack?.reddit || d.subs || [];
+    const queries = pack?.ddg || d.queries || [];
+    const xQueries = pack?.x || d.xQueries || [];
+    const redgifs = pack?.redgifs || d.redgifsQueries || [];
+    const creators = pack?.creators || d.creatorQueries || [];
+    if ($('ingest-subs') && !$('ingest-subs').value.trim()) $('ingest-subs').value = subs.join('\n');
+    if ($('ingest-queries')) $('ingest-queries').value = queries.join('\n');
+    if ($('ingest-xqueries')) $('ingest-xqueries').value = xQueries.join('\n');
+    if ($('ingest-redgifs')) $('ingest-redgifs').value = redgifs.join('\n');
     if ($('ingest-creator-queries') && !$('ingest-creator-queries').value.trim()) {
-      $('ingest-creator-queries').value = (d.creatorQueries || []).join('\n');
+      $('ingest-creator-queries').value = creators.join('\n');
     }
   }
 
@@ -1009,7 +1051,7 @@
   window.adminIngestSweep = () => api('/api/admin/ingest/sweep', {
     method: 'POST',
     body: JSON.stringify({ probeImgur: true, limit: 800 })
-  }).then((r) => toast(`Hid ${r.hidden || 0} junk items`, 'ok')).catch(e => toast(e.message, 'err'));
+  }).then((r) => toast(`Hid ${r.hidden || 0} junk / female-tagged items`, 'ok')).catch(e => toast(e.message, 'err'));
 
   async function loadAdminModeration() {
     try {

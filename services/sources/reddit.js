@@ -34,7 +34,8 @@ function extractFromListingPost(post) {
     mediaType: null,
     mediaUrl: null,
     previewUrl: null,
-    thumbnail: d.thumbnail
+    thumbnail: d.thumbnail,
+    flair: d.link_flair_text || d.link_flair_richtext?.[0]?.t || null,
   };
 
   if (d.preview && d.preview.images && d.preview.images[0] && d.preview.images[0].source) {

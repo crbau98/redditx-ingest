@@ -64,6 +64,42 @@ const QUERY_PACKS = {
       'twink gay',
       'gay otter',
       'jock gay',
+      'onlyfans gay male',
+    ],
+  },
+  onlyfans: {
+    id: 'onlyfans',
+    label: 'OF promo (public)',
+    hint: 'Public ads on Reddit / X / RedGIFs — never paid OF vaults',
+    reddit: [
+      'gaybrosgonewild', 'gaynsfw', 'mangonewild', 'gayporn', 'twinks',
+      'gaymuscle', 'hardbodies', 'otters', 'jockstraps', 'boysgonewild',
+    ],
+    redgifs: [
+      'onlyfans gay',
+      'gay onlyfans male',
+      'onlyfans twink gay',
+      'onlyfans muscle gay',
+      'onlyfans jock gay',
+    ],
+    x: [
+      'site:x.com onlyfans gay male',
+      'site:x.com onlyfans twink gay',
+      'site:x.com onlyfans muscle gay',
+      'site:twitter.com onlyfans gay nsfw',
+      'site:x.com/status onlyfans gay',
+    ],
+    ddg: [
+      'site:redgifs.com onlyfans gay',
+      'site:imgur.com onlyfans gay male',
+      'site:reddit.com onlyfans gay gonewild',
+    ],
+    web: ['site:redgifs.com onlyfans gay'],
+    creators: [
+      'onlyfans gay male',
+      'onlyfans twink gay',
+      'onlyfans muscle gay',
+      'gay onlyfans promo',
     ],
   },
   muscle: {

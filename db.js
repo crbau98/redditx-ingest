@@ -342,12 +342,16 @@ module.exports = {
 
   listPublishedMediaPage(offset = 0, limit = 200) {
     return db.prepare(`
-      SELECT id, title, media_url, preview_url, source_platform, creator_id
+      SELECT id, title, media_url, preview_url, source_platform, creator_id, author, subreddit
       FROM media
       WHERE publish_state = 'published'
       ORDER BY created_at DESC
       LIMIT ? OFFSET ?
     `).all(limit, offset);
+  },
+
+  countPublishedMedia() {
+    return db.prepare("SELECT COUNT(*) as count FROM media WHERE publish_state = 'published'").get().count;
   },
 
   hideMedia(id, reason) {

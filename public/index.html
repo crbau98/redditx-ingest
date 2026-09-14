@@ -34,8 +34,13 @@
   <header class="header">
     <div class="brand" onclick="navigate('gallery')" role="link" tabindex="0">
       <h1>PRISM</h1>
-      <span class="tag">Discovery</span>
+      <span class="tag">Male creators</span>
     </div>
+    <nav class="header-nav desktop-only" aria-label="Primary">
+      <button type="button" data-view="gallery" onclick="navigate('gallery')">Explore</button>
+      <button type="button" data-view="creators" onclick="navigate('creators')">Creators</button>
+      <button type="button" data-view="saved" onclick="navigate('saved')">Saved</button>
+    </nav>
     <div class="header-center">
       <div class="search-box">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
@@ -59,9 +64,19 @@
 
   <!-- GALLERY -->
   <div id="view-gallery" class="view active">
+    <div class="explore-hero">
+      <div>
+        <p class="explore-kicker">Gay male creators</p>
+        <h2 class="explore-title">Discover public promo — photos, clips, people</h2>
+        <p class="explore-lede">Browse by creator first. Auto-discover pulls public Reddit, X, and RedGIFs ads — never paid OnlyFans vaults.</p>
+      </div>
+      <div class="explore-actions">
+        <button class="btn btn-primary" type="button" onclick="navigate('creators')">Browse creators</button>
+        <button class="chip" type="button" id="chip-creators" aria-pressed="false" onclick="toggleCreatorBrowse()">Creators only</button>
+      </div>
+    </div>
     <div class="toolbar" role="toolbar" aria-label="Gallery filters">
       <button class="chip mobile-only" type="button" onclick="openFilterDrawer()">Filters</button>
-      <button class="chip" type="button" id="chip-creators" aria-pressed="false" onclick="toggleCreatorBrowse()">Creators only</button>
       <label class="sr-only" for="filter-type">Media type</label>
       <select id="filter-type" class="filter-select desktop-only" onchange="applyFilters()">
         <option value="">All media</option>
@@ -111,7 +126,7 @@
   <div id="view-creators" class="view">
     <div class="page-pad">
       <h2 class="section-title">Creators</h2>
-      <p class="section-sub">People, not random posts. Profiles are built from Reddit, X, and RedGIFs identities as media is ingested.</p>
+      <p class="section-sub">People first. Profiles are built from public Reddit, X, and RedGIFs identities as promo media is ingested — not from paid OnlyFans posts.</p>
       <div class="creator-toolbar">
         <label class="sr-only" for="creator-search">Search creators</label>
         <input type="search" id="creator-search" class="form-input" placeholder="Search handles…" onkeydown="if(event.key==='Enter')loadCreatorsBrowse()">
@@ -139,7 +154,7 @@
   <div id="view-admin" class="view">
     <div class="page-pad no-bottom">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;flex-wrap:wrap">
-        <h2 class="section-title" style="margin:0">Admin</h2>
+        <h2 class="section-title" style="margin:0">Control panel</h2>
         <a class="back-link" style="margin:0" onclick="navigate('gallery')">← Gallery</a>
       </div>
       <div class="admin-tabs">
@@ -165,8 +180,8 @@
       <div id="admin-ingestion" class="admin-section">
         <div class="ingest-hero">
           <div>
-            <h3 class="ingest-heading">Creator scan</h3>
-            <p class="section-sub" style="margin:0">Public indexes only: Reddit communities, X posts, RedGIFs. Quality gate blocks stock photos and dead Imgur before anything is published.</p>
+            <h3 class="ingest-heading">Auto discover</h3>
+            <p class="section-sub" style="margin:0">Public promo only: Reddit communities, X posts via fxtwitter, RedGIFs. Quality gate blocks stock photos, dead Imgur, female-tagged titles, and OnlyFans.com paywall URLs. This never logs into OnlyFans or downloads paid posts.</p>
           </div>
           <div class="ingest-controls">
             <button class="btn btn-primary" type="button" onclick="adminIngestStart()">Scan all creator sources</button>
@@ -175,6 +190,21 @@
             <button class="btn btn-danger" type="button" onclick="adminIngestStop()">Stop</button>
             <button class="btn" type="button" onclick="adminIngestSweep()">Sweep junk</button>
           </div>
+        </div>
+        <div class="auto-panel" id="auto-panel">
+          <div class="auto-panel-copy">
+            <h4>Scheduled public scan</h4>
+            <p>When the archive is empty the server runs one scan on boot. After that it repeats on an interval (or cron if <code>CRON_ENABLED=true</code>). Queries target male OF creators’ <strong>public</strong> ads on Reddit, X, and RedGIFs.</p>
+          </div>
+          <label class="toggle-row">
+            <input type="checkbox" id="auto-discover-toggle" onchange="saveAutoDiscover()">
+            <span>Auto discover</span>
+          </label>
+          <div class="form-group" style="margin:0;min-width:140px">
+            <label for="auto-interval">Interval (minutes)</label>
+            <input type="number" class="form-input" id="auto-interval" min="30" max="1440" value="180" onchange="saveAutoDiscover()">
+          </div>
+          <div class="auto-mode" id="auto-mode">Interval mode</div>
         </div>
         <div class="ingest-outcome" id="ingest-outcome" role="status">No scan yet this session.</div>
         <div class="ingest-progress" id="ingest-progress" hidden>
@@ -237,7 +267,7 @@
             </div>
           </div>
         </div>
-        <pre class="ingest-log" id="ingest-log" aria-live="polite">Ready. Default scan is Reddit + X + RedGIFs — not stock photo search. Paywalled sites are not crawled.</pre>
+        <pre class="ingest-log" id="ingest-log" aria-live="polite">Ready. Default auto-scan is Reddit + X + RedGIFs public promo — not OnlyFans login, not leaked vaults.</pre>
         <h3 style="font-size:14px;color:var(--muted);margin:16px 0 10px">Job history</h3>
         <div class="table-wrap">
           <table class="admin-table">
@@ -299,6 +329,7 @@
               <option value="permissive">Permissive</option>
             </select>
           </div>
+          <p class="section-sub">Female-tagged titles (pussy, busty, lesbian, milf, girl-only without gay keepers) are rejected at ingest and hidden by Sweep junk.</p>
           <button class="btn btn-primary" type="button" onclick="saveSettings()">Save settings</button>
         </div>
       </div>

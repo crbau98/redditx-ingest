@@ -1,8 +1,17 @@
 const db = require('../db');
+const { looksFemaleTagged, isJunkTitle } = require('./media-quality');
 
 module.exports = {
   list(params) {
-    return db.listMedia(params);
+    const result = db.listMedia(params);
+    const publicView = !params.publishState || params.publishState === 'published';
+    if (!publicView) return result;
+    result.items = result.items.filter((row) => {
+      if (isJunkTitle(row.title)) return false;
+      const blob = [row.title, row.author, row.subreddit].join(' ');
+      return !looksFemaleTagged(blob, { gayContext: true });
+    });
+    return result;
   },
 
   get(id) {

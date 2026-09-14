@@ -6,6 +6,8 @@ const DEFAULT_QUERIES = [
   'site:redgifs.com gay muscle',
   'site:redgifs.com gay twink',
   'site:redgifs.com gay jock',
+  'site:redgifs.com onlyfans gay',
+  'site:imgur.com onlyfans gay male',
   'site:i.redd.it gay',
 ];
 

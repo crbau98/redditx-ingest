@@ -18,7 +18,13 @@ router.get('/health', (req, res) => {
 router.get('/stats', (req, res) => {
   const stats = mediaService.getStats();
   const state = ingestion.getState();
-  res.json({ ...stats, ingesting: state.ingesting, paused: state.paused, ingest: state.stats });
+  res.json({
+    ...stats,
+    ingesting: state.ingesting,
+    paused: state.paused,
+    ingest: state.stats,
+    auto: ingestion.getSchedulerState(),
+  });
 });
 
 // Media list
@@ -116,10 +122,7 @@ router.get('/proxy', (req, res) => {
     'external-preview.redd.it', 'b.thumbs.redditmedia.com',
     'v.redd.it', 'redditmedia.com', 'redgifs.com', 'gfycat.com',
     'pbs.twimg.com', 'twimg.com', 'video.twimg.com',
-    'media.tumblr.com', 'pinimg.com', 'bing.net', 'bing.com',
-    'duckduckgo.com', 'googleusercontent.com', 'ggpht.com',
-    'discordsays.com', 'discordapp.com', 'cdninstagram.com',
-    'fbcdn.net', 'onlyfans.com', 'xhcdn.com', 'redgifs.com'
+    'erome.com',
   ];
 
   let parsed;

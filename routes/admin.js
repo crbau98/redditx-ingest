@@ -37,7 +37,23 @@ router.post('/ingest/start', (req, res) => {
 });
 
 router.get('/ingest/status', (req, res) => {
-  res.json({ ...ingestion.getState(), logs: ingestion.getLogs().slice(-80) });
+  res.json({
+    ...ingestion.getState(),
+    logs: ingestion.getLogs().slice(-80),
+    auto: ingestion.getSchedulerState(),
+  });
+});
+
+router.put('/ingest/auto', (req, res) => {
+  const { enabled, intervalMinutes } = req.body || {};
+  if (enabled !== undefined) {
+    db.setSetting('auto_discover', enabled ? 'true' : 'false');
+  }
+  if (intervalMinutes !== undefined && intervalMinutes !== null && intervalMinutes !== '') {
+    const n = parseInt(intervalMinutes, 10);
+    if (Number.isFinite(n)) db.setSetting('auto_discover_interval_min', String(Math.min(Math.max(n, 30), 1440)));
+  }
+  res.json({ ok: true, auto: ingestion.applyScheduler() });
 });
 
 router.get('/ingest/logs', (req, res) => {

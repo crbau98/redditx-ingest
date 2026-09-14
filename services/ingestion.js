@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { sleep } = require('./fetch');
+const cron = require('node-cron');
 const { itemPassesQuality, shouldHideExisting, probeMedia } = require('./media-quality');
 const reddit = require('./sources/reddit');
 const ddg = require('./sources/ddg');
@@ -21,6 +22,10 @@ let sseClients = [];
 let stats = emptyStats();
 let logs = [];
 let lastOutcome = null;
+let intervalHandle = null;
+let cronTask = null;
+let lastScheduledAt = null;
+let bootScanStarted = false;
 
 function emptyStats() {
   return { total: 0, images: 0, videos: 0, dupes: 0, skipped: 0, errors: 0, swept: 0, bySource: {} };
@@ -102,7 +107,9 @@ async function persistItem(item, source) {
     if (!item.author || item.author === 'web') item.author = resolved.author;
   }
 
-  const quality = await itemPassesQuality(item);
+  const gayContext = getOrientationScope(item.subreddit, source) === 'gay'
+    || /gay|twink|jock|otter|bear|onlyfans.?male/i.test(String(item.query || ''));
+  const quality = await itemPassesQuality(item, { gayContext });
   if (!quality.ok) {
     stats.skipped++;
     bumpSource(source, 'skipped');
@@ -274,7 +281,7 @@ async function sweepJunkMedia({ probeImgur = true, limit = 400 } = {}) {
   let hidden = 0;
   let checked = 0;
   let offset = 0;
-  log('INFO', 'Sweeping previously ingested junk (stock, dead Imgur, generic web)...');
+  log('INFO', 'Sweeping junk + female-tagged published items (stock, dead Imgur, generic web)...');
 
   while (checked < limit) {
     const batch = db.listPublishedMediaPage(offset, 100);
@@ -444,6 +451,100 @@ function resumeIngestion() {
   broadcast({ type: 'status', data: 'running' });
 }
 
+function autoDiscoverEnabled() {
+  const setting = db.getSetting('auto_discover');
+  if (setting == null) return true;
+  return setting !== 'false' && setting !== '0';
+}
+
+function autoIntervalMinutes() {
+  const raw = db.getSetting('auto_discover_interval_min') || process.env.AUTO_INGEST_MINUTES || '180';
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) ? Math.min(Math.max(n, 30), 24 * 60) : 180;
+}
+
+function scheduledIngestConfig() {
+  return {
+    queryPack: 'onlyfans',
+    sources: ['reddit', 'x', 'redgifs'],
+    limit: 24,
+    sweep: true,
+  };
+}
+
+function maybeStartScheduledIngest(reason) {
+  if (!autoDiscoverEnabled()) return { ok: false, msg: 'auto-discover off' };
+  if (ingesting) return { ok: false, msg: 'already running' };
+  lastScheduledAt = new Date().toISOString();
+  log('INFO', `Auto-discover (${reason}): public Reddit / X / RedGIFs promo only — not OnlyFans login, cookies, or paid posts`);
+  runIngestion(scheduledIngestConfig());
+  return { ok: true };
+}
+
+function seedAutoSettings() {
+  if (db.getSetting('auto_discover') == null) db.setSetting('auto_discover', 'true');
+  if (db.getSetting('auto_discover_interval_min') == null) {
+    db.setSetting('auto_discover_interval_min', String(autoIntervalMinutes()));
+  }
+}
+
+function applyScheduler() {
+  seedAutoSettings();
+  if (intervalHandle) {
+    clearInterval(intervalHandle);
+    intervalHandle = null;
+  }
+  if (!autoDiscoverEnabled()) {
+    if (cronTask) cronTask.stop();
+    log('INFO', 'Auto-discover disabled');
+    return getSchedulerState();
+  }
+
+  if (process.env.CRON_ENABLED === 'true') {
+    const schedule = process.env.CRON_SCHEDULE || '0 */3 * * *';
+    if (!cronTask) {
+      cronTask = cron.schedule(schedule, () => maybeStartScheduledIngest('cron'));
+      log('INFO', `Auto-discover cron: ${schedule}`);
+    } else {
+      cronTask.start();
+    }
+  } else {
+    const ms = autoIntervalMinutes() * 60 * 1000;
+    intervalHandle = setInterval(() => maybeStartScheduledIngest('interval'), ms);
+    log('INFO', `Auto-discover interval: every ${autoIntervalMinutes()} minutes (in-process; set CRON_ENABLED=true for node-cron)`);
+  }
+  return getSchedulerState();
+}
+
+function startScheduler() {
+  applyScheduler();
+  if (bootScanStarted) return getSchedulerState();
+  bootScanStarted = true;
+  setTimeout(() => {
+    try {
+      if (!autoDiscoverEnabled()) return;
+      if (db.countPublishedMedia() === 0) {
+        maybeStartScheduledIngest('empty archive on boot');
+      }
+    } catch (e) {
+      console.error('[auto-discover boot]', e.message);
+    }
+  }, 4000);
+  return getSchedulerState();
+}
+
+function getSchedulerState() {
+  return {
+    enabled: autoDiscoverEnabled(),
+    intervalMinutes: autoIntervalMinutes(),
+    mode: process.env.CRON_ENABLED === 'true' ? 'cron' : 'interval',
+    cronSchedule: process.env.CRON_SCHEDULE || '0 */3 * * *',
+    lastScheduledAt,
+    ingesting,
+    note: 'Pulls public promo media (Reddit, X/fxtwitter, RedGIFs). Does not log into OnlyFans or download paid posts.',
+  };
+}
+
 module.exports = {
   DEFAULT_SUBS,
   DEFAULT_SOURCES,
@@ -457,5 +558,9 @@ module.exports = {
   stopIngestion,
   pauseIngestion,
   resumeIngestion,
-  sweepJunkMedia
+  sweepJunkMedia,
+  startScheduler,
+  applyScheduler,
+  getSchedulerState,
+  maybeStartScheduledIngest,
 };

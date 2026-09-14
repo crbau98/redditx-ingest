@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "test": "node tests/quality.test.js && node tests/ingest-smoke.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.7.0",

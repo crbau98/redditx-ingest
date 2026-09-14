@@ -8,6 +8,9 @@ const DEFAULT_QUERIES = [
   'site:x.com gay jock nsfw',
   'site:twitter.com gay male nsfw',
   'site:twitter.com gay otter',
+  'site:x.com onlyfans gay male',
+  'site:x.com onlyfans twink gay',
+  'site:twitter.com onlyfans gay nsfw',
 ];
 
 function tweetIdFromUrl(url) {
