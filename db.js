@@ -332,6 +332,14 @@ module.exports = {
     return db.prepare('SELECT * FROM media WHERE hash = ?').get(hash);
   },
 
+  isKnownMediaUrl(url) {
+    if (!url) return false;
+    const row = db.prepare(
+      'SELECT 1 AS ok FROM media WHERE media_url = ? OR preview_url = ? OR thumbnail_url = ? LIMIT 1'
+    ).get(url, url, url);
+    return !!row;
+  },
+
   getStats() {
     const total = countMedia.get().count;
     const byType = {};
@@ -406,7 +414,15 @@ module.exports = {
 
   // Jobs
   insertJob(data) { return insertJob.run(data); },
-  updateJob(data) { return updateJob.run(data); },
+  updateJob(data) {
+    return updateJob.run({
+      id: data.id,
+      status: data.status ?? null,
+      stats: data.stats ?? null,
+      completed_at: data.completed_at ?? null,
+      error: data.error ?? null
+    });
+  },
   getJob(id) { return getJob.get(id); },
   getJobs(limit = 50) { return getJobs.all(limit); },
 

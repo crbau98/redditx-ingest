@@ -19,6 +19,14 @@ router.post('/ingest/start', (req, res) => {
   res.json({ ok: true });
 });
 
+router.get('/ingest/status', (req, res) => {
+  res.json({ ...ingestion.getState(), logs: ingestion.getLogs().slice(-80) });
+});
+
+router.get('/ingest/logs', (req, res) => {
+  res.json(ingestion.getLogs());
+});
+
 router.post('/ingest/stop', (req, res) => {
   ingestion.stopIngestion();
   res.json({ ok: true });

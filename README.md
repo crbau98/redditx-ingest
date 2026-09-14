@@ -8,8 +8,9 @@ A gay-focused NSFW media discovery platform with Reddit ingestion, SQLite persis
 - **Mobile-first shell** — Bottom navigation, filter drawer, mobile search, swipeable lightbox
 - **Saved collection** — Device-local favorites with heart actions and share links
 - **Creators** — Browse and open creator profiles with media grids
-- **Reddit Ingestion** — Automated media fetching from configurable subreddits
-- **Admin Panel** — Dashboard, ingestion controls, moderation queue, media/creator management
+- **Reddit Ingestion** — Pulls gay-focused communities via Reddit when allowed, with an archive fallback when Reddit returns 403
+- **X / DuckDuckGo / Web** — Optional multi-source scan for public creator posts and images (X bearer token optional)
+- **Admin Panel** — Dashboard, ingestion controls, live logs, moderation queue, media/creator management
 - **Age Gate** — Session-based age verification interstitial
 - **Real-time Updates** — SSE streaming during ingestion
 - **Media Proxy** — Remote media proxied through the server for privacy
@@ -45,7 +46,9 @@ Copy `.env.example` to `.env` and customize:
 2. Enter your `ADMIN_KEY` when prompted
 3. Use the admin panel to manage ingestion, moderation, media, and creators
 
-Admin API routes require the `x-admin-key` header.
+Set `X_BEARER_TOKEN` for official X recent-search ingest. Without it, X still harvests public tweet media found via DuckDuckGo.
+
+Default sources: Reddit (archive fallback when Reddit returns 403), DuckDuckGo/web image search, X, and Open Graph harvest from DDG web results.
 
 ## Deploy to Railway
 
@@ -80,10 +83,12 @@ Admin API routes require the `x-admin-key` header.
 
 ### Admin Endpoints (require `x-admin-key` header)
 
-- `POST /api/admin/ingest/start` - Start ingestion
-- `POST /api/admin/ingest/stop` - Stop ingestion
-- `POST /api/admin/ingest/pause` - Pause ingestion
-- `POST /api/admin/ingest/resume` - Resume ingestion
+- `POST /api/admin/ingest/start` — Start a multi-source scan (`sources`, `subs`, `queries`, `xQueries`, `limit`, `minScore`)
+- `POST /api/admin/ingest/stop` — Stop ingestion
+- `POST /api/admin/ingest/pause` — Pause ingestion
+- `POST /api/admin/ingest/resume` — Resume ingestion
+- `GET /api/admin/ingest/status` — Live job stats + recent logs
+- `GET /api/admin/ingest/logs` — Full in-memory ingest log
 - `GET /api/admin/jobs` - Job history
 - `PATCH /api/admin/media/:id` - Update media
 - `DELETE /api/admin/media/:id` - Remove media

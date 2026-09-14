@@ -745,6 +745,21 @@ textarea.form-input { min-height: 96px; resize: vertical; }
 }
 @media (min-width: 800px) { .ingest-config { grid-template-columns: 1.2fr 1fr; } }
 .ingest-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.source-pills label.chip { gap: 8px; }
+.source-pills label.chip input { margin: 0; }
+.ingest-log {
+  margin-top: 14px;
+  max-height: 240px;
+  overflow: auto;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--ink);
+  color: #d7ece8;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .mod-card {
   display: flex; flex-direction: column; gap: 12px;
   padding: 14px; border-radius: var(--radius);
