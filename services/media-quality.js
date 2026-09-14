@@ -47,6 +47,8 @@ const BLOCKED_HOSTS = new Set([
   'encrypted-tbn1.gstatic.com',
   'encrypted-tbn2.gstatic.com',
   'encrypted-tbn3.gstatic.com',
+  'ggpht.com',
+  'googleusercontent.com',
   'bing.com',
   'tse1.mm.bing.net',
   'tse2.mm.bing.net',
@@ -60,6 +62,17 @@ const BLOCKED_HOSTS = new Set([
   'placekitten.com',
   'loremflickr.com',
   'picsum.photos',
+  // Paywalled / leaked vaults — never ingest
+  'onlyfans.com',
+  'cdn.onlyfans.com',
+  'thumbs.onlyfans.com',
+  'coomer.su',
+  'coomer.party',
+  'coomer.st',
+  'kemono.su',
+  'kemono.party',
+  'kemono.cr',
+  'simpcity.su',
 ]);
 
 const TRUSTED_HOST_SUFFIXES = [
@@ -139,6 +152,21 @@ function isJunkTitle(title = '') {
   );
 }
 
+const HARD_FEMALE = /pussy|vagina|\bclit\b|lesbian|milf|busty|boobs|\btits\b|\bbreasts\b|solo.?female|female.?only|only.?fans.?girl|trans.?wom[ae]n|\btranswoman\b|\bshemale\b|girl.?on.?girl|women.?only|hotwives|wife.?share/i;
+const SOFT_FEMALE = /\bfemale\b|\bwomen\b|\bgirl\b|\bgirls\b/i;
+const MALE_KEEP = /gay|twink|jock|cock|male|\bman\b|\bmen\b|\bboy\b|\bboys\b|otter|bear|muscle|\bdl\b|\bbro\b|onlyfans.?male|femboy|trans.?man|\bftm\b|masc/i;
+
+function looksFemaleTagged(text = '', { gayContext = false } = {}) {
+  const blob = String(text || '');
+  if (!blob) return false;
+  if (HARD_FEMALE.test(blob)) return true;
+  if (!SOFT_FEMALE.test(blob)) return false;
+  if (MALE_KEEP.test(blob)) return false;
+  // Gay-community slang often uses "girl" for a submissive man — do not drop those posts.
+  if (gayContext && /\bgirl\b|\bgirls\b/.test(blob) && !/\bfemale\b|\bwomen\b/.test(blob)) return false;
+  return true;
+}
+
 function classifyUrl(url) {
   const host = hostOf(url);
   if (hostBlocked(host)) return { ok: false, reason: `blocked host ${host}`, host };
@@ -207,11 +235,18 @@ async function probeMedia(url, type) {
   }
 }
 
-async function itemPassesQuality(item) {
+async function itemPassesQuality(item, { gayContext = false } = {}) {
   if (!item?.mediaUrl) return { ok: false, reason: 'missing media url' };
   if (isJunkTitle(item.title)) return { ok: false, reason: 'junk title' };
+  const orientationBlob = [item.title, item.flair, item.query, item.author, item.subreddit]
+    .filter(Boolean)
+    .join(' ');
+  if (looksFemaleTagged(orientationBlob, { gayContext })) {
+    return { ok: false, reason: 'female-tagged' };
+  }
   const type = item.mediaType || item.type || 'image';
   const host = hostOf(item.mediaUrl);
+  if (hostBlocked(host)) return { ok: false, reason: `blocked host ${host}` };
   if (!hostTrusted(host) && !looksLikeDirectMedia(item.mediaUrl)) {
     return { ok: false, reason: `untrusted host ${host}` };
   }
@@ -220,6 +255,10 @@ async function itemPassesQuality(item) {
 
 function shouldHideExisting(row) {
   if (isJunkTitle(row.title)) return { hide: true, reason: 'junk title' };
+  const orientationBlob = [row.title, row.author, row.subreddit].filter(Boolean).join(' ');
+  if (looksFemaleTagged(orientationBlob, { gayContext: /gay|twink|jock|otter|bear|bro/i.test(orientationBlob) })) {
+    return { hide: true, reason: 'female-tagged' };
+  }
   const url = row.media_url || '';
   const classified = classifyUrl(url);
   if (!classified.ok) return { hide: true, reason: classified.reason };
@@ -239,6 +278,8 @@ module.exports = {
   probeMedia,
   itemPassesQuality,
   isJunkTitle,
+  looksFemaleTagged,
   shouldHideExisting,
   looksLikeDirectMedia,
+  HARD_FEMALE,
 };

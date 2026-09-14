@@ -6,7 +6,6 @@ const compression = require('compression');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
-const cron = require('node-cron');
 
 // Initialize DB (runs migrations)
 require('./db');
@@ -65,26 +64,16 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Scheduled ingestion (every 6 hours if enabled)
-if (process.env.CRON_ENABLED === 'true') {
-  const schedule = process.env.CRON_SCHEDULE || '0 */6 * * *';
-  cron.schedule(schedule, () => {
-    console.log('[CRON] Starting scheduled ingestion...');
-    const state = ingestion.getState();
-    if (!state.ingesting) {
-      ingestion.runIngestion({});
-    }
-  });
-  console.log(`[CRON] Scheduled ingestion: ${process.env.CRON_SCHEDULE || '0 */6 * * *'}`);
-}
+ingestion.startScheduler();
 
 app.listen(PORT, () => {
+  const auto = ingestion.getSchedulerState();
   console.log(`\n  ==============================`);
   console.log(`   PRISM v3.0 Server`);
   console.log(`  ==============================`);
   console.log(`   Port:  ${PORT}`);
   console.log(`   Local: http://localhost:${PORT}`);
   console.log(`   Admin: Set ADMIN_KEY env var`);
-  console.log(`   Cron:  ${process.env.CRON_ENABLED === 'true' ? 'Enabled' : 'Disabled'}`);
+  console.log(`   Auto:  ${auto.enabled ? auto.mode + ' / ' + auto.intervalMinutes + 'min' : 'off'} (public promo only)`);
   console.log(`  ==============================\n`);
 });

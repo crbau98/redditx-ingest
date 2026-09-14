@@ -7,10 +7,11 @@ A gay-focused NSFW media discovery platform with Reddit ingestion, SQLite persis
 - **Media Gallery** — Responsive masonry/grid with lazy loading, infinite scroll, filters, and search
 - **Mobile-first shell** — Bottom navigation, filter drawer, mobile search, swipeable lightbox
 - **Saved collection** — Device-local favorites with heart actions and share links
-- **Creators** — Browse and open creator profiles with media grids
-- **Reddit / X / RedGIFs ingestion** — Pulls creator photos and videos from gay Reddit communities, public X posts, and RedGIFs. Generic Bing/DuckDuckGo image search is off by default because it filled the gallery with stock photos and dead Imgur links.
-- **Quality gate** — Rejects stock/CDN junk, deleted Imgur placeholders, and HTML pages before anything is published. Admin can sweep existing junk.
-- **Admin Panel** — Dashboard, ingestion controls, live logs, moderation queue, media/creator management
+- **Creators** — Browse and open creator profiles with media grids. Gallery “Creators only” filter hides anonymous posts.
+- **Reddit / X / RedGIFs ingestion** — Default scan is Reddit gay communities + public X posts + RedGIFs (male-tagged). Optional DDG/web ingest only keeps Imgur, RedGIFs, Reddit, and similar creator hosts — not Bing stock photos. Query packs (Muscle / Twink / Otter / Jock / **OF promo**) and a curated creator-query list are in Admin.
+- **Auto discover** — On by default. If `CRON_ENABLED=true`, node-cron runs the OF-promo pack; otherwise an in-process interval (default 180 minutes) does. An empty archive triggers one scan on boot. This finds **public promo** of male OnlyFans creators on Reddit, X, and RedGIFs. It does **not** log into OnlyFans, use session cookies, or download paid posts.
+- **Quality gate** — Rejects stock/CDN junk, deleted Imgur placeholders, HTML pages, OnlyFans.com/leaked-vault hosts, and clearly female-tagged titles before anything is published. Admin sweep hides existing junk and female-tagged items.
+- **Admin Panel** — Control panel for auto-discover, ingestion, live logs, moderation, media/creator management
 - **Age Gate** — Session-based age verification interstitial
 - **Real-time Updates** — SSE streaming during ingestion
 - **Media Proxy** — Remote media proxied through the server for privacy
@@ -39,6 +40,9 @@ Copy `.env.example` to `.env` and customize:
 | `DB_PATH` | SQLite database path | `./data/prism.db` |
 | `ADMIN_KEY` | Admin API key | _(none - open access)_ |
 | `NODE_ENV` | Environment | `development` |
+| `CRON_ENABLED` | `true` uses node-cron; unset/false uses in-process interval | unset (interval) |
+| `CRON_SCHEDULE` | Cron expression when `CRON_ENABLED=true` | `0 */3 * * *` |
+| `AUTO_INGEST_MINUTES` | Interval when cron env is not true | `180` |
 
 ## Admin Access
 
@@ -77,17 +81,21 @@ Default sources: Reddit (archive fallback when Reddit returns 403), X, and RedGI
 - `GET /api/creators/:id` - Creator profile
 - `GET /api/tags` - List tags
 - `GET /api/subreddits` - List subreddits
+- `GET /api/sources` - Distinct ingest source platforms
+- `GET /api/ingest-catalog` - Public source list and query packs
 - `GET /api/stats` - Public stats
 - `GET /api/proxy?url=` - Media proxy
 - `GET /api/stream` - SSE event stream
 
 ### Admin Endpoints (require `x-admin-key` header)
 
-- `POST /api/admin/ingest/start` — Start a multi-source scan (`sources`, `subs`, `queries`, `xQueries`, `redgifsQueries`, `limit`, `minScore`)
+- `POST /api/admin/ingest/start` — Start a multi-source scan (`sources`, `subs`, `queries`, `xQueries`, `redgifsQueries`, `creatorQueries`, `redgifsUsers`, `queryPack`, `limit`, `minScore`)
+- `GET /api/admin/ingest/catalog` — Source blurbs, query packs, default creator queries
 - `POST /api/admin/ingest/stop` — Stop ingestion
 - `POST /api/admin/ingest/pause` — Pause ingestion
 - `POST /api/admin/ingest/resume` — Resume ingestion
-- `POST /api/admin/ingest/sweep` — Hide stock photos, dead Imgur, and other junk already in the gallery
+- `PUT /api/admin/ingest/auto` — Toggle auto-discover (`enabled`, `intervalMinutes`). Public promo only; not paid OF.
+- `POST /api/admin/ingest/sweep` — Hide stock photos, dead Imgur, female-tagged titles, and other junk already in the gallery
 - `GET /api/admin/ingest/status` — Live job stats + recent logs
 - `GET /api/admin/ingest/logs` — Full in-memory ingest log
 - `GET /api/admin/jobs` - Job history

@@ -18,16 +18,22 @@ router.get('/health', (req, res) => {
 router.get('/stats', (req, res) => {
   const stats = mediaService.getStats();
   const state = ingestion.getState();
-  res.json({ ...stats, ingesting: state.ingesting, paused: state.paused, ingest: state.stats });
+  res.json({
+    ...stats,
+    ingesting: state.ingesting,
+    paused: state.paused,
+    ingest: state.stats,
+    auto: ingestion.getSchedulerState(),
+  });
 });
 
 // Media list
 router.get('/media', (req, res) => {
-  const { page, limit, type, subreddit, creator, tag, sort, q, publishState } = req.query;
+  const { page, limit, type, subreddit, source, hasCreator, creator, tag, sort, q, publishState } = req.query;
   const result = mediaService.list({
     page: parseInt(page) || 0,
     limit: Math.min(parseInt(limit) || 50, 200),
-    type, subreddit, creator, tag, sort, q,
+    type, subreddit, source, hasCreator, creator, tag, sort, q,
     ...(publishState !== undefined ? { publishState } : {})
   });
   res.json(result);
@@ -98,6 +104,14 @@ router.get('/subreddits', (req, res) => {
   res.json(mediaService.getSubreddits());
 });
 
+router.get('/sources', (req, res) => {
+  res.json(mediaService.getSourcePlatforms());
+});
+
+router.get('/ingest-catalog', (req, res) => {
+  res.json(ingestion.catalog.publicCatalog());
+});
+
 // Image/video proxy — allow known CDNs and URLs already ingested
 router.get('/proxy', (req, res) => {
   const target = req.query.url;
@@ -108,10 +122,7 @@ router.get('/proxy', (req, res) => {
     'external-preview.redd.it', 'b.thumbs.redditmedia.com',
     'v.redd.it', 'redditmedia.com', 'redgifs.com', 'gfycat.com',
     'pbs.twimg.com', 'twimg.com', 'video.twimg.com',
-    'media.tumblr.com', 'pinimg.com', 'bing.net', 'bing.com',
-    'duckduckgo.com', 'googleusercontent.com', 'ggpht.com',
-    'discordsays.com', 'discordapp.com', 'cdninstagram.com',
-    'fbcdn.net', 'onlyfans.com', 'xhcdn.com', 'redgifs.com'
+    'erome.com',
   ];
 
   let parsed;

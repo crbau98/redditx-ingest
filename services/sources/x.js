@@ -3,8 +3,14 @@ const { searchWeb } = require('./ddg');
 
 const DEFAULT_QUERIES = [
   'site:x.com/status gay muscle',
-  'site:x.com gay muscle',
-  'site:twitter.com gay male nsfw'
+  'site:x.com gay muscle nsfw',
+  'site:x.com/status gay twink',
+  'site:x.com gay jock nsfw',
+  'site:twitter.com gay male nsfw',
+  'site:twitter.com gay otter',
+  'site:x.com onlyfans gay male',
+  'site:x.com onlyfans twink gay',
+  'site:twitter.com onlyfans gay nsfw',
 ];
 
 function tweetIdFromUrl(url) {

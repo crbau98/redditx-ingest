@@ -1,12 +1,21 @@
 const { fetchJSON } = require('../fetch');
+const { looksFemaleTagged } = require('../media-quality');
 
 const DEFAULT_QUERIES = [
   'gay',
-  'twink',
-  'muscle',
-  'jock',
-  'otter',
+  'gay twink',
+  'gay muscle',
+  'gay jock',
+  'gay otter',
+  'gay couple',
+  'bareback gay',
+  'jockstrap gay',
+  'onlyfans gay',
+  'onlyfans male gay',
 ];
+
+/** Optional public RedGIFs usernames (not paywalled). Empty by default; admin can add. */
+const DEFAULT_USERS = [];
 
 let cachedToken = null;
 let tokenExpires = 0;
@@ -34,14 +43,10 @@ function gifIdFromUrl(url) {
   return m ? m[1] : null;
 }
 
-const SKIP_TAGS = /pussy|boobs|busty|lesbian|milf|\bfemale\b|\bwomen\b|\bgirl\b|\btits\b|\bbreasts\b/i;
-const KEEP_TAGS = /gay|twink|jock|cock|male|man|boy|otter|bear|muscle|onlyfans.?male|dl|bro/i;
-
 function gifLooksMale(gif, query) {
   const blob = `${(gif.tags || []).join(' ')} ${gif.userName || ''} ${query || ''}`;
-  if (SKIP_TAGS.test(blob) && !KEEP_TAGS.test(blob)) return false;
-  if (SKIP_TAGS.test(blob) && /busty|pussy|lesbian|milf|boobs/.test(blob) && !/gay|cock|twink|male/.test(blob)) return false;
-  return true;
+  const gayContext = /gay|twink|jock|cock|male|otter|bear|muscle|onlyfans.?male/i.test(blob + ' ' + (query || ''));
+  return !looksFemaleTagged(blob, { gayContext });
 }
 
 function itemFromGif(gif, query) {
@@ -83,4 +88,34 @@ async function harvestQuery(query, { limit = 24 } = {}) {
   };
 }
 
-module.exports = { DEFAULT_QUERIES, harvestQuery, resolveUrl, gifIdFromUrl };
+async function harvestUser(username, { limit = 24 } = {}) {
+  const handle = String(username || '').replace(/^@/, '').trim();
+  if (!handle) return { items: [] };
+  const count = Math.min(limit, 80);
+  const paths = [
+    `/v2/users/${encodeURIComponent(handle)}/search?count=${count}&order=new`,
+    `/v2/users/${encodeURIComponent(handle)}/gifs?count=${count}&order=new`,
+  ];
+  let lastErr = null;
+  for (const path of paths) {
+    try {
+      const json = await redgifsJSON(path);
+      const gifs = json.gifs || json.gfycats || [];
+      return {
+        items: gifs.map((gif) => itemFromGif(gif, handle)).filter(Boolean),
+      };
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  return { items: [], officialError: lastErr ? lastErr.message : 'user not found' };
+}
+
+module.exports = {
+  DEFAULT_QUERIES,
+  DEFAULT_USERS,
+  harvestQuery,
+  harvestUser,
+  resolveUrl,
+  gifIdFromUrl,
+};

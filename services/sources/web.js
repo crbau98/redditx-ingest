@@ -4,7 +4,8 @@ const { hostTrusted, hostBlocked, normalizeMediaUrl } = require('../media-qualit
 
 const DEFAULT_QUERIES = [
   'site:imgur.com gay male creator',
-  'site:redgifs.com gay',
+  'site:redgifs.com gay muscle',
+  'site:redgifs.com gay twink',
   'site:erome.com gay male',
 ];
 

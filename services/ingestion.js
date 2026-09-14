@@ -2,12 +2,14 @@ const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { sleep } = require('./fetch');
+const cron = require('node-cron');
 const { itemPassesQuality, shouldHideExisting, probeMedia } = require('./media-quality');
 const reddit = require('./sources/reddit');
 const ddg = require('./sources/ddg');
 const x = require('./sources/x');
 const web = require('./sources/web');
 const redgifs = require('./sources/redgifs');
+const catalog = require('./ingest-catalog');
 
 const DEFAULT_SUBS = reddit.DEFAULT_SUBS;
 const GAY_SUBS = new Set(DEFAULT_SUBS.map(s => s.toLowerCase()));
@@ -17,11 +19,20 @@ let ingesting = false;
 let paused = false;
 let currentJobId = null;
 let sseClients = [];
-let stats = { total: 0, images: 0, videos: 0, dupes: 0, skipped: 0, errors: 0, bySource: {} };
+let stats = emptyStats();
 let logs = [];
+let lastOutcome = null;
+let intervalHandle = null;
+let cronTask = null;
+let lastScheduledAt = null;
+let bootScanStarted = false;
+
+function emptyStats() {
+  return { total: 0, images: 0, videos: 0, dupes: 0, skipped: 0, errors: 0, swept: 0, bySource: {} };
+}
 
 function getState() {
-  return { ingesting, paused, stats, currentJobId };
+  return { ingesting, paused, stats, currentJobId, lastOutcome };
 }
 function setSseClients(clients) { sseClients = clients; }
 function getSseClients() { return sseClients; }
@@ -96,7 +107,9 @@ async function persistItem(item, source) {
     if (!item.author || item.author === 'web') item.author = resolved.author;
   }
 
-  const quality = await itemPassesQuality(item);
+  const gayContext = getOrientationScope(item.subreddit, source) === 'gay'
+    || /gay|twink|jock|otter|bear|onlyfans.?male/i.test(String(item.query || ''));
+  const quality = await itemPassesQuality(item, { gayContext });
   if (!quality.ok) {
     stats.skipped++;
     bumpSource(source, 'skipped');
@@ -194,6 +207,36 @@ async function runReddit(config) {
   }
 }
 
+async function runRedgifsUsers(users, limit) {
+  log('INFO', `RedGIFs creators: ${users.length} public usernames`);
+  for (const username of users) {
+    if (!ingesting) break;
+    await waitIfPaused();
+    log('INFO', `RedGIFs user: ${username}`);
+    try {
+      const result = await redgifs.harvestUser(username, { limit });
+      if (result.officialError) log('WARN', `RedGIFs @${username}: ${result.officialError}`);
+      let count = 0;
+      for (const item of result.items || []) {
+        if (!ingesting) break;
+        await waitIfPaused();
+        if (await persistItem(item, 'redgifs')) {
+          count++;
+          log('OK', `[redgifs ${item.mediaType}] @${username}: ${(item.title || '').slice(0, 70)}`);
+        }
+        await sleep(30);
+      }
+      log('OK', `RedGIFs @${username}: ${count} new items`);
+    } catch (e) {
+      stats.errors++;
+      bumpSource('redgifs', 'errors');
+      log('ERR', `RedGIFs @${username}: ${e.message}`);
+      broadcast({ type: 'stats', data: stats });
+    }
+    await sleep(250);
+  }
+}
+
 async function runQueries(sourceName, harvest, queries, limit) {
   log('INFO', `${sourceName}: ${queries.length} queries`);
   for (const query of queries) {
@@ -238,7 +281,7 @@ async function sweepJunkMedia({ probeImgur = true, limit = 400 } = {}) {
   let hidden = 0;
   let checked = 0;
   let offset = 0;
-  log('INFO', 'Sweeping previously ingested junk (stock, dead Imgur, generic web)...');
+  log('INFO', 'Sweeping junk + female-tagged published items (stock, dead Imgur, generic web)...');
 
   while (checked < limit) {
     const batch = db.listPublishedMediaPage(offset, 100);
@@ -264,6 +307,10 @@ async function sweepJunkMedia({ probeImgur = true, limit = 400 } = {}) {
   }
 
   log('OK', `Sweep complete: hid ${hidden} of ${checked} items`);
+  if (ingesting) {
+    stats.swept = (stats.swept || 0) + hidden;
+    broadcast({ type: 'stats', data: stats });
+  }
   return { hidden, checked };
 }
 
@@ -272,32 +319,63 @@ async function runIngestion(config = {}) {
 
   ingesting = true;
   paused = false;
-  stats = { total: 0, images: 0, videos: 0, dupes: 0, skipped: 0, errors: 0, bySource: {} };
+  stats = emptyStats();
   logs = [];
 
+  const pack = config.queryPack ? catalog.packById(config.queryPack) : null;
   const sources = parseList(config.sources, DEFAULT_SOURCES).map(s => s.toLowerCase());
   const enabled = new Set(sources);
-  const queries = parseList(config.queries, ddg.DEFAULT_QUERIES);
-  const xQueries = parseList(config.xQueries, x.DEFAULT_QUERIES);
-  const webQueries = parseList(config.webQueries, web.DEFAULT_QUERIES);
-  const redgifsQueries = parseList(config.redgifsQueries, redgifs.DEFAULT_QUERIES);
+  const queries = parseList(config.queries, pack ? pack.ddg : ddg.DEFAULT_QUERIES);
+  const creatorQueries = parseList(
+    config.creatorQueries,
+    parseList(db.getSetting('creator_queries'), catalog.DEFAULT_CREATOR_QUERIES),
+  );
+  const xQueries = uniqueList(
+    parseList(config.xQueries, pack ? pack.x : x.DEFAULT_QUERIES),
+    creatorQueries.map((q) => `site:x.com ${q}`),
+  );
+  const webQueries = parseList(config.webQueries, pack ? pack.web : web.DEFAULT_QUERIES);
+  const redgifsQueries = uniqueList(
+    parseList(config.redgifsQueries, pack ? pack.redgifs : redgifs.DEFAULT_QUERIES),
+    creatorQueries,
+  );
+  const redgifsUsers = parseList(
+    config.redgifsUsers,
+    parseList(db.getSetting('redgifs_users'), redgifs.DEFAULT_USERS),
+  );
+  if (pack && (!config.subs || !config.subs.length)) config.subs = pack.reddit;
 
   const jobId = uuidv4();
   currentJobId = jobId;
+  const jobConfig = {
+    ...config,
+    sources: [...enabled],
+    queries,
+    xQueries,
+    webQueries,
+    redgifsQueries,
+    redgifsUsers,
+    creatorQueries,
+    queryPack: config.queryPack || null,
+  };
   db.insertJob({
     id: jobId,
     status: 'running',
-    config: JSON.stringify({ ...config, sources: [...enabled], queries }),
+    config: JSON.stringify(jobConfig),
     started_at: new Date().toISOString()
   });
 
-  log('INFO', `Starting ingestion: ${[...enabled].join(', ')}`);
+  log('INFO', `Starting creator scan: ${[...enabled].join(', ')}${config.queryPack ? ` · pack=${config.queryPack}` : ''}`);
   broadcast({ type: 'status', data: 'running' });
+  broadcast({ type: 'stats', data: stats });
 
   try {
     if (config.sweep !== false) await sweepJunkMedia({ probeImgur: true, limit: 500 });
     if (enabled.has('reddit')) await runReddit(config);
-    if (enabled.has('redgifs') && ingesting) await runQueries('redgifs', redgifs.harvestQuery, redgifsQueries, config.limit || 24);
+    if (enabled.has('redgifs') && ingesting) {
+      await runQueries('redgifs', redgifs.harvestQuery, redgifsQueries, config.limit || 24);
+      if (redgifsUsers.length && ingesting) await runRedgifsUsers(redgifsUsers, config.limit || 24);
+    }
     if (enabled.has('x') && ingesting) await runQueries('x', x.harvestQuery, xQueries, config.limit || 20);
     if (enabled.has('ddg') && ingesting) await runQueries('ddg', ddg.harvestQuery, queries, config.limit || 24);
     if (enabled.has('web') && ingesting) await runQueries('web', web.harvestQuery, webQueries, Math.min(config.limit || 12, 20));
@@ -321,9 +399,36 @@ async function runIngestion(config = {}) {
 
   ingesting = false;
   currentJobId = null;
-  log('INFO', `Ingestion complete. New: ${stats.total} · skipped: ${stats.skipped} · dupes: ${stats.dupes} · errors: ${stats.errors}`);
+  lastOutcome = {
+    jobId,
+    at: new Date().toISOString(),
+    newItems: stats.total,
+    skipped: stats.skipped,
+    dupes: stats.dupes,
+    errors: stats.errors,
+    swept: stats.swept || 0,
+    bySource: stats.bySource,
+  };
+  log('INFO', `Scan complete. New: ${stats.total} · skipped: ${stats.skipped} · dupes: ${stats.dupes} · junk swept: ${stats.swept || 0} · errors: ${stats.errors}`);
   broadcast({ type: 'status', data: 'idle' });
   broadcast({ type: 'stats', data: stats });
+  broadcast({ type: 'outcome', data: lastOutcome });
+}
+
+function uniqueList(...lists) {
+  const seen = new Set();
+  const out = [];
+  for (const list of lists) {
+    for (const raw of list || []) {
+      const value = String(raw).trim();
+      if (!value) continue;
+      const key = value.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(value);
+    }
+  }
+  return out;
 }
 
 function stopIngestion() {
@@ -346,9 +451,104 @@ function resumeIngestion() {
   broadcast({ type: 'status', data: 'running' });
 }
 
+function autoDiscoverEnabled() {
+  const setting = db.getSetting('auto_discover');
+  if (setting == null) return true;
+  return setting !== 'false' && setting !== '0';
+}
+
+function autoIntervalMinutes() {
+  const raw = db.getSetting('auto_discover_interval_min') || process.env.AUTO_INGEST_MINUTES || '180';
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) ? Math.min(Math.max(n, 30), 24 * 60) : 180;
+}
+
+function scheduledIngestConfig() {
+  return {
+    queryPack: 'onlyfans',
+    sources: ['reddit', 'x', 'redgifs'],
+    limit: 24,
+    sweep: true,
+  };
+}
+
+function maybeStartScheduledIngest(reason) {
+  if (!autoDiscoverEnabled()) return { ok: false, msg: 'auto-discover off' };
+  if (ingesting) return { ok: false, msg: 'already running' };
+  lastScheduledAt = new Date().toISOString();
+  log('INFO', `Auto-discover (${reason}): public Reddit / X / RedGIFs promo only — not OnlyFans login, cookies, or paid posts`);
+  runIngestion(scheduledIngestConfig());
+  return { ok: true };
+}
+
+function seedAutoSettings() {
+  if (db.getSetting('auto_discover') == null) db.setSetting('auto_discover', 'true');
+  if (db.getSetting('auto_discover_interval_min') == null) {
+    db.setSetting('auto_discover_interval_min', String(autoIntervalMinutes()));
+  }
+}
+
+function applyScheduler() {
+  seedAutoSettings();
+  if (intervalHandle) {
+    clearInterval(intervalHandle);
+    intervalHandle = null;
+  }
+  if (!autoDiscoverEnabled()) {
+    if (cronTask) cronTask.stop();
+    log('INFO', 'Auto-discover disabled');
+    return getSchedulerState();
+  }
+
+  if (process.env.CRON_ENABLED === 'true') {
+    const schedule = process.env.CRON_SCHEDULE || '0 */3 * * *';
+    if (!cronTask) {
+      cronTask = cron.schedule(schedule, () => maybeStartScheduledIngest('cron'));
+      log('INFO', `Auto-discover cron: ${schedule}`);
+    } else {
+      cronTask.start();
+    }
+  } else {
+    const ms = autoIntervalMinutes() * 60 * 1000;
+    intervalHandle = setInterval(() => maybeStartScheduledIngest('interval'), ms);
+    log('INFO', `Auto-discover interval: every ${autoIntervalMinutes()} minutes (in-process; set CRON_ENABLED=true for node-cron)`);
+  }
+  return getSchedulerState();
+}
+
+function startScheduler() {
+  applyScheduler();
+  if (bootScanStarted) return getSchedulerState();
+  bootScanStarted = true;
+  setTimeout(() => {
+    try {
+      if (!autoDiscoverEnabled()) return;
+      if (db.countPublishedMedia() === 0) {
+        maybeStartScheduledIngest('empty archive on boot');
+      }
+    } catch (e) {
+      console.error('[auto-discover boot]', e.message);
+    }
+  }, 4000);
+  return getSchedulerState();
+}
+
+function getSchedulerState() {
+  return {
+    enabled: autoDiscoverEnabled(),
+    intervalMinutes: autoIntervalMinutes(),
+    mode: process.env.CRON_ENABLED === 'true' ? 'cron' : 'interval',
+    cronSchedule: process.env.CRON_SCHEDULE || '0 */3 * * *',
+    lastScheduledAt,
+    ingesting,
+    note: 'Pulls public promo media (Reddit, X/fxtwitter, RedGIFs). Does not log into OnlyFans or download paid posts.',
+  };
+}
+
 module.exports = {
   DEFAULT_SUBS,
   DEFAULT_SOURCES,
+  catalog,
   getState,
   setSseClients,
   getSseClients,
@@ -358,5 +558,9 @@ module.exports = {
   stopIngestion,
   pauseIngestion,
   resumeIngestion,
-  sweepJunkMedia
+  sweepJunkMedia,
+  startScheduler,
+  applyScheduler,
+  getSchedulerState,
+  maybeStartScheduledIngest,
 };

@@ -12,15 +12,48 @@ const router = express.Router();
 router.use(adminAuth);
 
 // --- Ingestion ---
+router.get('/ingest/catalog', (req, res) => {
+  res.json(ingestion.catalog.publicCatalog());
+});
+
 router.post('/ingest/start', (req, res) => {
   const state = ingestion.getState();
   if (state.ingesting) return res.json({ ok: false, msg: 'Already running' });
-  ingestion.runIngestion(req.body);
+  const body = req.body || {};
+  if (Array.isArray(body.creatorQueries) || typeof body.creatorQueries === 'string') {
+    const list = Array.isArray(body.creatorQueries)
+      ? body.creatorQueries
+      : String(body.creatorQueries).split(/\n|,/).map((s) => s.trim()).filter(Boolean);
+    db.setSetting('creator_queries', list.join('\n'));
+  }
+  if (Array.isArray(body.redgifsUsers) || typeof body.redgifsUsers === 'string') {
+    const list = Array.isArray(body.redgifsUsers)
+      ? body.redgifsUsers
+      : String(body.redgifsUsers).split(/\n|,/).map((s) => s.trim()).filter(Boolean);
+    db.setSetting('redgifs_users', list.join('\n'));
+  }
+  ingestion.runIngestion(body);
   res.json({ ok: true });
 });
 
 router.get('/ingest/status', (req, res) => {
-  res.json({ ...ingestion.getState(), logs: ingestion.getLogs().slice(-80) });
+  res.json({
+    ...ingestion.getState(),
+    logs: ingestion.getLogs().slice(-80),
+    auto: ingestion.getSchedulerState(),
+  });
+});
+
+router.put('/ingest/auto', (req, res) => {
+  const { enabled, intervalMinutes } = req.body || {};
+  if (enabled !== undefined) {
+    db.setSetting('auto_discover', enabled ? 'true' : 'false');
+  }
+  if (intervalMinutes !== undefined && intervalMinutes !== null && intervalMinutes !== '') {
+    const n = parseInt(intervalMinutes, 10);
+    if (Number.isFinite(n)) db.setSetting('auto_discover_interval_min', String(Math.min(Math.max(n, 30), 1440)));
+  }
+  res.json({ ok: true, auto: ingestion.applyScheduler() });
 });
 
 router.get('/ingest/logs', (req, res) => {

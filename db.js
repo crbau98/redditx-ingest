@@ -243,7 +243,7 @@ module.exports = {
   updateMedia(data) { return updateMedia.run(data); },
   deleteMedia(id) { return deleteMedia.run(id); },
 
-  listMedia({ page = 0, limit = 50, type, subreddit, creator, tag, sort = 'recent', q, publishState = 'published' } = {}) {
+  listMedia({ page = 0, limit = 50, type, subreddit, source, hasCreator, creator, tag, sort = 'recent', q, publishState = 'published' } = {}) {
     let where = [];
     let params = [];
 
@@ -257,6 +257,10 @@ module.exports = {
 
     if (type) { where.push('media_type = ?'); params.push(type); }
     if (subreddit) { where.push('subreddit = ?'); params.push(subreddit); }
+    if (source) { where.push('source_platform = ?'); params.push(source); }
+    if (hasCreator === true || hasCreator === '1' || hasCreator === 'true') {
+      where.push('creator_id IS NOT NULL');
+    }
     if (creator) { where.push('creator_id = ?'); params.push(creator); }
     if (q) { where.push('(title LIKE ? OR author LIKE ? OR subreddit LIKE ?)'); params.push(`%${q}%`, `%${q}%`, `%${q}%`); }
     if (tag) {
@@ -328,18 +332,26 @@ module.exports = {
     return db.prepare("SELECT DISTINCT subreddit FROM media WHERE publish_state = 'published' AND subreddit IS NOT NULL ORDER BY subreddit").all().map(r => r.subreddit);
   },
 
+  getSourcePlatforms() {
+    return db.prepare("SELECT DISTINCT source_platform FROM media WHERE publish_state = 'published' AND source_platform IS NOT NULL ORDER BY source_platform").all().map(r => r.source_platform);
+  },
+
   getMediaByHash(hash) {
     return db.prepare('SELECT * FROM media WHERE hash = ?').get(hash);
   },
 
   listPublishedMediaPage(offset = 0, limit = 200) {
     return db.prepare(`
-      SELECT id, title, media_url, preview_url, source_platform, creator_id
+      SELECT id, title, media_url, preview_url, source_platform, creator_id, author, subreddit
       FROM media
       WHERE publish_state = 'published'
       ORDER BY created_at DESC
       LIMIT ? OFFSET ?
     `).all(limit, offset);
+  },
+
+  countPublishedMedia() {
+    return db.prepare("SELECT COUNT(*) as count FROM media WHERE publish_state = 'published'").get().count;
   },
 
   hideMedia(id, reason) {
