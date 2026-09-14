@@ -4,6 +4,8 @@ const http = require('http');
 const mediaService = require('../services/media');
 const creatorsService = require('../services/creators');
 const ingestion = require('../services/ingestion');
+const db = require('../db');
+const { isPrivateHost } = require('../services/fetch');
 
 const router = express.Router();
 
@@ -16,7 +18,7 @@ router.get('/health', (req, res) => {
 router.get('/stats', (req, res) => {
   const stats = mediaService.getStats();
   const state = ingestion.getState();
-  res.json({ ...stats, ingesting: state.ingesting, paused: state.paused });
+  res.json({ ...stats, ingesting: state.ingesting, paused: state.paused, ingest: state.stats });
 });
 
 // Media list
@@ -96,29 +98,48 @@ router.get('/subreddits', (req, res) => {
   res.json(mediaService.getSubreddits());
 });
 
-// Image/video proxy
+// Image/video proxy — allow known CDNs and URLs already ingested
 router.get('/proxy', (req, res) => {
   const target = req.query.url;
   if (!target) return res.status(400).json({ error: 'Missing url parameter' });
 
   const allowed = [
-    'i.redd.it', 'preview.redd.it', 'i.imgur.com',
+    'i.redd.it', 'preview.redd.it', 'i.imgur.com', 'imgur.com',
     'external-preview.redd.it', 'b.thumbs.redditmedia.com',
-    'v.redd.it'
+    'v.redd.it', 'redditmedia.com', 'redgifs.com', 'gfycat.com',
+    'pbs.twimg.com', 'twimg.com', 'video.twimg.com',
+    'media.tumblr.com', 'pinimg.com', 'bing.net', 'bing.com',
+    'duckduckgo.com', 'googleusercontent.com', 'ggpht.com',
+    'discordsays.com', 'discordapp.com', 'cdninstagram.com',
+    'fbcdn.net', 'onlyfans.com', 'xhcdn.com', 'redgifs.com'
   ];
 
-  let hostname;
-  try { hostname = new URL(target).hostname; } catch { return res.status(400).json({ error: 'Invalid url' }); }
-  if (!allowed.some(h => hostname.endsWith(h))) {
+  let parsed;
+  try { parsed = new URL(target); } catch { return res.status(400).json({ error: 'Invalid url' }); }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return res.status(400).json({ error: 'Invalid protocol' });
+  }
+  if (isPrivateHost(parsed.hostname)) {
+    return res.status(403).json({ error: 'Blocked host' });
+  }
+
+  const hostOk = allowed.some(h => parsed.hostname === h || parsed.hostname.endsWith('.' + h));
+  if (!hostOk && !db.isKnownMediaUrl(target)) {
     return res.status(403).json({ error: 'Domain not allowed' });
   }
 
-  const mod = target.startsWith('https') ? https : http;
+  const mod = parsed.protocol === 'https:' ? https : http;
   const proxyReq = mod.get(target, {
-    headers: { 'User-Agent': 'Mozilla/5.0', Referer: 'https://www.reddit.com/' }
+    headers: {
+      'User-Agent': 'Mozilla/5.0',
+      Referer: parsed.origin + '/',
+      Accept: 'image/avif,image/webp,image/*,*/*;q=0.8'
+    }
   }, proxyRes => {
-    if (proxyRes.statusCode === 301 || proxyRes.statusCode === 302) {
-      return res.redirect(proxyRes.headers.location);
+    if ([301, 302, 303, 307, 308].includes(proxyRes.statusCode) && proxyRes.headers.location) {
+      const next = new URL(proxyRes.headers.location, parsed).toString();
+      proxyRes.resume();
+      return res.redirect('/api/proxy?url=' + encodeURIComponent(next));
     }
     res.writeHead(proxyRes.statusCode, {
       'Content-Type': proxyRes.headers['content-type'] || 'image/jpeg',
@@ -128,7 +149,7 @@ router.get('/proxy', (req, res) => {
     proxyRes.pipe(res);
   });
   proxyReq.on('error', () => res.status(502).json({ error: 'Proxy error' }));
-  proxyReq.setTimeout(10000, () => { proxyReq.destroy(); res.status(504).json({ error: 'Timeout' }); });
+  proxyReq.setTimeout(15000, () => { proxyReq.destroy(); res.status(504).json({ error: 'Timeout' }); });
 });
 
 module.exports = router;

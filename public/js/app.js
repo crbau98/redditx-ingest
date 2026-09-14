@@ -576,6 +576,7 @@
           if ($('st-videos')) $('st-videos').textContent = m.data.videos || 0;
         }
         if (m.type === 'status') setStatus(m.data);
+        if (m.type === 'log') appendIngestLog(m.data);
       } catch { /* ignore */ }
     };
     es.onerror = () => { es.close(); setTimeout(connectSSE, 3000); };
@@ -785,28 +786,60 @@
       $('ingest-jobs-table').innerHTML = jobs.map(j => {
         const cfg = j.config ? JSON.parse(j.config) : {};
         const s = j.stats ? JSON.parse(j.stats) : {};
+        const src = cfg.sources ? cfg.sources.join('+') : (cfg.subs ? cfg.subs.length + ' subs' : '');
         return `<tr>
           <td style="font-family:monospace;font-size:11px">${esc(j.id.slice(0, 8))}</td>
           <td>${esc(j.status)}</td>
-          <td style="font-size:11px">${cfg.subs ? cfg.subs.length + ' subs' : ''}</td>
-          <td>${esc(s.total || 0)} items</td>
+          <td style="font-size:11px">${esc(src)}</td>
+          <td>${esc(s.total || 0)} new · ${esc(s.dupes || 0)} dupes</td>
           <td>${esc(timeAgo(j.started_at))}</td>
           <td>${j.completed_at ? esc(timeAgo(j.completed_at)) : '—'}</td>
         </tr>`;
       }).join('');
+      const st = await api('/api/admin/ingest/status');
+      if (st.logs && st.logs.length) {
+        $('ingest-log').textContent = st.logs.map(l => `[${l.level}] ${l.msg}`).join('\n');
+        $('ingest-log').scrollTop = $('ingest-log').scrollHeight;
+      }
     } catch { /* ok */ }
   }
 
+  function selectedSources() {
+    return [...document.querySelectorAll('#ingest-sources input:checked')].map(i => i.value);
+  }
+
+  function lines(id) {
+    return ($(id)?.value || '').split('\n').map(s => s.trim()).filter(Boolean);
+  }
+
   window.adminIngestStart = function adminIngestStart() {
-    const subsText = $('ingest-subs').value.trim();
-    const subs = subsText ? subsText.split('\n').map(s => s.trim()).filter(Boolean) : undefined;
-    const sort = $('ingest-sort').value;
-    const limit = parseInt($('ingest-limit').value, 10) || 50;
-    const minScore = parseInt($('ingest-minscore').value, 10) || 0;
-    api('/api/admin/ingest/start', { method: 'POST', body: JSON.stringify({ subs, sort, limit, minScore }) })
-      .then(() => toast('Ingestion started', 'ok'))
-      .catch(e => toast(e.message, 'err'));
+    const sources = selectedSources();
+    if (!sources.length) return toast('Pick at least one source', 'err');
+    api('/api/admin/ingest/start', {
+      method: 'POST',
+      body: JSON.stringify({
+        sources,
+        subs: lines('ingest-subs'),
+        queries: lines('ingest-queries'),
+        xQueries: lines('ingest-xqueries'),
+        webQueries: lines('ingest-queries'),
+        sort: $('ingest-sort').value,
+        limit: parseInt($('ingest-limit').value, 10) || 40,
+        minScore: parseInt($('ingest-minscore').value, 10) || 0
+      })
+    }).then(() => {
+      toast('Scan started', 'ok');
+      $('ingest-log').textContent = '';
+    }).catch(e => toast(e.message, 'err'));
   };
+
+  function appendIngestLog(entry) {
+    const el = $('ingest-log');
+    if (!el || !entry) return;
+    const line = `[${entry.level}] ${entry.msg}`;
+    el.textContent = (el.textContent + '\n' + line).trim();
+    el.scrollTop = el.scrollHeight;
+  }
   window.adminIngestPause = () => api('/api/admin/ingest/pause', { method: 'POST' }).then(() => toast('Paused')).catch(e => toast(e.message, 'err'));
   window.adminIngestResume = () => api('/api/admin/ingest/resume', { method: 'POST' }).then(() => toast('Resumed', 'ok')).catch(e => toast(e.message, 'err'));
   window.adminIngestStop = () => api('/api/admin/ingest/stop', { method: 'POST' }).then(() => toast('Stopped')).catch(e => toast(e.message, 'err'));

@@ -8,8 +8,9 @@ A gay-focused NSFW media discovery platform with Reddit ingestion, SQLite persis
 - **Mobile-first shell** — Bottom navigation, filter drawer, mobile search, swipeable lightbox
 - **Saved collection** — Device-local favorites with heart actions and share links
 - **Creators** — Browse and open creator profiles with media grids
-- **Reddit Ingestion** — Automated media fetching from configurable subreddits
-- **Admin Panel** — Dashboard, ingestion controls, moderation queue, media/creator management
+- **Reddit Ingestion** — Pulls gay-focused communities via Reddit when allowed, with an archive fallback when Reddit returns 403
+- **X / DuckDuckGo / Web** — Optional multi-source scan for public creator posts and images (X bearer token optional)
+- **Admin Panel** — Dashboard, ingestion controls, live logs, moderation queue, media/creator management
 - **Age Gate** — Session-based age verification interstitial
 - **Real-time Updates** — SSE streaming during ingestion
 - **Media Proxy** — Remote media proxied through the server for privacy

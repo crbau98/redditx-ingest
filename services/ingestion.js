@@ -1,30 +1,28 @@
-const https = require('https');
-const http = require('http');
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
+const { sleep } = require('./fetch');
+const reddit = require('./sources/reddit');
+const ddg = require('./sources/ddg');
+const x = require('./sources/x');
+const web = require('./sources/web');
 
-const DEFAULT_SUBS = [
-  'gaybrosgonemild', 'boyswithabs', 'vlinesabsanddick',
-  'gaynsfw', 'twinks', 'massivecocks', 'hardbodies', 'gaymuscle',
-  'totallystraight', 'broslikeus', 'malepubes', 'cock',
-  'gaybrosgonewild', 'bulges', 'jockstraps'
-];
+const DEFAULT_SUBS = reddit.DEFAULT_SUBS;
+const GAY_SUBS = new Set(DEFAULT_SUBS.map(s => s.toLowerCase()));
 
-// Runtime state
 let ingesting = false;
 let paused = false;
 let currentJobId = null;
 let sseClients = [];
-let stats = { total: 0, images: 0, videos: 0, dupes: 0, errors: 0 };
+let stats = { total: 0, images: 0, videos: 0, dupes: 0, errors: 0, bySource: {} };
 let logs = [];
 
 function getState() {
   return { ingesting, paused, stats, currentJobId };
 }
-
 function setSseClients(clients) { sseClients = clients; }
 function getSseClients() { return sseClients; }
+function getLogs() { return logs; }
 
 function broadcast(msg) {
   const data = `data: ${JSON.stringify(msg)}\n\n`;
@@ -36,111 +34,179 @@ function broadcast(msg) {
 function log(level, msg) {
   const entry = { ts: new Date().toISOString(), level, msg };
   logs.push(entry);
-  if (logs.length > 500) logs.shift();
+  if (logs.length > 800) logs.shift();
   broadcast({ type: 'log', data: entry });
 }
 
-function getLogs() { return logs; }
-
-function fetchJSON(url) {
-  return new Promise((resolve, reject) => {
-    const mod = url.startsWith('https') ? https : http;
-    const req = mod.get(url, { headers: { 'User-Agent': 'PRISM-Ingest/2.0' } }, res => {
-      if (res.statusCode === 301 || res.statusCode === 302) {
-        return fetchJSON(res.headers.location).then(resolve).catch(reject);
-      }
-      let body = '';
-      res.on('data', c => body += c);
-      res.on('end', () => {
-        try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
-      });
-    });
-    req.on('error', reject);
-    req.setTimeout(15000, () => { req.destroy(); reject(new Error('Timeout')); });
-  });
+function bumpSource(source, field) {
+  if (!stats.bySource[source]) stats.bySource[source] = { total: 0, dupes: 0, errors: 0 };
+  stats.bySource[source][field] = (stats.bySource[source][field] || 0) + 1;
 }
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-function extractMedia(post) {
-  const d = post.data;
-  const result = {
-    id: d.id, title: d.title, author: d.author, subreddit: d.subreddit,
-    score: d.score, url: d.url, permalink: 'https://reddit.com' + d.permalink,
-    created: d.created_utc, nsfw: d.over_18, mediaType: null, mediaUrl: null,
-    previewUrl: null, thumbnail: d.thumbnail
-  };
-
-  // Preview
-  if (d.preview && d.preview.images && d.preview.images[0]) {
-    const src = d.preview.images[0].source;
-    if (src) result.previewUrl = src.url.replace(/&amp;/g, '&');
-  }
-
-  // Direct image
-  if (/\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i.test(d.url)) {
-    result.mediaType = 'image'; result.mediaUrl = d.url;
-  }
-  // Imgur
-  else if (/imgur\.com\/\w+$/i.test(d.url) && !/\/a\//i.test(d.url)) {
-    result.mediaType = 'image'; result.mediaUrl = d.url + '.jpg';
-  }
-  // Reddit gallery
-  else if (d.is_gallery && d.media_metadata) {
-    const first = Object.values(d.media_metadata)[0];
-    if (first && first.s) {
-      result.mediaType = 'image'; result.mediaUrl = (first.s.u || first.s.gif || '').replace(/&amp;/g, '&');
-    }
-  }
-  // Reddit video
-  else if (d.is_video && d.media && d.media.reddit_video) {
-    result.mediaType = 'video'; result.mediaUrl = d.media.reddit_video.fallback_url;
-  }
-  // Redgifs
-  else if (/redgifs\.com/i.test(d.url)) {
-    result.mediaType = 'video'; result.mediaUrl = d.url;
-    if (result.previewUrl) { result.mediaType = 'image'; result.mediaUrl = result.previewUrl; }
-  }
-  // Fallback to preview
-  else if (result.previewUrl) {
-    result.mediaType = 'image'; result.mediaUrl = result.previewUrl;
-  }
-
-  return result;
-}
-
-// Gay-focused subreddits get 'gay' scope, others get 'uncertain'
-const GAY_SUBS = new Set(DEFAULT_SUBS.map(s => s.toLowerCase()));
-
-function getOrientationScope(subreddit) {
+function getOrientationScope(subreddit, source) {
+  if (source !== 'reddit') return 'gay';
   if (!subreddit) return 'uncertain';
   return GAY_SUBS.has(subreddit.toLowerCase()) ? 'gay' : 'uncertain';
 }
 
-function getOrCreateCreator(author) {
-  if (!author || author === '[deleted]' || author === 'AutoModerator') return null;
-
-  let creator = db.getCreatorByHandle(author);
+function getOrCreateCreator(author, platform, profileUrl) {
+  if (!author || author === '[deleted]' || author === 'AutoModerator' || author === 'web') return null;
+  const handle = String(author).replace(/^@/, '').slice(0, 80);
+  let creator = db.getCreatorByHandle(handle);
   if (creator) return creator;
 
   const id = uuidv4();
   db.insertCreator({
     id,
-    primary_handle: author,
-    display_name: author,
+    primary_handle: handle,
+    display_name: handle,
     orientation_scope: 'gay'
   });
-
   db.insertCreatorSource({
     id: uuidv4(),
     creator_id: id,
-    source_platform: 'reddit',
-    source_creator_id: author,
-    handle: author,
-    profile_url: `https://reddit.com/u/${author}`
+    source_platform: platform,
+    source_creator_id: handle,
+    handle,
+    profile_url: profileUrl || null
+  });
+  return db.getCreator(id);
+}
+
+async function waitIfPaused() {
+  while (paused && ingesting) await sleep(250);
+}
+
+function persistItem(item, source) {
+  if (!item || !item.mediaUrl) return false;
+  const hash = crypto.createHash('md5').update(item.mediaUrl).digest('hex');
+  if (db.getMediaByHash(hash)) {
+    stats.dupes++;
+    bumpSource(source, 'dupes');
+    broadcast({ type: 'stats', data: stats });
+    return false;
+  }
+
+  const creator = getOrCreateCreator(
+    item.author,
+    source,
+    item.permalink && item.author ? item.permalink : null
+  );
+  const mediaId = uuidv4();
+  db.insertMedia({
+    id: mediaId,
+    title: item.title || null,
+    description: item.query ? `Found via ${source}: ${item.query}` : null,
+    media_type: item.mediaType === 'video' ? 'video' : 'image',
+    media_url: item.mediaUrl,
+    preview_url: item.previewUrl || null,
+    thumbnail_url: (item.thumbnail && String(item.thumbnail).startsWith('http')) ? item.thumbnail : null,
+    source_platform: source,
+    source_url: item.permalink || item.mediaUrl,
+    source_id: String(item.sourceId || hash).slice(0, 80),
+    subreddit: item.subreddit || source,
+    author: item.author || null,
+    score: item.score || 0,
+    hash,
+    width: null,
+    height: null,
+    orientation_scope: getOrientationScope(item.subreddit, source),
+    publish_state: 'published',
+    creator_id: creator ? creator.id : null
   });
 
-  return db.getCreator(id);
+  if (creator) db.updateCreatorStats(creator.id);
+  const tag = (item.subreddit || item.query || source).toLowerCase().replace(/\s+/g, '-').slice(0, 40);
+  if (tag) db.addTagToMedia(mediaId, tag, 'ingest');
+  db.addTagToMedia(mediaId, source, 'ingest');
+
+  stats.total++;
+  bumpSource(source, 'total');
+  if (item.mediaType === 'video') stats.videos++;
+  else stats.images++;
+
+  broadcast({ type: 'item', data: db.getMedia(mediaId) });
+  broadcast({ type: 'stats', data: stats });
+  return true;
+}
+
+async function runReddit(config) {
+  const subs = (config.subs && config.subs.length) ? config.subs : DEFAULT_SUBS;
+  const sort = config.sort || 'hot';
+  const limit = config.limit || 40;
+  const minScore = config.minScore || 0;
+  log('INFO', `Reddit: ${subs.length} communities, sort=${sort}, limit=${limit}`);
+
+  for (const sub of subs) {
+    if (!ingesting) break;
+    await waitIfPaused();
+    if (!ingesting) break;
+    log('INFO', `Fetching r/${sub}...`);
+    try {
+      const items = await reddit.fetchSub(sub, { sort, limit });
+      if (items._officialError) {
+        log('WARN', `r/${sub}: official API ${items._officialError} — using archive`);
+      }
+      let count = 0;
+      for (const item of items) {
+        if (!ingesting) break;
+        await waitIfPaused();
+        if ((item.score || 0) < minScore) continue;
+        if (persistItem(item, 'reddit')) {
+          count++;
+          log('OK', `[reddit ${item.mediaType}] r/${sub}: ${(item.title || '').slice(0, 70)}`);
+        }
+        await sleep(40);
+      }
+      log('OK', `r/${sub}: ${count} new items`);
+    } catch (e) {
+      stats.errors++;
+      bumpSource('reddit', 'errors');
+      log('ERR', `r/${sub}: ${e.message}`);
+      broadcast({ type: 'stats', data: stats });
+    }
+    await sleep(200);
+  }
+}
+
+async function runQueries(sourceName, harvest, queries, limit) {
+  log('INFO', `${sourceName}: ${queries.length} queries`);
+  for (const query of queries) {
+    if (!ingesting) break;
+    await waitIfPaused();
+    log('INFO', `${sourceName} search: ${query}`);
+    try {
+      const result = await harvest(query, { limit, webLimit: limit, imageLimit: limit });
+      if (result.officialError) log('WARN', `${sourceName}: ${result.officialError}`);
+      if (result.imageError) log('WARN', `${sourceName} images: ${result.imageError}`);
+      if (result.webError) log('WARN', `${sourceName} web: ${result.webError}`);
+      let count = 0;
+      for (const item of result.items || []) {
+        if (!ingesting) break;
+        await waitIfPaused();
+        if (persistItem(item, sourceName)) {
+          count++;
+          log('OK', `[${sourceName} ${item.mediaType}] ${(item.title || query).slice(0, 70)}`);
+        }
+        await sleep(30);
+      }
+      log('OK', `${sourceName} "${query}": ${count} new items`);
+    } catch (e) {
+      stats.errors++;
+      bumpSource(sourceName, 'errors');
+      log('ERR', `${sourceName} "${query}": ${e.message}`);
+      broadcast({ type: 'stats', data: stats });
+    }
+    await sleep(250);
+  }
+}
+
+function parseList(value, fallback) {
+  if (Array.isArray(value) && value.length) return value.map(s => String(s).trim()).filter(Boolean);
+  if (typeof value === 'string' && value.trim()) {
+    return value.split(/\n|,/).map(s => s.trim()).filter(Boolean);
+  }
+  return fallback;
 }
 
 async function runIngestion(config = {}) {
@@ -148,114 +214,36 @@ async function runIngestion(config = {}) {
 
   ingesting = true;
   paused = false;
-  stats = { total: 0, images: 0, videos: 0, dupes: 0, errors: 0 };
+  stats = { total: 0, images: 0, videos: 0, dupes: 0, errors: 0, bySource: {} };
   logs = [];
 
-  const subs = (config.subs && config.subs.length) ? config.subs : DEFAULT_SUBS;
-  const sort = config.sort || 'hot';
-  const limit = config.limit || 50;
-  const minScore = config.minScore || 0;
+  const sources = parseList(config.sources, ['reddit', 'x', 'ddg', 'web']).map(s => s.toLowerCase());
+  const enabled = new Set(sources);
+  const queries = parseList(config.queries, ddg.DEFAULT_QUERIES);
+  const xQueries = parseList(config.xQueries, x.DEFAULT_QUERIES);
+  const webQueries = parseList(config.webQueries, web.DEFAULT_QUERIES);
 
   const jobId = uuidv4();
   currentJobId = jobId;
   db.insertJob({
     id: jobId,
     status: 'running',
-    config: JSON.stringify({ subs, sort, limit, minScore }),
+    config: JSON.stringify({ ...config, sources: [...enabled], queries }),
     started_at: new Date().toISOString()
   });
 
-  log('INFO', `Starting ingestion: ${subs.length} subs, sort=${sort}, limit=${limit}`);
+  log('INFO', `Starting ingestion: ${[...enabled].join(', ')}`);
   broadcast({ type: 'status', data: 'running' });
 
   try {
-    for (const sub of subs) {
-      if (!ingesting) break;
-      while (paused) { await sleep(500); if (!ingesting) break; }
-      if (!ingesting) break;
-
-      log('INFO', `Fetching r/${sub}/${sort}...`);
-      try {
-        const url = `https://www.reddit.com/r/${sub}/${sort}.json?limit=${limit}&raw_json=1`;
-        const json = await fetchJSON(url);
-        if (!json || !json.data || !json.data.children) {
-          log('WARN', `No data from r/${sub}`);
-          continue;
-        }
-
-        let count = 0;
-        for (const post of json.data.children) {
-          if (!ingesting) break;
-          while (paused) { await sleep(500); }
-
-          const item = extractMedia(post);
-          if (!item.mediaUrl) continue;
-
-          const hash = crypto.createHash('md5').update(item.mediaUrl).digest('hex');
-          if (db.getMediaByHash(hash)) {
-            stats.dupes++;
-            broadcast({ type: 'stats', data: stats });
-            continue;
-          }
-
-          if (item.score < minScore) continue;
-
-          const creator = getOrCreateCreator(item.author);
-          const mediaId = uuidv4();
-          const orientation = getOrientationScope(item.subreddit);
-
-          db.insertMedia({
-            id: mediaId,
-            title: item.title || null,
-            description: null,
-            media_type: item.mediaType,
-            media_url: item.mediaUrl,
-            preview_url: item.previewUrl || null,
-            thumbnail_url: (item.thumbnail && item.thumbnail.startsWith('http')) ? item.thumbnail : null,
-            source_platform: 'reddit',
-            source_url: item.permalink,
-            source_id: item.id,
-            subreddit: item.subreddit,
-            author: item.author,
-            score: item.score || 0,
-            hash,
-            width: null,
-            height: null,
-            orientation_scope: orientation,
-            publish_state: 'published',
-            creator_id: creator ? creator.id : null
-          });
-
-          if (creator) db.updateCreatorStats(creator.id);
-
-          // Add subreddit as a tag
-          if (item.subreddit) {
-            db.addTagToMedia(mediaId, item.subreddit.toLowerCase(), 'ingest');
-          }
-
-          stats.total++;
-          if (item.mediaType === 'image') stats.images++;
-          else if (item.mediaType === 'video') stats.videos++;
-
-          const mediaData = db.getMedia(mediaId);
-          broadcast({ type: 'item', data: mediaData });
-          broadcast({ type: 'stats', data: stats });
-          log('OK', `[${item.mediaType}] r/${sub}: ${(item.title || '').substring(0, 60)}`);
-          count++;
-          await sleep(100);
-        }
-        log('OK', `r/${sub}: ${count} items ingested`);
-      } catch (e) {
-        stats.errors++;
-        log('ERR', `r/${sub}: ${e.message}`);
-        broadcast({ type: 'stats', data: stats });
-      }
-      await sleep(300 + Math.random() * 400);
-    }
+    if (enabled.has('reddit')) await runReddit(config);
+    if (enabled.has('ddg') && ingesting) await runQueries('ddg', ddg.harvestQuery, queries, config.limit || 24);
+    if (enabled.has('x') && ingesting) await runQueries('x', x.harvestQuery, xQueries, config.limit || 20);
+    if (enabled.has('web') && ingesting) await runQueries('web', web.harvestQuery, webQueries, Math.min(config.limit || 12, 20));
 
     db.updateJob({
       id: jobId,
-      status: 'completed',
+      status: ingesting ? 'completed' : 'cancelled',
       stats: JSON.stringify(stats),
       completed_at: new Date().toISOString()
     });
@@ -267,12 +255,14 @@ async function runIngestion(config = {}) {
       error: e.message,
       completed_at: new Date().toISOString()
     });
+    log('ERR', e.message);
   }
 
   ingesting = false;
   currentJobId = null;
-  log('INFO', `Ingestion complete. Total: ${stats.total}`);
+  log('INFO', `Ingestion complete. New: ${stats.total} · dupes: ${stats.dupes} · errors: ${stats.errors}`);
   broadcast({ type: 'status', data: 'idle' });
+  broadcast({ type: 'stats', data: stats });
 }
 
 function stopIngestion() {
