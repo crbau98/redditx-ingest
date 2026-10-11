@@ -1,0 +1,117 @@
+'use strict';
+/**
+ * RedGIFs adapter (public v2 API with a temporary guest token).
+ *
+ * Feed kinds:
+ *   user   - everything a creator posted (the best signal: creator-owned)
+ *   search - text search, ordered by latest
+ *   niche  - a RedGIFs niche (community)
+ * Searches are untrusted: items must carry a male signal, see lib/scope.
+ */
+const config = require('../config');
+const http = require('./http').forPlatform('redgifs', 700);
+const { toIso, clip } = require('./util');
+
+const base = config.baseUrls.redgifs;
+let cached = null;
+
+async function authHeaders() {
+  if (!cached || Date.now() > cached.expires) {
+    const res = await http.json(`${base}/v2/auth/temporary`, { headers: { origin: 'https://www.redgifs.com' }, retries: 1 });
+    if (!res || !res.token) throw new Error('RedGIFs auth returned no token');
+    cached = { token: res.token, expires: Date.now() + 40 * 60 * 1000 };
+  }
+  return { authorization: `Bearer ${cached.token}`, origin: 'https://www.redgifs.com' };
+}
+
+async function api(path) {
+  try {
+    return await http.json(`${base}${path}`, { headers: await authHeaders() });
+  } catch (e) {
+    if (e.status === 401 || e.status === 403) { cached = null; return http.json(`${base}${path}`, { headers: await authHeaders() }); }
+    throw e;
+  }
+}
+
+function itemFromGif(gif, query) {
+  if (!gif || !gif.urls) return null;
+  const mediaUrl = gif.urls.hd || gif.urls.sd || gif.urls.silent;
+  if (!mediaUrl) return null;
+  const isImage = gif.type === 2;
+  const tags = (gif.tags || []).map(String);
+  return {
+    sourceId: `redgifs-${gif.id}`,
+    position: 0,
+    title: clip(tags.slice(0, 5).join(' ') || query || gif.id, 200),
+    author: gif.userName || null,
+    community: (gif.niches && gif.niches[0]) || null,
+    score: (gif.likes || 0) + Math.round((gif.views || 0) / 50),
+    postedAt: toIso(gif.createDate),
+    permalink: `https://www.redgifs.com/watch/${gif.id}`,
+    mediaType: isImage ? 'image' : 'video',
+    mediaUrl,
+    previewUrl: gif.urls.poster || gif.urls.thumbnail || null,
+    thumbnailUrl: gif.urls.thumbnail || null,
+    hasAudio: !!gif.hasAudio,
+    width: gif.width || null,
+    height: gif.height || null,
+    duration: gif.duration || null,
+    tags,
+    nsfw: 'explicit',
+    query: query || null,
+    trusted: true, // API-provided media URL (scope trust is decided per feed by the engine)
+  };
+}
+
+function idFromUrl(url) {
+  const m = String(url).match(/redgifs\.com\/(?:watch\/|ifr\/|embed\/)?([A-Za-z0-9]+)/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
+module.exports = {
+  platform: 'redgifs',
+  label: 'RedGIFs',
+  color: '#e11d48',
+  kinds: ['user', 'search', 'niche'],
+  intervalMin: { user: 240, search: 180, niche: 180 },
+  itemFromGif,
+  isConfigured: () => ({ ok: true }),
+
+  async resolve(url) {
+    const id = idFromUrl(url);
+    if (!id) return null;
+    const json = await api(`/v2/gifs/${encodeURIComponent(id)}`);
+    return itemFromGif(json.gif || json, null);
+  },
+
+  async fetch(feed, ctx) {
+    const count = Math.min(ctx.limit || 40, 80);
+    const cursor = ctx.cursor || {};
+    let path;
+    if (feed.kind === 'user') path = `/v2/users/${encodeURIComponent(feed.target)}/search?order=recent&count=${count}`;
+    else if (feed.kind === 'niche') path = `/v2/niches/${encodeURIComponent(feed.target)}/gifs?order=latest&count=${count}`;
+    else path = `/v2/gifs/search?search_text=${encodeURIComponent(feed.target)}&order=latest&count=${count}`;
+
+    const items = [];
+    let newest = cursor.newestAt || null;
+    const maxPages = cursor.newestAt ? 1 : 2;
+    let profile;
+    for (let page = 1; page <= maxPages; page++) {
+      if (ctx.aborted()) break;
+      const json = await api(`${path}&page=${page}`);
+      for (const gif of json.gifs || []) {
+        const it = itemFromGif(gif, feed.kind === 'search' ? feed.target : null);
+        if (!it) continue;
+        if (it.postedAt && (!newest || it.postedAt > newest)) newest = it.postedAt;
+        if (cursor.newestAt && it.postedAt && it.postedAt <= cursor.newestAt && !ctx.force) continue;
+        items.push(it);
+      }
+      if (feed.kind === 'user' && !profile && json.users && json.users[0]) {
+        const u = json.users[0];
+        profile = { displayName: u.name || u.username, bio: u.description || null, avatarUrl: u.profileImageUrl || null, verified: !!u.verified };
+      }
+      if (page >= (json.pages || 1)) break;
+    }
+    return { items, cursor: newest ? { newestAt: newest } : undefined, profile, via: 'api' };
+  },
+};
