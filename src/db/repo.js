@@ -1042,12 +1042,12 @@ const candidates = {
     return { items, total, page, limit };
   },
   /** Highest-scoring undecided candidates (for auto-follow). */
-  promotable(minScore, limit) {
-    return db.prepare("SELECT * FROM candidates WHERE status = 'pending' AND score >= ? AND scope != 'excluded' AND (reason IS NULL OR reason NOT LIKE 'needs review%') ORDER BY score DESC LIMIT ?").all(minScore, limit).map(parseSignals);
+  promotable(minScore, limit, offset = 0) {
+    return db.prepare("SELECT * FROM candidates WHERE status = 'pending' AND score >= ? AND scope != 'excluded' AND (reason IS NULL OR reason NOT LIKE 'needs review%') ORDER BY score DESC, id LIMIT ? OFFSET ?").all(minScore, limit, offset).map(parseSignals);
   },
-  /** Pending candidates that still need details (bio/name) looked up. */
-  needingDetails(platform, limit) {
-    return db.prepare("SELECT * FROM candidates WHERE status = 'pending' AND platform = ? AND bio IS NULL AND (reason IS NULL OR reason != 'checked') ORDER BY score DESC LIMIT ?").all(platform, limit).map(parseSignals);
+  /** Pending accounts (kind 'user' unless given) that still need details (bio/name) looked up. */
+  needingDetails(platform, limit, kind = 'user') {
+    return db.prepare("SELECT * FROM candidates WHERE status = 'pending' AND platform = ? AND kind = ? AND bio IS NULL AND (reason IS NULL OR reason != 'checked') ORDER BY score DESC LIMIT ?").all(platform, kind, limit).map(parseSignals);
   },
   counts() {
     const o = { pending: 0, followed: 0, linked: 0, rejected: 0 };

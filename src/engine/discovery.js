@@ -405,15 +405,24 @@ function promote(s = settingsStore.get()) {
   const limit = Math.min(s.discoveryMaxFollowsPerRun, capacity);
   if (!limit) return { followed: 0, linked: 0 };
   let followed = 0; let linked = 0;
-  for (const c of repo.candidates.promotable(s.discoveryAutoFollowScore, limit * 2)) {
-    if (followed + linked >= limit) break;
-    const shared = c.kind === 'community' || c.kind === 'feedgen' || c.kind === 'list';
-    if (shared && (!s.discoveryAutoCommunities || c.scope !== 'in')) continue; // shared spaces need the switch and a male-focused description
-    if (c.scope !== 'in' && !(c.signals.identity || []).length) continue; // need a male signal unless it is a known creator
-    const r = follow(c);
-    if (r.ok && !r.already) {
-      if (r.status === 'linked') linked++; else followed++;
-      events.log('OK', `Discovery: ${r.status === 'linked' ? 'linked' : 'followed'} ${c.platform}:${c.target} (score ${c.score}: ${describeSignals(c.signals)})`);
+  // Page through the queue: ineligible leads (shared spaces with the switch off, no male signal)
+  // stay pending, so they must not use up the window and hide eligible ones ranked below them.
+  // Followed or rejected rows leave the pending set, so only skipped rows advance the offset.
+  const PAGE = Math.max(25, limit * 2);
+  let skipped = 0;
+  for (let pages = 0; pages < 20 && followed + linked < limit; pages++) {
+    const rows = repo.candidates.promotable(s.discoveryAutoFollowScore, PAGE, skipped);
+    if (!rows.length) break;
+    for (const c of rows) {
+      if (followed + linked >= limit) break;
+      const shared = SHARED_KINDS.has(c.kind);
+      // shared spaces need the switch and a male-focused description; people need a male signal unless already a known creator
+      if ((shared && (!s.discoveryAutoCommunities || c.scope !== 'in')) || (c.scope !== 'in' && !(c.signals.identity || []).length)) { skipped++; continue; }
+      const r = follow(c);
+      if (r.ok && !r.already) {
+        if (r.status === 'linked') linked++; else followed++;
+        events.log('OK', `Discovery: ${r.status === 'linked' ? 'linked' : 'followed'} ${c.platform}:${c.target} (score ${c.score}: ${describeSignals(c.signals)})`);
+      }
     }
   }
   return { followed, linked };

@@ -34,17 +34,29 @@ export function makeZoomable(img, stage, { onChange, onSingleClick } = {}) {
 
   img.addEventListener('wheel', (e) => { e.preventDefault(); zoomAt(e.clientX, e.clientY, scale * Math.exp(-e.deltaY * 0.0016)); }, { passive: false });
 
-  // click toggles zoom; double-click is left to the caller (e.g. "save"), so single clicks wait a beat
-  let clickTimer = null; let moved = 0;
+  // click toggles zoom; double-click is left to the caller (e.g. "save"), so single clicks wait a beat.
+  // People with a slower double-click setting can outlast that beat: the first click's zoom then
+  // runs before the dblclick arrives, so dblclick undoes it (this listener runs before the caller's).
+  let clickTimer = null; let moved = 0; let lastToggle = null; let clicks = 0; let pairStart = 0;
   img.addEventListener('click', (e) => {
+    clicks++;
+    if (e.detail <= 1) pairStart = clicks; // first click of a (possible) double-click
     if (moved > 5) return;
     if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; return; }
     const { clientX: x, clientY: y } = e;
+    const from = clicks;
     clickTimer = setTimeout(() => {
       clickTimer = null;
       if (onSingleClick && onSingleClick() === false) return;
+      lastToggle = { from, scale, tx, ty };
       if (scale > 1) { scale = 1; tx = 0; ty = 0; apply(true); } else zoomAt(x, y, 2.5, true);
     }, 230);
+  });
+  img.addEventListener('dblclick', () => {
+    if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
+    // undo only a toggle started by the first click of this very double-click
+    if (lastToggle && lastToggle.from === pairStart) { ({ scale, tx, ty } = lastToggle); apply(false); }
+    lastToggle = null;
   });
 
   const pts = new Map(); let pinch = null; let last = null;

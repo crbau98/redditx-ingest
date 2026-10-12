@@ -218,6 +218,18 @@ describe('far-reaching discovery', () => {
     const feed = repo.feeds.find('reddit', 'community', 'gaybrosgonewild');
     assert.ok(feed); assert.equal(feed.trusted, 0, 'auto-followed communities are untrusted');
   });
+  test('ineligible leads do not crowd eligible ones out of an auto-follow run', () => {
+    // 40 strong but unclear (not male-focused) communities rank above one strong male-focused person
+    for (let i = 0; i < 40; i++) repo.candidates.insert({ platform: 'reddit', kind: 'community', target: `crowd${i}`, signals: { search: ['a', 'b', 'c'] }, scope: 'uncertain', score: 50 });
+    const person = repo.candidates.insert({ platform: 'bluesky', kind: 'user', target: 'eligible.bsky.social', signals: { mention: ['a', 'b', 'c'] }, scope: 'in', score: 40, bio: 'gay muscle' });
+    discovery.promote({ ...settings.get(), maxFeeds: 10000, discoveryMaxFollowsPerRun: 5 });
+    assert.equal(repo.candidates.get(person.id).status, 'followed');
+  });
+  test('custom feeds and communities are never sent to the profile lookups', () => {
+    const { parseProfile } = require('../src/lib/links');
+    discovery.consider(parseProfile('at://did:plc:nodesc/app.bsky.feed.generator/hot'), 'search', 'bluesky:x', { displayName: 'Hot men 18+' });
+    assert.ok(!repo.candidates.needingDetails('bluesky', 100).some((c) => c.kind !== 'user'));
+  });
   test('a human follow of a community is trusted', () => {
     const c = discovery.consider(require('../src/lib/links').parseProfile('https://lemmynsfw.com/c/hairymen'), 'search', 'lemmy:x', { displayName: 'Hairy men', bio: 'gay hairy men' });
     assert.ok(discovery.follow(c.id, { actor: 'admin' }).ok);
