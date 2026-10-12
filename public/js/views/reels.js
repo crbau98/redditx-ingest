@@ -5,7 +5,7 @@ import { prefs, favorites, follows, history as viewHistory, tastes, collections,
 import { attachVideo, releaseVideo } from '../components/video.js';
 import { openCollectionPicker } from '../components/collections.js';
 import { openLightbox, isOpen as lightboxOpen } from '../components/lightbox.js';
-import { heartBurst } from '../components/fx.js';
+import { heartBurst, ambientBackdrop } from '../components/fx.js';
 
 const SORTS = [['foryou', 'For you'], ['trending', 'Trending'], ['random', 'Shuffle'], ['recent', 'Newest'], ['top', 'Top']];
 const PAGE = 12;
@@ -58,7 +58,7 @@ export async function reels(root, { query }) {
     const isVideo = it.media_type === 'video';
     const poster = it.preview_url || it.thumbnail_url || (!isVideo ? it.media_url : null);
     const stage = h('div', { class: 'reel-stage' });
-    const bg = h('div', { class: 'reel-bg', style: poster ? { backgroundImage: `url("${proxied(poster)}")` } : {} });
+    const bg = h('div', { class: 'reel-bg' });
     const bar = h('div', { class: 'reel-progress' }, h('i'));
     const favBtn = h('button', { class: 'reel-act', 'aria-label': 'Save' }, icon('heart'), h('span', null, 'Save'));
     const paintFav = () => { const on = favorites.has(it.id); favBtn.classList.toggle('on', on); favBtn.setAttribute('aria-pressed', String(on)); favBtn.querySelector('svg').classList.toggle('fill', on); };
@@ -88,7 +88,7 @@ export async function reels(root, { query }) {
       it.source_url ? h('a', { class: 'reel-act', href: it.source_url, target: '_blank', rel: 'noopener noreferrer nofollow', 'aria-label': 'View original' }, icon('external'), h('span', null, 'Source')) : null);
 
     const el = h('section', { class: 'reel', dataset: { index: String(index) }, 'aria-label': it.title || `Item ${index + 1}` }, bg, stage, meta, rail, isVideo ? bar : null);
-    const s = { it, el, stage, bar, isVideo, poster, handle: null, mounted: false, paintFav, paintColl, paintFollow };
+    const s = { it, el, stage, bg, bar, isVideo, poster, handle: null, mounted: false, paintFav, paintColl, paintFollow };
 
     // tap: play/pause; double tap: save with a heart burst
     let lastTap = 0; let tapTimer = null;
@@ -110,10 +110,19 @@ export async function reels(root, { query }) {
   function mount(s) {
     if (s.mounted) return;
     s.mounted = true;
+    if (s.poster && !s.bg.style.backgroundImage) {
+      ambientBackdrop(proxied(s.poster)).then((url) => {
+        // baked colour field; if the poster cannot be read, fall back to blurring it live
+        if (url) s.bg.style.backgroundImage = `url("${url}")`;
+        else { s.bg.classList.add('raw'); s.bg.style.backgroundImage = `url("${proxied(s.poster)}")`; }
+        s.bg.classList.add('on');
+      });
+    }
     if (s.isVideo) {
       const v = h('video', { playsinline: true, loop: true, preload: 'none', poster: s.poster ? proxied(s.poster) : null, 'aria-label': s.it.title || 'Video' });
       v.muted = prefs.muted;
-      v.addEventListener('timeupdate', () => { if (v.duration) s.bar.firstChild.style.width = `${(v.currentTime / v.duration) * 100}%`; });
+      for (const ev of ['playing', 'seeked', 'ratechange']) v.addEventListener(ev, () => syncProgress(s));
+      for (const ev of ['pause', 'waiting']) v.addEventListener(ev, () => { if (s.prog) s.prog.pause(); });
       s.stage.replaceChildren(v);
     } else {
       const preview = s.it.preview_url || s.it.thumbnail_url;
@@ -126,8 +135,21 @@ export async function reels(root, { query }) {
   function unmount(s) {
     if (!s.mounted) return;
     deactivate(s);
+    if (s.prog) { s.prog.cancel(); s.prog = null; }
     s.mounted = false;
     s.stage.replaceChildren();
+  }
+  // Progress bar: a compositor animation matched to the video's clock, re-synced whenever the clock
+  // jumps (play, seek, loop, rate change) and paused with it. No per-frame JavaScript; the old bar
+  // followed timeupdate (~4×/s), so it stepped visibly and re-laid-out the slide each time.
+  function syncProgress(s) {
+    const v = s.stage.querySelector('video'); const bar = s.bar.firstChild;
+    if (!v || !v.duration || !Number.isFinite(v.duration)) return;
+    if (s.prog) s.prog.cancel();
+    s.prog = bar.animate([{ transform: 'scaleX(0)' }, { transform: 'scaleX(1)' }], { duration: v.duration * 1000, iterations: Infinity, easing: 'linear' });
+    s.prog.playbackRate = v.playbackRate || 1;
+    s.prog.currentTime = v.currentTime * 1000;
+    if (v.paused || v.readyState < 3) s.prog.pause();
   }
   function activate(s) {
     mount(s);
@@ -139,7 +161,7 @@ export async function reels(root, { query }) {
     if (!v) return;
     v.muted = prefs.muted;
     if (!s.handle) s.handle = attachVideo(v, s.it);
-    s.handle.autoplay = true;
+    s.handle.promote();
     v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
   }
   function deactivate(s) {
@@ -163,7 +185,9 @@ export async function reels(root, { query }) {
 
   function setActive(i) {
     if (i === active || !slides[i]) return;
+    if (slides[active]) slides[active].el.classList.remove('is-active');
     active = i;
+    slides[i].el.classList.add('is-active');
     slides.forEach((s, k) => {
       if (k === i) activate(s);
       // the next one buffers; the previous one keeps its buffer, so swiping back is instant too

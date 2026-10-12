@@ -12,8 +12,22 @@ const canHover = window.matchMedia('(hover: hover) and (pointer: fine)').matches
 const live = new Set();
 const MAX_LIVE = 2;
 
+// Touch previews (which start on their own) wait until the page has loaded and settled, so clips
+// never compete with the first screen of images. None at all on data saver or a 2G/3G link.
+const conn = navigator.connection || {};
+const slowLink = () => conn.saveData || /(^|-)2g$|^3g$/.test(conn.effectiveType || '');
+let previewsReady = false;
+const pending = new Set();
+const armPreviews = () => setTimeout(() => {
+  previewsReady = true;
+  for (const media of pending) if (media.isConnected) startPreview(media, media._item);
+  pending.clear();
+}, 1200);
+if (document.readyState === 'complete') armPreviews(); else window.addEventListener('load', armPreviews, { once: true });
+
 function startPreview(media, item) {
-  if (!prefs.previews) return;
+  if (!prefs.previews || slowLink()) return;
+  if (!previewsReady && !canHover) { pending.add(media); return; } // a hover is explicit intent: no wait
   if (media.querySelector('video') || !item.media_url || /\.m3u8(\?|$)/i.test(item.media_url)) return;
   while (live.size >= MAX_LIVE) stopPreview([...live][0]);
   const v = h('video', { muted: true, loop: true, playsinline: true, preload: 'metadata', 'aria-hidden': 'true', tabindex: '-1' });
@@ -28,6 +42,7 @@ function startPreview(media, item) {
 }
 
 function stopPreview(media) {
+  pending.delete(media);
   const v = media.querySelector('video');
   if (v) { v.pause(); v.removeAttribute('src'); v.load(); v.remove(); }
   live.delete(media);
@@ -42,6 +57,16 @@ const io = !canHover && 'IntersectionObserver' in window
     }
   }, { threshold: [0, 0.65, 1] })
   : null;
+
+// One listener repaints the save buttons for every card on the page. (A listener per card was only
+// dropped at the next save, so a long scroll session piled up thousands of them.)
+bus.on('fav', (d) => {
+  const sel = d && d.id ? `.card[data-id="${CSS.escape(d.id)}"] > .card-fav` : '.card > .card-fav';
+  for (const b of document.querySelectorAll(sel)) {
+    const on = favorites.has(b.parentElement.dataset.id);
+    b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on));
+  }
+});
 
 /** One media card. `open(item)` is called when the media is activated. */
 // The first few cards a page renders are above the fold: load them eagerly at high priority so the
@@ -59,14 +84,17 @@ export function mediaCard(item, { open, compact = false, why = null } = {}) {
   media._item = item;
   // Placeholder tinted per item, so a loading grid reads as colour rather than grey boxes.
   let hue = 0; for (let i = 0; i < 8 && i < item.id.length; i++) hue = (hue * 31 + item.id.charCodeAt(i)) % 360;
-  media.appendChild(h('div', { class: 'ph', style: { '--h': String(hue) } }));
+  const ph = h('div', { class: 'ph', style: { '--h': String(hue) } });
+  media.appendChild(ph);
   if (src) {
     const eager = eagerLeft > 0 && eagerLeft--;
     const img = h('img', { class: 'loading', alt: item.title || '', loading: eager ? 'eager' : 'lazy', fetchpriority: eager ? 'high' : 'auto', decoding: 'async', src: proxied(src) });
-    img.addEventListener('load', () => { img.classList.remove('loading'); });
-    img.addEventListener('error', () => { img.remove(); reportBroken(item.id); });
+    // The placeholder's shimmer stops as soon as the image is in: a grid of finished cards must not
+    // keep animating underneath (it repainted every visible card, every frame, forever).
+    img.addEventListener('load', () => { img.classList.remove('loading'); ph.classList.add('done'); });
+    img.addEventListener('error', () => { img.remove(); ph.classList.add('done'); reportBroken(item.id); });
     media.appendChild(img);
-  }
+  } else ph.classList.add('done');
   if (why) media.appendChild(h('span', { class: 'card-why', title: 'Why you are seeing this' }, icon('sparkle', 'sm'), why));
   media.appendChild(h('div', { class: 'card-badges' },
     isVideo ? h('span', { class: 'pill' }, icon('play', 'fill'), item.duration ? fmt.duration(item.duration) : 'Video') : null,
@@ -90,10 +118,6 @@ export function mediaCard(item, { open, compact = false, why = null } = {}) {
       e.preventDefault(); e.stopPropagation();
       if (favorites.toggle(item.id, item)) { const r = e.currentTarget.getBoundingClientRect(); heartBurst(r.left + r.width / 2, r.top + r.height / 2); }
     } }, icon('heart'));
-  const off = bus.on('fav', (d) => {
-    if (!media.isConnected) { off(); return; }
-    if (!d.id || d.id === item.id) { const on = favorites.has(item.id); fav.classList.toggle('on', on); fav.setAttribute('aria-pressed', String(on)); }
-  });
 
   const card = h('article', { class: `card${compact ? ' compact' : ''}`, dataset: { id: item.id } }, media, fav);
   if (!compact) {

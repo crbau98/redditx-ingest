@@ -17,7 +17,6 @@ import { creator } from './views/creator.js';
 import { saved } from './views/saved.js';
 import { browse } from './views/browse.js';
 import { reels } from './views/reels.js';
-import { galaxy } from './views/galaxy.js';
 
 const routes = [
   { pattern: '/', view: home, nav: 'home' },
@@ -25,7 +24,8 @@ const routes = [
   { pattern: '/reels', view: reels, nav: 'reels' },
   { pattern: '/browse', view: browse, nav: 'browse' },
   { pattern: '/creators', view: creators, nav: 'creators' },
-  { pattern: '/galaxy', view: galaxy, nav: 'creators' },
+  // loaded on first visit: the 3D map is the heaviest view and most sessions never open it
+  { pattern: '/galaxy', view: (...a) => import('./views/galaxy.js').then((m) => m.galaxy(...a)), nav: 'creators' },
   { pattern: '/creator/:id', view: creator, nav: 'creators' },
   { pattern: '/saved', view: saved, nav: 'saved' },
   { pattern: '/admin/:tab?', view: (...a) => import('./views/admin/index.js').then((m) => m.admin(...a)), nav: 'admin' },

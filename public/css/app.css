@@ -141,8 +141,10 @@ svg.i.lg { width: 24px; height: 24px; }
 .avatar { border-radius: 50%; background: var(--surface-3) center/cover; flex: none; display: grid; place-items: center; font-weight: 700; font-family: var(--font-display); color: #fff; overflow: hidden; }
 .avatar img { width: 100%; height: 100%; object-fit: cover; }
 
-.skeleton { background: linear-gradient(100deg, var(--surface-2) 30%, var(--surface-3) 50%, var(--surface-2) 70%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; border-radius: var(--radius); }
-@keyframes shimmer { to { background-position: -200% 0; } }
+.skeleton { position: relative; overflow: hidden; background: var(--surface-2); border-radius: var(--radius); }
+/* shimmer = a band that slides across; transform-only so the compositor runs it without repainting */
+.skeleton::after { content: ''; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 20%, var(--surface-3) 50%, transparent 80%); transform: translateX(-100%); animation: shimmer 1.4s linear infinite; will-change: transform; }
+@keyframes shimmer { to { transform: translateX(100%); } }
 .spinner { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--accent); animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; flex: none; }
@@ -446,7 +448,9 @@ body.reels-mode .footer, body.reels-mode .fab { display: none !important; }
 .reels-track { height: 100%; overflow-y: auto; scroll-snap-type: y mandatory; overscroll-behavior: contain; scrollbar-width: none; outline: none; }
 .reels-track::-webkit-scrollbar { display: none; }
 .reel { position: relative; height: 100%; scroll-snap-align: start; scroll-snap-stop: always; overflow: hidden; display: grid; place-items: center; }
-.reel-bg { position: absolute; inset: -40px; background-size: cover; background-position: center; filter: blur(38px) brightness(.42) saturate(1.3); transform: scale(1.1); }
+.reel-bg { position: absolute; inset: 0; background-size: 100% 100%; background-position: center; opacity: 0; transition: opacity .6s var(--ease); }
+.reel-bg.on { opacity: 1; }
+.reel-bg.raw { inset: -40px; background-size: cover; filter: blur(38px) brightness(.42) saturate(1.3); transform: scale(1.1); }
 .reel-stage { position: relative; z-index: 1; width: 100%; height: 100%; display: grid; place-items: center; }
 .reel-stage img, .reel-stage video { max-width: min(100%, 980px); max-height: 100%; width: auto; height: auto; object-fit: contain; display: block; }
 .reel-stage video { width: 100%; height: 100%; }
@@ -456,18 +460,20 @@ body.reels-mode .footer, body.reels-mode .fab { display: none !important; }
 .reel-name { font-weight: 700; font-size: 15px; text-shadow: 0 1px 6px rgba(0, 0, 0, .6); }
 .reel-handle { font-size: 12.5px; color: rgba(255, 255, 255, .72); }
 .reel-caption { margin: 0; font-size: 14px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; text-shadow: 0 1px 6px rgba(0, 0, 0, .6); }
-.reel-tag { font-size: 12.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px; background: rgba(255, 255, 255, .14); backdrop-filter: blur(6px); }
+.reel-tag { font-size: 12.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px; background: rgba(255, 255, 255, .14); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .1); }
 .reel-tag:hover { background: rgba(255, 255, 255, .26); }
 .reel-follow { height: 30px; flex: none; }
 .reel-follow:not(.primary) { background: rgba(255, 255, 255, .14); color: #fff; border-color: rgba(255, 255, 255, .25); }
 .reel-rail { position: absolute; z-index: 2; right: 10px; bottom: 26px; display: grid; gap: 14px; justify-items: center; }
 .reel-act { display: grid; justify-items: center; gap: 4px; background: none; border: 0; color: #fff; font-size: 11px; font-weight: 600; text-shadow: 0 1px 6px rgba(0, 0, 0, .7); cursor: pointer; }
-.reel-act svg { width: 46px; height: 46px; padding: 11px; border-radius: 50%; background: rgba(0, 0, 0, .35); backdrop-filter: blur(8px); transition: transform .15s var(--ease), background .15s; }
+/* No backdrop blur over a playing video: it was recomputed for every video frame. A denser tint and
+   a hairline edge keep the glass look. */
+.reel-act svg { width: 46px; height: 46px; padding: 11px; border-radius: 50%; background: rgba(10, 10, 14, .46); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12), 0 4px 18px rgba(0, 0, 0, .25); transition: transform .2s var(--ease), background .15s; }
 .reel-act:hover svg { background: rgba(255, 255, 255, .2); }
 .reel-act:active svg { transform: scale(.9); }
 .reel-act.on svg { color: var(--accent); background: rgba(255, 92, 138, .22); }
 .reel-progress { position: absolute; z-index: 3; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255, 255, 255, .15); }
-.reel-progress i { display: block; height: 100%; width: 0; background: var(--grad); }
+.reel-progress i { display: block; height: 100%; width: 100%; background: var(--grad); transform: scaleX(0); transform-origin: 0 50%; }
 .reel-end { color: var(--text); background: var(--bg); }
 .reel-end .empty { color: var(--muted); }
 @media (max-width: 899px) {
@@ -534,7 +540,9 @@ body.reels-mode .footer, body.reels-mode .fab { display: none !important; }
 /* ---------- v4.3: polish ------------------------------------------------------ */
 .card-media .ph { background: linear-gradient(135deg, hsl(var(--h, 260) 30% 16%), hsl(calc(var(--h, 260) + 50) 38% 24%)); }
 :root[data-theme='light'] .card-media .ph { background: linear-gradient(135deg, hsl(var(--h, 260) 45% 90%), hsl(calc(var(--h, 260) + 50) 50% 84%)); }
-.card-media .ph::after { content: ''; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, .06) 50%, transparent 70%); background-size: 200% 100%; animation: shimmer 1.6s linear infinite; }
+.card-media .ph { overflow: hidden; }
+.card-media .ph::after { content: ''; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, .07) 50%, transparent 80%); transform: translateX(-100%); animation: shimmer 1.6s linear infinite; will-change: transform; }
+.card-media .ph.done::after { content: none; }
 .pill.seen { background: rgba(8, 8, 12, .6); color: rgba(255, 255, 255, .85); }
 .pill.seen svg { width: 12px; height: 12px; }
 .chip.sm { height: 28px; padding: 0 10px; font-size: 12.5px; }
@@ -544,7 +552,7 @@ body.reels-mode .footer, body.reels-mode .fab { display: none !important; }
 .intro-card h2 svg { color: var(--accent); }
 
 /* animated hero glow (respects reduced motion via the global rule) */
-.hero::after { content: ''; position: absolute; z-index: -1; width: 420px; height: 420px; left: 50%; top: -140px; margin-left: -210px; border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, var(--accent) 22%, transparent), transparent 65%); filter: blur(30px); animation: drift 14s ease-in-out infinite alternate; pointer-events: none; }
+.hero::after { content: ''; position: absolute; z-index: -1; width: 420px; height: 420px; left: 50%; top: -140px; margin-left: -210px; border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, var(--accent) 22%, transparent), transparent 65%); filter: blur(30px); animation: drift 14s ease-in-out infinite alternate; pointer-events: none; will-change: transform; }
 @keyframes drift { 0% { transform: translate(-30%, 0) scale(1); } 50% { transform: translate(25%, 30px) scale(1.15); } 100% { transform: translate(-10%, -10px) scale(.95); } }
 
 /* accent palettes (Display settings) */
@@ -570,7 +578,6 @@ body.reels-mode .footer, body.reels-mode .fab { display: none !important; }
 /* ==========================================================================
    v4.4 "Spectrum" — depth, light and motion
    ========================================================================== */
-@property --spin { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
 
 /* film grain behind everything (texture without touching media) */
 body::before { content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: .05;
@@ -591,11 +598,13 @@ body::before { content: ''; position: fixed; inset: 0; z-index: -1; pointer-even
 .hero.has-prism::before { opacity: .35; }
 .hero.has-prism::after { display: none; }
 .hero-kicker { display: inline-flex; align-items: center; gap: 9px; padding: 6px 14px 6px 10px; border-radius: 999px; font-size: 12.5px; font-weight: 600; color: var(--text-2); background: color-mix(in srgb, var(--surface-2) 60%, transparent); border: 1px solid var(--line-strong); backdrop-filter: blur(10px); margin-bottom: 18px; }
-.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 0 color-mix(in srgb, var(--good) 60%, transparent); animation: live 2.2s ease-out infinite; }
-@keyframes live { 70% { box-shadow: 0 0 0 9px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+.live-dot { position: relative; width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
+/* the pulse is a ring that scales and fades (compositor-only; a growing box-shadow repainted every frame) */
+.live-dot::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: color-mix(in srgb, var(--good) 60%, transparent); animation: live 2.2s cubic-bezier(.2, .7, .3, 1) infinite; }
+@keyframes live { 0% { transform: scale(1); opacity: .9; } 70%, 100% { transform: scale(3.2); opacity: 0; } }
 .btn.glass { background: color-mix(in srgb, var(--surface-2) 55%, transparent); border-color: var(--line-strong); backdrop-filter: blur(12px) saturate(1.4); }
 .btn.glass:hover { background: color-mix(in srgb, var(--surface-3) 70%, transparent); }
-.hero h1 em { background-size: 200% 100%; animation: sheen 8s ease-in-out infinite alternate; }
+.hero h1 em { background-size: 200% 100%; animation: sheen 6s ease-in-out 2 alternate; } /* sweeps there and back once, then rests (it repaints the headline while it runs) */
 @keyframes sheen { to { background-position: 100% 0; } }
 
 .hero.hero-split { display: grid; grid-template-columns: minmax(0, 1.02fr) minmax(0, .98fr); align-items: center; gap: 12px 28px; text-align: left; padding: 52px 0 26px; }
@@ -689,9 +698,13 @@ body::before { content: ''; position: fixed; inset: 0; z-index: -1; pointer-even
 
 /* ---------- avatar "posted recently" ring ------------------------------------ */
 .avatar-ring { position: relative; flex: none; border-radius: 50%; padding: 4px; background: var(--bg); }
-.avatar-ring.live { background: conic-gradient(from var(--spin), var(--accent-2), var(--accent), var(--accent-3), var(--accent-2)); animation: spin-ring 5s linear infinite; }
-.avatar-ring.live::after { content: ''; position: absolute; inset: -6px; z-index: -1; border-radius: 50%; background: inherit; filter: blur(14px); opacity: .55; }
-@keyframes spin-ring { to { --spin: 360deg; } }
+/* The ring and its glow rotate as layers (transform), instead of re-rendering a conic gradient and a
+   14px blur every frame through an animated custom property. */
+.avatar-ring.live { background: none; isolation: isolate; }
+.avatar-ring.live::before, .avatar-ring.live::after { content: ''; position: absolute; border-radius: 50%; background: conic-gradient(var(--accent-2), var(--accent), var(--accent-3), var(--accent-2)); animation: spin-ring 5s linear infinite; will-change: transform; }
+.avatar-ring.live::before { inset: 0; z-index: -1; }
+.avatar-ring.live::after { inset: -6px; z-index: -2; filter: blur(14px); opacity: .55; }
+@keyframes spin-ring { to { transform: rotate(360deg); } }
 
 /* ---------- section headings: a touch of light -------------------------------- */
 .section-head h2 svg { filter: drop-shadow(0 0 10px color-mix(in srgb, var(--accent) 55%, transparent)); }
@@ -863,3 +876,62 @@ main.tinted .tag { border-color: color-mix(in srgb, var(--accent) 30%, var(--lin
 .since-tile.hot b { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
 @media (max-width: 560px) { .since-row { grid-template-columns: 1fr 1fr; } .since-tile b { font-size: 24px; } .since-tile.hot { grid-column: 1 / -1; } }
 @media (prefers-reduced-motion: reduce) { .since-tile { animation: none; } }
+
+/* ==========================================================================
+   v4.13 "Fluid" — cheaper frames, calmer motion
+   ========================================================================== */
+:root {
+  /* a spring: quick out, settles with a hint of overshoot (falls back to --ease where linear() is unknown) */
+  --spring: cubic-bezier(.2, .9, .3, 1.15);
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+}
+@supports (transition-timing-function: linear(0, 1)) {
+  :root { --spring: linear(0, .009, .035 2.1%, .141 4.4%, .723 12.9%, .938 16.7%, 1.017 19.8%, 1.051 22.5%, 1.059 25.1%, 1.044 29.1%, 1.002 38.4%, .99 43.4%, 1.001 61.9%, 1); }
+}
+
+/* Small chips that ride on every card: a dense tint and a hairline instead of a backdrop blur.
+   Dozens of live blurs (one per card on screen) were re-rendered on every frame of a scroll. */
+.pill, .card-fav, .card-why { backdrop-filter: none; -webkit-backdrop-filter: none; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .1); }
+.pill { background: rgba(8, 8, 12, .7); }
+.card-fav { background: rgba(8, 8, 12, .62); }
+.card-why { background: rgba(10, 8, 18, .7); }
+
+/* Images fade in on a softer curve. (A scale-settle was tried and dropped: animating the transform of
+   a just-decoded image delayed the largest paint on Explore by ~250 ms.) */
+.card-media img { transition: opacity .45s var(--ease-out), transform .6s var(--ease); }
+
+/* Save: the heart pops on a spring when it turns on. */
+.card-fav { transition: opacity .2s var(--ease), transform .35s var(--spring), color .2s, background .2s; }
+.card-fav.on svg { animation: fav-pop .45s var(--spring); }
+@keyframes fav-pop { 0% { transform: scale(.6); } 60% { transform: scale(1.18); } 100% { transform: scale(1); } }
+.card-fav:active { transform: scale(.88); }
+
+/* Touch: cards give under the finger. */
+@media (hover: none) {
+  .card, .creator-card, .coll-card, .browse-tile { transition: transform .35s var(--spring), box-shadow .25s; }
+  .card:active, .creator-card:active, .coll-card:active, .browse-tile:active { transform: scale(.975); transition-duration: .12s; }
+}
+
+/* Reels: the caption block and the action rail of the slide on screen rise in (rail a beat later);
+   off-screen slides keep them lowered. Two layers move per swipe, not one per line. */
+.reel-meta, .reel-rail { transition: opacity .5s var(--ease-out), transform .6s var(--ease-out); }
+.reel:not(.is-active) .reel-meta { opacity: 0; transform: translateY(18px); transition-duration: .2s; }
+.reel:not(.is-active) .reel-rail { opacity: 0; transform: translateX(14px); transition-duration: .2s; }
+.reel.is-active .reel-rail { transition-delay: .08s; }
+.reel-act svg { transition: transform .35s var(--spring), background .15s; }
+.reel-act:active svg { transform: scale(.86); transition-duration: .1s; }
+.reel-act.on svg { animation: fav-pop .45s var(--spring); }
+.reel-progress { opacity: 0; transition: opacity .4s; }
+.reel.is-active .reel-progress { opacity: 1; }
+
+/* Long feeds on phones: cards well off-screen skip style, layout and paint, so a feed that has grown
+   to hundreds of cards scrolls like a short one. Each card carries its estimated height (masonry.js)
+   and the browser remembers the real one once seen, so nothing jumps. Touch only: paint containment
+   would clip the desktop hover shadow. */
+@media (hover: none) {
+  .masonry-col > .card { content-visibility: auto; contain-intrinsic-size: auto 320px; }
+}
+
+/* Badges never run under the save button on narrow cards: they wrap to a second line instead. */
+.card-badges { right: 52px; flex-wrap: wrap; }
+.card.compact .card-badges { right: 50px; }
