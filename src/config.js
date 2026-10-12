@@ -67,10 +67,25 @@ module.exports = {
     telegramBot: env.TELEGRAM_API_KEY || env.TELEGRAM_BOT_TOKEN || '',
   },
 
-  // Federated sources: instances that adapters may talk to by default.
-  mastodonInstances: list(env.MASTODON_INSTANCES, ['mastodon.social']),
-  lemmyInstances: list(env.LEMMY_INSTANCES, ['lemmynsfw.com']),
-  misskeyInstances: list(env.MISSKEY_INSTANCES, ['misskey.io']),
+  // Federated sources: instances that adapters may talk to by default. Every hashtag/keyword feed is queried
+  // on EACH instance below, so a longer list means more surface (and more requests): override from the
+  // environment to narrow or widen it. The first Mastodon instance is the one MASTODON_ACCESS_TOKEN applies to.
+  // Only well-established servers are listed; an unreachable one is reported in the feed's notes, never fatal.
+  mastodonInstances: list(env.MASTODON_INSTANCES, [
+    'mastodon.social', 'pawoo.net', 'mstdn.jp', 'fedibird.com', 'mastodon.online', 'mas.to', 'mstdn.social', 'mastodon.world', 'lgbt.io',
+  ]),
+  lemmyInstances: list(env.LEMMY_INSTANCES, [
+    'lemmynsfw.com', 'lemmy.world', 'sh.itjust.works', 'lemmy.ml', 'lemm.ee', 'lemmy.dbzer0.com', 'reddthat.com',
+  ]),
+  misskeyInstances: list(env.MISSKEY_INSTANCES, [
+    'misskey.io', 'misskey.design', 'nijimiss.moe', 'sushi.ski', 'submarin.online',
+  ]),
+  // PeerTube: instances for tag feeds (`/api/v1/videos?tagsOneOf=`) and the federated search index used by
+  // `search` feeds (Sepia Search by default; any PeerTube search-index compatible endpoint works).
+  peertubeInstances: list(env.PEERTUBE_INSTANCES, ['tilvids.com', 'diode.zone', 'spectra.video', 'toobnix.org', 'kolektiva.media']),
+  peertubeSearchUrl: String(env.PEERTUBE_SEARCH_URL || 'https://sepiasearch.org').replace(/\/+$/, ''),
+  // Tumblr: reblogged posts belong to somebody else's blog, so they are skipped unless this is switched on.
+  tumblrIncludeReblogs: bool(env.TUMBLR_REBLOGS, false),
 
   // Base-URL overrides so adapters can be pointed at a mock in tests.
   baseUrls: {
@@ -85,6 +100,8 @@ module.exports = {
     xSyndication: env.X_SYNDICATION_URL || 'https://syndication.twitter.com',
     brave: env.BRAVE_BASE_URL || 'https://api.search.brave.com',
     telegramBot: env.TELEGRAM_BOT_BASE_URL || 'https://api.telegram.org',
+    // Tumblr's global tag feeds (blog feeds live on <blog>.tumblr.com or the blog's own domain).
+    tumblr: String(env.TUMBLR_BASE_URL || 'https://www.tumblr.com').replace(/\/+$/, ''),
   },
 
   // --- media cache for proxied images --------------------------------

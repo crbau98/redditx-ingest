@@ -253,6 +253,11 @@ function seedDefaults() {
     const r = repo.feeds.upsert({ ...s, origin: 'seed', intervalMin: s.intervalMin || (adapter.intervalMin && adapter.intervalMin[s.kind]) || 180 });
     if (r.created) created++;
   }
+  // Retire seeds that were dropped from the curated set (only feeds PRISM itself seeded; an admin's own are left alone).
+  for (const r of registry.RETIRED_SEEDS || []) {
+    const f = repo.feeds.find(r.platform, r.kind, r.target);
+    if (f && f.origin === 'seed' && f.enabled) repo.feeds.update(f.id, { enabled: false });
+  }
   repo.settings.set('seed_version', String(registry.SEED_VERSION));
   return created;
 }

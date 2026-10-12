@@ -10,7 +10,9 @@
  */
 const cheerio = require('cheerio');
 const http = require('./http').forPlatform('rss', 800);
-const { toIso, htmlToText, absUrl, clip } = require('./util');
+const net = require('../lib/net');
+const limiter = require('../lib/limiter');
+const { toIso, htmlToText, absUrl, clip, bestSrcset } = require('./util');
 const { looksLikeDirectMedia, looksLikeVideo, hostBlocked, hostOf } = require('../lib/mediaurl');
 
 const IMG_JUNK = /(?:^|\/)(?:avatar|emoji|icon|logo|favicon|sprite|badge|pixel|spacer|blank|tracking|gravatar)|\/emoji\/|\.svg(?:\?|$)|\/wp-includes\/|feedburner|doubleclick|googleads|stats\.wp\.com|pixel\.wp\.com|gravatar\.com/i;
@@ -30,19 +32,26 @@ function mediaFromHtml(html, base) {
     const src = absUrl($(v).attr('src') || $(v).find('source').first().attr('src'), base);
     if (src) out.push({ url: src, type: 'video', preview: poster });
   });
-  // <a href="full.jpg"><img src="thumb.jpg"></a> — prefer the full-size link
+  // <a href="full.jpg"><img src="thumb.jpg"></a> — prefer the full-size link, and don't also emit its thumbnail as a second item
+  const thumbsOfLinked = new Set();
   $('a[href]').each((_, a) => {
     const href = absUrl($(a).attr('href'), base);
     if (!href || !looksLikeDirectMedia(href)) return;
     const img = $(a).find('img').first();
-    out.push({ url: href, type: kindOf(href), preview: img.length ? absUrl(img.attr('src'), base) : null });
+    const preview = img.length ? absUrl(img.attr('src') || img.attr('data-src'), base) : null;
+    if (preview) thumbsOfLinked.add(preview);
+    out.push({ url: href, type: kindOf(href), preview });
   });
-  $('img[src]').each((_, i) => {
-    const src = absUrl($(i).attr('src') || $(i).attr('data-src'), base);
-    if (!src || IMG_JUNK.test(src)) return;
-    const w = parseInt($(i).attr('width'), 10); const h = parseInt($(i).attr('height'), 10);
+  $('img').each((_, i) => {
+    const el = $(i);
+    // Lazy-loaders put a 1px data: placeholder in src and the real file in data-src / data-lazy-src / data-original / srcset.
+    let src = el.attr('src');
+    if (!src || /^data:/i.test(src)) src = el.attr('data-src') || el.attr('data-lazy-src') || el.attr('data-original') || null;
+    src = bestSrcset(el.attr('srcset') || el.attr('data-srcset'), base) || absUrl(src, base);
+    if (!src || /^data:/i.test(src) || IMG_JUNK.test(src) || thumbsOfLinked.has(src)) return;
+    const w = parseInt(el.attr('width'), 10); const h = parseInt(el.attr('height'), 10);
     if ((w && w < 160) || (h && h < 160)) return;
-    out.push({ url: src, type: 'image', width: w || null, height: h || null, alt: $(i).attr('alt') || null });
+    out.push({ url: src, type: 'image', width: w || null, height: h || null, alt: el.attr('alt') || null });
   });
   return out;
 }
@@ -54,6 +63,15 @@ function linksFromHtml(html, base) {
   const out = [];
   $('a[href]').each((_, a) => { const u = absUrl($(a).attr('href'), base); if (u && /^https?:/i.test(u)) out.push(u); });
   return [...new Set(out)];
+}
+
+/** Entry date. `published` wins over `updated` (an edited old post must not look new) whichever comes first in the XML. */
+function dateOf(e) {
+  for (const sel of ['pubDate', 'published', 'dc\\:date', 'updated']) {
+    const iso = toIso(e.children(sel).first().text().trim());
+    if (iso) return iso;
+  }
+  return null;
 }
 
 /** Parse any supported feed document. Never throws on malformed entries. */
@@ -107,7 +125,7 @@ function parseFeed(text, baseUrl) {
         id: e.children('guid, id').first().text().trim() || link,
         title: e.children('title').first().text().trim(),
         link,
-        published: toIso(e.children('pubDate, published, updated, dc\\:date').first().text().trim()),
+        published: dateOf(e),
         author: (e.children('dc\\:creator').first().text() || e.children('author').first().children('name').first().text() || e.children('author').first().text()).trim() || null,
         text: htmlToText(content, 400),
         links: linksFromHtml(content, link || baseUrl),
@@ -124,6 +142,7 @@ function parseJsonFeed(json, baseUrl) {
   for (const it of json.items || []) {
     const media = [];
     if (it.image) media.push({ url: absUrl(it.image, baseUrl), type: 'image' });
+    if (it.banner_image && it.banner_image !== it.image) media.push({ url: absUrl(it.banner_image, baseUrl), type: 'image' });
     for (const a of it.attachments || []) {
       if (a && a.url && /^(image|video)\//.test(a.mime_type || '')) media.push({ url: absUrl(a.url, baseUrl), type: kindOf(a.url, a.mime_type) });
     }
@@ -168,19 +187,83 @@ function entryToItems(entry, feed, ctx = {}) {
   return items;
 }
 
+/** Bytes -> text honouring a BOM, the HTTP charset or the XML declaration (feeds in ISO-8859-1 / Windows-1252 are still common). */
+function decodeBody(buf, contentType) {
+  let cs = (/charset=["']?([\w.:-]+)/i.exec(contentType || '') || [])[1];
+  if (buf[0] === 0xff && buf[1] === 0xfe) cs = 'utf-16le';
+  else if (buf[0] === 0xfe && buf[1] === 0xff) cs = 'utf-16be';
+  else if (!cs) cs = (/^\s*<\?xml[^>]*encoding=["']([\w.:-]+)["']/i.exec(buf.subarray(0, 200).toString('latin1')) || [])[1];
+  if (!cs || /^utf-?8$/i.test(cs)) return buf.toString('utf8');
+  try { return new TextDecoder(cs).decode(buf); } catch { return buf.toString('utf8'); }
+}
+
+const FEED_ACCEPT = 'application/rss+xml, application/atom+xml, application/feed+json, application/json;q=0.9, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5';
+const looksLikeHtml = (text, ctype) => /^\s*(?:<!doctype\s+html|<html)/i.test(text.slice(0, 2000))
+  || (/text\/html/i.test(ctype || '') && !/<(?:rss|feed|rdf:rdf)\b/i.test(text.slice(0, 4000)));
+const guessedFeedPaths = ['/feed', '/rss', '/rss.xml', '/feed.xml', '/atom.xml', '/index.xml'];
+
+/** GET a feed with conditional-request validators. -> {notModified} | {text, url, headers} */
+async function load(url, validators = {}) {
+  const headers = { accept: FEED_ACCEPT };
+  if (validators.etag) headers['if-none-match'] = validators.etag;
+  if (validators.lastModified) headers['if-modified-since'] = validators.lastModified;
+  const res = await http.raw(url, { headers, maxBytes: 4_000_000 });
+  if (res.status === 304) return { notModified: true };
+  if (res.status >= 400) {
+    const retryAfter = net.parseRetryAfter(res.headers['retry-after']);
+    if (res.status === 429) limiter.penalize(http.key, retryAfter || 30000);
+    throw new net.HttpError(`HTTP ${res.status} for ${url}`, { status: res.status, url, retryAfter });
+  }
+  return { text: decodeBody(res.body, res.headers['content-type']), url: res.url || url, headers: res.headers, ctype: res.headers['content-type'] };
+}
+
+/** The page links to its feed (or sits at a conventional path): find and fetch it. Returns null when nothing is a feed. */
+async function discover(html, pageUrl) {
+  const $ = cheerio.load(html);
+  const found = [];
+  $('link[rel~="alternate"]').each((_, l) => {
+    const type = String($(l).attr('type') || '');
+    if (/rss|atom|feed\+json|json/i.test(type) && !/comments/i.test($(l).attr('title') || '')) { const u = absUrl($(l).attr('href'), pageUrl); if (u) found.push(u); }
+  });
+  const origin = new URL(pageUrl).origin;
+  const candidates = [...new Set([...found, ...guessedFeedPaths.map((p) => origin + p)])].slice(0, 7);
+  for (const c of candidates) {
+    try {
+      const got = await load(c);
+      if (got.notModified) continue;
+      if (!looksLikeHtml(got.text, got.ctype) && (got.text.trim().startsWith('{') || /<(?:rss|feed|rdf:rdf)\b/i.test(got.text.slice(0, 4000)))) return got;
+    } catch { /* try the next candidate */ }
+  }
+  return null;
+}
+
 module.exports = {
   platform: 'rss',
   label: 'RSS / Atom',
   color: '#f59e0b',
   kinds: ['feed'],
   intervalMin: { feed: 120 },
-  parseFeed, mediaFromHtml, entryToItems,
+  parseFeed, mediaFromHtml, entryToItems, decodeBody, load,
   isConfigured: () => ({ ok: true }),
 
   async fetch(feed, ctx) {
-    const text = await http.text(feed.target, { headers: { accept: 'application/rss+xml, application/atom+xml, application/feed+json, application/xml;q=0.9, */*;q=0.5' }, maxBytes: 4_000_000 });
-    const parsed = parseFeed(text, feed.target);
     const cursor = ctx.cursor || {};
+    // Conditional GET: an unchanged feed costs one 304 instead of a full download and re-parse (skipped on forced runs).
+    let got = await load(feed.target, ctx.force ? {} : { etag: cursor.etag, lastModified: cursor.lastModified });
+    if (got.notModified) return { items: [], via: 'feed-304' };
+    let via = 'feed';
+    if (looksLikeHtml(got.text, got.ctype)) {
+      // A site URL instead of a feed URL: follow <link rel="alternate"> (or a conventional path) rather than silently finding nothing.
+      const found = await discover(got.text, got.url);
+      if (!found) throw Object.assign(new Error(`${feed.target} is a web page, not a feed, and advertises no RSS/Atom/JSON feed`), { status: 422 });
+      got = found; via = 'feed-discovered';
+    }
+    let parsed;
+    try { parsed = parseFeed(got.text, got.url); } catch (e) { throw Object.assign(new Error(`Not a valid feed: ${e.message}`), { status: 422 }); }
+    // Some feeds list oldest-first; the newest N is what we want.
+    const dated = parsed.entries.filter((e) => e.published);
+    if (dated.length > 1 && dated[0].published < dated[dated.length - 1].published) parsed.entries.reverse();
+
     const items = [];
     let newest = cursor.newestAt || null;
     for (const entry of parsed.entries.slice(0, ctx.limit || 40)) {
@@ -188,11 +271,13 @@ module.exports = {
       if (entry.published && (!newest || entry.published > newest)) newest = entry.published;
       items.push(...entryToItems(entry, parsed));
     }
+    const etag = got.headers && got.headers.etag; const lastModified = got.headers && got.headers['last-modified'];
+    const next = { ...(newest ? { newestAt: newest } : {}), ...(etag ? { etag } : {}), ...(lastModified ? { lastModified } : {}) };
     return {
       items,
-      cursor: newest ? { newestAt: newest } : undefined,
+      cursor: Object.keys(next).length ? next : undefined,
       profile: { displayName: parsed.title, avatarUrl: parsed.image, bio: parsed.description },
-      via: 'feed',
+      via,
     };
   },
 };

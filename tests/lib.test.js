@@ -77,7 +77,7 @@ describe('profile / link parsing', () => {
     assert.equal(p('https://mastodon.social/@zed'), 'mastodon|user|zed@mastodon.social');
     assert.equal(p('https://www.redgifs.com/users/Bar'), 'redgifs|user|bar');
     assert.equal(p('https://lemmynsfw.com/c/gaynsfw'), 'lemmy|community|gaynsfw@lemmynsfw.com');
-    assert.equal(p('https://foo.tumblr.com'), 'rss|feed|https://foo.tumblr.com/rss');
+    assert.equal(p('https://foo.tumblr.com'), 'tumblr|user|foo');
     assert.equal(p('https://example.com/feed.xml'), 'rss|feed|https://example.com/feed.xml');
     assert.equal(p('https://linktr.ee/zed'), 'linkinbio|page|https://linktr.ee/zed');
     assert.equal(p('https://example.com/gallery'), 'web|page|https://example.com/gallery');

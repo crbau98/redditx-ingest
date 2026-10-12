@@ -9,37 +9,73 @@
  */
 const cheerio = require('cheerio');
 const http = require('./http').forPlatform('web', 1000);
-const { absUrl, clip, uniq } = require('./util');
+const { absUrl, clip, uniq, bestSrcset } = require('./util');
 const { extractLinks } = require('../lib/links');
 const { hostOf, hostBlocked, looksLikeDirectMedia, looksLikeVideo } = require('../lib/mediaurl');
 const rss = require('./rss');
 
 /* --------------------------------------------------------------- robots.txt */
 const robotsCache = new Map();
+
+/**
+ * robots.txt -> the rules that apply to us: the group naming PRISM if there is one, otherwise "*".
+ * Consecutive User-agent lines share a group (RFC 9309).
+ */
+function parseRobots(txt) {
+  const groups = [];
+  let cur = null; let lastWasAgent = false;
+  for (const raw of String(txt || '').split(/\r?\n/)) {
+    const m = raw.replace(/#.*/, '').trim().match(/^([A-Za-z-]+)\s*:\s*(.*)$/);
+    if (!m) continue;
+    const k = m[1].toLowerCase(); const v = m[2].trim();
+    if (k === 'user-agent') {
+      if (!cur || !lastWasAgent) { cur = { agents: [], rules: [] }; groups.push(cur); }
+      cur.agents.push(v.toLowerCase()); lastWasAgent = true;
+      continue;
+    }
+    lastWasAgent = false;
+    if (cur && v && (k === 'disallow' || k === 'allow')) cur.rules.push({ allow: k === 'allow', pattern: v });
+  }
+  const own = groups.filter((g) => g.agents.some((a) => a !== '*' && /prism/.test(a)));
+  return (own.length ? own : groups.filter((g) => g.agents.includes('*'))).flatMap((g) => g.rules);
+}
+
+/** Robots path pattern -> RegExp ("*" wildcard, trailing "$" anchor, otherwise a prefix match). */
+function robotsPattern(pattern) {
+  const anchored = pattern.endsWith('$');
+  const body = (anchored ? pattern.slice(0, -1) : pattern).split('*').map((x) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*');
+  return new RegExp(`^${body}${anchored ? '$' : ''}`);
+}
+
+/** Longest matching rule wins; Allow beats Disallow on a tie; no matching rule = allowed. */
+function pathAllowed(rules, path) {
+  let best = null;
+  for (const r of rules) {
+    if (!robotsPattern(r.pattern).test(path)) continue;
+    if (!best || r.pattern.length > best.pattern.length || (r.pattern.length === best.pattern.length && r.allow)) best = r;
+  }
+  return !best || best.allow;
+}
+
 async function robotsAllows(url) {
   let u;
   try { u = new URL(url); } catch { return false; }
   const key = u.origin;
-  let rules = robotsCache.get(key);
-  if (!rules || rules.expires < Date.now()) {
-    let disallow = [];
+  let entry = robotsCache.get(key);
+  if (!entry || entry.expires < Date.now()) {
+    let rules = [];
     try {
-      const txt = await http.text(`${key}/robots.txt`, { maxBytes: 200_000, retries: 0 });
-      let applies = false;
-      for (const raw of txt.split(/\r?\n/)) {
-        const line = raw.replace(/#.*/, '').trim();
-        const m = line.match(/^([A-Za-z-]+)\s*:\s*(.*)$/);
-        if (!m) continue;
-        const [, k, v] = m;
-        if (/^user-agent$/i.test(k)) applies = v.trim() === '*' || /prism/i.test(v);
-        else if (applies && /^disallow$/i.test(k) && v.trim()) disallow.push(v.trim());
-      }
-    } catch { disallow = []; } // no robots.txt (or unreachable) = allowed
-    rules = { disallow, expires: Date.now() + 3600_000 };
-    robotsCache.set(key, rules);
+      const res = await http.raw(`${key}/robots.txt`, { maxBytes: 500_000, retries: 0, headers: { accept: 'text/plain, */*;q=0.5' } });
+      const body = res.body.toString('utf8');
+      const ctype = String(res.headers['content-type'] || '');
+      // Only a real robots.txt counts. A 404/5xx, a soft-404 HTML page or a login wall means "no rules" - it must
+      // never read as "everything is disallowed" (that would silently zero every web feed on that site).
+      if (res.status >= 200 && res.status < 300 && !/html/i.test(ctype) && !/^\s*</.test(body)) rules = parseRobots(body);
+    } catch { rules = []; } // unreachable = no rules
+    entry = { rules, expires: Date.now() + 3600_000 };
+    robotsCache.set(key, entry);
   }
-  const path = u.pathname + u.search;
-  return !rules.disallow.some((d) => path.startsWith(d.replace(/\*$/, '')));
+  return pathAllowed(entry.rules, u.pathname + u.search);
 }
 
 const IMG_JUNK = /(?:^|[\/_.-])(?:avatar|emoji|icon|logo|favicon|sprite|badge|pixel|spacer|blank|tracking|gravatar|banner-ad)(?:[\/_.-]|$)|\.svg(?:\?|$)|\/ads?\//i;
@@ -52,14 +88,10 @@ function metaContent($, ...names) {
   return null;
 }
 
-function bestSrcset(srcset, base) {
-  const cands = String(srcset || '').split(',').map((s) => s.trim().split(/\s+/)).filter((p) => p[0]).map((p) => ({ url: absUrl(p[0], base), w: parseInt(p[1], 10) || 0 }));
-  cands.sort((a, b) => b.w - a.w);
-  return cands[0] && cands[0].url;
-}
-
-function extractPage(html, pageUrl) {
+function extractPage(html, pageUrl0) {
   const $ = cheerio.load(html);
+  // Relative URLs resolve against <base href> when the page has one.
+  const pageUrl = absUrl($('base[href]').first().attr('href'), pageUrl0) || pageUrl0;
   const media = [];
   const seen = new Set();
   const push = (m) => { if (m.url && !seen.has(m.url) && !hostBlocked(hostOf(m.url))) { seen.add(m.url); media.push(m); } };
@@ -80,8 +112,8 @@ function extractPage(html, pageUrl) {
   });
   $('img').each((_, i) => {
     const el = $(i);
-    const src = absUrl(bestSrcset(el.attr('srcset') || el.attr('data-srcset'), pageUrl) || el.attr('src') || el.attr('data-src') || el.attr('data-original'), pageUrl);
-    if (!src || IMG_JUNK.test(src) || src.startsWith('data:')) return;
+    const src = absUrl(bestSrcset(el.attr('srcset') || el.attr('data-srcset'), pageUrl) || el.attr('src') || el.attr('data-src') || el.attr('data-lazy-src') || el.attr('data-original'), pageUrl);
+    if (!src || src.startsWith('data:') || IMG_JUNK.test(src)) return;
     const w = parseInt(el.attr('width'), 10); const h = parseInt(el.attr('height'), 10);
     if ((w && w < 200) || (h && h < 200)) return;
     push({ url: src, type: 'image', width: w || null, height: h || null, alt: el.attr('alt') || null });
@@ -145,11 +177,20 @@ const linkInBioAdapter = {
   async fetch(feed) {
     const html = await http.text(feed.target, { headers: { accept: 'text/html' }, maxBytes: 2_000_000 });
     const page = extractPage(html, feed.target);
-    // Hrefs from anchors plus URLs embedded in hydration JSON (Linktree et al.)
+    // Hrefs from anchors plus URLs embedded in hydration JSON (Linktree/Beacons __NEXT_DATA__, Nuxt, inline state).
     const hrefs = [];
     page.$('a[href]').each((_, a) => hrefs.push(absUrl(page.$(a).attr('href'), feed.target)));
-    const jsonUrls = (html.match(/https?:\\?\/\\?\/[^"'\s<>\\]+(?:\\\/[^"'\s<>\\]*)*/g) || []).map((u) => u.replace(/\\\//g, '/'));
-    const links = extractLinks(uniq([...hrefs, ...jsonUrls]).join(' '))
+    // JSON escapes slashes/ampersands three ways (\/ , \u002F , \u0026); undo them so one pattern finds every URL.
+    const plain = html.replace(/\\u002[fF]/g, '/').replace(/\\u0026/g, '&').replace(/\\\//g, '/');
+    const jsonUrls = (plain.match(/https?:\/\/[^"'\s<>\\]+/g) || []).map((u) => u.replace(/[),.;]+$/, ''));
+    // Click-tracking wrappers (?url=https%3A%2F%2Fx.com%2F...) hide the real destination: add it.
+    const unwrapped = [...hrefs, ...jsonUrls].flatMap((h) => {
+      try {
+        const u = new URL(h);
+        return ['url', 'u', 'link', 'target', 'to', 'redirect', 'redirect_url', 'dest', 'destination'].map((k) => u.searchParams.get(k)).filter((v) => /^https?:\/\//i.test(v || ''));
+      } catch { return []; }
+    });
+    const links = extractLinks(uniq([...hrefs, ...jsonUrls, ...unwrapped]).join(' '))
       .filter((l) => l.platform !== 'web' && l.platform !== 'linkinbio')
       .slice(0, 30);
     return {
@@ -160,4 +201,4 @@ const linkInBioAdapter = {
   },
 };
 
-module.exports = { webAdapter, linkInBioAdapter, extractPage, robotsAllows };
+module.exports = { webAdapter, linkInBioAdapter, extractPage, robotsAllows, parseRobots, pathAllowed };

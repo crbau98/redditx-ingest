@@ -142,7 +142,7 @@ describe('OPML import', () => {
   test('feeds become RSS feeds; recognised platform URLs become native feeds; junk is ignored', () => {
     const specs = targets.parseOpml(opml);
     assert.equal(specs.length, 3);
-    assert.deepEqual(specs.map((s) => `${s.platform}/${s.kind}`), ['rss/feed', 'reddit/community', 'rss/feed']);
+    assert.deepEqual(specs.map((s) => `${s.platform}/${s.kind}`), ['rss/feed', 'reddit/community', 'tumblr/user']);
     assert.equal(specs[0].target, 'https://ab-blog.example/posts?format=rss&full=1', 'XML entities decoded');
     assert.equal(specs[0].label, 'A & B blog');
   });

@@ -23,10 +23,10 @@ const { normalize } = require('./safety');
 // Whole-word male signals. Strong ones are unmistakable; weak ones ("bi", "abs") only count as a hint
 // because female posts use them too, but no HARD female hit can be outvoted by any of them.
 const MALE = new RegExp(
-  '\\b(?:gay|gays|gaybro|gaybros|male|males|men|man|manly|guy|guys|dude|dudes|twinks?|bears?|otters?|jocks?|cocks?|dicks?|studs?|daddy|daddies|dads?|' +
+  '\\b(?:gay[a-z0-9]*|male|males|men|man|manly|guy|guys|dude|dudes|twinks?|bears?|otters?|jocks?|cocks?|dicks?|studs?|daddy|daddies|dads?|' +
   'muscles?|muscular|hunks?|bros?|boys?|lads?|hung|bulges?|jockstraps?|m4m|m4a|dilf|dilfs|hubby|husband|boyfriend|bf|abs|pecs|beard|bearded|' +
   'hombres?|homme|hommes|homem|homens|maenner|schwul|gai|gei|bofe|' +
-  'hairy men|gaymuscle|menofmastodon|malenude)\\b' +
+  'hairy men|menofmastodon|malenude)\\b' +
   '|[\\[(]\\s*m\\s*[\\])]',
 );
 // CJK / Cyrillic male words are matched as substrings (no word boundaries exist). Female terms are checked

@@ -15,6 +15,8 @@ const BLURB = {
   redgifs: 'Creator pages, niches and searches via the public RedGIFs API. Reddit posts linking to RedGIFs are resolved automatically.',
   bluesky: 'Creator timelines (media posts only) through the public AppView. Video plays via HLS. Search needs an app password.',
   mastodon: 'Creators and hashtags on any Mastodon-compatible server. Public API; some servers require sign-in for public timelines.',
+  tumblr: 'Blogs and tags through Tumblr’s public RSS. Reblogs are skipped (they carry someone else’s media); images are upgraded to the largest size.',
+  peertube: 'PeerTube accounts, channels, tags and keyword search across the federation (Sepia Search). Videos play as MP4 or HLS.',
   lemmy: 'Communities and users on Lemmy instances (API v3 with v4 fallback).',
   x: 'Creator timelines and searches. The official API (bearer token) is reliable; without it only a best-effort keyless route is available.',
   telegram: 'Public Telegram channels through the web preview (t.me/s/…). No login or key; channels that disable the preview report an error.',

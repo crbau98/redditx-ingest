@@ -13,17 +13,38 @@
  */
 const config = require('../config');
 const http = require('./http').forPlatform('misskey', 700);
-const { toIso, clip } = require('./util');
+const { toIso, clip, originOf, errorDetail } = require('./util');
+const { looksLikeDirectMedia, looksLikeVideo } = require('../lib/mediaurl');
 const { extractLinks } = require('../lib/links');
 
 const userCache = new Map();
 const softwareCache = new Map();
 const MISSKEY_FAMILY = /^(misskey|sharkey|firefish|calckey|foundkey|iceshrimp|catodon|cherrypick|meisskey)/i;
 
-function api(host, endpoint, body) {
-  return http.json(`https://${host}/api/${endpoint}`, {
-    method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(body),
-  });
+// Optional access token (MISSKEY_ACCESS_TOKEN) for servers that hide notes from signed-out readers. A token only
+// works on the server that issued it, so it goes to the first configured instance and nowhere else.
+const tokenFor = (host) => {
+  const t = config.creds.misskeyToken || process.env.MISSKEY_ACCESS_TOKEN || '';
+  return t && String(host).toLowerCase() === String(config.misskeyInstances[0] || '').toLowerCase() ? t : '';
+};
+
+async function api(host, endpoint, body) {
+  const token = tokenFor(host);
+  const payload = JSON.stringify(token ? { ...body, i: token } : body);
+  try {
+    return await http.json(`${originOf(host)}/api/${endpoint}`, {
+      // Explicit length: some reverse proxies in front of Misskey reject chunked request bodies.
+      method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json', 'content-length': Buffer.byteLength(payload) }, body: payload,
+    });
+  } catch (e) {
+    // 401 CREDENTIAL_REQUIRED / 403 (role or instance policy): the server wants a login even for public reads.
+    if (e && (e.status === 401 || e.status === 403)) {
+      const err = new Error(`${host} requires sign-in for ${endpoint} (HTTP ${e.status}${errorDetail(e) ? `: ${errorDetail(e)}` : ''}); ${token ? 'the configured MISSKEY_ACCESS_TOKEN was not accepted' : `set MISSKEY_ACCESS_TOKEN (an access token from ${config.misskeyInstances[0] || 'your instance'}) or choose servers that allow signed-out reads`}`);
+      err.status = e.status; err.skip = true;
+      throw err;
+    }
+    throw e;
+  }
 }
 
 /** Total of all emoji reactions (Misskey's equivalent of likes). */
@@ -36,7 +57,15 @@ function reactionTotal(note) {
 function parseNote(note, host) {
   if (!note || !note.id) return [];
   if (note.renote && !note.text && !(note.files || []).length) return [];
-  const files = (note.files || []).filter((f) => f && f.url && /^(image|video)\//.test(f.type || ''));
+  // Misskey reports a MIME type per file; very old/odd uploads say application/octet-stream, so fall back to the extension.
+  const kindOfFile = (f) => {
+    const t = String(f.type || '');
+    if (/^video\//i.test(t)) return 'video';
+    if (/^image\//i.test(t)) return 'image';
+    if (/^application\/octet-stream$/i.test(t) && looksLikeDirectMedia(f.name || f.url)) return looksLikeVideo(f.name || f.url) ? 'video' : 'image';
+    return null;
+  };
+  const files = (note.files || []).filter((f) => f && f.url && kindOfFile(f));
   if (!files.length) return [];
   const u = note.user || {};
   const acct = u.username ? `${u.username}@${(u.host || host).toLowerCase()}` : null;
@@ -44,7 +73,7 @@ function parseNote(note, host) {
   const tags = (note.tags || []).concat(text.match(/#[\p{L}\p{N}_]+/gu) || []);
   return files.map((f, i) => {
     const p = f.properties || {};
-    const video = f.type.startsWith('video/');
+    const video = kindOfFile(f) === 'video';
     return {
       sourceId: `${host}:${note.id}`,
       position: i,
@@ -86,17 +115,20 @@ async function showUser(host, username) {
 
 /** What server software runs on a host (via NodeInfo). Cached; null when unknown. */
 async function detectSoftware(host) {
-  if (softwareCache.has(host)) return softwareCache.get(host);
+  const hit = softwareCache.get(host);
+  if (hit && (hit.name || hit.until > Date.now())) return hit.name;
   let name = null;
   try {
-    const wk = await http.json(`https://${host}/.well-known/nodeinfo`, { retries: 0 });
+    const wk = await http.json(`${originOf(host)}/.well-known/nodeinfo`, { retries: 0 });
     const link = (wk.links || []).map((l) => l.href).filter(Boolean).pop();
-    if (link && new URL(link).hostname === host) {
+    // Only follow a NodeInfo link on the same host (it is attacker-controlled data).
+    if (link && new URL(link).host.toLowerCase() === String(host).toLowerCase()) {
       const ni = await http.json(link, { retries: 0 });
       name = ni && ni.software && ni.software.name ? String(ni.software.name).toLowerCase() : null;
     }
   } catch { name = null; }
-  softwareCache.set(host, name);
+  // Remember a positive answer for good, a failed detection only briefly (a blip must not pin a server to "unknown").
+  softwareCache.set(host, { name, until: Date.now() + 10 * 60 * 1000 });
   return name;
 }
 const isMisskeyFamily = (software) => !!software && MISSKEY_FAMILY.test(software);

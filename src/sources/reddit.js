@@ -17,32 +17,43 @@ const config = require('../config');
 const http = require('./http').forPlatform('reddit', 1100);
 const net = require('../lib/net');
 const rss = require('./rss');
+const events = require('../engine/events');
 const { toIso, decodeHtml, pickWidth, clip } = require('./util');
 const { hostOf, hostBlocked, hostMatches, normalizeMediaUrl, looksLikeDirectMedia } = require('../lib/mediaurl');
 
 const base = config.baseUrls.reddit;
 const oldBase = base.includes('www.reddit.com') ? base.replace('www.reddit.com', 'old.reddit.com') : base;
-const REDGIFS_LINK = /redgifs\.com\/(?:watch|ifr)\/[a-z0-9]+/i;
+// watch / ifr / embed / legacy gifs/detail pages on www., v3. or bare redgifs.com.
+const REDGIFS_LINK = /redgifs\.com\/(?:watch|ifr|embed|gifs\/detail)\/[a-z0-9]+/i;
+const VREDDIT = /^https?:\/\/v\.redd\.it\/([a-z0-9]+)\/?$/i;
 
 /* ----------------------------------------------------------------- OAuth */
 let token = null;
+let tokenFailUntil = 0; // bad credentials must not turn into a token request per page
 async function oauthToken() {
   const { redditClientId: id, redditClientSecret: secret } = config.creds;
   if (!id || !secret) return null;
   if (token && Date.now() < token.expires - 60000) return token.value;
-  const res = await net.fetchJSON(`${base}/api/v1/access_token`, {
-    method: 'POST',
-    headers: {
-      authorization: `Basic ${Buffer.from(`${id}:${secret}`).toString('base64')}`,
-      'content-type': 'application/x-www-form-urlencoded',
-      'user-agent': config.redditUserAgent,
-    },
-    body: 'grant_type=client_credentials',
-    retries: 1,
-  });
-  if (!res.access_token) throw new Error('Reddit OAuth returned no token');
-  token = { value: res.access_token, expires: Date.now() + (res.expires_in || 3600) * 1000 };
-  return token.value;
+  if (Date.now() < tokenFailUntil) return null;
+  try {
+    const res = await http.json(`${base}/api/v1/access_token`, {
+      method: 'POST',
+      headers: {
+        authorization: `Basic ${Buffer.from(`${id}:${secret}`).toString('base64')}`,
+        'content-type': 'application/x-www-form-urlencoded',
+        'user-agent': config.redditUserAgent,
+      },
+      body: 'grant_type=client_credentials',
+      retries: 1,
+    });
+    if (!res.access_token) throw new Error('Reddit OAuth returned no token');
+    token = { value: res.access_token, expires: Date.now() + (res.expires_in || 3600) * 1000 };
+    return token.value;
+  } catch (e) {
+    tokenFailUntil = Date.now() + 10 * 60000;
+    events.log('WARN', `Reddit OAuth token request failed (${e.status || e.message}) — check REDDIT_CLIENT_ID/REDDIT_CLIENT_SECRET (an app of type "script" or "web app"); using public JSON/RSS/archive for the next 10 minutes`);
+    throw e;
+  }
 }
 
 /* --------------------------------------------------------------- parsing */
@@ -58,6 +69,20 @@ function previewOf(d) {
     mp4: img.variants && img.variants.mp4 && img.variants.mp4.source && decodeHtml(img.variants.mp4.source.url),
   };
 }
+
+/**
+ * preview.redd.it/<file> is a resized, signed rendition; i.redd.it/<file> is the unsigned original.
+ * Deriving it avoids signature-bearing URLs (which Reddit can rotate or refuse when hotlinked).
+ * external-preview.redd.it has no i.redd.it twin and is left alone.
+ */
+function toOriginal(url) {
+  try {
+    const u = new URL(url);
+    if (u.hostname.toLowerCase() === 'preview.redd.it' && /\.(jpe?g|png|gif|webp)$/i.test(u.pathname)) return `https://i.redd.it${u.pathname}`;
+  } catch { /* keep as is */ }
+  return url;
+}
+const MIME_EXT = { 'image/jpg': 'jpg', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp' };
 
 /** One Reddit submission -> 0..n ingest items (galleries yield several). */
 function parsePost(post) {
@@ -93,7 +118,10 @@ function parsePost(post) {
       const s = meta.s;
       const isAnim = meta.e === 'AnimatedImage';
       const video = isAnim && s.mp4 ? decodeHtml(s.mp4) : null;
-      const mediaUrl = video || decodeHtml(s.u || s.gif || '');
+      // Stills: the unsigned original at i.redd.it/<media_id>.<ext>; the signed preview URL is the fallback.
+      const ext = MIME_EXT[String(meta.m || '').toLowerCase()];
+      const original = !video && ext && /^[a-z0-9]+$/i.test(gi.media_id) ? `https://i.redd.it/${gi.media_id}.${ext}` : null;
+      const mediaUrl = video || original || decodeHtml(s.u || s.gif || '');
       if (!mediaUrl) return;
       items.push({
         ...base, position: i, mediaType: video ? 'video' : 'image', mediaUrl,
@@ -135,27 +163,41 @@ function parsePost(post) {
     return [{ ...base, position: 0, mediaType: /\.mp4$/.test(norm) ? 'video' : 'image', mediaUrl: norm, previewUrl: prev.previewUrl, width: prev.width, height: prev.height }];
   }
   if (/\.(jpe?g|png|webp|avif|gif)(\?|$)/i.test(url) || hostMatches(host, 'i.redd.it')) {
-    return [{ ...base, position: 0, mediaType: 'image', mediaUrl: url, previewUrl: prev.previewUrl || url, width: prev.width, height: prev.height }];
+    const full = toOriginal(url);
+    return [{ ...base, position: 0, mediaType: 'image', mediaUrl: full, previewUrl: prev.previewUrl || url, width: prev.width, height: prev.height }];
   }
   return []; // text / unsupported external link
 }
 
 /** Atom entries from the .rss transport -> items (no scores / dimensions available). */
+const RSS_MEDIA_HOSTS = new Set(['i.redd.it', 'preview.redd.it', 'i.imgur.com', 'imgur.com']);
 function fromRssEntry(entry) {
   const id = String(entry.id || '').replace(/^t3_/, '') || (entry.link || '').split('/comments/')[1]?.split('/')[0];
   if (!id) return [];
   const author = (entry.author || '').replace(/^\/?u\//, '') || null;
   const sub = ((entry.link || '').match(/\/r\/([^/]+)\//) || [])[1] || null;
-  const direct = entry.media.find((m) => looksLikeDirectMedia(m.url) && /redd\.it|imgur\.com/.test(m.url));
-  const redgifsLink = (entry.links || []).find((u) => REDGIFS_LINK.test(u));
-  const redgifs = redgifsLink ? { url: redgifsLink, type: 'video' } : entry.media.find((m) => REDGIFS_LINK.test(m.url));
-  const any = direct || entry.media.find((m) => /preview\.redd\.it|i\.redd\.it/.test(m.url));
-  const pick = redgifs || any;
-  if (!pick) return [];
-  const mediaUrl = pick.url.replace(/&amp;/g, '&');
   const common = { sourceId: id, position: 0, title: entry.title, author, community: sub, score: 0, postedAt: entry.published, permalink: entry.link, nsfw: 'explicit', trusted: true, tags: [] };
-  if (redgifs) return [{ ...common, mediaType: 'video', mediaUrl, resolve: 'redgifs' }];
-  return [{ ...common, mediaType: pick.type, mediaUrl, previewUrl: pick.type === 'image' ? mediaUrl : null }];
+  const links = entry.links || [];
+
+  const redgifsLink = links.find((u) => REDGIFS_LINK.test(u));
+  const redgifs = redgifsLink ? { url: redgifsLink, type: 'video' } : entry.media.find((m) => REDGIFS_LINK.test(m.url));
+  if (redgifs) return [{ ...common, mediaType: 'video', mediaUrl: redgifs.url.replace(/&amp;/g, '&'), resolve: 'redgifs' }];
+
+  // v.redd.it/<id> carries no file extension in the feed; its HLS playlist (video + audio) is at a fixed path.
+  const vlink = links.concat(entry.media.map((m) => m.url)).find((u) => VREDDIT.test(u));
+  if (vlink) {
+    const hls = `https://v.redd.it/${vlink.match(VREDDIT)[1]}/HLSPlaylist.m3u8`;
+    const thumb = entry.media.find((m) => m.type === 'image');
+    return [{ ...common, mediaType: 'video', mediaUrl: hls, hlsUrl: hls, hasAudio: true, previewUrl: thumb ? thumb.url : null }];
+  }
+
+  // Only Reddit's own image hosts / imgur: external-preview.redd.it and *.thumbs.redditmedia.com are
+  // thumbnails of link posts, not the poster's media.
+  const direct = entry.media.find((m) => RSS_MEDIA_HOSTS.has(hostOf(m.url)) && looksLikeDirectMedia(m.url));
+  const any = direct || entry.media.find((m) => hostOf(m.url) === 'i.redd.it');
+  if (!any) return [];
+  const mediaUrl = toOriginal(any.url.replace(/&amp;/g, '&'));
+  return [{ ...common, mediaType: any.type, mediaUrl, previewUrl: any.type === 'image' ? mediaUrl : null }];
 }
 
 /* ------------------------------------------------------------- transports */
@@ -171,60 +213,105 @@ function qs(params) {
 async function viaOauth(path, params) {
   const t = await oauthToken();
   if (!t) return null;
-  const json = await http.json(`${config.baseUrls.redditOauth}${path}?${qs({ ...params, raw_json: 1 })}`, {
-    headers: { authorization: `Bearer ${t}`, 'user-agent': config.redditUserAgent },
-  });
-  return { children: (json.data && json.data.children) || [], after: json.data && json.data.after, via: 'oauth' };
+  try {
+    const json = await http.json(`${config.baseUrls.redditOauth}${path}?${qs({ ...params, raw_json: 1 })}`, {
+      headers: { authorization: `Bearer ${t}`, 'user-agent': config.redditUserAgent },
+    });
+    if (!json || !json.data) throw new Error('unexpected Reddit OAuth JSON shape');
+    return { children: json.data.children || [], after: json.data.after, via: 'oauth' };
+  } catch (e) {
+    if (e.status === 401) token = null; // revoked/expired early: fetch a fresh one next time
+    throw e;
+  }
 }
+
+/** A listing of subreddits (kind t5) means Reddit redirected a missing subreddit to its search page. */
+const looksLikeSearchRedirect = (children) => children.length > 0 && children.every((c) => c && c.kind === 't5');
 
 async function viaJson(origin, path, params, label) {
   const json = await http.json(`${origin}${path}.json?${qs({ ...params, raw_json: 1 })}`, {
     headers: { 'user-agent': config.redditUserAgent },
   });
-  if (!json || !json.data) throw new Error('unexpected Reddit JSON shape');
-  return { children: json.data.children || [], after: json.data.after, via: label };
+  if (!json || !json.data) throw new Error('unexpected Reddit JSON shape'); // e.g. {"message":"Forbidden","error":403} served with 200
+  const children = json.data.children || [];
+  if (looksLikeSearchRedirect(children)) throw Object.assign(new Error('Reddit redirected to subreddit search (the community does not exist)'), { status: 404 });
+  return { children, rawCount: children.length, after: json.data.after, via: label };
 }
 
 async function viaRss(path, params) {
   const text = await http.text(`${base}${path}.rss?${qs({ limit: params.limit, sort: params.sort, t: params.t })}`, {
-    headers: { 'user-agent': config.redditUserAgent, accept: 'application/atom+xml, application/xml' },
+    headers: { 'user-agent': config.redditUserAgent, accept: 'application/atom+xml, application/rss+xml, application/xml;q=0.9' },
   });
+  // A block/challenge page served with 200 parses as an empty feed; refuse it so the ladder keeps walking.
+  if (!/<(?:feed|rss|rdf:RDF)[\s>]/i.test(String(text).slice(0, 4000))) throw new Error('Reddit RSS returned a non-feed document (HTML challenge page?)');
   const feed = rss.parseFeed(text, base);
-  return { items: feed.entries.flatMap(fromRssEntry), after: null, via: 'rss' };
+  return { items: feed.entries.flatMap(fromRssEntry), rawCount: feed.entries.length, after: null, via: 'rss' };
 }
 
 async function viaArchive(feed, params) {
+  // Arctic Shift: /api/posts/search?subreddit=<name>|author=<name>&limit=<=100&sort=desc  ->  {data:[reddit-shaped posts]}
   const q = { limit: Math.min(params.limit || 100, 100), sort: 'desc', ...(feed.kind === 'user' ? { author: feed.target } : { subreddit: feed.target }) };
-  const json = await http.json(`${config.baseUrls.redditArchive}/api/posts/search?${qs(q)}`);
+  const json = await http.json(`${config.baseUrls.redditArchive}/api/posts/search?${qs(q)}`, { headers: { 'user-agent': config.redditUserAgent } });
   const rows = Array.isArray(json) ? json : json.data || [];
-  return { children: rows, after: null, via: 'archive' };
+  return { children: rows, rawCount: rows.length, after: null, via: 'archive' };
 }
 
-/** Walk the transport ladder; returns the first page that works plus notes about failures. */
-async function fetchPage(feed, sort, params) {
+/** Reddit explains refusals: {"reason":"private"|"quarantined"|"banned"...,"error":403}. Those are about ONE target. */
+const TARGET_REASONS = {
+  private: 'is private', quarantined: 'is quarantined (needs opt-in, cannot be read anonymously)', gold_only: 'is restricted to premium members',
+  gated: 'is age/opt-in gated', employees_only: 'is restricted', archived: null,
+};
+function targetReason(e) {
+  if (!e || !e.body || e.status !== 403) return null;
+  try { const r = String((JSON.parse(e.body) || {}).reason || '').toLowerCase(); return TARGET_REASONS[r] ? { reason: r, text: TARGET_REASONS[r] } : null; } catch { return null; }
+}
+
+/**
+ * Walk the transport ladder; returns the first page that works plus notes about failures.
+ *   - 403/429/5xx, HTML/non-JSON bodies, JSON without `data`, a non-feed RSS body: next transport.
+ *   - an empty first page: also next transport (a blocked edge often answers 200 with nothing); if every
+ *     transport agrees it is empty, that empty page is returned.
+ *   - 404/410 (and private/quarantined): about this target, not the transport - stop at once.
+ *   - `after` cursors: RSS and the archive cannot continue them, so page 2+ only uses the JSON transports.
+ * `dead` remembers transports that already failed during this feed run, so pages 2..n do not re-knock.
+ */
+async function fetchPage(feed, sort, params, dead = new Set()) {
   const path = listingPath(feed, sort);
+  const paged = !!params.after;
+  const label = `${feed.kind === 'user' ? 'u' : 'r'}/${feed.target}`;
   const attempts = [
-    () => viaOauth(path, params),
-    () => viaJson(base, path, params, 'json'),
-    () => viaJson(oldBase, path, params, 'old'),
-    () => viaRss(path, params),
-    () => viaArchive(feed, params),
+    ['oauth', () => viaOauth(path, params)],
+    ['json', () => viaJson(base, path, params, 'json')],
+    ['old', () => viaJson(oldBase, path, params, 'old')],
+    ...(paged ? [] : [['rss', () => viaRss(path, params)], ['archive', () => viaArchive(feed, params)]]),
   ];
+  const usable = attempts.filter(([name]) => !dead.has(name));
   const notes = [];
-  let firstErr;
-  for (const attempt of attempts) {
+  const failed = [];
+  let firstErr; let empty = null;
+  for (const [name, attempt] of usable.length ? usable : attempts) {
     try {
       const page = await attempt();
-      if (page) { page.notes = notes; return page; }
+      if (!page) continue; // OAuth not configured
+      if (!paged && name !== 'archive' && page.rawCount === 0) { empty = empty || page; failed.push(`${name} empty`); notes.push(`${name}: empty listing`); continue; }
+      page.notes = notes;
+      return page;
     } catch (e) {
+      dead.add(name);
       if (!firstErr) firstErr = e; // the primary failure is the one worth reporting, not the last mirror's
+      failed.push(`${name} ${e.status || e.code || 'err'}`);
       notes.push(`${e.status || e.code || 'err'} ${String(e.message).slice(0, 80)}`);
-      if (e.status === 404 || e.status === 410) break; // banned/private/unknown: no point trying mirrors
+      const tr = targetReason(e);
+      if (tr) throw Object.assign(new Error(`${label} ${tr.text} (Reddit says "${tr.reason}")`), { status: 403, perTarget: true, targetGone: true });
+      if (e.status === 404 || e.status === 410) {
+        throw Object.assign(new Error(`${label} not found (HTTP ${e.status}: banned, suspended, private or misspelled)`), { status: e.status, retryAfter: e.retryAfter || 0 });
+      }
     }
   }
+  if (empty) { empty.notes = notes; return empty; }
   if (!firstErr) firstErr = new Error('no Reddit transport available');
-  if (notes.length > 1) firstErr.message += ` (${notes.length - 1} fallback${notes.length > 2 ? 's' : ''} also failed)`;
-  throw firstErr;
+  // One actionable line: what failed where. Keep the first failure's status so the engine/breaker can reason about it.
+  throw Object.assign(new Error(`Reddit unavailable for ${label} on every transport: ${failed.join(', ')}`), { status: firstErr.status || 0, retryAfter: firstErr.retryAfter || 0, code: firstErr.code || '' });
 }
 
 async function fetchProfile(name) {

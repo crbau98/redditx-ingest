@@ -11,16 +11,20 @@
 const THRESHOLD = 4;            // consecutive systemic failures
 const BASE_COOLDOWN_MS = 3 * 60 * 1000;
 const MAX_COOLDOWN_MS = 60 * 60 * 1000;
+// A half-open probe that never reports back (crash between canRun() and the run's outcome) must not
+// wedge the platform forever: after this long the slot is considered lost and another probe may go.
+const PROBE_STALE_MS = 10 * 60 * 1000;
 
 const states = new Map();
 const get = (p) => {
-  if (!states.has(p)) states.set(p, { failures: 0, trips: 0, openUntil: 0, halfOpen: false, lastError: null, lastFailureAt: 0 });
+  if (!states.has(p)) states.set(p, { failures: 0, trips: 0, openUntil: 0, halfOpen: false, halfOpenAt: 0, lastError: null, lastFailureAt: 0 });
   return states.get(p);
 };
 
 function isSystemic(err) {
   if (!err) return false;
   if (err.skip) return false;
+  if (err.perTarget) return false; // e.g. a private/quarantined subreddit: about one target, not the platform
   if (err.status === 404 || err.status === 410 || err.status === 400 || err.status === 422) return false;
   return true;
 }
@@ -29,8 +33,8 @@ function canRun(platform, now = Date.now()) {
   const s = get(platform);
   if (s.openUntil && now < s.openUntil) return false;
   if (s.openUntil && now >= s.openUntil) {
-    if (s.halfOpen) return false; // a probe is already in flight
-    s.halfOpen = true;
+    if (s.halfOpen && now - s.halfOpenAt < PROBE_STALE_MS) return false; // a probe is already in flight
+    s.halfOpen = true; s.halfOpenAt = now;
   }
   return true;
 }
