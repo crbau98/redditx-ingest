@@ -19,6 +19,8 @@
 | **Media** | Silent video, no seeking | HTTP **Range** (seeking), **HLS** with audio, on-disk image cache, hover/in-view previews |
 | **Data** | Ingest time only, `LIKE` search, galleries truncated | Original post time, **FTS5** search, every gallery image, creators with cross-platform links, versioned migrations |
 | **UI** | Basic grid | New design system (dark/light), discover home, filters, creator profiles, immersive viewer, saved & following, full admin console |
+| **Discovery** (v4.1) | Search box | Autocomplete (creators · tags · communities), Browse page, *Similar creators*, a *From creators you follow* rail and Following filter |
+| **Operations** (v4.1) | – | Nightly SQLite backups with retention, config export/import, audit log, duplicate-creator review, installable offline shell (PWA) |
 
 ---
 
@@ -42,7 +44,7 @@ DEMO_ART=1 DB_PATH=./data/demo.db ADMIN_KEY=dev node server.js
 ### Tests
 
 ```bash
-npm test      # 117 tests: safety, SSRF, migration from a real v3 DB, adapters, engine resilience, HTTP API, proxy
+npm test      # 132 tests: safety, SSRF, migration from a real v3 DB, adapters, engine resilience, HTTP API, proxy
 ```
 
 ---
@@ -84,6 +86,7 @@ No system can enumerate "the whole web". PRISM grows its coverage three ways: **
 | Mastodon | user, tag | – (optional token) | Any Mastodon-compatible server; some require sign-in for public timelines. |
 | Lemmy | community, user | – | API v3 with v4 fallback. |
 | X | user, search | `X_BEARER_TOKEN` (search); users work keyless best-effort | Official API when a token is present. |
+| Telegram | user (public channel) | – | Public web preview (`t.me/s/<channel>`); channels that disable it report an error. |
 | RSS / Atom / JSON Feed | feed | – | Creator sites, Tumblr `/rss`, Mastodon `.rss`, Bluesky `/rss`, … |
 | Web page | page | – | OpenGraph, `<video>`, linked images; honours `robots.txt`. |
 | Link-in-bio | page | – | Discovers a creator's other accounts; never yields media itself. |
@@ -104,11 +107,19 @@ No system can enumerate "the whole web". PRISM grows its coverage three ways: **
 
 ## Admin console (`#/admin`)
 
-Overview (health, activity, queues) · Feeds (schedule, status, run-now, bulk import) · Creators (add, merge, block) · Review queue · Reports · Media (bulk moderation) · Sources (config & breaker state) · Live log (SSE) · Blocklist · Settings.
+Overview (health, activity, queues) · Feeds (schedule, status, run-now, bulk import) · Creators (add, merge, block, **possible-duplicate review**) · Review queue · Reports · Media (bulk moderation) · Sources (config & breaker state) · Live log (SSE) · Blocklist · **Audit log** · Settings (**backups, config export/import**, maintenance).
 
 Set `ADMIN_KEY`. **Without it the admin is disabled in production** (open only in development, or with `ADMIN_OPEN=true`).
 
 ---
+
+## Operations
+
+- **Backups**: a consistent copy of the database (`VACUUM INTO`, safe while serving) is written nightly to `<db dir>/backups/` and the newest *N* are kept (Admin → Settings; on by default in production). *Back up now* is one click. Put the volume under your host's own snapshots too.
+- **Config export / import**: creators, feeds and the blocklist as JSON — no media, no secrets. Import is additive and idempotent (people are matched by their accounts, then by handle) and re-applies the safety gate.
+- **Audit log**: every moderation decision — manual or automatic — with actor, target and reason.
+- **Offline shell**: the app installs as a PWA and opens offline. The service worker caches only its own static files; API responses and media are never cached.
+- **Retroactive safety**: raising the safety rules bumps a sweep version, so existing libraries are re-checked once on the next boot.
 
 ## Configuration
 
@@ -143,12 +154,12 @@ Adding a source = one file in `src/sources/` implementing `{ platform, kinds, is
 
 ## API (public)
 
-`GET /api/media` (`q, type, platform, community, creator, tag, sort=recent|trending|top|random|oldest|relevance, since, page, limit, ids`) · `GET /api/media/:id` · `/related` · `POST /api/media/:id/like|view` · `GET /api/discover` · `GET /api/creators` · `/creators/:id` · `/creators/:id/media` · `GET /api/tags|communities|platforms|stats` · `POST /api/report` · `GET /api/proxy?url=` (Range supported) · `GET /api/hls?url=` · `GET /api/stream` (SSE) · `GET /api/health` · `GET /api/meta`.
+`GET /api/media` (`q, type, platform, community, creator, creators, tag, sort=recent|trending|top|random|oldest|relevance, since, page, limit, ids`) · `GET /api/media/:id` · `/related` · `POST /api/media/:id/like|view` · `GET /api/discover` · `GET /api/creators` · `/creators/:id` · `/creators/:id/media` · `GET /api/suggest?q=` · `GET /api/creators/:id/similar` · `GET /api/tags|communities|platforms|stats` · `POST /api/report` · `GET /api/proxy?url=` (Range supported) · `GET /api/hls?url=` · `GET /api/stream` (SSE) · `GET /api/health` · `GET /api/meta`.
 Content endpoints require the age cookie from `POST /api/age/confirm`. Admin endpoints live under `/api/admin/*` and require `x-admin-key` (or `Authorization: Bearer`).
 
 ---
 
 ## Verification status (please read)
 
-- **Tested:** 117 automated tests, including a migration from a real v3 schema, SSRF defences, safety rules, the engine's retry/backoff/breaker behaviour, the HTTP API and the media/HLS proxy. The UI was exercised in a real browser (desktop and phone-sized viewports, dark and light themes), including the viewer with keyboard navigation and deep links, WebM video playback, the age gate, creator add flow, and every admin tab. Touch-swipe gestures and HLS playback (hls.js) were not exercised in a browser.
+- **Tested:** 132 automated tests, including a migration from a real v3 schema, SSRF defences, safety rules, the engine's retry/backoff/breaker behaviour, the HTTP API and the media/HLS proxy. The UI was exercised in a real browser (desktop and phone-sized viewports, dark and light themes), including the viewer with keyboard navigation and deep links, WebM video playback, the age gate, creator add flow, and every admin tab. Touch-swipe gestures and HLS playback (hls.js) were not exercised in a browser.
 - **Not verified live:** the adapters' *network* behaviour. The development sandbox blocked outbound access to Reddit, RedGIFs, Bluesky, Mastodon, Lemmy and X, so each adapter was built against the platforms' documented response shapes and tested with fixtures and local mock servers — not against the live services. Expect to tune small details (field names, rate limits, headers) on first real run. The **Admin → Live log** and per-feed error text show exactly what each source returned. The keyless X route and unauthenticated Mastodon/Bluesky access depend on those services' current policies, which change.

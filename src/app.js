@@ -44,6 +44,7 @@ function createApp() {
   }));
   app.use(compression({ filter: (req, res) => (req.path.startsWith('/api/stream') || req.path.startsWith('/api/admin/stream') || req.path === '/api/proxy' ? false : compression.filter(req, res)) }));
   if (!config.isTest) app.use(morgan(config.isProd ? 'tiny' : 'dev', { skip: (req) => req.path === '/api/health' || req.path === '/api/proxy' }));
+  app.use('/api/admin/import', express.json({ limit: '12mb' })); // curated configs can be large; everything else stays at 1mb
   app.use(express.json({ limit: '1mb' }));
 
   // Generous limiter for the JSON API; the media proxy has its own, much higher ceiling

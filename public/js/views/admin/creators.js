@@ -39,6 +39,21 @@ function mergeDialog(from, onDone) {
   search.addEventListener('input', run);
 }
 
+async function duplicatesDialog(onDone) {
+  const groups = await adminGet('/creators-duplicates');
+  const body = groups.length ? h('div', { class: 'stack' }, groups.map((g) => {
+    const keep = g[0];
+    return h('div', { class: 'panel' },
+      h('div', { class: 'stack', style: { gap: '8px' } }, g.map((c, i) => h('div', { class: 'row' }, avatar(c, 30), h('span', { class: 'grow' }, `${c.display_name || c.handle} · @${c.handle}`), h('span', { class: 'muted' }, `${c.media_count} posts`), i === 0 ? h('span', { class: 'badge good' }, 'keep') : null))),
+      h('div', { class: 'row', style: { marginTop: '12px', justifyContent: 'flex-end' } }, h('button', { class: 'btn sm primary', onclick: async (e) => {
+        if (!(await confirmDialog(`Merge ${g.length - 1} into “${keep.display_name || keep.handle}”? Their media and accounts move across.`, { confirmLabel: 'Merge', danger: true }))) return;
+        await act(e.currentTarget, async () => { for (const c of g.slice(1)) await adminPost('/creators/merge', { keepId: keep.id, mergeId: c.id }); }, 'Merged');
+        m.close(); onDone();
+      } }, 'Merge into the first')));
+  })) : h('p', { class: 'muted' }, 'No probable duplicates found.');
+  const m = openModal({ title: 'Possible duplicate creators', sub: 'Handles that match once punctuation and common suffixes (_xo, _fit, official…) are ignored. Only merge if it is really the same person.', wide: true, body, actions: [h('button', { class: 'btn', onclick: () => m.close() }, 'Close')] });
+}
+
 async function detailDialog(id, onDone) {
   const c = await adminGet(`/creators/${id}`);
   const m = openModal({
@@ -64,7 +79,9 @@ export async function render(root) {
   search.addEventListener('input', debounce(() => set({ q: search.value.trim(), page: 0 }), 350));
   const sort = h('select', { class: 'select sm', style: { width: 'auto' }, onchange: (e) => set({ sort: e.target.value, page: 0 }) }, [['recent', 'Recently active'], ['media', 'Most posts'], ['new', 'Newest'], ['name', 'A–Z']].map(([v, l]) => h('option', { value: v, selected: f.sort === v }, l)));
   const host = h('div');
-  root.append(pageHead('Creators', 'People, not just feeds. Add a creator once and PRISM follows all of their public accounts.', h('button', { class: 'btn primary', onclick: () => addCreatorDialog(load) }, icon('plus', 'sm'), 'Add creator')), h('div', { class: 'toolbar' }, search, sort), host);
+  const dupBtn = h('button', { class: 'btn sm', hidden: true, onclick: () => duplicatesDialog(load) }, icon('users', 'sm'), 'Possible duplicates');
+  root.append(pageHead('Creators', 'People, not just feeds. Add a creator once and PRISM follows all of their public accounts.', h('button', { class: 'btn primary', onclick: () => addCreatorDialog(load) }, icon('plus', 'sm'), 'Add creator')), h('div', { class: 'toolbar' }, search, sort, dupBtn), host);
+  adminGet('/creators-duplicates').then((g) => { if (g.length) { dupBtn.hidden = false; dupBtn.lastChild.textContent = ` ${g.length} possible duplicate${g.length === 1 ? '' : 's'}`; dupBtn.replaceChildren(icon('users', 'sm'), `${g.length} possible duplicate${g.length === 1 ? '' : 's'}`); } }).catch(() => {});
 
   async function load() {
     const r = await adminGet('/creators', { q: f.q, page: f.page, sort: f.sort, limit: 40 });

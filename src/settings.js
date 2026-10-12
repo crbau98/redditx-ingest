@@ -17,6 +17,8 @@ const SCHEMA = {
   autoLinkProfiles: { type: 'bool', default: true, label: 'Follow creators’ other public accounts found in their bios' },
   maxFeeds: { type: 'int', default: 600, min: 10, max: 5000, label: 'Cap on enabled feeds' },
   probeUnknownHosts: { type: 'bool', default: true, label: 'Verify media from unknown hosts before publishing' },
+  backupEnabled: { type: 'bool', default: config.isProd, label: 'Back up the database nightly' },
+  backupKeep: { type: 'int', default: 3, min: 1, max: 30, label: 'Backups to keep' },
   keepRunHistoryDays: { type: 'int', default: 30, min: 1, max: 365, label: 'Run history retention (days)' },
 };
 

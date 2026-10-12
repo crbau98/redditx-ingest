@@ -10,6 +10,7 @@ const adapters = [
   require('./mastodon'),
   require('./lemmy'),
   require('./x'),
+  require('./telegram'),
   require('./rss'),
   webAdapter,
   linkInBioAdapter,

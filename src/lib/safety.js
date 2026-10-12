@@ -54,6 +54,9 @@ function normalize(text) {
     .normalize('NFKD')
     .replace(/[̀-ͯ​-‏⁠﻿]/g, '')
     .toLowerCase()
+    // `_` is a regex word character, so "lol_underage" would hide a term from \b. Usernames are
+    // routinely underscore-joined; treat it as the separator it is.
+    .replace(/_+/g, ' ')
     .replace(/\s+/g, ' ');
 }
 

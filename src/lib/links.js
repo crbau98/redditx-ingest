@@ -35,7 +35,6 @@ const EXTERNAL = {
   'ko-fi.com': 'Ko-fi',
   'discord.gg': 'Discord',
   'discord.com': 'Discord',
-  't.me': 'Telegram',
   'facebook.com': 'Facebook',
   'threads.net': 'Threads',
   'threads.com': 'Threads',
@@ -127,6 +126,13 @@ function parseProfile(input, hint = {}) {
     return null; // single-gif links are handled by resolvers, not as feeds
   }
 
+  if (h === 't.me' || h === 'telegram.me' || h === 'telegram.dog') {
+    const name = parts[0] === 's' ? parts[1] : parts[0];
+    // invite links (+abc / joinchat) and bare numeric message links are not channels we can follow
+    if (name && /^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(name) && name.toLowerCase() !== 'joinchat') return out('telegram', 'user', name, { label: `t.me/${name}`, url: `https://t.me/${name}` });
+    return { platform: 'external', kind: 'link', target: url.href, ingestable: false, external: true, label: 'Telegram', service: 'Telegram', url: url.href };
+  }
+
   if (matches(h, 'tumblr.com') && h !== 'tumblr.com' && h !== 'www.tumblr.com') {
     const blog = h.replace(/\.tumblr\.com$/, '');
     return out('rss', 'feed', `https://${blog}.tumblr.com/rss`, { label: `${blog} (Tumblr)`, url: url.href });
@@ -189,6 +195,7 @@ function profileUrl(platform, kind, target) {
     case 'x': return `https://x.com/${target}`;
     case 'bluesky': return `https://bsky.app/profile/${target}`;
     case 'redgifs': return kind === 'niche' ? `https://www.redgifs.com/niches/${target}` : `https://www.redgifs.com/users/${target}`;
+    case 'telegram': return `https://t.me/${target}`;
     case 'mastodon': { const [u, i] = String(target).split('@'); return i ? `https://${i}/@${u}` : null; }
     case 'lemmy': { const [c, i] = String(target).split('@'); return i ? `https://${i}/c/${c}` : null; }
     case 'rss': case 'web': case 'linkinbio': return /^https?:/.test(target) ? target : null;

@@ -17,6 +17,7 @@ const BLURB = {
   mastodon: 'Creators and hashtags on any Mastodon-compatible server. Public API; some servers require sign-in for public timelines.',
   lemmy: 'Communities and users on Lemmy instances (API v3 with v4 fallback).',
   x: 'Creator timelines and searches. The official API (bearer token) is reliable; without it only a best-effort keyless route is available.',
+  telegram: 'Public Telegram channels through the web preview (t.me/s/…). No login or key; channels that disable the preview report an error.',
   rss: 'Any RSS / Atom / JSON Feed — creators’ own sites, Tumblr blogs (/rss), Mastodon and Bluesky profile feeds. The most stable way to follow anything.',
   web: 'A single page’s photos and videos (OpenGraph, <video>, linked images). Respects robots.txt.',
   linkinbio: 'Linktree-style hubs. Not content: PRISM reads them to discover a creator’s other public accounts.',

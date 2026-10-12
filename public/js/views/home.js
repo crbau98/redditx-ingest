@@ -1,7 +1,7 @@
 import { h, icon, fmt, emptyState } from '../dom.js';
 import { get } from '../api.js';
 import { href, navigate } from '../router.js';
-import { platformLabel, platformColor } from '../store.js';
+import { platformLabel, platformColor, follows } from '../store.js';
 import { mediaCard } from '../components/card.js';
 import { creatorCard } from '../components/creator-card.js';
 import { createFeed } from '../components/feed.js';
@@ -52,9 +52,19 @@ export async function home(root) {
     return () => {};
   }
 
+  // Newest posts from creators this device follows (the server never learns who you follow beyond this request).
+  let fromFollowed = [];
+  const followIds = follows.list().map((c) => c.id).slice(0, 100);
+  if (followIds.length) {
+    try { fromFollowed = (await get('/api/media', { creators: followIds.join(','), sort: 'recent', limit: 14 })).items; } catch { /* rail is optional */ }
+  }
+
   const open = (list) => (item) => openLightbox(list, Math.max(0, list.findIndex((x) => x.id === item.id)));
   const parts = [hero];
 
+  if (fromFollowed.length) {
+    parts.push(h('section', { class: 'section' }, sectionHead('heart', 'From creators you follow', 'Latest from the people you follow on this device', { href: href('/explore', { following: '1' }), label: 'See all' }), rail(fromFollowed, { open: open(fromFollowed) })));
+  }
   if (data.trending.length) {
     parts.push(h('section', { class: 'section' }, sectionHead('flame', 'Trending now', 'What people are watching and saving', { href: href('/explore', { sort: 'trending' }), label: 'See all' }), rail(data.trending, { open: open(data.trending) })));
   }

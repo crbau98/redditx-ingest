@@ -47,6 +47,7 @@ function mediaFilters(q) {
     community: str(q.community || q.subreddit),
     creator: /^[0-9a-f-]{36}$/i.test(q.creator || '') ? q.creator : undefined,
     tag: str(q.tag, 60),
+    creators: typeof q.creators === 'string' ? q.creators.split(',').filter((x) => /^[0-9a-f-]{36}$/i.test(x)).slice(0, 100) : undefined,
     ids: typeof q.ids === 'string' ? q.ids.split(',').filter((x) => /^[0-9a-f-]{36}$/i.test(x)).slice(0, 100) : undefined,
     q: str(q.q, 100),
     sort, seed: q.seed,
@@ -111,7 +112,7 @@ router.post('/report', reportLimiter, (req, res) => {
 });
 
 /* -------------------------------------------------------- age-gated content */
-router.use(['/discover', '/stats', '/media', '/creators', '/tags', '/communities', '/subreddits', '/platforms', '/stream'], age.requireAge);
+router.use(['/discover', '/stats', '/suggest', '/media', '/creators', '/tags', '/communities', '/subreddits', '/platforms', '/stream'], age.requireAge);
 
 router.get('/discover', (req, res) => res.json(discoverCached()));
 router.get('/stats', (req, res) => res.json(repo.publicStats()));
@@ -162,6 +163,14 @@ router.get('/creators/:id/media', (req, res) => {
   if (!c || c.status !== 'active') return res.status(404).json({ error: 'Not found' });
   const r = repo.media.list({ ...mediaFilters(req.query), creator: c.id });
   res.json({ ...r, items: r.items.map(publicMedia) });
+});
+
+router.get('/suggest', (req, res) => res.json(repo.suggest(typeof req.query.q === 'string' ? req.query.q : '', 6)));
+
+router.get('/creators/:id/similar', (req, res) => {
+  const c = repo.creators.get(req.params.id);
+  if (!c || c.status !== 'active') return res.status(404).json({ error: 'Not found' });
+  res.json(repo.creators.similar(c.id, repo.clampInt(req.query.limit, 1, 24, 12)).map(publicCreator));
 });
 
 router.get('/tags', (req, res) => res.json(tagsCached().slice(0, repo.clampInt(req.query.limit, 1, 200, 100))));

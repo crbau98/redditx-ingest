@@ -4,10 +4,10 @@ import { parse, navigate, href } from '../../router.js';
 import { platforms, platformLabel } from '../../store.js';
 import { table, pager, toggle, platBadge, statusDot, pageHead, act } from './ui.js';
 
-const KINDS = { reddit: ['community', 'user'], redgifs: ['search', 'user', 'niche'], bluesky: ['user', 'search'], mastodon: ['user', 'tag'], lemmy: ['community', 'user'], x: ['user', 'search'], rss: ['feed'], web: ['page'], linkinbio: ['page'] };
+const KINDS = { reddit: ['community', 'user'], redgifs: ['search', 'user', 'niche'], bluesky: ['user', 'search'], mastodon: ['user', 'tag'], lemmy: ['community', 'user'], x: ['user', 'search'], telegram: ['user'], rss: ['feed'], web: ['page'], linkinbio: ['page'] };
 const HINT = {
   reddit: 'r/gaybros or u/someone', redgifs: 'a search term, or a username', bluesky: 'handle.bsky.social', mastodon: 'name@instance.social  /  hashtag',
-  lemmy: 'community@instance.tld', x: '@handle  /  search query (needs token)', rss: 'https://site.com/feed.xml', web: 'https://site.com/gallery', linkinbio: 'https://linktr.ee/name',
+  lemmy: 'community@instance.tld', x: '@handle  /  search query (needs token)', telegram: 't.me/channelname (public preview)', rss: 'https://site.com/feed.xml', web: 'https://site.com/gallery', linkinbio: 'https://linktr.ee/name',
 };
 const INTERVALS = [[30, '30 min'], [60, '1 hour'], [90, '90 min'], [180, '3 hours'], [360, '6 hours'], [720, '12 hours'], [1440, '1 day'], [4320, '3 days']];
 

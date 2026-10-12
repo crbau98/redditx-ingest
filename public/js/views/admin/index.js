@@ -13,6 +13,7 @@ const TABS = [
   ['sources', 'Sources', 'compass', () => import('./sources.js')],
   ['live', 'Live log', 'bolt', () => import('./live.js')],
   ['blocklist', 'Blocklist', 'lock', () => import('./blocklist.js')],
+  ['audit', 'Audit log', 'clock', () => import('./audit.js')],
   ['settings', 'Settings', 'sliders', () => import('./settings.js')],
 ];
 

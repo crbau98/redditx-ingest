@@ -9,6 +9,8 @@ const breaker = require('../engine/breaker');
 const maintenance = require('../engine/maintenance');
 const settingsStore = require('../settings');
 const targets = require('../services/targets');
+const portability = require('../services/portability');
+const backup = require('../engine/backup');
 const { adminAuth } = require('../middleware/auth');
 
 const router = express.Router();
@@ -222,6 +224,24 @@ router.post('/maintenance/sweep', async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 router.post('/maintenance/recompute', (req, res) => res.json({ ok: true, updated: repo.media.recomputeHot() }));
+
+/* ------------------------------------------------- audit / duplicates / backups / portability */
+router.get('/audit', (req, res) => res.json(repo.audit.list({ ...page(req), targetType: ['media', 'creator', 'report'].includes(req.query.type) ? req.query.type : undefined })));
+
+router.get('/creators-duplicates', (req, res) => res.json(repo.creators.duplicates().slice(0, 100)));
+
+router.get('/backups', (req, res) => res.json({ items: backup.list(), enabled: settingsStore.get().backupEnabled, keep: settingsStore.get().backupKeep }));
+router.post('/backups', (req, res) => {
+  try { res.status(201).json({ ok: true, ...backup.run() }); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.get('/export', (req, res) => {
+  res.set({ 'Content-Disposition': `attachment; filename="prism-config-${new Date().toISOString().slice(0, 10)}.json"`, 'Cache-Control': 'no-store' });
+  res.json(portability.exportConfig());
+});
+router.post('/import', (req, res) => {
+  try { res.json({ ok: true, ...portability.importConfig(req.body) }); } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
 
 /* ------------------------------------------------- legacy v3 endpoint aliases */
 router.post('/ingest/start', (req, res) => res.json({ ok: true, queued: engine.enqueuePlatforms(req.body && req.body.sources, {}) }));

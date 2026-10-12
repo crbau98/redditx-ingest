@@ -3,6 +3,7 @@ import { get, post } from '../api.js';
 import { favorites, follows, prefs, platformLabel, platformColor, bus } from '../store.js';
 import { parse, href, setParam } from '../router.js';
 import { openReport } from './report.js';
+import { openModal } from '../dom.js';
 
 let S = null; // the single active lightbox session
 const viewed = new Set();
@@ -69,6 +70,7 @@ function start(items, loadMore) {
 function destroy() {
   if (!S) return;
   document.removeEventListener('keydown', onKey);
+  clearSlide();
   S.offFav && S.offFav(); S.offFollow && S.offFollow();
   teardownVideo();
   S.root.replaceChildren();
@@ -112,6 +114,7 @@ function show(i, { push = false } = {}) {
   const target = parse();
   if (target.query.get('m') !== it.id) setParam('m', it.id, { replace: !push });
   paintTop(); paintStage(it); paintInfo();
+  scheduleSlide();
   S.prev.disabled = i === 0;
   S.next.disabled = i >= S.items.length - 1 && !S.loadMore;
   // keep the feed ahead of the viewer, and warm the next image
@@ -119,6 +122,46 @@ function show(i, { push = false } = {}) {
   const n = S.items[i + 1];
   if (n && n.media_type === 'image') { const pre = new Image(); pre.src = proxied(n.media_url); }
   if (!viewed.has(it.id)) { viewed.add(it.id); post(`/api/media/${it.id}/view`).catch(() => {}); }
+}
+
+/* ------------------------------------------------- download / slideshow / help */
+const isHlsOnly = (it) => isM3u8(it.media_url);
+
+function downloadLink(it) {
+  if (isHlsOnly(it)) return null; // streams cannot be saved as a single file
+  const ext = (String(it.media_url).split('?')[0].match(/\.([a-z0-9]{2,4})$/i) || [])[1] || (it.media_type === 'video' ? 'mp4' : 'jpg');
+  const name = `${(it.creator_handle || it.author || 'prism').replace(/[^a-z0-9_-]+/gi, '')}-${it.id.slice(0, 8)}.${ext}`;
+  return h('a', { class: 'btn icon', href: proxied(it.media_url), download: name, 'aria-label': 'Download', title: 'Download', rel: 'noopener' }, icon('download'));
+}
+
+const SLIDE_MS = 4500;
+function clearSlide() { if (S && S.slideTimer) { clearTimeout(S.slideTimer); S.slideTimer = null; } }
+
+function scheduleSlide() {
+  if (!S || !S.slide) return;
+  clearSlide();
+  const it = cur();
+  if (!it) return;
+  const v = S.stage.querySelector('video');
+  if (it.media_type === 'video' && v) {
+    v.loop = false;                                   // let clips play through, then advance
+    v.addEventListener('ended', () => { if (S && S.slide) nav(1); }, { once: true });
+    S.slideTimer = setTimeout(() => { if (S && S.slide) nav(1); }, 45000); // safety net for stalled streams
+  } else {
+    S.slideTimer = setTimeout(() => { if (S && S.slide) nav(1); }, SLIDE_MS);
+  }
+}
+
+function toggleSlideshow() {
+  if (!S) return;
+  S.slide = !S.slide;
+  if (S.slide) { toast('Slideshow started — press S to stop'); scheduleSlide(); } else { clearSlide(); const v = S.stage.querySelector('video'); if (v) v.loop = true; toast('Slideshow stopped'); }
+  paintTop();
+}
+
+function showHelp() {
+  const rows = [['← / →  (J / K)', 'Previous / next'], ['F', 'Save to favourites'], ['I', 'Show or hide details'], ['M', 'Mute video'], ['Space', 'Play / pause video'], ['S', 'Start / stop slideshow'], ['Esc', 'Close'], ['/', 'Search (outside the viewer)'], ['Double-click', 'Save the image'], ['Swipe ← →', 'Navigate (touch)'], ['Swipe ↓', 'Close (touch)']];
+  const m = openModal({ title: 'Keyboard shortcuts', body: h('dl', { class: 'kv', style: { gridTemplateColumns: 'auto 1fr' } }, rows.map(([k, d]) => [h('dt', null, h('kbd', { class: 'kbd' }, k)), h('dd', { style: { textAlign: 'left' } }, d)])), actions: [h('button', { class: 'btn primary', onclick: () => m.close() }, 'Got it')] });
 }
 
 /* ---------------------------------------------------------------- top bar */
@@ -133,6 +176,9 @@ function paintTop() {
     h('span', { class: 'lb-count' }, `${S.index + 1} / ${S.items.length}`),
     h('button', { class: `btn icon fav${faved ? ' on' : ''}`, 'aria-label': faved ? 'Remove from saved' : 'Save', 'aria-pressed': String(faved), title: 'Save (F)', onclick: () => toggleFav(it) }, icon('heart')),
     h('button', { class: 'btn icon', 'aria-label': 'Share link', title: 'Copy link', onclick: () => share(it) }, icon('share')),
+    downloadLink(it),
+    h('button', { class: `btn icon hide-mobile${S.slide ? ' on' : ''}`, 'aria-label': S.slide ? 'Stop slideshow' : 'Start slideshow', 'aria-pressed': String(!!S.slide), title: 'Slideshow (S)', onclick: toggleSlideshow }, icon(S.slide ? 'pause' : 'play', S.slide ? '' : 'fill')),
+    h('button', { class: 'btn icon hide-mobile', 'aria-label': 'Keyboard shortcuts', title: 'Keyboard shortcuts (?)', onclick: showHelp }, icon('sliders')),
     h('button', { class: `btn icon${S.info ? ' on' : ''}`, 'aria-label': 'Details', 'aria-pressed': String(S.info), title: 'Details (I)', onclick: () => { S.info = !S.info; S.el.classList.toggle('info-open', S.info); paintTop(); } }, icon('info')));
 }
 
@@ -260,6 +306,8 @@ function onKey(e) {
     case 'ArrowRight': case 'j': nav(1); break;
     case 'f': case 'F': if (it) toggleFav(it, true); break;
     case 'i': case 'I': S.info = !S.info; S.el.classList.toggle('info-open', S.info); paintTop(); break;
+    case 's': case 'S': toggleSlideshow(); break;
+    case '?': showHelp(); break;
     case 'm': case 'M': { const v = S.stage.querySelector('video'); if (v) v.muted = !v.muted; break; }
     case ' ': { const v = S.stage.querySelector('video'); if (v) { e.preventDefault(); if (v.paused) v.play(); else v.pause(); } break; }
     default:

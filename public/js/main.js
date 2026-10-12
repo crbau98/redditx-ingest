@@ -4,15 +4,18 @@ import { parse, href, navigate, matchRoute, routeKey } from './router.js';
 import { prefs, favorites, follows, platforms, bus } from './store.js';
 import { syncFromUrl, isOpen } from './components/lightbox.js';
 import { openTakedownForm } from './components/report.js';
+import { attachSuggest } from './components/suggest.js';
 import { home } from './views/home.js';
 import { explore } from './views/explore.js';
 import { creators } from './views/creators.js';
 import { creator } from './views/creator.js';
 import { saved } from './views/saved.js';
+import { browse } from './views/browse.js';
 
 const routes = [
   { pattern: '/', view: home, nav: 'home' },
   { pattern: '/explore', view: explore, nav: 'explore' },
+  { pattern: '/browse', view: browse, nav: 'browse' },
   { pattern: '/creators', view: creators, nav: 'creators' },
   { pattern: '/creator/:id', view: creator, nav: 'creators' },
   { pattern: '/saved', view: saved, nav: 'saved' },
@@ -49,11 +52,13 @@ function ensureAgeGate() {
 onAgeRequired(ensureAgeGate);
 
 /* ------------------------------------------------------------------ shell */
-const NAV = [['home', '/', 'Home', 'home'], ['explore', '/explore', 'Explore', 'compass'], ['creators', '/creators', 'Creators', 'users'], ['saved', '/saved', 'Saved', 'heart']];
+// 5th field: desktop-only (the phone tab bar keeps four entries)
+const NAV = [['home', '/', 'Home', 'home'], ['explore', '/explore', 'Explore', 'compass'], ['browse', '/browse', 'Browse', 'layers', true], ['creators', '/creators', 'Creators', 'users'], ['saved', '/saved', 'Saved', 'heart']];
 
 function buildShell() {
   const app = $('#app');
   const searchInput = h('input', { class: 'input', type: 'search', id: 'global-search', placeholder: 'Search creators, tags, communities…', 'aria-label': 'Search', enterkeyhint: 'search', autocomplete: 'off' });
+  attachSuggest(searchInput); // registered first so it can claim Enter for a highlighted suggestion
   searchInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { navigate('/explore', { q: searchInput.value.trim() }); searchInput.blur(); }
     if (e.key === 'Escape') searchInput.blur();
@@ -80,9 +85,10 @@ function buildShell() {
   const main = h('main', { id: 'main', tabindex: '-1' });
   const footer = h('footer', { class: 'footer' },
     h('span', null, 'PRISM — adults only (18+)'),
+    h('a', { href: href('/browse') }, 'Browse'),
     h('button', { onclick: openTakedownForm }, 'Report content / takedown'),
     h('a', { href: href('/admin') }, 'Admin'));
-  const bottom = h('nav', { class: 'bottomnav', 'aria-label': 'Primary' }, NAV.map(([key, path, label, ic]) => h('a', { href: href(path), dataset: { nav: key } }, icon(ic, 'lg'), label)));
+  const bottom = h('nav', { class: 'bottomnav', 'aria-label': 'Primary' }, NAV.filter((n) => !n[4]).map(([key, path, label, ic]) => h('a', { href: href(path), dataset: { nav: key } }, icon(ic, 'lg'), label)));
   const fab = h('button', { class: 'fab', hidden: true, 'aria-label': 'Back to top', onclick: () => window.scrollTo({ top: 0, behavior: 'smooth' }) }, icon('up'));
   window.addEventListener('scroll', () => { fab.hidden = window.scrollY < 900; }, { passive: true });
 
@@ -139,6 +145,13 @@ function wireLiveUpdates(shell) {
   window.addEventListener('hashchange', () => { if (pill) { pill.remove(); pill = null; pending = 0; } });
 }
 
+/* ---------------------------------------------------------- offline shell (PWA) */
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') return;
+  navigator.serviceWorker.register('/sw.js').catch(() => { /* optional enhancement */ });
+}
+
 /* ------------------------------------------------------------------- boot */
 async function boot() {
   prefs.theme = prefs.theme; // re-apply (handles "auto")
@@ -151,6 +164,7 @@ async function boot() {
   window.addEventListener('hashchange', () => render(shell));
   await render(shell);
   wireLiveUpdates(shell);
+  registerServiceWorker();
 }
 
 boot();

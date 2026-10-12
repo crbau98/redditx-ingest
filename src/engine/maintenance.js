@@ -11,7 +11,7 @@ const { checkText } = require('../lib/safety');
 const { hostBlocked, hostOf, isJunkTitle } = require('../lib/mediaurl');
 const { probeMedia } = require('./probe');
 
-const SAFETY_SWEEP_VERSION = '1';
+const SAFETY_SWEEP_VERSION = '2'; // bump whenever the safety rules get stricter: existing libraries are re-swept once
 
 async function sweep({ probe = false, limit = 1_000_000 } = {}) {
   const res = { checked: 0, blocked: 0, review: 0, hidden: 0, dead: 0 };

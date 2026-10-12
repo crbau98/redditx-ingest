@@ -1,7 +1,7 @@
 import { h, icon, fmt, emptyState } from '../dom.js';
 import { get } from '../api.js';
 import { navigate, href } from '../router.js';
-import { prefs, platforms, platformLabel } from '../store.js';
+import { prefs, platforms, platformLabel, follows } from '../store.js';
 import { createFeed } from '../components/feed.js';
 
 const SORTS = [['trending', 'Trending'], ['recent', 'Newest'], ['top', 'Top rated'], ['random', 'Shuffle'], ['oldest', 'Oldest']];
@@ -10,11 +10,12 @@ const SINCE = [['', 'All time'], ['day', 'Past day'], ['week', 'Past week'], ['m
 export async function explore(root, { query }) {
   const f = {
     type: query.get('type') || '', sort: query.get('sort') || (query.get('q') ? 'relevance' : 'recent'), platform: query.get('platform') || '',
-    community: query.get('community') || '', tag: query.get('tag') || '', q: query.get('q') || '', since: query.get('since') || '',
+    community: query.get('community') || '', tag: query.get('tag') || '', q: query.get('q') || '', since: query.get('since') || '', following: query.get('following') || '',
   };
   const set = (patch) => { const next = { ...f, ...patch }; if (next.sort === 'relevance' && !next.q) next.sort = 'recent'; navigate('/explore', next, { replace: true }); window.scrollTo({ top: 0 }); };
 
-  const title = f.q ? `Results for “${f.q}”` : f.tag ? `#${f.tag}` : f.community ? f.community : 'Explore';
+  const followIds = f.following ? follows.list().map((c) => c.id).slice(0, 100) : null;
+  const title = f.following ? 'Following' : f.q ? `Results for “${f.q}”` : f.tag ? `#${f.tag}` : f.community ? f.community : 'Explore';
   document.title = `${title} — PRISM`;
   const count = h('div', { class: 'sub' }, ' ');
 
@@ -31,13 +32,14 @@ export async function explore(root, { query }) {
   const chip = (label, key) => active.push(h('button', { class: 'chip on x', onclick: () => set({ [key]: '' }), 'aria-label': `Remove filter ${label}` }, label));
   if (f.q) chip(`“${f.q}”`, 'q'); if (f.tag) chip(`#${f.tag}`, 'tag'); if (f.community) chip(f.community, 'community'); if (f.platform) chip(platformLabel(f.platform), 'platform'); if (f.since) chip(SINCE.find((s) => s[0] === f.since)[1], 'since');
 
-  const bar = h('div', { class: 'filterbar' }, typeSeg, sortSel, sinceSel, platSel, h('span', { class: 'spacer' }), density, active.length ? h('div', { class: 'active-filters' }, active) : null);
+  const followChip = h('button', { class: `chip${f.following ? ' on' : ''}`, 'aria-pressed': String(!!f.following), onclick: () => set({ following: f.following ? '' : '1' }) }, icon('heart', 'sm'), 'Following');
+  const bar = h('div', { class: 'filterbar' }, typeSeg, followChip, sortSel, sinceSel, platSel, h('span', { class: 'spacer' }), density, active.length ? h('div', { class: 'active-filters' }, active) : null);
   const tagRail = h('div', { class: 'row', style: { gap: '8px', overflowX: 'auto', padding: '14px 0 2px', scrollbarWidth: 'none' } });
 
   const feed = createFeed({
-    query: { ...f, sort: f.sort === 'relevance' ? undefined : f.sort },
+    query: { ...f, following: undefined, creators: followIds ? (followIds.length ? followIds.join(',') : '00000000-0000-0000-0000-000000000000') : undefined, sort: f.sort === 'relevance' ? undefined : f.sort },
     onTotal: (t) => { count.textContent = `${fmt.int(t)} ${t === 1 ? 'result' : 'results'}`; },
-    empty: emptyState({ icon: 'search', title: 'No matches', text: f.q ? 'Try a shorter search, or remove a filter.' : 'Nothing has been ingested for these filters yet.', actions: [h('a', { class: 'btn', href: href('/explore') }, 'Clear filters')] }),
+    empty: f.following && !followIds.length ? emptyState({ icon: 'heart', title: 'You’re not following anyone yet', text: 'Follow creators from their profile and their newest posts will collect here.', actions: [h('a', { class: 'btn primary', href: href('/creators') }, 'Browse creators')] }) : emptyState({ icon: 'search', title: 'No matches', text: f.q ? 'Try a shorter search, or remove a filter.' : 'Nothing has been ingested for these filters yet.', actions: [h('a', { class: 'btn', href: href('/explore') }, 'Clear filters')] }),
   });
 
   root.replaceChildren(h('div', { class: 'page-head' }, h('div', null, h('h1', null, title), count)), bar, tagRail, h('div', { style: { height: '14px' } }), feed.el);

@@ -5,6 +5,7 @@ const config = require('./src/config');
 const { createApp } = require('./src/app');
 const engine = require('./src/engine/engine');
 const maintenance = require('./src/engine/maintenance');
+const backup = require('./src/engine/backup');
 const { migration } = require('./src/db');
 
 const app = createApp();
@@ -21,10 +22,12 @@ const server = app.listen(config.port, () => {
 
 engine.start();
 maintenance.startupSweepIfNeeded();
+backup.start();
 
 function shutdown(signal) {
   console.log(`\n[${signal}] shutting down…`);
   engine.shutdown();
+  backup.stop();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 8000).unref();
 }

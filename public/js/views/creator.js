@@ -3,6 +3,7 @@ import { get } from '../api.js';
 import { navigate, href } from '../router.js';
 import { follows, platformColor, platformLabel, bus } from '../store.js';
 import { createFeed } from '../components/feed.js';
+import { creatorCard } from '../components/creator-card.js';
 import { openReport } from '../components/report.js';
 
 export async function creator(root, { params, query }) {
@@ -54,5 +55,14 @@ export async function creator(root, { params, query }) {
     h('div', { style: { height: '22px' } }),
     h('div', { class: 'row', style: { alignItems: 'flex-end' } }, h('div', { class: 'grow' }, tabs), sortSel),
     feed.el);
+  // "Similar creators" loads after the page is usable; a failure just means no rail.
+  get(`/api/creators/${c.id}/similar`, { limit: 12 }).then((list) => {
+    if (!list.length || !root.isConnected) return;
+    const anchor = root.querySelector('.tabs');
+    if (!anchor) return;
+    anchor.closest('.row').before(h('section', { class: 'section', style: { marginTop: '28px' } },
+      h('div', { class: 'section-head' }, h('div', null, h('h2', null, icon('users'), 'Similar creators'), h('div', { class: 'sub' }, 'Based on what they post'))),
+      h('div', { class: 'rail' }, list.map((x) => creatorCard(x, { mini: true })))), h('div', { style: { height: '8px' } }));
+  }).catch(() => {});
   return () => { feed.destroy(); off(); };
 }

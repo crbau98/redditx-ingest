@@ -24,6 +24,10 @@ describe('safety gate', () => {
       assert.equal(level(t), 'block', t);
     }
   });
+  test('sees terms inside underscore-joined usernames and titles', () => {
+    for (const t of ['lol_underage', 'hot_under_18', 'twink_16yo', 'im_16_lol', 'sweet_jailbait_pics', 'm_17_selfie'.replace('m_17', '[m17]')]) assert.equal(level(t), 'block', t);
+    assert.equal(level('gym_bro_21'), null); assert.equal(level('daddy_bear_mike'), null);
+  });
   test('does not block adults, heights or measurements', () => {
     for (const t of ['18yo gym bro', '21 years old', "I'm 6'2 and 190lbs", 'im 8 inches', 'age: 25', 'part (2) of my series', 'm4m', 'twink', 'daddy', 'college jock 21', '4k video', '[M25]', 'm4a']) {
       assert.equal(level(t), null, t);

@@ -254,6 +254,78 @@ const creators = {
   },
 };
 
+/* ---------------------------------------------- creator discovery helpers */
+// Tags that say nothing about a creator's style (platform names, generic words).
+const GENERIC_TAGS = new Set(['reddit', 'redgifs', 'bluesky', 'mastodon', 'lemmy', 'x', 'rss', 'web', 'telegram', 'gay', 'nsfw', 'video', 'photo', 'image']);
+
+/** Creators who post in a similar style: shared tags, weighting rare tags higher than common ones. */
+creators.similar = function similar(id, limit = 12) {
+  const mine = db.prepare(`SELECT t.id, t.name, t.usage_count FROM media m
+      JOIN media_tags mt ON mt.media_id = m.id JOIN tags t ON t.id = mt.tag_id
+      WHERE m.creator_id = ? AND m.publish_state = 'published' GROUP BY t.id ORDER BY COUNT(*) DESC LIMIT 25`).all(id)
+    .filter((t) => !GENERIC_TAGS.has(t.name));
+  if (!mine.length) return [];
+  const weight = new Map(mine.map((t) => [t.id, 1 / (t.usage_count + 5)]));
+  const rows = db.prepare(`SELECT m.creator_id AS cid, mt.tag_id AS tid FROM media_tags mt
+      JOIN media m ON m.id = mt.media_id
+      WHERE mt.tag_id IN (${mine.map(() => '?').join(',')}) AND m.creator_id IS NOT NULL AND m.creator_id != ? AND m.publish_state = 'published'
+      GROUP BY m.creator_id, mt.tag_id`).all(...mine.map((t) => t.id), id);
+  const score = new Map();
+  for (const r of rows) score.set(r.cid, (score.get(r.cid) || 0) + weight.get(r.tid));
+  const top = [...score.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit * 2).map(([cid]) => cid);
+  if (!top.length) return [];
+  const found = db.prepare(`${SELECT_CREATOR_CARD} WHERE c.id IN (${top.map(() => '?').join(',')}) AND c.status = 'active' AND c.scope != 'excluded' AND c.media_count > 0`)
+    .all(...top).map(serializeCreator);
+  found.sort((a, b) => top.indexOf(a.id) - top.indexOf(b.id));
+  return found.slice(0, limit);
+};
+
+/** Groups of creators whose handles collapse to the same string (probable duplicates across platforms). */
+creators.duplicates = function duplicates() {
+  const norm = (h) => String(h || '').toLowerCase().replace(/[^a-z0-9]/g, '').replace(/(official|xo|fit|real|the)+$/g, '');
+  const groups = new Map();
+  for (const c of db.prepare("SELECT id, handle, display_name, avatar_url, media_count, status FROM creators WHERE status != 'blocked'").all()) {
+    const key = norm(c.handle);
+    if (key.length < 4) continue;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(c);
+  }
+  return [...groups.values()].filter((g) => g.length > 1).map((g) => g.sort((a, b) => b.media_count - a.media_count));
+};
+
+function likeEscape(q) { return `${String(q).replace(/[\\%_]/g, (m) => `\\${m}`)}%`; }
+
+/** Autocomplete across creators, tags and communities. */
+function suggest(query, limit = 6) {
+  const q = String(query || '').trim().slice(0, 40);
+  if (q.length < 1) return { creators: [], tags: [], communities: [] };
+  const pre = likeEscape(q); const any = `%${pre}`;
+  return {
+    creators: db.prepare(`SELECT id, handle, display_name, avatar_url, media_count FROM creators
+      WHERE status = 'active' AND scope != 'excluded' AND media_count > 0 AND (handle LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\' OR handle LIKE ? ESCAPE '\\')
+      ORDER BY (handle LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\') DESC, media_count DESC LIMIT ?`).all(pre, pre, any, pre, pre, limit),
+    tags: db.prepare(`SELECT t.name, COUNT(*) AS count FROM tags t JOIN media_tags mt ON mt.tag_id = t.id JOIN media m ON m.id = mt.media_id
+      WHERE t.name LIKE ? ESCAPE '\\' AND t.name NOT IN ('reddit','redgifs','bluesky','mastodon','lemmy','x','telegram','rss','web','linkinbio') AND m.publish_state = 'published' AND m.scope != 'excluded' GROUP BY t.id ORDER BY count DESC LIMIT ?`).all(pre, limit),
+    communities: db.prepare(`SELECT community AS name, platform, COUNT(*) AS count FROM media
+      WHERE publish_state = 'published' AND scope != 'excluded' AND community LIKE ? ESCAPE '\\' GROUP BY community, platform ORDER BY count DESC LIMIT ?`).all(pre, limit),
+  };
+}
+
+/** Moderation audit trail (who did what, when). */
+const audit = {
+  list({ page = 0, limit = 50, targetType } = {}) {
+    const where = targetType ? 'WHERE target_type = ?' : '';
+    const params = targetType ? [targetType] : [];
+    const total = db.prepare(`SELECT COUNT(*) AS n FROM moderation_actions ${where}`).get(...params).n;
+    const items = db.prepare(`SELECT a.*, CASE a.target_type
+        WHEN 'media' THEN (SELECT title FROM media WHERE id = a.target_id)
+        WHEN 'creator' THEN (SELECT COALESCE(display_name, handle) FROM creators WHERE id = a.target_id)
+        ELSE NULL END AS target_label
+      FROM moderation_actions a ${where} ORDER BY a.id DESC LIMIT ? OFFSET ?`).all(...params, limit, page * limit);
+    return { items, total, page, limit };
+  },
+};
+
 /* --------------------------------------------------------------------- feeds */
 const feedQ = {
   get: db.prepare('SELECT * FROM feeds WHERE id = ?'),
@@ -387,6 +459,10 @@ function ftsQuery(text) {
   return tokens.map((t) => `"${t}"*`).join(' ');
 }
 
+// Every item is tagged with its platform at ingest; that is already covered by the source filter, so keep it out of tag lists.
+const PLATFORM_TAGS = ['reddit', 'redgifs', 'bluesky', 'mastodon', 'lemmy', 'x', 'telegram', 'rss', 'web', 'linkinbio'];
+const PLATFORM_TAGS_SQL = PLATFORM_TAGS.map((t) => `'${t}'`).join(',');
+
 const SORTS = {
   recent: 'm.posted_at DESC, m.seq DESC',
   oldest: 'm.posted_at ASC, m.seq ASC',
@@ -433,6 +509,10 @@ function buildMediaWhere(f) {
   if (f.platform) { where.push('m.platform = ?'); params.push(f.platform); }
   if (f.community) { where.push('m.community = ? COLLATE NOCASE'); params.push(f.community); }
   if (f.creator) { where.push('m.creator_id = ?'); params.push(f.creator); }
+  if (Array.isArray(f.creators)) {
+    if (!f.creators.length) where.push('0=1');
+    else { where.push(`m.creator_id IN (${f.creators.map(() => '?').join(',')})`); params.push(...f.creators); }
+  }
   if (Array.isArray(f.ids)) {
     if (!f.ids.length) where.push('0=1');
     else { where.push(`m.id IN (${f.ids.map(() => '?').join(',')})`); params.push(...f.ids); }
@@ -591,7 +671,7 @@ const media = {
   tags(limit = 60, minCount = 1) {
     return db.prepare(`SELECT t.name, COUNT(*) AS count FROM media_tags mt
       JOIN tags t ON t.id = mt.tag_id JOIN media m ON m.id = mt.media_id
-      WHERE m.publish_state = 'published' AND m.scope != 'excluded'
+      WHERE m.publish_state = 'published' AND m.scope != 'excluded' AND t.name NOT IN (${PLATFORM_TAGS_SQL})
       GROUP BY t.id HAVING count >= ? ORDER BY count DESC, t.name LIMIT ?`).all(minCount, limit);
   },
 
@@ -693,6 +773,6 @@ function discover() {
 }
 
 module.exports = {
-  db, nowIso, clampInt, cleanTag, ftsQuery, settings, hosts, blocklist, logAction,
+  db, nowIso, clampInt, cleanTag, ftsQuery, settings, hosts, blocklist, logAction, suggest, audit,
   creators, feeds, runs, media, reports, addTags, publicStats, adminOverview, discover,
 };
