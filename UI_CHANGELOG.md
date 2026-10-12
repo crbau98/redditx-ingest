@@ -25,7 +25,7 @@
 
 **Unchanged, for the record**: first paint ~0.47 s and LCP (Home 2.81 → 2.68 s, Explore 2.66 → 2.67 s, Reels 2.10 → 1.97 s) are within run-to-run noise; Reels swipe-to-first-frame stays ~350 ms (it is the length of the smooth-scroll animation; the next video is already buffered). The Reels style/paint totals went up a little (style 82 → 476 ms over 8 swipes at 4× slowdown) from the caption/rail transitions; the raster and composite savings are several times larger.
 
-**Verification**: 465 unit tests (4 new in `tests/v413.test.js`: compositor-only loops, shimmer stops on load, no live blur behind Reels or on card chips, galaxy not preloaded; the loop guard fails on the v4.12 CSS). Screenshots of Reels (at rest and mid-swipe), Explore, Home and a creator page compared against v4.12 on a phone viewport with no console errors. Re-run the numbers with `NODE_PATH=$(npm root -g) node scripts/perf-audit.js http://localhost:3999 3` against the demo seed.
+**Verification**: 468 unit tests (4 new in `tests/v413.test.js`: compositor-only loops, shimmer stops on load, no live blur behind Reels or on card chips, galaxy not preloaded; the loop guard fails on the v4.12 CSS). Screenshots of Reels (at rest and mid-swipe), Explore, Home and a creator page compared against v4.12 on a phone viewport with no console errors. Re-run the numbers with `NODE_PATH=$(npm root -g) node scripts/perf-audit.js http://localhost:3999 3` against the demo seed.
 
 ## 2026-10-12 — v4.8 "Self-healing"
 
