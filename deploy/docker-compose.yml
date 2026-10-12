@@ -24,12 +24,17 @@ services:
         condition: service_completed_successfully
       searxng:
         condition: service_started
+      tor:
+        condition: service_started
     env_file: .env
     environment:
       NODE_ENV: production
       DB_PATH: /data/prism.db
       PORT: "3141"
-      SEARXNG_URL: http://searxng:8080
+      # Web search backend: the bundled SearXNG by default; set SEARXNG_URL in deploy/.env to your own instance. An http://….onion
+      # address is reached through the Tor sidecar below (the ONLY onion service PRISM will ever contact).
+      SEARXNG_URL: ${SEARXNG_URL:-http://searxng:8080}
+      TOR_PROXY: socks5h://tor:9050
       INTERNAL_HOSTS: searxng
       TRUST_PROXY: "0"
       AGE_GATE_ENFORCE: "false"      # private tool behind Tailscale: no gate needed
@@ -57,6 +62,13 @@ services:
       - data:/data
       - ./litestream.yml:/etc/litestream.yml:ro
     restart: unless-stopped
+
+  # Tor client (SOCKS5, compose-network only). Used solely to reach an onion SearXNG named in SEARXNG_URL.
+  tor:
+    build: ./tor
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
   # Keyless web search for discovery and creator lookup (JSON API enabled in searxng/settings.yml). Internal network only.
   searxng:

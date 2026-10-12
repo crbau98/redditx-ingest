@@ -57,6 +57,8 @@ module.exports = {
   // With a proxy, destinations are still resolved locally and private answers refused. Set this only if your proxy does the DNS
   // (names that local DNS cannot resolve are then tunnelled unvalidated).
   outboundProxyTrustDns: bool(env.OUTBOUND_PROXY_TRUST_DNS, false),
+  // Tor SOCKS5 proxy (socks5h://host:9050): lets PRISM reach ONE .onion service, the SearXNG in SEARXNG_URL. All other .onion names stay blocked.
+  torProxy: String(env.TOR_PROXY || '').trim(),
   // Exact hostnames that may resolve to private addresses (a SearXNG container on the compose network). Everything else stays SSRF-guarded.
   internalHosts: list(env.INTERNAL_HOSTS, []).map((h) => h.toLowerCase()),
 

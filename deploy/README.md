@@ -6,7 +6,7 @@ Why this and not a platform-as-a-service:
 - **CPU**: the image filter runs a neural network on every candidate picture. A 4-vCPU VPS is several times cheaper than the same CPU on a PaaS.
 - **Private by construction**: no public URL, so no age gate, abuse, or scraping traffic to worry about; you reach it from your own devices over your tailnet.
 - **Durability**: Litestream ships every SQLite change to object storage within seconds (two weeks of point-in-time history). A dead server is recovered by `docker compose up` on a new one.
-- **Search**: a private SearXNG container gives key-less web search next to Brave.
+- **Search**: Keenable and Brave when you have keys, plus a private SearXNG (bundled, or your own — including one on an onion address, reached through the bundled Tor client).
 - Reddit blocks datacenter IPs for anonymous reads, so the VPS **must** use Reddit OAuth (below). A home server on a residential connection avoids that, but loses on uptime; the same stack runs on one.
 
 Approximate monthly cost (check current prices): VPS €8–15, R2 storage free up to 10 GB then ≈ $0.015/GB, Brave per its current plan (SearXNG is the free fallback), Reddit OAuth free for personal-scale reads. **X's paid API is the expensive one** (Basic is on the order of $200/month): skip it unless X is essential; keyless X reading still works best-effort.
@@ -29,6 +29,9 @@ Approximate monthly cost (check current prices): VPS €8–15, R2 storage free 
 - **Brave Search**: create a key at <https://api.search.brave.com> (check the current plan and quota). SearXNG covers you if you skip it.
 - **Bluesky**: Settings → Privacy and security → App passwords → `BSKY_IDENTIFIER` (your handle) + `BSKY_APP_PASSWORD` (enables hashtag/keyword search).
 - Optional: `TELEGRAM_API_KEY` (a bot token from @BotFather), `MASTODON_ACCESS_TOKEN`, `MISSKEY_ACCESS_TOKEN`, `X_BEARER_TOKEN`.
+
+## 3b. Your own SearXNG, including an onion one
+Leave `SEARXNG_URL` empty to use the bundled container. To use your own, set it in `deploy/.env`; an onion instance must be written `http://<56 characters>.onion` (the `.onion` ending is required and the scheme is `http://`: Tor encrypts end to end). The compose stack includes a client-only Tor sidecar for this. PRISM will contact **only** that one onion address; every other `.onion` name is refused. Onion lookups are slow (several seconds to build a circuit): searches get a 70-second timeout and are cached for ten minutes.
 
 ## 4. Run it
 ```bash
