@@ -13,7 +13,7 @@ const clampInt = (v, min, max, d) => {
 };
 const PUBLISH_STATES = ['published', 'review', 'hidden', 'removed'];
 // Every item is tagged with its platform at ingest; that is already covered by the source filter, so keep it out of tag lists.
-const PLATFORM_TAGS = ['reddit', 'redgifs', 'bluesky', 'mastodon', 'misskey', 'lemmy', 'x', 'telegram', 'rss', 'web', 'linkinbio'];
+const PLATFORM_TAGS = ['reddit', 'redgifs', 'bluesky', 'mastodon', 'misskey', 'tumblr', 'peertube', 'lemmy', 'x', 'telegram', 'rss', 'web', 'linkinbio'];
 const PLATFORM_TAGS_SQL = PLATFORM_TAGS.map((t) => `'${t}'`).join(',');
 
 /* ------------------------------------------------------------------ settings */

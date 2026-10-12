@@ -10,7 +10,7 @@ const crypto = require('crypto');
 const repo = require('../db/repo');
 const registry = require('../sources');
 const { checkItem, checkText } = require('../lib/safety');
-const { classify } = require('../lib/scope');
+const { classify, femaleCheck } = require('../lib/scope');
 const { canonicalUrl, hostOf, hostBlocked, hostTrusted, looksLikeDirectMedia, normalizeMediaUrl, isJunkTitle } = require('../lib/mediaurl');
 const { probeMedia } = require('./probe');
 const events = require('./events');
@@ -20,6 +20,22 @@ const REDGIFS_PAGE = /redgifs\.com\/(?:watch|ifr)\//i;
 const md5 = (s) => crypto.createHash('md5').update(s).digest('hex');
 
 const cleanHandle = (a) => String(a || '').replace(/^[@/]+/, '').replace(/^u\//i, '').trim().slice(0, 80);
+
+/** Block the creator behind an item whose own profile text is female / feminine, and remember the account. */
+function blockFemaleCreator(item, feed, rule) {
+  const handle = cleanHandle(item.author);
+  const key = handle && `${feed.platform}:${handle.toLowerCase()}`;
+  const reason = `scope: ${rule || 'female'} (profile)`;
+  let creator = null;
+  if (feed.creator_id && ['user', 'feed', 'page'].includes(feed.kind)) creator = repo.creators.get(feed.creator_id);
+  else if (handle) creator = repo.creators.byAccount(feed.platform, handle);
+  if (creator && creator.status === 'active') {
+    repo.creators.block(creator.id, reason, 'system');
+    events.log('WARN', `Creator ${creator.handle} blocked: ${reason}`);
+  } else if (key && !SKIP_AUTHORS.has(handle.toLowerCase())) {
+    repo.blocklist.add('creator', key, reason);
+  }
+}
 
 /** Which creator does this item belong to? May create one. */
 function resolveCreator(item, feed, adapter) {
@@ -92,8 +108,13 @@ async function processItem(rawItem, feed, adapter, settings) {
   if (repo.blocklist.has('hash', hash) || repo.blocklist.has('source_key', sourceKey)) return { outcome: 'blocked', reason: 'blocklisted' };
 
   // ---- 4. scope: is this male-focused? ---------------------------------------------
-  const sc = classify([item.title, item.text, item.altText, item.community, item.author, item.tags, item.query], { trusted: !!feed.trusted });
-  if (sc.scope === 'excluded') return { outcome: 'excluded', reason: 'not male-focused' };
+  const sc = classify([item.title, item.text, item.altText, item.community, item.author, item.authorName, item.authorBio, item.tags, item.labels, item.query], { trusted: !!feed.trusted });
+  if (sc.scope === 'excluded') {
+    // A female / feminine person (handle, display name or bio) is removed as a creator, not just per post:
+    // their other posts, their feeds and their other accounts never come back.
+    if (femaleCheck(item.author, item.authorName, item.authorBio).level === 'hard') blockFemaleCreator(item, feed, sc.rule);
+    return { outcome: 'excluded', reason: sc.rule || 'not male-focused' };
+  }
 
   // ---- 5. media sanity ---------------------------------------------------------
   if (isJunkTitle(item.title)) return { outcome: 'skipped', reason: 'junk title' };
@@ -117,6 +138,7 @@ async function processItem(rawItem, feed, adapter, settings) {
   let state = 'published';
   let reviewReason = null;
   if (safety.level === 'review') { state = 'review'; reviewReason = `safety:${safety.rule}`; }
+  else if (sc.femaleSoft) { state = 'review'; reviewReason = `scope:${sc.rule}`; } // feminine-adjacent wording: a human decides, whatever the feed trust or scope mode
   else if (sc.scope === 'uncertain' && settings.scopeMode === 'strict') { state = 'review'; reviewReason = 'scope:unclear'; }
 
   const description = item.text && item.text !== item.title ? item.text.slice(0, 500) : null;

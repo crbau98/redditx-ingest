@@ -12,6 +12,8 @@
  *                 own pages) but never scrape them.
  */
 
+const config = require('../config');
+
 const EXTERNAL = {
   'onlyfans.com': 'OnlyFans',
   'fansly.com': 'Fansly',
@@ -62,6 +64,18 @@ const NOT_MASTODON_HOSTS = [
  * (and the Mastodon adapter still detects Misskey via NodeInfo at fetch time). */
 const isMisskeyHost = (h) => /(^|\.)(misskey|sharkey|firefish|iceshrimp|calckey|catodon)[.-]|^(misskey|sharkey)\./i.test(h);
 
+/** PeerTube has no tell-tale path for a bare `/c/<name>` (Lemmy uses it too), so the host has to say so. */
+const isPeertubeHost = (h) => (config.peertubeInstances || []).includes(h) || /(^|\.)peertube[.-]|^(peertube|tube)\./i.test(h);
+
+// First path segments on www.tumblr.com that are pages, not blogs.
+const TUMBLR_PAGES = new Set(['tagged', 'search', 'explore', 'dashboard', 'settings', 'login', 'register', 'likes', 'following', 'inbox', 'new', 'edit',
+  'reblog', 'share', 'about', 'policy', 'privacy', 'terms', 'docs', 'themes', 'apps', 'jobs', 'press', 'help', 'support', 'logo', 'buy', 'mobile',
+  'follow', 'ask', 'blog', 'communities', 'activity', 'domains', 'privacy-policy', 'safe-mode', 'rss', 'oembed', 'svc', 'tumblr']);
+// <x>.tumblr.com hosts that are infrastructure, not blogs.
+const TUMBLR_HOSTS = new Set(['www', 'assets', 'static', 'api', 'at', 'media', 'staff', 'engineering', 'support', 'help', 'vtt', 'va', 'embed', 'px', 'platform', 'cdn']);
+const TUMBLR_NAME = /^[A-Za-z0-9][A-Za-z0-9-]{0,31}$/;
+const tumblrTag = (raw) => { try { return decodeURIComponent(String(raw).replace(/\+/g, ' ')).trim().replace(/^#/, ''); } catch { return String(raw).trim(); } };
+
 const host = (h) => String(h || '').toLowerCase().replace(/^www\./, '');
 const matches = (h, d) => h === d || h.endsWith('.' + d);
 
@@ -86,9 +100,14 @@ function parseProfile(input, hint = {}) {
   if (m) return out('reddit', 'user', m[1], { label: `u/${m[1]}` });
   m = raw.match(/^misskey:@?([A-Za-z0-9_]+)@([A-Za-z0-9.-]+\.[a-z]{2,})$/i);
   if (m) return out('misskey', 'user', `${m[1]}@${m[2].toLowerCase()}`, { label: `@${m[1]}@${m[2]}` });
+  m = raw.match(/^peertube:@?([A-Za-z0-9_.-]+)@([A-Za-z0-9.-]+\.[a-z]{2,})$/i);
+  if (m) return out('peertube', 'user', `${m[1]}@${m[2].toLowerCase()}`, { label: `${m[1]}@${m[2].toLowerCase()} (PeerTube)` });
+  m = raw.match(/^tumblr:([A-Za-z0-9][A-Za-z0-9.-]{0,60})$/i);
+  if (m) return out('tumblr', 'user', m[1].toLowerCase().replace(/\.tumblr\.com$/, ''), { label: `${m[1]} (Tumblr)` });
   m = raw.match(/^@?([A-Za-z0-9_]+)@([A-Za-z0-9.-]+\.[a-z]{2,})$/i);
   if (m) {
     const inst = m[2].toLowerCase();
+    if (hint.platform === 'peertube') return out('peertube', 'user', `${m[1]}@${inst}`, { label: `${m[1]}@${inst} (PeerTube)` });
     const pl = hint.platform === 'misskey' || isMisskeyHost(inst) ? 'misskey' : 'mastodon';
     return out(pl, 'user', `${m[1]}@${inst}`, { label: `@${m[1]}@${m[2]}` });
   }
@@ -151,9 +170,17 @@ function parseProfile(input, hint = {}) {
     return { platform: 'external', kind: 'link', target: url.href, ingestable: false, external: true, label: 'Telegram', service: 'Telegram', url: url.href };
   }
 
-  if (matches(h, 'tumblr.com') && h !== 'tumblr.com' && h !== 'www.tumblr.com') {
+  if (matches(h, 'tumblr.com')) {
+    if (h === 'tumblr.com') { // www.tumblr.com/…
+      if (parts[0] === 'tagged' && parts[1]) { const tag = tumblrTag(parts[1]); return tag ? out('tumblr', 'tag', tag.toLowerCase(), { label: `#${tag} (Tumblr)`, url: url.href }) : null; }
+      const name = parts[0] === 'blog' ? (parts[1] === 'view' ? parts[2] : parts[1]) : parts[0];
+      if (name && !TUMBLR_PAGES.has(name.toLowerCase()) && TUMBLR_NAME.test(name)) return out('tumblr', 'user', name.toLowerCase(), { label: `${name} (Tumblr)`, url: `https://${name.toLowerCase()}.tumblr.com` });
+      return null;
+    }
     const blog = h.replace(/\.tumblr\.com$/, '');
-    return out('rss', 'feed', `https://${blog}.tumblr.com/rss`, { label: `${blog} (Tumblr)`, url: url.href });
+    if (blog.includes('.') || TUMBLR_HOSTS.has(blog) || !TUMBLR_NAME.test(blog)) return null; // media CDN and asset hosts
+    if (parts[0] === 'tagged' && parts[1]) { const tag = tumblrTag(parts[1]); return tag ? out('tumblr', 'tag', `${tag.toLowerCase()}@${blog}`, { label: `#${tag} on ${blog} (Tumblr)`, url: url.href }) : null; }
+    return out('tumblr', 'user', blog, { label: `${blog} (Tumblr)`, url: `https://${blog}.tumblr.com` });
   }
 
   for (const lb of LINKINBIO) {
@@ -175,6 +202,16 @@ function parseProfile(input, hint = {}) {
     }
     if (parts[0] === 'users' && parts[1] && parts.length === 2) {
       return out('mastodon', 'user', `${parts[1]}@${h}`, { label: `@${parts[1]}@${h}`, url: url.href });
+    }
+    // PeerTube: /a/<account>, /accounts/<account>, /c/<channel>/videos, /video-channels/<channel>
+    // (a bare /c/<name> is Lemmy unless the host is a known PeerTube server).
+    if ((parts[0] === 'a' || parts[0] === 'accounts') && parts[1] && /^[A-Za-z0-9_.@-]+$/.test(parts[1])) {
+      const acct = parts[1].includes('@') ? parts[1] : `${parts[1]}@${h}`;
+      return out('peertube', 'user', acct.toLowerCase(), { label: `${acct.toLowerCase()} (PeerTube)`, url: url.href });
+    }
+    if (((parts[0] === 'c' && (parts.length >= 3 || isPeertubeHost(h))) || parts[0] === 'video-channels') && parts[1] && /^[A-Za-z0-9_.@-]+$/.test(parts[1])) {
+      const chan = parts[1].includes('@') ? parts[1] : `${parts[1]}@${h}`;
+      return out('peertube', 'channel', chan.toLowerCase(), { label: `${chan.toLowerCase()} (PeerTube channel)`, url: url.href });
     }
     // Lemmy: /c/community@instance or /c/community, /u/user
     if (parts[0] === 'c' && parts[1] && !matches(h, 'youtube.com')) {
@@ -222,9 +259,19 @@ function profileUrl(platform, kind, target) {
     case 'telegram': return `https://t.me/${target}`;
     case 'mastodon': { const [u, i] = String(target).split('@'); return i ? `https://${i}/@${u}` : null; }
     case 'lemmy': { const [c, i] = String(target).split('@'); return i ? `https://${i}/c/${c}` : null; }
+    case 'peertube': {
+      const [n, i] = String(target).split('@');
+      if (!i) return null;
+      return kind === 'channel' ? `https://${i}/c/${n}` : kind === 'user' ? `https://${i}/a/${n}` : null;
+    }
+    case 'tumblr': {
+      const base = (b) => (/^https?:/i.test(b) ? b : /\./.test(b) ? `https://${b}` : `https://${b}.tumblr.com`);
+      if (kind === 'tag') { const [tag, blog] = String(target).split('@'); return blog ? `${base(blog)}/tagged/${encodeURIComponent(tag).replace(/%20/g, '+')}` : `https://www.tumblr.com/tagged/${encodeURIComponent(tag).replace(/%20/g, '+')}`; }
+      return base(String(target));
+    }
     case 'rss': case 'web': case 'linkinbio': return /^https?:/.test(target) ? target : null;
     default: return null;
   }
 }
 
-module.exports = { parseProfile, extractLinks, profileUrl, isMisskeyHost, EXTERNAL, LINKINBIO };
+module.exports = { parseProfile, extractLinks, profileUrl, isMisskeyHost, isPeertubeHost, EXTERNAL, LINKINBIO };

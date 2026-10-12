@@ -7,6 +7,7 @@
 const repo = require('../db/repo');
 const registry = require('../sources');
 const { checkText } = require('../lib/safety');
+const { femaleCheck } = require('../lib/scope');
 
 const FORMAT = 'prism-config';
 
@@ -35,6 +36,7 @@ function importConfig(data) {
     for (const c of data.creators || []) {
       if (!c || !c.handle || !c.ref) continue;
       if (checkText(c.handle, c.display_name, c.bio).level === 'block') { out.creators.rejected++; continue; }
+      if (femaleCheck(c.handle, c.display_name, c.bio).level === 'hard') { out.creators.rejected++; continue; } // male-only
       // Match an existing creator by (1) any account/feed they own, then (2) identical handle,
       // so re-importing never duplicates people — including ones owned only by an RSS feed or page.
       let existingId = null;
@@ -52,6 +54,7 @@ function importConfig(data) {
       const adapter = registry.get(f && f.platform);
       if (!adapter || !adapter.kinds.includes(f.kind) || !f.target) { out.feeds.skipped++; continue; }
       if (repo.blocklist.has('creator', `${f.platform}:${String(f.target).toLowerCase()}`)) { out.feeds.skipped++; continue; }
+      if (femaleCheck(f.target, f.label).level === 'hard') { out.feeds.skipped++; continue; }
       const r = repo.feeds.upsert({
         platform: f.platform, kind: f.kind, target: String(f.target), label: f.label, creatorId: f.creatorRef ? refToId.get(f.creatorRef) || null : null,
         enabled: f.enabled !== false, trusted: f.trusted !== false, origin: 'import', intervalMin: repo.clampInt(f.interval_min, 5, 20160, 180), priority: repo.clampInt(f.priority, -10, 10, 0),

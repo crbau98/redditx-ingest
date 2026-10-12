@@ -52,12 +52,13 @@ describe('scope classifier', () => {
     assert.equal(classify('sunset beach', { trusted: true }).scope, 'in');
     assert.equal(classify('[F] new here', { trusted: true }).scope, 'excluded');
     assert.equal(classify('busty milf', { trusted: true }).scope, 'excluded');
-    assert.equal(classify('f4m but also gay', { trusted: true }).scope, 'in');
+    // male-only policy: an f4m-style tag is a hard exclusion even on a trusted feed, whatever else the text says
+    assert.equal(classify('f4m but also gay', { trusted: true }).scope, 'excluded');
   });
   test('untrusted feeds need a positive male signal', () => {
     assert.equal(classify('hung gay stud').scope, 'in');
     assert.equal(classify('sunset beach').scope, 'uncertain');
-    assert.equal(classify('f4m but also gay').scope, 'uncertain');
+    assert.equal(classify('f4m but also gay').scope, 'excluded');
     assert.equal(classify(['lesbian couple']).scope, 'excluded');
   });
 });
@@ -76,7 +77,7 @@ describe('profile / link parsing', () => {
     assert.equal(p('https://mastodon.social/@zed'), 'mastodon|user|zed@mastodon.social');
     assert.equal(p('https://www.redgifs.com/users/Bar'), 'redgifs|user|bar');
     assert.equal(p('https://lemmynsfw.com/c/gaynsfw'), 'lemmy|community|gaynsfw@lemmynsfw.com');
-    assert.equal(p('https://foo.tumblr.com'), 'rss|feed|https://foo.tumblr.com/rss');
+    assert.equal(p('https://foo.tumblr.com'), 'tumblr|user|foo');
     assert.equal(p('https://example.com/feed.xml'), 'rss|feed|https://example.com/feed.xml');
     assert.equal(p('https://linktr.ee/zed'), 'linkinbio|page|https://linktr.ee/zed');
     assert.equal(p('https://example.com/gallery'), 'web|page|https://example.com/gallery');

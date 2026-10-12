@@ -33,6 +33,7 @@
 | **Insight** (v4.6) | Keyword search | **Plain-language search**: type “bearded guys at the beach, videos this week” and it is read into filters (tags, creator, photos/videos, time, source, sort) from the library's own vocabulary — plurals, “bearded”→#beard, typo fixes (“musscle”→#muscle), multi-word tags — with an **“Understood as” banner** of removable chips and a live preview in the search dropdown. When nothing matches everything, it **drops the least important filter and says so**. **Related tags** (“Narrow with”) from co-occurrence lift, automatic **Topics** (clusters of tags that travel together) on Home and Browse, and **“Because you watch #tag”** rails. Discovery now **reaches communities and custom feeds**: NSFW subreddit search, Lemmy community lists and popular Bluesky feeds by keyword, X profile lookups for bios and follower counts, and **audience size** counts toward a lead's score |
 | **Velocity** (v4.7) | – | **Fast at any size**: measured on a generated 60,000-item library, every public endpoint now answers in single-digit to low-double-digit milliseconds (search was 56 s → 11 ms; related tags, similar creators, For you, listings 10–200× faster). The app shell ships **versioned, permanently cached** code with **parallel module preloading**, fonts no longer block the first paint, back-navigation re-uses data instantly, and hovering a creator pre-loads their profile. **Search shows live results while you type.** **For you** cards say *why* they were picked. Discovery finds more people on its own: **Bluesky lookalikes** of your creators, **people search** on Bluesky and RedGIFs, and **communities where your creators already post** — with a per-signal "followed creators now posting" report |
 | **Self-healing** (v4.8) | – | **Link health**: when media is deleted at its source, PRISM notices and takes it down by itself — viewers' browsers report items that fail to load, a slow background sweep re-checks the library, and the server verifies every report at the source (an item is hidden only after two "gone" verdicts an hour apart; hotlink blocks and outages never hide anything). **Since your last visit** on Home: what is new from creators you follow, across the library and among newly discovered creators, each one tap from a filtered view. **Reels buffer the next video** while the current one plays (not on data-saver or slow links), so swiping is instant. Accessibility audit of every page and the viewer in both themes: no unnamed controls, no images without alt text, visible focus everywhere |
+| **Male-only & reach** (v4.9) | Soft scope check | A **strict male-only policy**: female, feminine and trans-feminine wording (women, wife, f4m/`[F]` tags, she/her, femboy, sissy, crossdresser, trans, shemale/ladyboy and the same words in other languages) now excludes an item **even on a trusted feed**, and ambiguous wording (lingerie, panties, “pussy”, non-binary…) always goes to the review queue. The same check runs on creator handles/names/bios, admin adds, discovery leads and config import; a female/feminine creator is **blocked as a person** (media removed, accounts remembered). A one-time **retroactive sweep** removes existing content, blocks creators and switches off feeds named for women. **New sources**: Tumblr (blogs + tags), PeerTube (accounts, channels, tags, federated keyword search); wider default Mastodon / Misskey / Lemmy instance lists; ~70 seed feeds incl. hashtag feeds on many servers; far more discovery topics. Reddit/fediverse audit fixes and `scripts/diagnose-sources.js` (a live self-test for your own deployment) |
 | **Sources** (v4.2) | – | **Misskey/Sharkey/Firefish** adapter (+ auto-detection behind Mastodon-looking links), **Bluesky custom feeds & lists**, **OPML import** from any feed reader |
 
 ---
@@ -57,7 +58,7 @@ DEMO_ART=1 DB_PATH=./data/demo.db ADMIN_KEY=dev node server.js
 ### Tests
 
 ```bash
-npm test      # 167 tests: safety, SSRF, migration from a real v3 DB, adapters, engine resilience, HTTP API, proxy
+npm test      # 389 tests: safety, SSRF, migration from a real v3 DB, adapters, engine resilience, HTTP API, proxy
 ```
 
 ---
@@ -123,6 +124,8 @@ No system can enumerate "the whole web". PRISM grows its coverage in layers:
 | Misskey | user, tag | – | Misskey, Sharkey, Firefish, Iceshrimp, Catodon… Hashtags are searched on `MISSKEY_INSTANCES` (default `misskey.io`) or `tag@instance`. Paste `@name@host`, a `https://host/@name` link, or `misskey:name@host`. |
 | Lemmy | community, user | – | API v3 with v4 fallback. |
 | X | user, search | `X_BEARER_TOKEN` (search); users work keyless best-effort | Official API when a token is present. |
+| Tumblr | user (blog), tag | – | Public RSS. Reblogs skipped (`TUMBLR_REBLOGS=true` to include), images upgraded to the largest size. |
+| PeerTube | user, channel, tag, search | – | Documented public API; keyword search through Sepia Search (`PEERTUBE_SEARCH_URL`), tags across `PEERTUBE_INSTANCES`. MP4 up to 1080p, else HLS. |
 | Telegram | user (public channel) | – | Public web preview (`t.me/s/<channel>`); channels that disable it report an error. |
 | RSS / Atom / JSON Feed | feed | – | Creator sites, Tumblr `/rss`, Mastodon `.rss`, Bluesky `/rss`, … Bulk import accepts **OPML** exported from any feed reader. |
 | Web page | page | – | OpenGraph, `<video>`, linked images; honours `robots.txt`. |
@@ -132,10 +135,24 @@ No system can enumerate "the whole web". PRISM grows its coverage in layers:
 
 ---
 
+## Verifying the sources
+
+Sources depend on the open web, so check them from the machine that runs PRISM (a sandbox without outbound network cannot):
+
+```bash
+node scripts/diagnose-sources.js                  # every platform, 1-2 sample feeds each
+node scripts/diagnose-sources.js --platform reddit,redgifs --limit 10
+node scripts/diagnose-sources.js --target reddit:community:gaybrosgonewild
+node scripts/diagnose-sources.js --json
+```
+
+It uses the real adapters and the real safety + male-only gates but writes nothing (throwaway database). Per source it prints whether it answered, how many items came back, how many would be published / reviewed / excluded / blocked, whether the first media URL actually loads, and a fix hint when it fails (e.g. Reddit blocking datacenter IPs → set `REDDIT_CLIENT_ID/SECRET`). Exit code 1 if a configured source returned nothing usable. Runs that add nothing also log *why* (`No new items: fetched 25 · 25 already stored`).
+
 ## Safety & takedowns
 
 - **Safety gate** (`src/lib/safety.js`) runs on every item (title, tags, community, handle, bio, alt text): explicit minor terms and any stated age under 18 (`16yo`, `I'm 15`, `[M17]`, "sixteen"…) are **dropped, never stored**; borderline wording (`teen`, `high school`…) goes to the **review queue**. It errs on the side of dropping. A creator whose bio indicates a minor is blocked immediately, and their other accounts are never followed.
 - **Report button** on every item and creator, plus a footer takedown form (works without the age gate). Reports about minors or consent **hide the item instantly**; admins then remove-and-blocklist, block the creator, restore, or dismiss.
+- **Male-only scope** (`src/lib/scope.js`): HARD female / feminine / trans-feminine terms exclude an item whatever else the text says and however much the feed is trusted; SOFT terms (also used in gay-male posts, or merely feminine-adjacent) always wait in the review queue, even when *Unclear male-focus items* is set to open. Creators whose handle, name or bio reads female are blocked as people. The sweep (Admin → Settings → Maintenance, and once on upgrade) applies it to everything stored.
 - **Blocklist**: removed media, blocked creators and takedowns are remembered by content hash, source key and account — they are never re-imported.
 - **Sweep**: Admin → Settings re-applies today's rules to everything already stored; it also runs automatically once after upgrades (so content ingested by v3, which had no gate, is checked retroactively).
 - Saved lists re-validate against the server, so a takedown also disappears from people's saved items.

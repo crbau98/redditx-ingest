@@ -28,7 +28,7 @@ const tgBot = require('../lib/telegram-bot');
 const registry = require('../sources');
 const { parseProfile, extractLinks, profileUrl } = require('../lib/links');
 const { checkText } = require('../lib/safety');
-const { classify } = require('../lib/scope');
+const { classify, femaleCheck } = require('../lib/scope');
 const bskyHttp = require('../sources/http').forPlatform('bluesky', 400);
 
 // similar: Bluesky lists the account among those most like a followed creator (per creator, max 4)
@@ -108,6 +108,14 @@ function consider(spec, type, value, meta = {}) {
   // whichever strategy found it (mentions, web search or community search).
   if (verdict.level === 'block' || (verdict.level === 'review' && SHARED_KINDS.has(spec.kind))) {
     const row = { status: 'rejected', reason: `safety: ${verdict.rule || 'blocked'}${verdict.level === 'review' ? ' (community)' : ''}`, decided_at: new Date().toISOString() };
+    if (c) return repo.candidates.update(c.id, row);
+    return repo.candidates.insert({ platform: spec.platform, kind: spec.kind, target, label: spec.label, url: spec.url || profileUrl(spec.platform, spec.kind, target), signals: {}, ...row });
+  }
+
+  // Male-only: a female / feminine / trans-feminine name, bio or community is rejected for good, never queued.
+  const gender = femaleCheck(target, spec.label, displayName, bio);
+  if (gender.level === 'hard') {
+    const row = { status: 'rejected', reason: `scope: ${gender.rule}`, decided_at: new Date().toISOString() };
     if (c) return repo.candidates.update(c.id, row);
     return repo.candidates.insert({ platform: spec.platform, kind: spec.kind, target, label: spec.label, url: spec.url || profileUrl(spec.platform, spec.kind, target), signals: {}, ...row });
   }
@@ -472,6 +480,13 @@ function follow(candidate, { actor = 'discovery' } = {}) {
   const c = typeof candidate === 'string' ? repo.candidates.get(candidate) : candidate;
   if (!c) return { ok: false, reason: 'Not found' };
   if (c.status === 'followed' || c.status === 'linked') return { ok: true, already: true };
+  // Profile text fetched after the lead was queued (bios of Telegram / Bluesky / X leads) can still turn out female.
+  const gender = femaleCheck(c.target, c.label, c.display_name, c.bio);
+  if (c.scope === 'excluded' || gender.level === 'hard') {
+    const reason = `scope: ${gender.rule || 'not male-focused'}`;
+    repo.candidates.update(c.id, { status: 'rejected', reason, decided_at: new Date().toISOString() });
+    return { ok: false, reason };
+  }
   const targets = require('../services/targets');
   const spec = { platform: c.platform, kind: c.kind, target: c.target, label: c.label || c.target, ingestable: true };
   const identity = (c.signals.identity || [])[0];

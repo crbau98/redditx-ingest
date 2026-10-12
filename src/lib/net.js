@@ -113,13 +113,22 @@ function parseRetryAfter(h) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function decode(res, buf) {
+// Decompressed bodies are capped too (the wire-size cap alone does not stop a tiny gzip bomb).
+const MAX_DECODED = 40 * 1024 * 1024;
+function decode(res, buf, url) {
   const enc = String(res.headers['content-encoding'] || '').toLowerCase();
+  const zopts = { maxOutputLength: MAX_DECODED };
   try {
-    if (enc === 'gzip' || enc === 'x-gzip') return zlib.gunzipSync(buf);
-    if (enc === 'deflate') return zlib.inflateSync(buf);
-    if (enc === 'br') return zlib.brotliDecompressSync(buf);
-  } catch { /* fall through with raw bytes */ }
+    if (enc === 'gzip' || enc === 'x-gzip') return zlib.gunzipSync(buf, zopts);
+    if (enc === 'deflate') {
+      // Some servers send raw deflate (no zlib header) under Content-Encoding: deflate.
+      try { return zlib.inflateSync(buf, zopts); } catch (e) { if (e.code === 'ERR_BUFFER_TOO_LARGE') throw e; return zlib.inflateRawSync(buf, zopts); }
+    }
+    if (enc === 'br') return zlib.brotliDecompressSync(buf, zopts);
+  } catch (e) {
+    if (e.code === 'ERR_BUFFER_TOO_LARGE') throw new HttpError('Response too large (decompressed)', { url, status: res.statusCode });
+    /* otherwise fall through with raw bytes */
+  }
   return buf;
 }
 
@@ -127,9 +136,11 @@ function decode(res, buf) {
  * Open a validated connection and hand back the raw response (not yet
  * consumed). Follows redirects itself so every hop is re-validated.
  */
-function open(url, { method = 'GET', headers = {}, timeout = 20000, maxRedirects = 5, body } = {}) {
+function open(url, { method: method0 = 'GET', headers = {}, timeout = 20000, maxRedirects = 5, body: body0 } = {}) {
   return new Promise((resolve, reject) => {
     let hops = 0;
+    let method = method0;
+    let body = body0;
     const go = (target, hdrs) => {
       let parsed;
       try { parsed = new URL(target); } catch (e) { return reject(new HttpError('Invalid URL', { url: String(target) })); }
@@ -152,6 +163,11 @@ function open(url, { method = 'GET', headers = {}, timeout = 20000, maxRedirects
           hops++;
           const next = new URL(loc, parsed);
           const nextHdrs = { ...hdrs };
+          // 301/302/303 after a POST are followed as GET without the body (browser/curl behaviour).
+          if (method === 'POST' && [301, 302, 303].includes(res.statusCode)) {
+            method = 'GET'; body = undefined;
+            delete nextHdrs['content-type']; delete nextHdrs['content-length'];
+          }
           if (next.host !== parsed.host) {
             delete nextHdrs.authorization; delete nextHdrs.Authorization;
             delete nextHdrs.cookie; delete nextHdrs.Cookie;
@@ -178,29 +194,38 @@ function lower(h) {
 
 /** Buffered request with decompression, size cap and single-shot semantics. */
 async function requestOnce(url, opts = {}) {
-  const { maxBytes = 3_000_000 } = opts;
+  const { maxBytes = 3_000_000, timeout = 20000 } = opts;
+  const startedAt = Date.now();
   const { res, req } = await open(url, opts);
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
+    // The socket timeout only fires on silence; a server that drips one byte at a time must not hold a feed run forever.
+    const deadline = setTimeout(() => { req.destroy(); reject(new HttpError('Timeout (body too slow)', { url, status: res.statusCode })); },
+      Math.max(5000, Math.max(timeout * 3, 60000) - (Date.now() - startedAt)));
+    deadline.unref();
     res.on('data', (c) => {
       size += c.length;
       if (size > maxBytes) {
         req.destroy();
+        clearTimeout(deadline);
         reject(new HttpError('Response too large', { url, status: res.statusCode }));
         return;
       }
       chunks.push(c);
     });
-    res.on('error', (e) => reject(new HttpError(e.message, { url, code: e.code || '' })));
-    res.on('aborted', () => reject(new HttpError('Connection aborted', { url })));
+    res.on('error', (e) => { clearTimeout(deadline); reject(new HttpError(e.message, { url, code: e.code || '' })); });
+    res.on('aborted', () => { clearTimeout(deadline); reject(new HttpError('Connection aborted', { url })); });
     res.on('end', () => {
-      resolve({
-        status: res.statusCode,
-        headers: res.headers,
-        url: res.finalUrl || url,
-        body: decode(res, Buffer.concat(chunks)),
-      });
+      clearTimeout(deadline);
+      try {
+        resolve({
+          status: res.statusCode,
+          headers: res.headers,
+          url: res.finalUrl || url,
+          body: decode(res, Buffer.concat(chunks), url),
+        });
+      } catch (e) { reject(e); }
     });
   });
 }
@@ -214,13 +239,16 @@ async function request(url, opts = {}) {
       const out = await requestOnce(url, opts);
       if (retryOn5xx && (out.status === 429 || out.status >= 500) && attempt < retries) {
         const wait = parseRetryAfter(out.headers['retry-after']) || 600 * 2 ** attempt;
+        // A long Retry-After is the server asking us to go away: hand the 429 back so the per-platform
+        // limiter can cool down, instead of retrying into it after 8 s (which only deepens the throttle).
+        if (out.status === 429 && wait > 10000) return out;
         attempt++;
         await sleep(Math.min(wait, 8000));
         continue;
       }
       return out;
     } catch (e) {
-      if (e.code === 'EBLOCKED' || e.message === 'Blocked host' || attempt >= retries) throw e;
+      if (e.code === 'EBLOCKED' || e.message === 'Blocked host' || /^Response too large/.test(e.message) || attempt >= retries) throw e;
       attempt++;
       await sleep(400 * 2 ** attempt);
     }

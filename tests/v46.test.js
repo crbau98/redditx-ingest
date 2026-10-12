@@ -180,7 +180,7 @@ describe('far-reaching discovery', () => {
       assert.equal(repo.candidates.find('reddit', 'community', 'gaybros'), null, 'SFW subreddits are skipped');
       assert.equal(repo.candidates.find('reddit', 'community', 'teenboysnsfw'), null, 'borderline wording drops a community outright (even when CamelCased)');
       const girls = repo.candidates.find('reddit', 'community', 'girlsgonewild');
-      assert.ok(!girls || girls.scope === 'excluded', 'female-focused communities sink');
+      assert.ok(!girls || girls.status === 'rejected' || girls.scope === 'excluded', 'female-focused communities are rejected for good');
       const feed = repo.candidates.find('bluesky', 'feedgen', 'at://did:plc:feedmaker/app.bsky.feed.generator/gaynsfw');
       assert.ok(feed); assert.equal(feed.signals.popularity, 5400);
       assert.equal(repo.candidates.find('bluesky', 'feedgen', 'at://did:plc:news/app.bsky.feed.generator/gaynews'), null, 'non-adult feeds are not leads');

@@ -24,8 +24,14 @@ async function call(method, params) {
     return json.result;
   } catch (e) {
     let detail = e.message;
-    try { const b = e.body && JSON.parse(e.body); if (b && b.description) detail = b.description; } catch { /* ignore */ }
-    throw Object.assign(new Error(scrub(`Telegram: ${detail}`)), { status: e.status || 0 });
+    let retryAfter = e.retryAfter || 0;
+    try {
+      const b = e.body && JSON.parse(e.body);
+      if (b && b.description) detail = b.description;
+      // Flood control: Telegram puts the wait in the JSON body (parameters.retry_after, seconds), not always in a header.
+      if (b && b.parameters && b.parameters.retry_after) retryAfter = Math.max(retryAfter, Number(b.parameters.retry_after) * 1000 || 0);
+    } catch { /* ignore */ }
+    throw Object.assign(new Error(scrub(`Telegram: ${detail}`)), { status: e.status || 0, retryAfter });
   }
 }
 
