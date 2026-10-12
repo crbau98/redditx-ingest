@@ -1,5 +1,5 @@
 import { h, icon, $, toast, fmt, openModal } from './dom.js';
-import { get, post, onAgeRequired, streamPublic, ApiError } from './api.js';
+import { get, post, onAgeRequired, streamPublic, ApiError, clearApiCache, prefetch } from './api.js';
 import { parse, href, navigate, matchRoute, routeKey } from './router.js';
 import { prefs, favorites, follows, platforms, bus } from './store.js';
 import { syncFromUrl, isOpen } from './components/lightbox.js';
@@ -8,6 +8,7 @@ import { openDisplaySettings } from './components/display.js';
 import { initTilt, initRails, gpuTier } from './components/fx.js';
 import { openTakedownForm } from './components/report.js';
 import { attachSuggest } from './components/suggest.js';
+import { primeEager } from './components/card.js';
 import { smartSearch } from './smart.js';
 import { home } from './views/home.js';
 import { explore } from './views/explore.js';
@@ -165,6 +166,7 @@ async function render(shell) {
   if (p.path === '/explore') shell.searchInput.value = p.query.get('q') || '';
   else if (p.path !== '/') shell.searchInput.value = '';
   shell.main.classList.remove('view-enter'); void shell.main.offsetWidth; shell.main.classList.add('view-enter');
+  primeEager(6);
   document.title = 'PRISM — Discover male creators';
   try {
     const result = await match.route.view(shell.main, { params: match.params, query: p.query });
@@ -184,6 +186,7 @@ function wireLiveUpdates(shell) {
   let pending = 0; let pill = null;
   streamPublic((evt) => {
     if (evt.type !== 'new') return;
+    clearApiCache(); // new content: the next request must not come from the cache
     const p = parse().path;
     if (p !== '/' && p !== '/explore') return;
     pending += evt.count || 1;
@@ -213,6 +216,18 @@ async function boot() {
   document.documentElement.dataset.gpu = gpuTier(); // CSS trims costly effects on software rendering
   initTilt();
   initRails($('#app'));
+  // Hover (or touch) on a creator link warms the profile request, so the click opens instantly.
+  const warmed = new Map();
+  const warmCreator = (e) => {
+    const a = e.target && e.target.closest ? e.target.closest('a[href^="#/creator/"]') : null;
+    if (!a) return;
+    const id = a.getAttribute('href').slice('#/creator/'.length).split(/[?/]/)[0];
+    if (!id || Date.now() - (warmed.get(id) || 0) < 25000) return;
+    warmed.set(id, Date.now());
+    prefetch(`/api/creators/${id}`);
+  };
+  document.addEventListener('pointerover', warmCreator, { passive: true });
+  document.addEventListener('touchstart', warmCreator, { passive: true });
   window.addEventListener('hashchange', () => render(shell));
   await render(shell);
   wireLiveUpdates(shell);

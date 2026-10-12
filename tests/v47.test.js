@@ -73,3 +73,44 @@ describe('query performance guards (large library)', () => {
     assert.equal(sug.json.tags[0].count, 750); // every 8th post
   });
 });
+
+describe('app shell: versioned immutable assets + modulepreload', () => {
+  test('the shell points at /v/<hash>/ and preloads the whole static module graph', async () => {
+    const res = await fetch(`${base}/`);
+    const html = await res.text();
+    assert.equal(res.headers.get('cache-control'), 'no-cache');
+    const m = html.match(/src="\/v\/([0-9a-f]{10})\/js\/main\.js"/);
+    assert.ok(m, 'main.js is versioned');
+    const ver = m[1];
+    assert.match(html, new RegExp(`href="/v/${ver}/css/app\\.css"`));
+    const preloads = [...html.matchAll(/rel="modulepreload" href="([^"]+)"/g)].map((x) => x[1]);
+    for (const mod of ['/js/main.js', '/js/dom.js', '/js/api.js', '/js/views/home.js', '/js/components/card.js']) assert.ok(preloads.includes(`/v/${ver}${mod}`), mod);
+    assert.ok(!preloads.some((p) => p.includes('/views/admin/')), 'the admin console is not preloaded (dynamic import)');
+    // deep links get the same shell
+    assert.equal(await (await fetch(`${base}/creators`)).text(), html);
+    // versioned assets are immutable; a module's relative imports resolve under the same prefix
+    const js = await fetch(`${base}/v/${ver}/js/main.js`);
+    assert.equal(js.status, 200);
+    assert.match(js.headers.get('cache-control'), /immutable/);
+    assert.match(await js.text(), /from '\.\/dom\.js'/);
+    // an old version (tab open across a deploy) still loads, but revalidates
+    const old = await fetch(`${base}/v/0000000000/js/dom.js`);
+    assert.equal(old.status, 200); assert.equal(old.headers.get('cache-control'), 'no-cache');
+    // unversioned paths keep working
+    assert.equal((await fetch(`${base}/js/main.js`)).status, 200);
+  });
+  test('the version changes when a front-end file changes', () => {
+    const assets = require('../src/lib/assets');
+    const path = require('path'); const fs = require('fs'); const os = require('os');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-assets-'));
+    fs.mkdirSync(path.join(dir, 'js')); fs.mkdirSync(path.join(dir, 'css'));
+    fs.writeFileSync(path.join(dir, 'index.html'), '<head><script type="module" src="/js/main.js"></script></head>');
+    fs.writeFileSync(path.join(dir, 'js', 'main.js'), "import { a } from './a.js';\n");
+    fs.writeFileSync(path.join(dir, 'js', 'a.js'), 'export const a = 1;\n');
+    fs.writeFileSync(path.join(dir, 'css', 'app.css'), 'body{}');
+    const one = assets.build(dir);
+    assert.deepEqual(one.modules.sort(), ['/js/a.js', '/js/main.js']);
+    fs.writeFileSync(path.join(dir, 'js', 'a.js'), 'export const a = 2;\n');
+    assert.notEqual(assets.build(dir).version, one.version);
+  });
+});
