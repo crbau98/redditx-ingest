@@ -4,7 +4,10 @@ import { parse, navigate } from '../../router.js';
 import { table, pager, toggle, platBadge, pageHead, act, kpi } from './ui.js';
 
 const STATUSES = [['pending', 'Waiting'], ['followed', 'Followed'], ['linked', 'Linked to a creator'], ['rejected', 'Rejected'], ['all', 'All']];
-const SIGNAL_LABEL = { identity: 'same name', mention: 'mentioned', cofollow: 'followed by', search: 'web search' };
+const SIGNAL_LABEL = { identity: 'same name', mention: 'mentioned', cofollow: 'followed by', search: 'search', similar: 'looks like', hangout: 'creators post here' };
+// What each strategy found on the last run (keys of the run report).
+const STRATEGIES = [['mentions', 'Mentions'], ['graph', 'Bluesky follows'], ['lookalikes', 'Lookalikes'], ['people', 'People search'], ['communities', 'Communities & feeds'], ['hangouts', 'Where creators post'], ['topics', 'Web topics'], ['identity', 'Same-name search']];
+const foundOf = (r) => (r ? (r.found !== undefined ? r.found : r.linked || 0) : null);
 const SCOPE = { in: ['good', 'male-focused'], uncertain: ['', 'unclear'], excluded: ['bad', 'off-topic'] };
 
 const KIND_LABEL = { community: 'community', feedgen: 'custom feed', list: 'list', page: 'link page' };
@@ -54,6 +57,18 @@ export async function render(root) {
     if (r) { toast(action === 'follow' ? `Following ${c.display_name || c.target} — first sync queued` : action === 'block' ? 'Blocked — it will never be suggested again' : 'Rejected', 'ok'); load(); }
   };
 
+  const runLine = h('div', { class: 'run-lines' });
+  function paintRun(d) {
+    const last = d.last;
+    const rows = [];
+    if (last) rows.push(h('div', { class: 'run-strategies' }, h('span', { class: 'muted' }, 'Last run found:'),
+      ...STRATEGIES.filter(([k]) => last[k]).map(([k, l]) => h('span', { class: `badge${foundOf(last[k]) ? ' good' : ''}`, title: JSON.stringify(last[k]) }, `${l} ${foundOf(last[k])}`))));
+    if (d.yield && d.yield.length) rows.push(h('div', { class: 'run-strategies', title: 'For creators discovery followed: the signal that weighed most, and how many have posted since' },
+      h('span', { class: 'muted' }, 'Followed creators now posting, by strongest signal:'),
+      ...d.yield.map((y) => h('span', { class: `badge sig-${y.signal}` }, `${SIGNAL_LABEL[y.signal] || y.signal} ${y.posting}/${y.followed}`))));
+    runLine.replaceChildren(...rows);
+  }
+
   function paintKpis(d) {
     const last = d.last;
     const lastLine = last ? `${fmt.ago(last.startedAt)} · ${last.promote ? `${last.promote.followed} followed, ${last.promote.linked} linked` : last.error || ''}` : 'never';
@@ -83,8 +98,9 @@ export async function render(root) {
       h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Follow strong candidates automatically'), toggle(v.autoDiscover, (on) => save({ autoDiscover: on }))),
       h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Read who your Bluesky creators follow'), toggle(v.discoveryGraph, (on) => save({ discoveryGraph: on }))),
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Search for communities and custom feeds'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'NSFW subreddits, Lemmy communities and popular Bluesky feeds matching your keywords')), toggle(v.discoveryCommunities, (on) => save({ discoveryCommunities: on }))),
+      h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Lookalikes and people search'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Accounts Bluesky rates as similar to your creators, plus Bluesky and RedGIFs people matching your keywords')), toggle(v.discoveryExpand, (on) => save({ discoveryExpand: on }))),
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Auto-follow strong communities'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Only male-focused ones; every post from them is still checked on its own')), toggle(v.discoveryAutoCommunities, (on) => save({ discoveryAutoCommunities: on }))),
-      h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Auto-follow at score'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'same name = 6 · each creator who mentions them = 3 · each who follows them = 1.5 · each search hit = 2 · audience up to +3 · male-focused bio = +2')), num('discoveryAutoFollowScore', 3, 60)),
+      h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Auto-follow at score'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'same name = 6 · each creator who mentions them = 3 · Bluesky lookalike (per creator) = 2 · each who follows them = 1.5 · each creator posting there = 1.5 · each search hit = 2 · audience up to +3 · male-focused bio = +2')), num('discoveryAutoFollowScore', 3, 60)),
       h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Max follows per run'), num('discoveryMaxFollowsPerRun', 0, 100)),
       h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Run every (minutes)'), num('discoveryIntervalMin', 15, 1440)),
       h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Brave searches per day'), num('braveDailyBudget', 0, 2000)),
@@ -97,7 +113,7 @@ export async function render(root) {
   async function load() {
     const [d, settings] = await Promise.all([adminGet('/discovery', { status: f.status, q: f.q, sort: f.sort, page: f.page, limit: 40 }), data ? Promise.resolve(null) : adminGet('/settings')]);
     data = d;
-    paintKpis(d);
+    paintKpis(d); paintRun(d);
     if (settings) paintTune(d, settings);
     const r = d.candidates;
     tableHost.replaceChildren(
@@ -121,7 +137,7 @@ export async function render(root) {
       pager({ page: r.page, limit: r.limit, total: r.total, onPage: (p) => set({ page: p }) }));
   }
 
-  root.append(head, kpis, tune, bar, tableHost);
+  root.append(head, kpis, runLine, tune, bar, tableHost);
   await load();
   const timer = setInterval(() => { if (root.isConnected && data && data.running) load().catch(() => {}); }, 5000);
   return () => clearInterval(timer);

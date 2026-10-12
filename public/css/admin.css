@@ -126,6 +126,11 @@
 .badge.sig-cofollow { background: color-mix(in srgb, var(--info) 16%, transparent); color: var(--info); }
 .badge.sig-search { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
 .badge.sig-reach { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); gap: 4px; }
+.badge.sig-similar { background: color-mix(in srgb, var(--info) 16%, transparent); color: var(--info); }
+.badge.sig-hangout { background: color-mix(in srgb, var(--good) 14%, transparent); color: var(--good); }
+.run-strategies { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -4px 0 14px; font-size: 13px; }
+.run-strategies:empty, .run-lines:empty { display: none; }
+.run-lines { margin-bottom: 4px; }
 details.panel > summary { cursor: pointer; list-style: none; display: flex; align-items: center; }
 details.panel > summary::-webkit-details-marker { display: none; }
 details.panel > summary::before { content: '▸'; margin-right: 8px; color: var(--muted); transition: transform .2s; }

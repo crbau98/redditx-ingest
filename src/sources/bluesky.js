@@ -123,8 +123,27 @@ async function searchFeeds(q, limit = 25) {
     .filter((f) => /^at:\/\//.test(f.uri || ''));
 }
 
+const actorOut = (p) => ({
+  handle: p.handle, displayName: p.displayName || null, description: p.description || null, avatar: p.avatar || null,
+  labels: (p.labels || []).map((l) => l.val), followers: p.followersCount || 0,
+});
+
+/** People search by keyword (discovery). Public AppView endpoint; returns bios for the gate. */
+async function searchActors(q, limit = 25) {
+  const json = await http.json(`${base}/xrpc/app.bsky.actor.searchActors?q=${encodeURIComponent(q)}&limit=${limit}`);
+  return (json.actors || []).map(actorOut).filter((a) => a.handle);
+}
+
+/** Bluesky's own "similar accounts" for an actor (discovery lookalikes). Public AppView endpoint. */
+async function suggestedFor(actor) {
+  const json = await http.json(`${base}/xrpc/app.bsky.graph.getSuggestedFollowsByActor?actor=${encodeURIComponent(actor)}`);
+  return (json.suggestions || []).map(actorOut).filter((a) => a.handle);
+}
+
 module.exports = {
   searchFeeds,
+  searchActors,
+  suggestedFor,
   platform: 'bluesky',
   label: 'Bluesky',
   color: '#0085ff',

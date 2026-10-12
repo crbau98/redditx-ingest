@@ -35,6 +35,7 @@ const SCHEMA = {
   },
   // --- discovery reach (v4.6) ---
   discoveryCommunities: { type: 'bool', default: true, label: 'Search Reddit, Lemmy and Bluesky for communities and custom feeds', group: 'discovery' },
+  discoveryExpand: { type: 'bool', default: true, label: 'Find lookalike creators (Bluesky) and search Bluesky and RedGIFs for new people', group: 'discovery' },
   discoveryAutoCommunities: { type: 'bool', default: true, label: 'Auto-follow strong communities and feeds (their posts are still checked one by one)', group: 'discovery' },
   discoveryKeywords: {
     type: 'text', group: 'discovery', label: 'Community keywords (one per line; two are searched per run, in rotation)',

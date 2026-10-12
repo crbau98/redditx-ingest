@@ -1198,6 +1198,20 @@ function mentionSource(afterIso, limit = 2000) {
 }
 
 /** Creators worth investigating, least recently checked first (by a discovery_state key prefix). */
+/**
+ * Communities where several followed creators post but that are not followed themselves
+ * ("where your creators hang out"). Pure SQL over what is already ingested.
+ */
+function communityHangouts({ minCreators = 2, limit = 60 } = {}) {
+  return db.prepare(`SELECT m.platform, m.community, COUNT(DISTINCT m.creator_id) AS creators, group_concat(DISTINCT m.creator_id) AS ids
+    FROM media m JOIN creators c ON c.id = m.creator_id
+    WHERE m.community IS NOT NULL AND m.community != '' AND m.platform IN ('reddit', 'lemmy')
+      AND m.publish_state = 'published' AND m.scope != 'excluded' AND c.status = 'active' AND c.scope != 'excluded'
+      AND NOT EXISTS (SELECT 1 FROM feeds f WHERE f.platform = m.platform AND f.kind = 'community' AND f.target = m.community COLLATE NOCASE)
+    GROUP BY m.platform, m.community COLLATE NOCASE HAVING creators >= ? ORDER BY creators DESC LIMIT ?`).all(minCreators, limit)
+    .map((r) => ({ ...r, ids: String(r.ids || '').split(',').filter(Boolean) }));
+}
+
 function discoveryTargets({ platform, prefix, staleDays, limit, minMedia = 1, maxAccounts = 99 }) {
   const since = new Date(Date.now() - staleDays * 86400000).toISOString();
   const platformJoin = platform ? 'JOIN feeds f ON f.creator_id = c.id AND f.platform = @platform AND f.kind = \'user\' AND f.enabled = 1' : '';
@@ -1214,5 +1228,5 @@ function discoveryTargets({ platform, prefix, staleDays, limit, minMedia = 1, ma
 module.exports = {
   db, nowIso, clampInt, cleanTag, ftsQuery, settings, hosts, blocklist, logAction, suggest, audit,
   creators, feeds, runs, media, reports, addTags, publicStats, adminOverview, discover,
-  candidates, discoveryState, mentionSource, discoveryTargets, PLATFORM_TAGS, tagIntel, library,
+  candidates, discoveryState, mentionSource, discoveryTargets, communityHangouts, PLATFORM_TAGS, tagIntel, library,
 };
