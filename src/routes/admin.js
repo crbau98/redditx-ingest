@@ -25,7 +25,7 @@ const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
 
 /* ---------------------------------------------------------------- overview */
 router.get('/overview', (req, res) => {
-  res.json({ ...repo.adminOverview(), engine: engine.status(), health: require('../engine/health').stats(), imageFilter: { enabled: settingsStore.get().imageFilter, ...imagefilter.status(), sweep: maintenance.imageSweepProgress() }, version: config.version, adminOpen: !config.adminKey });
+  res.json({ ...repo.adminOverview(), engine: engine.status(), health: require('../engine/health').stats(), imageFilter: { enabled: settingsStore.get().imageFilter, ...imagefilter.status(), sweep: maintenance.imageSweepProgress(), dedupe: maintenance.hashSweepProgress() }, version: config.version, adminOpen: !config.adminKey });
 });
 
 router.get('/stream', (req, res) => {
@@ -291,7 +291,7 @@ router.post('/maintenance/sweep', async (req, res) => {
 });
 router.get('/maintenance/image-filter', async (req, res) => {
   const s = settingsStore.get();
-  res.json({ enabled: s.imageFilter, threshold: s.imageFilterThreshold, sweep: { enabled: s.imageSweep, perMinute: s.imageSweepPerTick, ...maintenance.imageSweepProgress() }, model: { available: await imagefilter.available(), ...imagefilter.status() } });
+  res.json({ enabled: s.imageFilter, threshold: s.imageFilterThreshold, sweep: { enabled: s.imageSweep, perMinute: s.imageSweepPerTick, ...maintenance.imageSweepProgress() }, dedupe: { enabled: s.dedupe, distance: s.dedupeDistance, ...maintenance.hashSweepProgress() }, model: { available: await imagefilter.available(), ...imagefilter.status() } });
 });
 router.post('/maintenance/image-sweep', async (req, res) => {
   try {

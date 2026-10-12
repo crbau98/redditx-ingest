@@ -14,6 +14,7 @@ const { classify, femaleCheck } = require('../lib/scope');
 const { canonicalUrl, hostOf, hostBlocked, hostTrusted, looksLikeDirectMedia, normalizeMediaUrl, isJunkTitle } = require('../lib/mediaurl');
 const { probeMedia } = require('./probe');
 const imagefilter = require('../lib/imagefilter');
+const dedupe = require('../services/dedupe');
 const events = require('./events');
 
 const SKIP_AUTHORS = new Set(['[deleted]', 'deleted', 'automoderator', 'web', 'null', 'undefined', '']);
@@ -194,12 +195,30 @@ async function processItem(rawItem, feed, adapter, settings) {
   // ---- 6b. image filter: is there a woman in the picture? ---------------------------
   // Text can say nothing at all about a photo, so the picture itself is checked (on-device face + gender model).
   // No face / no image / model unavailable = no verdict: the text gates above already decided.
-  if (settings.imageFilter === true) {
-    const ir = await imagefilter.checkItem(item, { threshold: (settings.imageFilterThreshold || 50) / 100 });
+  // The picture is downloaded ONCE and read twice: faces (policy: women are excluded) and a perceptual hash
+  // (policy: the same picture posted again collapses into one item).
+  const wantFaces = settings.imageFilter === true;
+  const wantHash = settings.dedupe === true;
+  let phash = null;
+  if (wantFaces || wantHash) {
+    const ir = await imagefilter.checkItem(item, { threshold: (settings.imageFilterThreshold || 50) / 100, faces: wantFaces, hash: wantHash });
     if (ir.female) {
       repo.blocklist.add('hash', hash, 'image filter: female face');
+      dedupe.blockHash(ir.phash, 'image filter: female face'); // the same picture under another URL is refused without another look
       noteImageStrike(item, feed);
       return { outcome: 'excluded', reason: 'image:female-face' };
+    }
+    phash = wantHash ? ir.phash : null;
+  }
+
+  // ---- 6c. perceptual duplicates -----------------------------------------------------
+  if (phash) {
+    const d = dedupe.check({ phash, mediaType: item.mediaType, width: item.width, height: item.height }, { distance: settings.dedupeDistance == null ? 6 : settings.dedupeDistance });
+    if (d.blocked) return { outcome: 'blocked', reason: 'blocklisted (a picture that was removed)' };
+    if (d.dup) {
+      // Same picture, somewhere else: keep ONE item and remember where else it appeared.
+      repo.media.addAltSource(d.dup.id, { platform, source_url: item.permalink || item.mediaUrl, author: item.author ? cleanHandle(item.author) : null, community: item.community || null, posted_at: item.postedAt || null });
+      return { outcome: 'dupe', reason: `similar picture (${d.dup.id.slice(0, 8)}, distance ${d.dup.p}/${d.dup.d})`, mediaId: d.dup.id };
     }
   }
 
@@ -245,8 +264,10 @@ async function processItem(rawItem, feed, adapter, settings) {
     publish_state: state,
     review_reason: reviewReason,
     posted_at: item.postedAt || new Date().toISOString(),
+    phash,
   }, tags);
   if (!mediaId) return { outcome: 'dupe' };
+  if (phash && (state === 'published' || state === 'review')) dedupe.remember(mediaId, phash, { mediaType: item.mediaType, width: item.width, height: item.height });
 
   if (state === 'published') events.newItems(1);
   return { outcome: state === 'review' ? 'review' : 'added', mediaId, creatorId: creator ? creator.id : null, reason: reviewReason };

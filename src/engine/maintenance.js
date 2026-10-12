@@ -12,6 +12,7 @@ const { femaleCheck } = require('../lib/scope');
 const { hostBlocked, hostOf, isJunkTitle } = require('../lib/mediaurl');
 const { probeMedia } = require('./probe');
 const imagefilter = require('../lib/imagefilter');
+const dedupe = require('../services/dedupe');
 const settingsStore = require('../settings');
 
 // Bump whenever the safety or male-only scope rules get stricter: existing libraries are re-swept once.
@@ -97,6 +98,47 @@ async function imageSweep({ limit = 12, settings } = {}) {
   return res;
 }
 
+/* ------------------------------------------------------------- hash sweep */
+/**
+ * Give every stored picture a perceptual hash (oldest first, cursor `hash_sweep_seq`) and collapse look-alikes: when a
+ * picture matches an OLDER item, it is hidden and listed under the original as "also posted on ...". Hashing only needs
+ * the image bytes (no model), so it is cheap and runs even when the face filter is unavailable.
+ */
+async function hashSweep({ limit = 12, settings } = {}) {
+  const s = settings || settingsStore.get();
+  const res = { checked: 0, hashed: 0, collapsed: 0, errors: 0, done: false };
+  let after = parseInt(repo.settings.get('hash_sweep_seq') || '0', 10) || 0;
+  const rows = repo.db.prepare(`SELECT seq, id, platform, source_url, author, community, posted_at, media_type, media_url, preview_url, thumbnail_url, width, height, phash FROM media
+    WHERE publish_state IN ('published','review') AND seq > ? ORDER BY seq LIMIT ?`).all(after, limit);
+  if (!rows.length) { res.done = true; return res; }
+  for (const row of rows) {
+    after = row.seq; res.checked++;
+    let hash = row.phash;
+    if (!hash) {
+      const v = await imagefilter.checkItem({ mediaType: row.media_type, mediaUrl: row.media_url, previewUrl: row.preview_url, thumbnailUrl: row.thumbnail_url }, { faces: false, hash: true });
+      if (!v.phash) { if (v.status === 'error') res.errors++; continue; }
+      hash = v.phash; repo.media.setPhash(row.id, hash); res.hashed++;
+    }
+    if (!s.dedupe) { dedupe.remember(row.id, hash, { mediaType: row.media_type, width: row.width, height: row.height }); continue; }
+    const hit = dedupe.check({ phash: hash, mediaType: row.media_type, width: row.width, height: row.height }, { distance: s.dedupeDistance, ignoreId: row.id }).dup;
+    const orig = hit && repo.db.prepare("SELECT seq FROM media WHERE id = ? AND publish_state IN ('published','review')").get(hit.id);
+    if (orig && orig.seq < row.seq) {
+      repo.media.addAltSource(hit.id, { platform: row.platform, source_url: row.source_url, author: row.author, community: row.community, posted_at: row.posted_at });
+      repo.media.setState(row.id, 'hidden', `duplicate of ${hit.id}`);
+      res.collapsed++;
+    } else dedupe.remember(row.id, hash, { mediaType: row.media_type, width: row.width, height: row.height });
+  }
+  repo.settings.set('hash_sweep_seq', String(after));
+  if (res.collapsed || res.hashed) events.log('OK', `Hash sweep: ${res.hashed} hashed, ${res.collapsed} duplicate(s) collapsed (of ${res.checked} checked)`);
+  return res;
+}
+
+function hashSweepProgress() {
+  const cursor = parseInt(repo.settings.get('hash_sweep_seq') || '0', 10) || 0;
+  const remaining = repo.db.prepare("SELECT COUNT(*) AS n FROM media WHERE publish_state IN ('published','review') AND seq > ?").get(cursor).n;
+  return { cursor, remaining, ...dedupe.stats() };
+}
+
 function imageSweepProgress() {
   const cursor = parseInt(repo.settings.get('image_sweep_seq') || '0', 10) || 0;
   const q = (cmp) => repo.db.prepare(`SELECT COUNT(*) AS n FROM media WHERE publish_state IN ('published','review') AND seq ${cmp} ?`).get(cursor).n;
@@ -108,11 +150,13 @@ let sweepTimer = null; let sweepBusy = false; let sweepGaveUp = false;
 function startImageSweep() {
   if (sweepTimer) return;
   sweepTimer = setInterval(async () => {
-    if (sweepBusy || sweepGaveUp) return;
+    if (sweepBusy) return;
     const s = settingsStore.get();
-    if (!s.imageFilter || !s.imageSweep || !s.imageSweepPerTick) return;
+    if (!s.imageSweep || !s.imageSweepPerTick) return;
     sweepBusy = true;
     try {
+      if (s.dedupe) await hashSweep({ limit: s.imageSweepPerTick * 2, settings: s });
+      if (!s.imageFilter || sweepGaveUp) return;
       if (!(await imagefilter.available())) { sweepGaveUp = true; return; } // logged once by the filter itself
       await imageSweep({ limit: s.imageSweepPerTick, settings: s });
     } catch (e) { events.log('WARN', `Image sweep: ${e.message}`); } finally { sweepBusy = false; }
@@ -130,4 +174,4 @@ function startupSweepIfNeeded() {
   }, 1500).unref();
 }
 
-module.exports = { sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, startImageSweep, stopImageSweep };
+module.exports = { sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, hashSweep, hashSweepProgress, startImageSweep, stopImageSweep };

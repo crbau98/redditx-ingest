@@ -15,110 +15,123 @@
  * with the text gates only. Inference is serialised (the wasm backend is single-threaded) and results are
  * cached per URL.
  */
-const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const { Worker } = require('worker_threads');
 const net = require('./net');
+const phash = require('./phash');
 const events = require('../engine/events');
 
 const MAX_BYTES = 4 * 1024 * 1024;
-const MAX_SIDE = 896;            // faces in group shots are small: do not shrink more than this
 const MIN_FACE_CONFIDENCE = 0.45; // detector confidence for a box to count as a face
 const CACHE_MAX = 2000;
 
-let deps = null;       // { human, sharp } once ready
 let initPromise = null;
 let initError = null;
 let analyzer = null;   // test hook: async (url) => result
 const cache = new Map();
-let chain = Promise.resolve();
-const counters = { analyzed: 0, female: 0, errors: 0, cached: 0, totalMs: 0 };
+const counters = { analyzed: 0, female: 0, errors: 0, cached: 0, totalMs: 0, hashed: 0 };
 
-/* ------------------------------------------------------------------ loading */
-function resolveAssets() {
-  const sharp = require('sharp');
-  // The package's "exports" map has no subpaths: resolve the main entry and walk up to the package root.
-  const humanMain = require.resolve('@vladmandic/human'); // .../dist/human.node.js
-  const root = path.resolve(path.dirname(humanMain), '..');
-  const wasmDist = path.dirname(require.resolve('@tensorflow/tfjs-backend-wasm'));
-  require.resolve('@tensorflow/tfjs-converter');
-  return { sharp, root, wasmDist };
+/* ------------------------------------------------------------------ the model */
+/**
+ * Pool of worker threads, each with its own copy of the model (the wasm backend is single-threaded, so one copy would
+ * both serialise every picture AND freeze the server's event loop while it thinks). IMAGE_WORKERS sets the size
+ * (default: min(3, cpus - 1), at least 1); 0 runs the model in-process.
+ */
+class Pool {
+  constructor(size) { this.size = size; this.workers = []; this.pending = new Map(); this.nextId = 1; this.info = ''; }
+
+  start() {
+    return Promise.all(Array.from({ length: this.size }, () => this.spawn())).then((infos) => { this.info = `${infos[0]} x${this.size} worker${this.size === 1 ? '' : 's'}`; });
+  }
+
+  spawn() {
+    return new Promise((resolve, reject) => {
+      const w = new Worker(path.join(__dirname, 'imagefilter-worker.js'));
+      const slot = { w, busy: 0, ready: false };
+      // referenced while starting up or working (so a script awaiting a verdict is not abandoned), unreferenced when idle
+      slot.sync = () => { if (slot.busy > 0 || !slot.ready) w.ref(); else w.unref(); };
+      this.workers.push(slot);
+      w.on('message', (m) => {
+        if (m.type === 'ready') { slot.ready = true; slot.sync(); return resolve(m.info); }
+        if (m.type === 'failed') return reject(new Error(m.error));
+        const p = this.pending.get(m.id);
+        if (!p) return;
+        this.pending.delete(m.id); slot.busy--; slot.sync();
+        if (m.error) p.reject(new Error(m.error)); else p.resolve(m.faces);
+      });
+      w.on('error', (e) => { reject(e); this.failAll(slot, e); });
+      w.on('exit', () => { this.workers = this.workers.filter((x) => x !== slot); this.failAll(slot, new Error('image worker exited')); });
+      slot.sync(); // AFTER the listeners: attaching a 'message' listener re-references the worker
+    });
+  }
+
+  failAll(slot, err) { for (const [id, p] of this.pending) if (p.slot === slot) { this.pending.delete(id); p.reject(err); } }
+
+  detect(buffer) {
+    const slot = this.workers.reduce((a, b) => (!a || b.busy < a.busy ? b : a), null);
+    if (!slot) return Promise.reject(new Error('no image workers'));
+    const id = this.nextId++;
+    slot.busy++; slot.sync();
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject, slot });
+      const copy = new Uint8Array(buffer); // the cached download stays usable: the copy is transferred
+      slot.w.postMessage({ type: 'detect', id, buffer: copy.buffer }, [copy.buffer]);
+    });
+  }
+
+  async shutdown() { await Promise.all(this.workers.map((s) => s.w.terminate())); this.workers = []; }
 }
 
-/** Human loads its weights with fetch(); Node's fetch has no file:// scheme, so serve exactly that scheme from disk while loading. */
-async function withFileFetch(fn) {
-  const real = globalThis.fetch;
-  globalThis.fetch = async (url, opts) => {
-    const s = String(url);
-    if (!s.startsWith('file://')) return real(url, opts);
-    try {
-      const body = fs.readFileSync(decodeURIComponent(s.slice('file://'.length)));
-      return new Response(body, { status: 200, headers: { 'content-type': s.endsWith('.json') ? 'application/json' : 'application/octet-stream' } });
-    } catch { return new Response('not found', { status: 404 }); }
-  };
-  try { return await fn(); } finally { globalThis.fetch = real; }
+let pool = null;
+let inProcess = null; // { detect } when running the model in this thread
+
+function workerCount() {
+  const env = process.env.IMAGE_WORKERS;
+  if (env !== undefined && env !== '') return Math.max(0, parseInt(env, 10) || 0);
+  return Math.max(1, Math.min(3, os.cpus().length - 1));
 }
 
-async function init() {
-  if (deps) return deps;
-  if (initError) throw initError;
+function init() {
+  if (initError) return Promise.reject(initError);
   if (!initPromise) {
     initPromise = (async () => {
-      const { sharp, root, wasmDist } = resolveAssets();
-      const Human = require(path.join(root, 'dist', 'human.node-wasm.js')).default;
-      const human = new Human({
-        backend: 'wasm',
-        wasmPath: `${wasmDist}${path.sep}`,
-        modelBasePath: `file://${path.join(root, 'models')}/`,
-        debug: false, async: false, cacheSensitivity: 0, warmup: 'none',
-        filter: { enabled: false },
-        face: {
-          enabled: true, detector: { rotation: false, maxDetected: 8, minConfidence: 0.4 }, mesh: { enabled: false }, iris: { enabled: false },
-          description: { enabled: true }, emotion: { enabled: false }, antispoof: { enabled: false }, liveness: { enabled: false },
-        },
-        body: { enabled: false }, hand: { enabled: false }, object: { enabled: false }, gesture: { enabled: false }, segmentation: { enabled: false },
-      });
-      await withFileFetch(async () => { await human.load(); });
-      const loaded = Object.values(human.models.loaded ? human.models.loaded() : {});
-      if (!loaded.length) throw new Error('face models did not load');
-      deps = { human, sharp };
-      events.log('INFO', `Image filter ready (${human.tf.getBackend()} backend, models: ${loaded.join(', ')})`);
-      return deps;
+      const n = workerCount();
+      if (n > 0) {
+        try {
+          pool = new Pool(n);
+          await pool.start();
+          events.log('INFO', `Image filter ready (${pool.info})`);
+          return;
+        } catch (e) {
+          events.log('WARN', `Image filter workers could not start (${e.message}); trying in-process`);
+          if (pool) { pool.shutdown().catch(() => {}); pool = null; }
+        }
+      }
+      const { createModel } = require('./imagefilter-core');
+      inProcess = await createModel();
+      events.log('INFO', `Image filter ready (in-process, ${inProcess.info})`);
     })().catch((e) => { initError = e; events.log('WARN', `Image filter unavailable: ${e.message} — only the text gates will keep women out. Install the optional dependencies (npm install) to enable it.`); throw e; });
   }
   return initPromise;
 }
 
+const detectFaces = (buffer) => (pool ? pool.detect(buffer) : inProcess.detect(buffer));
+
 /* ----------------------------------------------------------------- analysis */
-async function decodeToTensor(buffer) {
-  const { human, sharp } = deps;
-  const { data, info } = await sharp(buffer, { failOn: 'none', limitInputPixels: 60e6 })
-    .rotate().removeAlpha().resize({ width: MAX_SIDE, height: MAX_SIDE, fit: 'inside', withoutEnlargement: true })
-    .raw().toBuffer({ resolveWithObject: true });
-  return human.tf.tensor3d(new Uint8Array(data), [info.height, info.width, 3], 'int32');
-}
-
-async function runModel(buffer) {
-  await init();
-  const tensor = await decodeToTensor(buffer);
-  try {
-    const result = await deps.human.detect(tensor);
-    return (result.face || []).map((f) => ({
-      gender: f.gender || 'unknown', score: Number(f.genderScore) || 0, confidence: Number(f.score) || 0, age: Number.isFinite(f.age) ? Math.round(f.age) : null,
-    }));
-  } finally { deps.human.tf.dispose(tensor); }
-}
-
 /**
- * Fetch an image and classify the faces in it.
- * @returns {Promise<{status:'ok'|'unavailable'|'error', faces?: object[], reason?: string, cached?: boolean, ms?: number}>}
+ * Fetch a picture ONCE and read both things we want from it: the faces (policy: women are excluded) and its perceptual hash
+ * (policy: duplicates collapse). `faces:false` / `hash:false` skip a part. A failed model never costs the hash.
+ * @returns {Promise<{status:'ok'|'unavailable'|'error', faces?: object[], phash?: string|null, reason?: string, cached?: boolean, ms?: number}>}
  */
-function analyze(url, { referer, timeout = 12000 } = {}) {
-  if (analyzer) return analyzer(url);
-  if (cache.has(url)) { counters.cached++; return Promise.resolve({ ...cache.get(url), cached: true }); }
+function analyze(url, { referer, timeout = 12000, faces = true, hash = true } = {}) {
+  if (analyzer) return analyzer(url, { faces, hash });
+  const hit = cache.get(url);
+  if (hit && (!faces || hit.faces !== undefined) && (!hash || hit.phash !== undefined)) { counters.cached++; return Promise.resolve({ ...hit, cached: true }); }
   return (async () => {
     const t0 = Date.now();
     let got;
-    try { // downloads run in parallel; only the model is single-file
+    try {
       const headers = { accept: 'image/avif,image/webp,image/*;q=0.8,*/*;q=0.5' };
       if (referer) headers.referer = referer;
       got = await net.fetchBuffer(url, { headers, timeout, maxBytes: MAX_BYTES, retries: 0 });
@@ -128,16 +141,21 @@ function analyze(url, { referer, timeout = 12000 } = {}) {
       counters.errors++;
       return { status: 'error', reason: String(e.message || e).slice(0, 160) };
     }
-    const job = chain.then(async () => {
-      try { await init(); } catch (e) { return { status: 'unavailable', reason: e.message }; }
-      try { return { status: 'ok', faces: await runModel(got.buffer) }; } catch (e) { counters.errors++; return { status: 'error', reason: String(e.message || e).slice(0, 160) }; }
-    });
-    chain = job.catch(() => {}); // keep the queue alive whatever happens
-    const res = await job;
+    const res = { status: 'ok' };
+    const jobs = [];
+    if (hash) jobs.push(phash.hashBuffer(got.buffer).then((h) => { res.phash = h; if (h) counters.hashed++; }, () => { res.phash = null; }));
+    if (faces) {
+      jobs.push((async () => {
+        try { await init(); } catch (e) { res.status = 'unavailable'; res.reason = e.message; return; }
+        try { res.faces = await detectFaces(got.buffer); } catch (e) { counters.errors++; res.status = 'error'; res.reason = String(e.message || e).slice(0, 160); }
+      })());
+    }
+    await Promise.all(jobs);
     res.ms = Date.now() - t0;
-    if (res.status === 'ok') {
+    if (res.status === 'ok' || res.phash !== undefined) {
       counters.analyzed++; counters.totalMs += res.ms;
-      cache.set(url, res);
+      if (res.status === 'ok' || (hit && hit.faces !== undefined)) cache.set(url, { ...(hit || {}), ...res, status: res.status === 'ok' ? 'ok' : (hit ? hit.status : res.status) });
+      else cache.set(url, { ...res });
       if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
     }
     return res;
@@ -165,14 +183,15 @@ function imageUrlOf(item) {
  * Verdict for a pipeline item. Never throws.
  * @returns {Promise<{female: boolean, decided: boolean, status: string, faces: number, females: number, url?: string}>}
  */
-async function checkItem(item, { threshold = 0.5 } = {}) {
+async function checkItem(item, { threshold = 0.5, faces = true, hash = false } = {}) {
   const url = imageUrlOf(item);
-  if (!url) return { female: false, decided: false, status: 'no-image', faces: 0, females: 0 };
+  if (!url) return { female: false, decided: false, status: 'no-image', faces: 0, females: 0, phash: null };
   let referer;
   try { referer = `${new URL(url).origin}/`; } catch { /* none */ }
-  const verdict = judge(await analyze(url, { referer }), threshold);
+  const res = await analyze(url, { referer, faces, hash });
+  const verdict = faces ? judge(res, threshold) : { female: false, faces: 0, females: 0, males: 0, decided: false, status: res.status, reason: res.reason };
   if (verdict.female) counters.female++;
-  return { ...verdict, url };
+  return { ...verdict, url, phash: res.phash || null };
 }
 
 /** Is the model usable? Starts loading it on first call. */
@@ -183,13 +202,16 @@ async function available() {
 
 function status() {
   return {
-    ready: !!deps || !!analyzer, failed: initError ? initError.message : null, ...counters,
+    ready: !!pool || !!inProcess || !!analyzer, failed: initError ? initError.message : null, workers: pool ? pool.workers.length : 0, ...counters,
     avgMs: counters.analyzed ? Math.round(counters.totalMs / counters.analyzed) : 0,
   };
 }
 
-/** Test hook: replace the whole fetch+detect step with `fn(url) -> {status:'ok', faces:[{gender, score, confidence}]}`. */
+/** Stop the worker threads (tests and graceful shutdown). */
+async function shutdown() { if (pool) { await pool.shutdown(); pool = null; } initPromise = null; }
+
+/** Test hook: replace the whole fetch+detect step with `fn(url, {faces, hash}) -> {status:'ok', faces:[{gender, score, confidence}], phash?}`. */
 function _setAnalyzer(fn) { analyzer = fn; }
 function _reset() { cache.clear(); analyzer = null; }
 
-module.exports = { analyze, judge, checkItem, imageUrlOf, available, status, init, _setAnalyzer, _reset };
+module.exports = { analyze, judge, checkItem, imageUrlOf, available, status, init, shutdown, _setAnalyzer, _reset };

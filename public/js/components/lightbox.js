@@ -294,6 +294,7 @@ function paintInfo() {
       it.width ? [h('dt', null, 'Size'), h('dd', { class: 'num' }, `${it.width} × ${it.height}`)] : null,
       it.duration ? [h('dt', null, 'Length'), h('dd', null, fmt.duration(it.duration))] : null),
     it.tags && it.tags.length ? h('div', { class: 'tagrow' }, it.tags.filter((t) => t !== it.platform).map((t) => h('a', { class: 'tag', href: href('/explore', { tag: t }), onclick: () => closeSilently() }, `#${t}`))) : null,
+    it.also && it.also.length ? h('div', { class: 'tagrow' }, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Also on'), it.also.map((a) => h('a', { class: 'tag', href: a.source_url, target: '_blank', rel: 'noopener noreferrer nofollow', title: [a.author, a.community].filter(Boolean).join(' · ') }, platformLabel(a.platform)))) : null,
     h('div', { class: 'row wrap' },
       it.source_url ? h('a', { class: 'btn sm', href: it.source_url, target: '_blank', rel: 'noopener noreferrer nofollow' }, icon('external', 'sm'), 'View original') : null,
       h('button', { class: 'btn sm ghost', onclick: () => openReport({ mediaId: it.id }) }, icon('flag', 'sm'), 'Report')),

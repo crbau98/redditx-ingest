@@ -161,7 +161,10 @@ router.get('/media', (req, res) => {
 router.get('/media/:id', (req, res) => {
   const m = repo.media.getFull(req.params.id);
   if (!m || m.publish_state !== 'published' || m.scope === 'excluded') return res.status(404).json({ error: 'Not found' });
-  res.json(publicMedia(m));
+  const out = publicMedia(m);
+  const also = repo.media.altSources(m.id);
+  if (also.length) out.also = also; // the same picture posted elsewhere
+  res.json(out);
 });
 
 router.get('/media/:id/related', (req, res) => {
