@@ -15,6 +15,7 @@ import { creator } from './views/creator.js';
 import { saved } from './views/saved.js';
 import { browse } from './views/browse.js';
 import { reels } from './views/reels.js';
+import { galaxy } from './views/galaxy.js';
 
 const routes = [
   { pattern: '/', view: home, nav: 'home' },
@@ -22,6 +23,7 @@ const routes = [
   { pattern: '/reels', view: reels, nav: 'reels' },
   { pattern: '/browse', view: browse, nav: 'browse' },
   { pattern: '/creators', view: creators, nav: 'creators' },
+  { pattern: '/galaxy', view: galaxy, nav: 'creators' },
   { pattern: '/creator/:id', view: creator, nav: 'creators' },
   { pattern: '/saved', view: saved, nav: 'saved' },
   { pattern: '/admin/:tab?', view: (...a) => import('./views/admin/index.js').then((m) => m.admin(...a)), nav: 'admin' },
@@ -62,7 +64,7 @@ const NAV = [['home', '/', 'Home', 'home'], ['explore', '/explore', 'Explore', '
 
 /* --------------------------------------------------------- global shortcuts */
 function showShortcuts() {
-  const rows = [['Ctrl / ⌘ + K', 'Command palette — jump anywhere, run actions'], ['/', 'Search'], ['?', 'This help'], ['G then H / E / R / C / S', 'Go to Home, Explore, Reels, Creators, Saved'], ['X', 'Surprise me (open something random)'],
+  const rows = [['Ctrl / ⌘ + K', 'Command palette — jump anywhere, run actions'], ['/', 'Search'], ['?', 'This help'], ['G then H / E / R / C / S / M', 'Go to Home, Explore, Reels, Creators, Saved, Galaxy map'], ['X', 'Surprise me (open something random)'],
     ['In the viewer', ''], ['← / →  (J / K)', 'Previous / next'], ['F · C', 'Save · add to collection'], ['S · I · M', 'Slideshow · details · mute'],
     ['In Reels', ''], ['↑ / ↓  (K / J)', 'Previous / next'], ['Space · M', 'Pause · sound'], ['F · C · Enter', 'Save · collect · open details'], ['Double-tap', 'Save']];
   const m = openModal({ title: 'Keyboard shortcuts', wide: true, body: h('dl', { class: 'kv', style: { gridTemplateColumns: 'auto 1fr' } }, rows.map(([k, d]) => (d
@@ -76,7 +78,7 @@ function wireShortcuts() {
     if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openPalette(); return; }
     if (e.metaKey || e.ctrlKey || e.altKey || isOpen() || paletteOpen() || $('#modal-root').children.length || e.target.closest('input, textarea, select, [contenteditable]')) return;
     if (Date.now() - g < 1200) {
-      const dest = { h: '/', e: '/explore', r: '/reels', c: '/creators', s: '/saved', b: '/browse', a: '/admin' }[e.key.toLowerCase()];
+      const dest = { h: '/', e: '/explore', r: '/reels', c: '/creators', s: '/saved', b: '/browse', a: '/admin', m: '/galaxy' }[e.key.toLowerCase()];
       g = 0;
       if (dest) { e.preventDefault(); navigate(dest); }
       return;
@@ -119,6 +121,7 @@ function buildShell() {
   const footer = h('footer', { class: 'footer' },
     h('span', null, 'PRISM — adults only (18+)'),
     h('a', { href: href('/browse') }, 'Browse'),
+    h('a', { href: href('/galaxy') }, 'Creator galaxy'),
     h('button', { onclick: showShortcuts }, 'Keyboard shortcuts'),
     h('button', { onclick: openDisplaySettings }, 'Display settings'),
     h('button', { onclick: openTakedownForm }, 'Report content / takedown'),

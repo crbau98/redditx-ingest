@@ -315,6 +315,66 @@ creators.activity = function activity(id, days = 371) {
  * Creators gaining momentum: lots of well-received posts this week compared with their usual pace
  * over the previous three weeks. New arrivals (no history) count as rising too.
  */
+/**
+ * The creator constellation: the most active public creators as nodes, linked to the creators
+ * whose posts they most resemble (tf-idf weighted tag vectors, cosine similarity, each node
+ * keeping its strongest few links). Each node carries its dominant tag as a "group" for colour.
+ */
+creators.graph = function graph({ limit = 150, perNode = 4, minSim = 0.12 } = {}) {
+  const nodes = db.prepare(`SELECT c.id, c.handle, c.display_name, c.avatar_url, c.media_count, c.last_media_at,
+      (SELECT COALESCE(m.preview_url, m.thumbnail_url, CASE WHEN m.media_type = 'image' THEN m.media_url END) FROM media m
+        WHERE m.creator_id = c.id AND m.publish_state = 'published' ORDER BY m.score DESC LIMIT 1) AS preview
+    FROM creators c WHERE c.status = 'active' AND c.scope != 'excluded' AND c.media_count >= 2
+    ORDER BY c.media_count DESC, c.total_score DESC LIMIT ?`).all(limit);
+  if (nodes.length < 2) return { nodes, links: [] };
+  const ids = nodes.map((n) => n.id);
+  const rows = db.prepare(`SELECT m.creator_id AS cid, t.name AS tag, COUNT(*) AS n FROM media m
+      JOIN media_tags mt ON mt.media_id = m.id JOIN tags t ON t.id = mt.tag_id
+      WHERE m.creator_id IN (${ids.map(() => '?').join(',')}) AND m.publish_state = 'published'
+      GROUP BY m.creator_id, t.id`).all(...ids).filter((r) => !GENERIC_TAGS.has(r.tag));
+  const df = new Map();
+  for (const r of rows) df.set(r.tag, (df.get(r.tag) || 0) + 1);
+  const vec = new Map(ids.map((id) => [id, new Map()]));
+  for (const r of rows) vec.get(r.cid).set(r.tag, (1 + Math.log(r.n)) * Math.log(1 + nodes.length / df.get(r.tag)));
+  const norm = new Map(ids.map((id) => [id, Math.sqrt([...vec.get(id).values()].reduce((a, w) => a + w * w, 0)) || 1]));
+  // Community names are tagged too ("mastodon-social"); they say where, not what — prefer real style tags for the group.
+  const communities = new Set(db.prepare(`SELECT DISTINCT community FROM media WHERE community IS NOT NULL AND creator_id IN (${ids.map(() => '?').join(',')})`).all(...ids).map((r) => cleanTag(r.community)));
+  for (const n of nodes) {
+    let best = null; let bw = 0; let anyBest = null; let aw = 0;
+    for (const [tag, w] of vec.get(n.id)) {
+      if (w > aw) { aw = w; anyBest = tag; }
+      if (!communities.has(tag) && w > bw) { bw = w; best = tag; }
+    }
+    n.group = best || anyBest;
+  }
+  // cosine similarity for every pair (n ≤ a few hundred, so O(n²) is fine), keep each node's strongest links
+  const cand = new Map(ids.map((id) => [id, []]));
+  for (let i = 0; i < ids.length; i++) {
+    const a = vec.get(ids[i]);
+    for (let j = i + 1; j < ids.length; j++) {
+      const b = vec.get(ids[j]);
+      const [small, big] = a.size < b.size ? [a, b] : [b, a];
+      let dot = 0;
+      for (const [tag, w] of small) { const o = big.get(tag); if (o) dot += w * o; }
+      if (!dot) continue;
+      const sim = dot / (norm.get(ids[i]) * norm.get(ids[j]));
+      if (sim < minSim) continue;
+      cand.get(ids[i]).push([ids[j], sim]); cand.get(ids[j]).push([ids[i], sim]);
+    }
+  }
+  const seen = new Set(); const links = [];
+  for (const [id, list] of cand) {
+    list.sort((x, y) => y[1] - x[1]);
+    for (const [other, sim] of list.slice(0, perNode)) {
+      const key = id < other ? `${id}|${other}` : `${other}|${id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      links.push({ source: id, target: other, weight: Math.round(sim * 1000) / 1000 });
+    }
+  }
+  return { nodes, links };
+};
+
 creators.rising = function rising(limit = 12) {
   const now = Date.now();
   const d7 = new Date(now - 7 * 86400000).toISOString();

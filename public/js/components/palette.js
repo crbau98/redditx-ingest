@@ -21,6 +21,7 @@ function staticCommands() {
     { group: 'Go to', icon: 'film', label: 'Reels', hint: 'full-screen, swipe through', run: go('/reels') },
     { group: 'Go to', icon: 'layers', label: 'Browse tags & sources', run: go('/browse') },
     { group: 'Go to', icon: 'users', label: 'Creators', run: go('/creators') },
+    { group: 'Go to', icon: 'sparkle', label: 'Creator galaxy', hint: '3D map of who posts alike', run: go('/galaxy') },
     { group: 'Go to', icon: 'heart', label: 'Saved', run: go('/saved') },
     { group: 'Go to', icon: 'folder', label: 'Collections', run: go('/saved', { tab: 'collections' }) },
     { group: 'Go to', icon: 'history', label: 'History', run: go('/saved', { tab: 'history' }) },

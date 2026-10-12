@@ -1,6 +1,6 @@
 import { h, icon, fmt, debounce, emptyState } from '../dom.js';
 import { get } from '../api.js';
-import { navigate } from '../router.js';
+import { navigate, href } from '../router.js';
 import { platformLabel } from '../store.js';
 import { creatorCard } from '../components/creator-card.js';
 
@@ -19,7 +19,8 @@ export async function creators(root, { query }) {
   const grid = h('div', { class: 'creator-grid' });
   const more = h('div', { class: 'loadmore' });
   root.replaceChildren(
-    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Creators'), count)),
+    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Creators'), count),
+      h('a', { class: 'btn galaxy-cta', href: href('/galaxy') }, icon('sparkle', 'sm'), 'Explore as a 3D galaxy')),
     h('div', { class: 'row wrap', style: { marginBottom: '18px' } }, search, sortSel, platSel),
     grid, more);
 

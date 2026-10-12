@@ -4,6 +4,7 @@ import { navigate, href } from '../router.js';
 import { follows, platformColor, platformLabel, bus } from '../store.js';
 import { createFeed } from '../components/feed.js';
 import { creatorCard } from '../components/creator-card.js';
+import { dominantColor } from '../components/fx.js';
 import { openReport } from '../components/report.js';
 
 /** Year-long posting heatmap, source split and usual posting hours (UTC → local). */
@@ -113,5 +114,18 @@ export async function creator(root, { params, query }) {
       h('div', { class: 'section-head' }, h('div', null, h('h2', null, icon('users'), 'Similar creators'), h('div', { class: 'sub' }, 'Based on what they post'))),
       h('div', { class: 'rail' }, list.map((x) => creatorCard(x, { mini: true })))), h('div', { style: { height: '8px' } }));
   }).catch(() => {});
-  return () => { feed.destroy(); off(); };
+  // Chameleon: the profile takes its accent colours from the creator's own artwork.
+  const TINT_VARS = ['--accent', '--accent-2', '--accent-3', '--grad', '--grad-soft'];
+  const art = c.banner_url || (c.previews && c.previews[0]) || c.avatar_url;
+  dominantColor(art ? proxied(art) : null).then((col) => {
+    if (!col || !root.isConnected || !root.contains(head)) return;
+    const hsl = (dh, ds = 0, dl = 0) => `hsl(${(col.h + dh + 360) % 360} ${Math.min(95, col.s + ds)}% ${Math.min(72, col.l + dl)}%)`;
+    root.style.setProperty('--accent', hsl(0));
+    root.style.setProperty('--accent-2', hsl(-38, 0, -6));
+    root.style.setProperty('--accent-3', hsl(32, 0, 6));
+    root.style.setProperty('--grad', `linear-gradient(120deg, ${hsl(-38, 0, -6)} 0%, ${hsl(0)} 55%, ${hsl(32, 0, 6)} 100%)`);
+    root.style.setProperty('--grad-soft', `linear-gradient(120deg, hsl(${(col.h + 322) % 360} ${col.s}% ${col.l}% / .22), hsl(${col.h} ${col.s}% ${col.l}% / .2) 55%, hsl(${(col.h + 32) % 360} ${col.s}% ${col.l}% / .16))`);
+    root.classList.add('tinted');
+  });
+  return () => { feed.destroy(); off(); TINT_VARS.forEach((v) => root.style.removeProperty(v)); root.classList.remove('tinted'); };
 }

@@ -70,6 +70,10 @@ const discoverCached = ttl(30000, () => {
     rising: d.rising.map((c) => ({ ...publicCreator(c), week_count: c.week_count })),
   };
 });
+const graphCached = ttl(5 * 60000, () => {
+  const g = repo.creators.graph({ limit: 160 });
+  return { nodes: g.nodes.map((n) => ({ id: n.id, handle: n.handle, display_name: n.display_name, avatar_url: n.avatar_url, media_count: n.media_count, last_media_at: n.last_media_at, preview: n.preview, group: n.group })), links: g.links };
+});
 const tagsCached = ttl(60000, () => repo.media.tags(120, 1));
 const communitiesCached = ttl(60000, () => repo.media.communities(100));
 
@@ -117,7 +121,7 @@ router.post('/report', reportLimiter, (req, res) => {
 });
 
 /* -------------------------------------------------------- age-gated content */
-router.use(['/discover', '/stats', '/suggest', '/recommend', '/media', '/creators', '/tags', '/communities', '/subreddits', '/platforms', '/stream'], age.requireAge);
+router.use(['/discover', '/stats', '/suggest', '/recommend', '/graph', '/media', '/creators', '/tags', '/communities', '/subreddits', '/platforms', '/stream'], age.requireAge);
 
 router.get('/discover', (req, res) => res.json(discoverCached()));
 router.get('/stats', (req, res) => res.json(repo.publicStats()));
@@ -195,6 +199,8 @@ router.get('/recommend', (req, res) => {
   }
   res.json({ ...r, items: r.items.map(publicMedia) });
 });
+
+router.get('/graph', (req, res) => res.json(graphCached()));
 
 router.get('/creators/:id/activity', (req, res) => {
   const c = repo.creators.get(req.params.id);

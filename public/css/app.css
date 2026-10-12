@@ -714,3 +714,68 @@ body::before { content: ''; position: fixed; inset: 0; z-index: -1; pointer-even
 /* software rendering (no GPU): keep the look, drop the costliest compositing effects */
 :root[data-gpu='software'] .hero-kicker, :root[data-gpu='software'] .btn.glass, :root[data-gpu='software'] .rail-arrow, :root[data-gpu='software'] .lb-info { backdrop-filter: none; -webkit-backdrop-filter: none; }
 :root[data-gpu='software'] .lb-ambient { filter: blur(40px) saturate(1.6) brightness(.6); }
+
+/* ==========================================================================
+   v4.5 "Constellation"
+   ========================================================================== */
+/* ---------- galaxy ------------------------------------------------------------ */
+body.galaxy-mode { overflow: hidden; }
+body.galaxy-mode .footer, body.galaxy-mode .fab { display: none !important; }
+.galaxy { position: fixed; z-index: 50; left: 0; right: 0; top: var(--appbar-h); bottom: 0; overflow: hidden; color: #fff;
+  background: radial-gradient(120% 90% at 50% 40%, #171032 0%, #0a0818 45%, #04040a 100%); }
+.galaxy::before { content: ''; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(40% 35% at 30% 30%, color-mix(in srgb, var(--accent-2) 22%, transparent), transparent 70%), radial-gradient(35% 30% at 72% 68%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 70%); }
+.galaxy-canvas { position: absolute; inset: 0; display: block; cursor: grab; touch-action: none; outline: none; }
+.galaxy-canvas:active { cursor: grabbing; }
+.galaxy-loading { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 12px; color: rgba(255, 255, 255, .7); }
+.galaxy-top { position: absolute; z-index: 2; left: 0; right: 0; top: 0; padding: 18px var(--pad); display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; pointer-events: none; }
+.galaxy-top > * { pointer-events: auto; }
+.galaxy-top h1 { font-size: clamp(22px, 3vw, 32px); display: flex; align-items: center; gap: 10px; margin: 0; text-shadow: 0 2px 20px rgba(0, 0, 0, .6); }
+.galaxy-top h1 svg { color: var(--accent); filter: drop-shadow(0 0 10px var(--accent)); }
+.galaxy-top .sub { color: rgba(255, 255, 255, .62); font-size: 13.5px; margin-top: 4px; }
+.galaxy-search { position: relative; width: min(340px, 100%); }
+.galaxy-search svg { position: absolute; left: 14px; top: 12px; color: rgba(255, 255, 255, .6); }
+.galaxy-search .input { padding-left: 38px; border-radius: 999px; background: rgba(255, 255, 255, .08); border-color: rgba(255, 255, 255, .16); color: #fff; backdrop-filter: blur(12px); }
+.galaxy-search .input::placeholder { color: rgba(255, 255, 255, .5); }
+.galaxy-legend { position: absolute; z-index: 2; left: var(--pad); bottom: 22px; display: flex; flex-wrap: wrap; gap: 6px; max-width: min(720px, calc(100% - 2 * var(--pad))); align-items: center; }
+.galaxy-legend-title { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: rgba(255, 255, 255, .5); margin-right: 4px; }
+.galaxy-chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, .14); background: rgba(10, 8, 24, .55); color: rgba(255, 255, 255, .85); font-size: 12.5px; font-weight: 600; backdrop-filter: blur(10px); }
+.galaxy-chip .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--gc); box-shadow: 0 0 10px var(--gc); }
+.galaxy-chip .n { color: rgba(255, 255, 255, .5); font-size: 11.5px; }
+.galaxy-chip.on { border-color: var(--gc); background: color-mix(in srgb, var(--gc) 22%, rgba(10, 8, 24, .7)); color: #fff; }
+.galaxy-card { position: absolute; z-index: 3; left: 0; top: 0; width: 250px; border-radius: 18px; overflow: hidden; background: rgba(14, 12, 30, .82); border: 1px solid rgba(255, 255, 255, .14); box-shadow: 0 24px 60px rgba(0, 0, 0, .6); backdrop-filter: blur(18px) saturate(1.4); transition: transform .12s linear; }
+.galaxy-card-img { height: 110px; background: center / cover no-repeat #1d1934; }
+.galaxy-card-body { padding: 12px 14px 14px; display: grid; gap: 6px; justify-items: start; }
+.galaxy-card .name { font-weight: 700; font-size: 16px; }
+.galaxy-card .muted { color: rgba(255, 255, 255, .62); font-size: 12.5px; }
+.galaxy-card .chip { border-color: var(--gc); color: #fff; background: color-mix(in srgb, var(--gc) 25%, transparent); }
+.galaxy-hint { position: absolute; z-index: 2; right: var(--pad); bottom: 26px; display: flex; gap: 8px; align-items: center; font-size: 12.5px; color: rgba(255, 255, 255, .7); padding: 8px 14px; border-radius: 999px; background: rgba(10, 8, 24, .55); border: 1px solid rgba(255, 255, 255, .12); backdrop-filter: blur(10px); transition: opacity .8s; }
+.galaxy-hint.fade { opacity: 0; pointer-events: none; }
+.galaxy-cta { background: var(--grad-soft); border-color: color-mix(in srgb, var(--accent) 35%, var(--line-strong)); }
+@media (max-width: 899px) {
+  .galaxy { bottom: 0; }
+  .galaxy-legend { bottom: calc(var(--bottomnav-h) + 22px + env(safe-area-inset-bottom)); }
+  .galaxy-hint { top: 168px; bottom: auto; right: 50%; transform: translateX(50%); white-space: nowrap; }
+  .galaxy-card { width: min(250px, calc(100vw - 24px)); }
+}
+@media (max-width: 560px) { .galaxy-legend .galaxy-chip:nth-child(n+6) { display: none; } }
+
+/* ---------- viewer: transform zoom + filmstrip --------------------------------- */
+.lb-stage.zoomed-wrap { overflow: hidden; place-items: center; grid-template: minmax(0, 1fr) / minmax(0, 1fr); cursor: grab; }
+.lb-stage.zoomed-wrap:active { cursor: grabbing; }
+.lb-stage img { cursor: zoom-in; touch-action: none; transform-origin: 0 0; }
+.lb-stage img.zoomed { max-width: 100%; max-height: 100%; border-radius: 12px; cursor: grab; }
+.lb { grid-template-rows: auto minmax(0, 1fr) auto; }
+.lb-info { grid-row: 2 / span 2; }
+.lb-strip { grid-column: 1; grid-row: 3; position: relative; z-index: 1; display: flex; gap: 8px; padding: 6px 56px 14px; overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity; }
+.lb-strip::-webkit-scrollbar { display: none; }
+.lb-strip:empty { display: none; }
+.lb-thumb { flex: none; width: 54px; height: 72px; border-radius: 10px; border: 2px solid transparent; background: rgba(255, 255, 255, .08) center / cover no-repeat; opacity: .55; transition: opacity .2s, transform .2s var(--ease), border-color .2s; display: grid; place-items: center; color: #fff; scroll-snap-align: center; }
+.lb-thumb svg { width: 14px; height: 14px; filter: drop-shadow(0 1px 3px rgba(0, 0, 0, .7)); }
+.lb-thumb:hover { opacity: .9; transform: translateY(-2px); }
+.lb-thumb.on { opacity: 1; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); transform: translateY(-3px); }
+@media (max-width: 900px), (max-height: 620px) { .lb-strip { display: none; } }
+
+/* ---------- chameleon creator pages ------------------------------------------- */
+main.tinted .profile-head::before { content: ''; position: absolute; z-index: -1; left: -6%; right: 30%; top: -70px; height: 260px; pointer-events: none; background: radial-gradient(50% 60% at 18% 45%, color-mix(in srgb, var(--accent) 34%, transparent), transparent 72%); filter: blur(8px); animation: fadeIn .8s; }
+main.tinted .profile-banner::after { background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 14%, transparent), var(--bg)); }
+main.tinted .tag { border-color: color-mix(in srgb, var(--accent) 30%, var(--line)); }

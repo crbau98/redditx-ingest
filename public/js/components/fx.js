@@ -65,6 +65,7 @@ export function initTilt() {
 /* ---------------------------------------------------------------- heart burst */
 /** A little shower of hearts from a point (e.g. the save button). */
 export function heartBurst(x, y, { count = 9 } = {}) {
+  haptic(12);
   if (reduced()) return;
   const layer = document.createElement('div');
   layer.className = 'fx-layer';
@@ -161,10 +162,64 @@ export function playFlip(target) {
     const dx = (src.rect.left + src.rect.width / 2) - (to.left + to.width / 2);
     const dy = (src.rect.top + src.rect.height / 2) - (to.top + to.height / 2);
     target.animate([
-      { transform: `translate(${dx}px, ${dy}px) scale(${scale})`, borderRadius: '18px', opacity: 0.6 },
-      { transform: 'none', borderRadius: '12px', opacity: 1 },
+      { transform: `translate(${dx}px, ${dy}px) scale(${scale})`, transformOrigin: '50% 50%', borderRadius: '18px', opacity: 0.6 },
+      { transform: 'none', transformOrigin: '50% 50%', borderRadius: '12px', opacity: 1 },
     ], { duration: 420, easing: 'cubic-bezier(.2,.85,.25,1)' });
   };
   if (target.complete === false || (target.tagName === 'VIDEO' && !target.videoWidth && !target.poster)) target.addEventListener(target.tagName === 'VIDEO' ? 'loadedmetadata' : 'load', run, { once: true });
   else requestAnimationFrame(run);
+}
+
+/* ---------------------------------------------------------------- haptics */
+/** A tiny tap on phones that support it (Android Chrome); silently nothing elsewhere. */
+export function haptic(ms = 10) {
+  try { if (navigator.vibrate && window.matchMedia('(pointer: coarse)').matches) navigator.vibrate(ms); } catch { /* ignore */ }
+}
+
+/* ------------------------------------------------------- colour from an image
+ * The most characterful colour of an image: a 24×24 sample, weighted toward saturated
+ * mid-tones, then nudged into a range that reads well as an accent in both themes.
+ * Works because every remote image is served same-origin through the proxy. */
+const colourCache = new Map();
+export function dominantColor(src) {
+  if (!src) return Promise.resolve(null);
+  if (colourCache.has(src)) return colourCache.get(src);
+  const p = new Promise((resolve) => {
+    const img = new Image();
+    img.decoding = 'async';
+    img.onload = () => {
+      try {
+        const c = document.createElement('canvas'); c.width = 24; c.height = 24;
+        const g = c.getContext('2d', { willReadFrequently: true });
+        g.drawImage(img, 0, 0, 24, 24);
+        const d = g.getImageData(0, 0, 24, 24).data;
+        let r = 0; let gg = 0; let b = 0; let ws = 0;
+        for (let i = 0; i < d.length; i += 4) {
+          const R = d[i]; const G = d[i + 1]; const B = d[i + 2]; const A = d[i + 3] / 255;
+          const max = Math.max(R, G, B); const min = Math.min(R, G, B);
+          const sat = max ? (max - min) / max : 0; const light = (max + min) / 510;
+          const w = A * (sat * sat * (1 - Math.min(1, Math.abs(light - 0.5) * 1.6)) + 0.01);
+          r += R * w; gg += G * w; b += B * w; ws += w;
+        }
+        if (!ws) { resolve(null); return; }
+        resolve(vivid(r / ws, gg / ws, b / ws));
+      } catch { resolve(null); }
+    };
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+  colourCache.set(src, p);
+  return p;
+}
+
+function vivid(r, g, b) {
+  // RGB → HSL, then clamp saturation/lightness so the colour works as an accent
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b); const min = Math.min(r, g, b); const l = (max + min) / 2;
+  let h = 0; let s = 0;
+  if (max !== min) {
+    const d = max - min; s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4; h *= 60;
+  }
+  return { h: Math.round(h), s: Math.round(Math.min(92, Math.max(58, s * 100))), l: Math.round(Math.min(66, Math.max(52, l * 100))) };
 }

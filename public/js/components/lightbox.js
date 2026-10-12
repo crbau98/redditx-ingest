@@ -6,6 +6,7 @@ import { openReport } from './report.js';
 import { attachVideo, releaseVideo, isM3u8 } from './video.js';
 import { openCollectionPicker } from './collections.js';
 import { playFlip, heartBurst } from './fx.js';
+import { makeZoomable } from './zoom.js';
 
 let S = null; // the single active lightbox session
 const viewed = new Set();
@@ -61,7 +62,9 @@ function start(items, loadMore) {
   S.prev = h('button', { class: 'lb-nav prev', 'aria-label': 'Previous', onclick: () => nav(-1) }, icon('chev-l', 'lg'));
   S.next = h('button', { class: 'lb-nav next', 'aria-label': 'Next', onclick: () => nav(1) }, icon('chev-r', 'lg'));
   S.stage.append(S.prev, S.next);
-  S.el.append(S.amb[0], S.amb[1], S.top, S.stage, S.info$);
+  // Filmstrip: neighbours of the current item, for jumping around a long sequence (desktop).
+  S.strip = h('div', { class: 'lb-strip', role: 'listbox', 'aria-label': 'More in this sequence' });
+  S.el.append(S.amb[0], S.amb[1], S.top, S.stage, S.strip, S.info$);
   root.replaceChildren(S.el);
   document.body.classList.add('no-scroll');
   document.addEventListener('keydown', onKey);
@@ -118,7 +121,7 @@ function show(i, { push = false } = {}) {
   S.index = i;
   const target = parse();
   if (target.query.get('m') !== it.id) setParam('m', it.id, { replace: !push });
-  paintTop(); paintStage(it); paintInfo();
+  paintTop(); paintStage(it); paintInfo(); paintStrip();
   scheduleSlide();
   S.prev.disabled = i === 0;
   S.next.disabled = i >= S.items.length - 1 && !S.loadMore;
@@ -167,7 +170,7 @@ function toggleSlideshow() {
 }
 
 function showHelp() {
-  const rows = [['← / →  (J / K)', 'Previous / next'], ['F', 'Save to favourites'], ['C', 'Add to a collection'], ['I', 'Show or hide details'], ['M', 'Mute video'], ['Space', 'Play / pause video'], ['S', 'Start / stop slideshow'], ['Esc', 'Close'], ['/', 'Search (outside the viewer)'], ['Ctrl / ⌘ + K', 'Command palette (outside the viewer)'], ['Double-click', 'Save the image'], ['Swipe ← →', 'Navigate (touch)'], ['Swipe ↓', 'Close (touch)']];
+  const rows = [['← / →  (J / K)', 'Previous / next'], ['F', 'Save to favourites'], ['C', 'Add to a collection'], ['Click · scroll · pinch', 'Zoom the image (+ / − / 0 too)'], ['Drag', 'Pan while zoomed'], ['I', 'Show or hide details'], ['M', 'Mute video'], ['Space', 'Play / pause video'], ['S', 'Start / stop slideshow'], ['Esc', 'Close'], ['/', 'Search (outside the viewer)'], ['Ctrl / ⌘ + K', 'Command palette (outside the viewer)'], ['Double-click', 'Save the image'], ['Swipe ← →', 'Navigate (touch)'], ['Swipe ↓', 'Close (touch)']];
   const m = openModal({ title: 'Keyboard shortcuts', body: h('dl', { class: 'kv', style: { gridTemplateColumns: 'auto 1fr' } }, rows.map(([k, d]) => [h('dt', null, h('kbd', { class: 'kbd' }, k)), h('dd', { style: { textAlign: 'left' } }, d)])), actions: [h('button', { class: 'btn primary', onclick: () => m.close() }, 'Got it')] });
 }
 
@@ -222,8 +225,26 @@ function paintAmbient(it) {
   S.ambIdx ^= 1;
 }
 
+function paintStrip() {
+  if (!S || !S.strip) return;
+  const n = S.items.length;
+  if (n < 2) { S.strip.replaceChildren(); return; }
+  const from = Math.max(0, S.index - 14); const to = Math.min(n, S.index + 15);
+  const thumbs = [];
+  for (let i = from; i < to; i++) {
+    const x = S.items[i];
+    const src = x.preview_url || x.thumbnail_url || (x.media_type === 'image' ? x.media_url : '');
+    thumbs.push(h('button', { class: `lb-thumb${i === S.index ? ' on' : ''}`, role: 'option', 'aria-selected': String(i === S.index), 'aria-label': x.title || `Item ${i + 1}`, style: src ? { backgroundImage: `url("${proxied(src)}")` } : null, onclick: () => show(i) },
+      x.media_type === 'video' ? icon('play', 'fill') : null));
+  }
+  S.strip.replaceChildren(...thumbs);
+  const on = S.strip.querySelector('.on');
+  if (on) requestAnimationFrame(() => { S.strip.scrollTo({ left: on.offsetLeft - S.strip.clientWidth / 2 + on.offsetWidth / 2, behavior: 'smooth' }); });
+}
+
 function paintStage(it) {
   teardownVideo();
+  S.zoom = null;
   paintAmbient(it);
   S.stage.classList.remove('zoomed-wrap');
   const keep = [S.prev, S.next];
@@ -245,7 +266,7 @@ function paintStage(it) {
       full.onload = () => { if (img.isConnected) img.src = full.src; };
       full.src = proxied(it.media_url);
     }
-    img.addEventListener('click', () => { const z = img.classList.toggle('zoomed'); S.stage.classList.toggle('zoomed-wrap', z); });
+    S.zoom = makeZoomable(img, S.stage);
     img.addEventListener('dblclick', () => { if (img.classList.contains('zoomed')) return; toggleFav(it, true); });
     img.addEventListener('error', () => S.stage.replaceChildren(...keep, h('div', { class: 'lb-loading' }, 'This image is no longer available at its source.')));
   }
@@ -307,6 +328,9 @@ function onKey(e) {
     case 's': case 'S': toggleSlideshow(); break;
     case '?': showHelp(); break;
     case 'm': case 'M': { const v = S.stage.querySelector('video'); if (v) v.muted = !v.muted; break; }
+    case '+': case '=': if (S.zoom) { e.preventDefault(); S.zoom.zoomBy(1.6); } break;
+    case '-': if (S.zoom) { e.preventDefault(); S.zoom.zoomBy(1 / 1.6); } break;
+    case '0': if (S.zoom) { e.preventDefault(); S.zoom.reset(); } break;
     case ' ': { const v = S.stage.querySelector('video'); if (v) { e.preventDefault(); if (v.paused) v.play(); else v.pause(); } break; }
     default:
   }
