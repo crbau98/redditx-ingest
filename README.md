@@ -1,6 +1,6 @@
 # PRISM
 
-**Creator-centric adult media discovery.** PRISM follows male creators across the open web — Reddit, RedGIFs, Bluesky, Mastodon, Lemmy, X, RSS/Atom feeds, personal sites and link-in-bio pages — and presents their photos and videos in one fast, searchable, mobile-first app, with a safety gate, a takedown flow and an admin console.
+**Creator-centric adult media discovery.** PRISM follows male creators across the open web — Reddit, RedGIFs, Bluesky, Mastodon, Misskey/Sharkey, Lemmy, X, Telegram, RSS/Atom feeds, personal sites and link-in-bio pages — and presents their photos and videos in one fast, searchable, mobile-first app, with a safety gate, a takedown flow and an admin console.
 
 > Adults only (18+). The server enforces an age gate on every content endpoint.
 
@@ -21,6 +21,11 @@
 | **UI** | Basic grid | New design system (dark/light), discover home, filters, creator profiles, immersive viewer, saved & following, full admin console |
 | **Discovery** (v4.1) | Search box | Autocomplete (creators · tags · communities), Browse page, *Similar creators*, a *From creators you follow* rail and Following filter |
 | **Operations** (v4.1) | – | Nightly SQLite backups with retention, config export/import, audit log, duplicate-creator review, installable offline shell (PWA) |
+| **Watching** (v4.2) | Grid only | **Reels** — full-screen vertical swipe feed (keyboard, double-tap to save, one live decoder at a time), *Play as Reels* from any search, profile or smart feed |
+| **Personal library** (v4.2) | Saved list | **Collections** (named boards), **smart feeds** (saved searches with “N new since last visit”), **history** with *Hide seen*, one-file library export/import |
+| **Navigation** (v4.2) | Search box | **Command palette** (Ctrl/⌘ K), `g`-prefixed jumps, `x` = Surprise me, global `?` help |
+| **Insight** (v4.2) | – | Creator **activity heatmap**, source split and usual posting hours; **Rising this week** rail; admin ingest-per-day chart by source |
+| **Sources** (v4.2) | – | **Misskey/Sharkey/Firefish** adapter (+ auto-detection behind Mastodon-looking links), **Bluesky custom feeds & lists**, **OPML import** from any feed reader |
 
 ---
 
@@ -44,7 +49,7 @@ DEMO_ART=1 DB_PATH=./data/demo.db ADMIN_KEY=dev node server.js
 ### Tests
 
 ```bash
-npm test      # 132 tests: safety, SSRF, migration from a real v3 DB, adapters, engine resilience, HTTP API, proxy
+npm test      # 148 tests: safety, SSRF, migration from a real v3 DB, adapters, engine resilience, HTTP API, proxy
 ```
 
 ---
@@ -66,6 +71,7 @@ u/name
 https://www.redgifs.com/users/name
 https://linktr.ee/name          ← crawled for more accounts
 https://onlyfans.com/name       ← shown on their profile, never scraped
+@name@misskey.io                ← Misskey-family servers get their own adapter
 ```
 
 PRISM follows every public account, keeps their media on one profile, and reads their bios/link pages to find more accounts.
@@ -82,12 +88,13 @@ No system can enumerate "the whole web". PRISM grows its coverage three ways: **
 |---|---|---|---|
 | Reddit | community, user | – (optional `REDDIT_CLIENT_ID/SECRET`) | Falls back OAuth → www JSON → old.reddit → RSS → Arctic Shift archive. Galleries, video (+HLS), GIF→MP4, crossposts, RedGIFs links resolved. |
 | RedGIFs | user, search, niche | – | Public guest-token API. |
-| Bluesky | user, search | search: `BSKY_IDENTIFIER` + `BSKY_APP_PASSWORD` | Media-only author feeds; video via HLS. |
-| Mastodon | user, tag | – (optional token) | Any Mastodon-compatible server; some require sign-in for public timelines. |
+| Bluesky | user, search, feedgen, list | search: `BSKY_IDENTIFIER` + `BSKY_APP_PASSWORD` | Media-only author feeds; video via HLS. Paste a custom feed (`bsky.app/profile/…/feed/…`) or list (`…/lists/…`) link to follow a curated stream; its posters become creators like any community. |
+| Mastodon | user, tag | – (optional token) | Any Mastodon-compatible server; some require sign-in for public timelines. If a server turns out to run Misskey-family software (detected via NodeInfo), the feed is read through the Misskey API automatically. |
+| Misskey | user, tag | – | Misskey, Sharkey, Firefish, Iceshrimp, Catodon… Hashtags are searched on `MISSKEY_INSTANCES` (default `misskey.io`) or `tag@instance`. Paste `@name@host`, a `https://host/@name` link, or `misskey:name@host`. |
 | Lemmy | community, user | – | API v3 with v4 fallback. |
 | X | user, search | `X_BEARER_TOKEN` (search); users work keyless best-effort | Official API when a token is present. |
 | Telegram | user (public channel) | – | Public web preview (`t.me/s/<channel>`); channels that disable it report an error. |
-| RSS / Atom / JSON Feed | feed | – | Creator sites, Tumblr `/rss`, Mastodon `.rss`, Bluesky `/rss`, … |
+| RSS / Atom / JSON Feed | feed | – | Creator sites, Tumblr `/rss`, Mastodon `.rss`, Bluesky `/rss`, … Bulk import accepts **OPML** exported from any feed reader. |
 | Web page | page | – | OpenGraph, `<video>`, linked images; honours `robots.txt`. |
 | Link-in-bio | page | – | Discovers a creator's other accounts; never yields media itself. |
 
@@ -105,9 +112,18 @@ No system can enumerate "the whole web". PRISM grows its coverage three ways: **
 
 ---
 
+## Using PRISM
+
+- **Reels** (`#/reels`): one item at a time, full screen. Swipe or use ↑/↓ (J/K), Space to pause, M for sound, F to save, C to collect, Enter for details, double-tap to save. Filters: videos/all/photos and trending/shuffle/newest/top; every Explore search, smart feed, profile and the Following list has a *Play as Reels* button.
+- **Collections**: press C (or the bookmark) in the viewer or Reels to file anything into named boards; *Your library → Collections* shows covers and plays a board start to finish.
+- **Smart feeds**: in Explore, *Save as feed* stores the exact filter set. Home shows each one with how many items arrived since you last opened it.
+- **History & Hide seen**: everything opened in the viewer or Reels is remembered on the device (pause or clear it any time); *Hide seen* filters it out of Explore and Reels.
+- **Command palette**: Ctrl/⌘ K jumps to any page, creator, tag, community, collection or smart feed, and runs actions (theme, shuffle, surprise me). `g h/e/r/c/s` jump to Home/Explore/Reels/Creators/Saved; `x` opens something random; `?` lists every shortcut.
+- Everything personal (saved, collections, smart feeds, follows, history) stays in the browser; *Your library → Export* writes it to one file that *Import* merges back on any device.
+
 ## Admin console (`#/admin`)
 
-Overview (health, activity, queues) · Feeds (schedule, status, run-now, bulk import) · Creators (add, merge, block, **possible-duplicate review**) · Review queue · Reports · Media (bulk moderation) · Sources (config & breaker state) · Live log (SSE) · Blocklist · **Audit log** · Settings (**backups, config export/import**, maintenance).
+Overview (health, activity, **ingest per day by source**, queues) · Feeds (schedule, status, run-now, bulk import) · Creators (add, merge, block, **possible-duplicate review**) · Review queue · Reports · Media (bulk moderation) · Sources (config & breaker state) · Live log (SSE) · Blocklist · **Audit log** · Settings (**backups, config export/import**, maintenance).
 
 Set `ADMIN_KEY`. **Without it the admin is disabled in production** (open only in development, or with `ADMIN_OPEN=true`).
 
@@ -142,7 +158,7 @@ src/app.js                Express app: CSP, rate limits, age gate, routes
 src/config.js             all environment parsing
 src/db/                   schema.js (versioned migrations, FTS5) · repo.js (all SQL)
 src/lib/                  net (SSRF-safe client) · safety · scope · links · mediaurl · limiter · media-cache
-src/sources/              adapters: reddit redgifs bluesky mastodon lemmy x rss web(+linkinbio)
+src/sources/              adapters: reddit redgifs bluesky mastodon misskey lemmy x telegram rss web(+linkinbio)
 src/engine/               engine (scheduler/runs) · pipeline (per-item gates) · breaker · probe · creators · maintenance · events (SSE)
 src/routes/               public · admin · proxy (media + HLS)
 src/services/targets.js   add creators / feeds from pasted links
@@ -154,12 +170,12 @@ Adding a source = one file in `src/sources/` implementing `{ platform, kinds, is
 
 ## API (public)
 
-`GET /api/media` (`q, type, platform, community, creator, creators, tag, sort=recent|trending|top|random|oldest|relevance, since, page, limit, ids`) · `GET /api/media/:id` · `/related` · `POST /api/media/:id/like|view` · `GET /api/discover` · `GET /api/creators` · `/creators/:id` · `/creators/:id/media` · `GET /api/suggest?q=` · `GET /api/creators/:id/similar` · `GET /api/tags|communities|platforms|stats` · `POST /api/report` · `GET /api/proxy?url=` (Range supported) · `GET /api/hls?url=` · `GET /api/stream` (SSE) · `GET /api/health` · `GET /api/meta`.
+`GET /api/media` (`q, type, platform, community, creator, creators, tag, sort=recent|trending|top|random|oldest|relevance, since, after=<ISO time ingested>, page, limit, ids`) · `GET /api/media/:id` · `/related` · `POST /api/media/:id/like|view` · `GET /api/discover` · `GET /api/creators` · `/creators/:id` · `/creators/:id/media` · `GET /api/suggest?q=` · `GET /api/creators/:id/similar` · `GET /api/creators/:id/activity` · `GET /api/tags|communities|platforms|stats` · `POST /api/report` · `GET /api/proxy?url=` (Range supported) · `GET /api/hls?url=` · `GET /api/stream` (SSE) · `GET /api/health` · `GET /api/meta`.
 Content endpoints require the age cookie from `POST /api/age/confirm`. Admin endpoints live under `/api/admin/*` and require `x-admin-key` (or `Authorization: Bearer`).
 
 ---
 
 ## Verification status (please read)
 
-- **Tested:** 132 automated tests, including a migration from a real v3 schema, SSRF defences, safety rules, the engine's retry/backoff/breaker behaviour, the HTTP API and the media/HLS proxy. The UI was exercised in a real browser (desktop and phone-sized viewports, dark and light themes), including the viewer with keyboard navigation and deep links, WebM video playback, the age gate, creator add flow, and every admin tab. Touch-swipe gestures and HLS playback (hls.js) were not exercised in a browser.
-- **Not verified live:** the adapters' *network* behaviour. The development sandbox blocked outbound access to Reddit, RedGIFs, Bluesky, Mastodon, Lemmy and X, so each adapter was built against the platforms' documented response shapes and tested with fixtures and local mock servers — not against the live services. Expect to tune small details (field names, rate limits, headers) on first real run. The **Admin → Live log** and per-feed error text show exactly what each source returned. The keyless X route and unauthenticated Mastodon/Bluesky access depend on those services' current policies, which change.
+- **Tested:** 148 automated tests, including a migration from a real v3 schema, SSRF defences, safety rules, the engine's retry/backoff/breaker behaviour, the HTTP API and the media/HLS proxy. The UI was exercised in a real browser (desktop and phone-sized viewports, dark and light themes), including the viewer with keyboard navigation and deep links, WebM video playback, the age gate, creator add flow, and every admin tab. v4.2's Reels, collections, smart feeds, history/hide-seen, command palette, keyboard shortcuts, creator activity and admin charts were exercised end-to-end in Chromium (39 scripted checks, desktop and phone-sized, no console errors), and the v4.1 browser checks were re-run without regressions. Touch-swipe gestures and HLS playback (hls.js) were not exercised in a browser.
+- **Not verified live:** the adapters' *network* behaviour. The development sandbox blocked outbound access to Reddit, RedGIFs, Bluesky, Mastodon, Misskey, Lemmy, Telegram and X, so each adapter was built against the platforms' documented response shapes and tested with fixtures and local mock servers — not against the live services. Expect to tune small details (field names, rate limits, headers) on first real run. The **Admin → Live log** and per-feed error text show exactly what each source returned. The keyless X route and unauthenticated Mastodon/Bluesky access depend on those services' current policies, which change.

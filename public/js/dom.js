@@ -173,7 +173,8 @@ export function promptDialog({ title, sub, label, value = '', placeholder = '', 
     if (multiline) input.value = value;
     let m;
     const done = (v) => { resolve(v); m.close(); };
-    if (!multiline) input.addEventListener('keydown', (e) => { if (e.key === 'Enter') done(input.value.trim()); });
+    // preventDefault: focus returns to the opener on close, and an unhandled Enter would then "click" it again
+    if (!multiline) input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); done(input.value.trim()); } });
     m = openModal({
       title, sub, body: h('div', { class: 'field' }, label ? h('label', null, label) : null, input), onClose: () => resolve(null),
       actions: [h('button', { class: 'btn', onclick: () => done(null) }, 'Cancel'), h('button', { class: 'btn primary', onclick: () => done(input.value.trim()) }, confirmLabel)],

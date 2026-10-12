@@ -20,6 +20,23 @@ function activityChart(buckets) {
     h('div', { class: 'chart-axis' }, h('span', null, '48h ago'), h('span', null, `peak ${fmt.int(max)}/h`), h('span', null, 'now')));
 }
 
+/** Items ingested per day for the last 14 days, stacked by source. */
+function dailyChart(rows = []) {
+  const days = [];
+  const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+  for (let i = 13; i >= 0; i--) days.push(new Date(today.getTime() - i * 86400000).toISOString().slice(0, 10));
+  const byDay = new Map(days.map((d) => [d, []]));
+  for (const r of rows) if (byDay.has(r.day)) byDay.get(r.day).push(r);
+  const totals = days.map((d) => byDay.get(d).reduce((a, r) => a + r.n, 0));
+  const max = Math.max(1, ...totals);
+  const plats = [...new Set(rows.map((r) => r.platform))];
+  return h('div', null,
+    h('div', { class: 'chart stacked', role: 'img', 'aria-label': 'Items ingested per day by source, last 14 days' }, days.map((d, i) => h('div', { class: 'col', style: { height: `${Math.max(2, (totals[i] / max) * 100)}%` }, title: `${new Date(`${d}T12:00:00Z`).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}: ${fmt.int(totals[i])} items${byDay.get(d).length ? ` — ${byDay.get(d).map((r) => `${platformLabel(r.platform)} ${r.n}`).join(', ')}` : ''}` },
+      byDay.get(d).sort((a, b) => b.n - a.n).map((r) => h('div', { class: 'seg', style: { flexGrow: r.n, background: platformColor(r.platform) } }))))),
+    h('div', { class: 'chart-axis' }, h('span', null, '14 days ago'), h('span', null, `peak ${fmt.int(max)}/day`), h('span', null, 'today')),
+    plats.length ? h('div', { class: 'row wrap', style: { gap: '10px', marginTop: '10px', fontSize: '12px' } }, plats.map((p) => h('span', { class: 'row', style: { gap: '5px' } }, h('span', { class: 'dot', style: { background: platformColor(p), width: '8px', height: '8px', borderRadius: '50%', display: 'inline-block' } }), platformLabel(p)))) : null);
+}
+
 export async function render(root, { overview: first }) {
   let o = first;
   const holder = h('div', { class: 'adm-main', style: { gap: '20px' } });
@@ -65,6 +82,7 @@ export async function render(root, { overview: first }) {
       h('div', { class: 'grid-2' },
         h('div', { class: 'panel' }, h('h3', null, 'New items per hour'), activityChart(o.activity)),
         engineBox),
+      h('div', { class: 'panel' }, h('h3', null, 'Ingested per day, by source'), dailyChart(o.ingestDaily)),
       h('div', { class: 'grid-2' },
         h('div', { class: 'panel' }, h('h3', null, 'Library by source'),
           o.pubByPlatform.length ? h('div', { class: 'hbars' }, o.pubByPlatform.map((p) => h('div', { class: 'hbar', style: { '--c': platformColor(p.platform) } }, h('span', null, platformLabel(p.platform)), h('div', { class: 'track' }, h('div', { class: 'fill', style: { width: `${(p.count / maxPub) * 100}%` } })), h('span', { class: 'n' }, fmt.num(p.count))))) : h('p', { class: 'muted' }, 'No published items yet.')),

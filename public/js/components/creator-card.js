@@ -2,11 +2,12 @@ import { h, icon, proxied, fmt, avatar } from '../dom.js';
 import { platformLabel, platformColor, follows } from '../store.js';
 import { href } from '../router.js';
 
-export function creatorCard(c, { mini = false } = {}) {
+export function creatorCard(c, { mini = false, badge = null } = {}) {
   const thumbs = (c.previews || []).slice(0, 3);
   while (thumbs.length < 3) thumbs.push(null);
   const isNew = follows.has(c.id) && c.last_media_at && follows.seen(c.id) && c.last_media_at > follows.seen(c.id);
-  return h('a', { class: `creator-card${mini ? ' mini' : ''}`, href: href(`/creator/${c.id}`), 'aria-label': c.display_name || c.handle },
+  return h('a', { class: `creator-card${mini ? ' mini' : ''}`, href: href(`/creator/${c.id}`), 'aria-label': c.display_name || c.handle, style: badge ? { position: 'relative' } : null },
+    badge ? h('span', { class: 'rise' }, icon('trend', 'sm'), badge) : null,
     h('div', { class: 'creator-thumbs' }, thumbs.map((t) => h('div', { style: t ? { backgroundImage: `url("${proxied(t)}")` } : {} }))),
     h('div', { class: 'creator-body' },
       avatar(c, 56),

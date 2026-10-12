@@ -6,6 +6,47 @@ import { createFeed } from '../components/feed.js';
 import { creatorCard } from '../components/creator-card.js';
 import { openReport } from '../components/report.js';
 
+/** Year-long posting heatmap, source split and usual posting hours (UTC → local). */
+function activityPanel(a) {
+  const total = a.platforms.reduce((n, p) => n + p.n, 0);
+  if (!total) return null;
+  const counts = new Map(a.days.map((d) => [d.day, d.n]));
+  const max = Math.max(1, ...a.days.map((d) => d.n));
+  const level = (n) => (!n ? 0 : n >= max * 0.75 ? 4 : n >= max * 0.5 ? 3 : n >= max * 0.25 ? 2 : 1);
+  const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+  const start = new Date(today.getTime() - 52 * 7 * 86400000);
+  start.setUTCDate(start.getUTCDate() - start.getUTCDay()); // align columns to weeks starting Sunday
+  const cells = [];
+  for (let t = start.getTime(); t <= today.getTime(); t += 86400000) {
+    const key = new Date(t).toISOString().slice(0, 10);
+    const n = counts.get(key) || 0;
+    cells.push(h('i', { dataset: { l: String(level(n)) }, title: `${new Date(t).toLocaleDateString([], { dateStyle: 'medium', timeZone: 'UTC' })}: ${n} post${n === 1 ? '' : 's'}` }));
+  }
+  const yearTotal = a.days.reduce((n, d) => n + d.n, 0);
+  const activeDays = a.days.length;
+
+  // hours are stored in UTC; shift to the viewer's local clock
+  const offset = -new Date().getTimezoneOffset() / 60;
+  const hours = Array(24).fill(0);
+  for (const r of a.hours) hours[(((r.hour + offset) % 24) + 24) % 24 | 0] += r.n;
+  const hMax = Math.max(1, ...hours);
+  const peak = hours.indexOf(Math.max(...hours));
+  const fmtHour = (x) => new Date(2000, 0, 1, x).toLocaleTimeString([], { hour: 'numeric' });
+
+  const heat = h('div', { class: 'heatmap', role: 'img', 'aria-label': `${yearTotal} posts on ${activeDays} days in the last year` }, cells);
+  requestAnimationFrame(() => { heat.scrollLeft = heat.scrollWidth; }); // newest weeks visible on small screens
+  return h('div', { class: 'activity' },
+    h('div', { class: 'panel-lite' }, h('h4', null, 'Posting activity'), heat,
+      h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '8px' } }, `${fmt.int(yearTotal)} posts on ${activeDays} day${activeDays === 1 ? '' : 's'} in the last year${a.range && a.range.first ? ` · first seen ${fmt.ago(a.range.first)}` : ''}`)),
+    h('div', { class: 'panel-lite' },
+      h('h4', null, 'Where they post'),
+      h('div', { class: 'split' }, a.platforms.map((p) => h('i', { style: { width: `${(p.n / total) * 100}%`, background: platformColor(p.platform) }, title: `${platformLabel(p.platform)}: ${p.n}` }))),
+      h('div', { class: 'row wrap', style: { gap: '4px 12px', fontSize: '12.5px', marginBottom: '14px' } }, a.platforms.map((p) => h('span', { class: 'row', style: { gap: '5px' } }, h('span', { style: { width: '8px', height: '8px', borderRadius: '50%', background: platformColor(p.platform), display: 'inline-block' } }), `${platformLabel(p.platform)} ${Math.round((p.n / total) * 100)}%`))),
+      h('h4', null, 'Usually posts around'),
+      h('div', { class: 'hours', role: 'img', 'aria-label': `Most posts around ${fmtHour(peak)}` }, hours.map((n, i) => h('i', { style: { height: `${Math.max(3, (n / hMax) * 100)}%` }, title: `${fmtHour(i)}: ${n}` }))),
+      h('div', { class: 'chart-axis', style: { display: 'flex', justifyContent: 'space-between', color: 'var(--muted)', fontSize: '11.5px', marginTop: '6px' } }, h('span', null, fmtHour(0)), h('b', { style: { color: 'var(--text)' } }, `peak ${fmtHour(peak)}`), h('span', null, fmtHour(23)))));
+}
+
 export async function creator(root, { params, query }) {
   root.replaceChildren(h('div', { class: 'skeleton', style: { height: '260px' } }));
   let c;
@@ -38,6 +79,7 @@ export async function creator(root, { params, query }) {
     avatar(c, 112),
     h('div', { class: 'profile-info' }, h('h1', null, c.display_name || c.handle, c.verified ? icon('verified', 'fill') : null), h('div', { class: 'creator-handle' }, `@${c.handle}`)),
     h('div', { class: 'profile-actions' }, followBtn,
+      c.media_count ? h('a', { class: 'btn', href: href('/reels', { creator: c.id, sort: 'recent', type: 'all' }), title: 'Watch everything full screen' }, icon('film', 'sm'), 'Reels') : null,
       h('button', { class: 'btn icon', 'aria-label': 'Copy profile link', title: 'Copy link', onclick: async () => toast((await copyText(location.href)) ? 'Link copied' : 'Could not copy') }, icon('share')),
       h('button', { class: 'btn icon', 'aria-label': 'Report', title: 'Report', onclick: () => openReport({ creatorId: c.id, title: 'Report this creator' }) }, icon('flag'))));
 
@@ -55,7 +97,12 @@ export async function creator(root, { params, query }) {
     h('div', { style: { height: '22px' } }),
     h('div', { class: 'row', style: { alignItems: 'flex-end' } }, h('div', { class: 'grow' }, tabs), sortSel),
     feed.el);
-  // "Similar creators" loads after the page is usable; a failure just means no rail.
+  // Activity and "Similar creators" load after the page is usable; a failure just means they are missing.
+  get(`/api/creators/${c.id}/activity`).then((a) => {
+    const panel = root.isConnected && activityPanel(a);
+    const anchor = root.querySelector('.tabs');
+    if (panel && anchor) anchor.closest('.row').before(panel, h('div', { style: { height: '22px' } }));
+  }).catch(() => {});
   get(`/api/creators/${c.id}/similar`, { limit: 12 }).then((list) => {
     if (!list.length || !root.isConnected) return;
     const anchor = root.querySelector('.tabs');

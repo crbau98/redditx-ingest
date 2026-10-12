@@ -1,8 +1,9 @@
-import { h, icon, $, toast, fmt } from './dom.js';
+import { h, icon, $, toast, fmt, openModal } from './dom.js';
 import { get, post, onAgeRequired, streamPublic, ApiError } from './api.js';
 import { parse, href, navigate, matchRoute, routeKey } from './router.js';
 import { prefs, favorites, follows, platforms, bus } from './store.js';
 import { syncFromUrl, isOpen } from './components/lightbox.js';
+import { openPalette, paletteOpen, surpriseMe } from './components/palette.js';
 import { openTakedownForm } from './components/report.js';
 import { attachSuggest } from './components/suggest.js';
 import { home } from './views/home.js';
@@ -11,10 +12,12 @@ import { creators } from './views/creators.js';
 import { creator } from './views/creator.js';
 import { saved } from './views/saved.js';
 import { browse } from './views/browse.js';
+import { reels } from './views/reels.js';
 
 const routes = [
   { pattern: '/', view: home, nav: 'home' },
   { pattern: '/explore', view: explore, nav: 'explore' },
+  { pattern: '/reels', view: reels, nav: 'reels' },
   { pattern: '/browse', view: browse, nav: 'browse' },
   { pattern: '/creators', view: creators, nav: 'creators' },
   { pattern: '/creator/:id', view: creator, nav: 'creators' },
@@ -52,8 +55,35 @@ function ensureAgeGate() {
 onAgeRequired(ensureAgeGate);
 
 /* ------------------------------------------------------------------ shell */
-// 5th field: desktop-only (the phone tab bar keeps four entries)
-const NAV = [['home', '/', 'Home', 'home'], ['explore', '/explore', 'Explore', 'compass'], ['browse', '/browse', 'Browse', 'layers', true], ['creators', '/creators', 'Creators', 'users'], ['saved', '/saved', 'Saved', 'heart']];
+// 5th field: desktop-only (the phone tab bar keeps five entries)
+const NAV = [['home', '/', 'Home', 'home'], ['explore', '/explore', 'Explore', 'compass'], ['reels', '/reels', 'Reels', 'film'], ['browse', '/browse', 'Browse', 'layers', true], ['creators', '/creators', 'Creators', 'users'], ['saved', '/saved', 'Saved', 'heart']];
+
+/* --------------------------------------------------------- global shortcuts */
+function showShortcuts() {
+  const rows = [['Ctrl / ⌘ + K', 'Command palette — jump anywhere, run actions'], ['/', 'Search'], ['?', 'This help'], ['G then H / E / R / C / S', 'Go to Home, Explore, Reels, Creators, Saved'], ['X', 'Surprise me (open something random)'],
+    ['In the viewer', ''], ['← / →  (J / K)', 'Previous / next'], ['F · C', 'Save · add to collection'], ['S · I · M', 'Slideshow · details · mute'],
+    ['In Reels', ''], ['↑ / ↓  (K / J)', 'Previous / next'], ['Space · M', 'Pause · sound'], ['F · C · Enter', 'Save · collect · open details'], ['Double-tap', 'Save']];
+  const m = openModal({ title: 'Keyboard shortcuts', wide: true, body: h('dl', { class: 'kv', style: { gridTemplateColumns: 'auto 1fr' } }, rows.map(([k, d]) => (d
+    ? [h('dt', null, h('kbd', { class: 'kbd' }, k)), h('dd', { style: { textAlign: 'left' } }, d)]
+    : [h('dt', { style: { gridColumn: '1 / -1', marginTop: '10px', fontWeight: 700, color: 'var(--text)' } }, k)]))), actions: [h('button', { class: 'btn primary', onclick: () => m.close() }, 'Got it')] });
+}
+
+function wireShortcuts() {
+  let g = 0; // timestamp of a pending "g" prefix
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openPalette(); return; }
+    if (e.metaKey || e.ctrlKey || e.altKey || isOpen() || paletteOpen() || $('#modal-root').children.length || e.target.closest('input, textarea, select, [contenteditable]')) return;
+    if (Date.now() - g < 1200) {
+      const dest = { h: '/', e: '/explore', r: '/reels', c: '/creators', s: '/saved', b: '/browse', a: '/admin' }[e.key.toLowerCase()];
+      g = 0;
+      if (dest) { e.preventDefault(); navigate(dest); }
+      return;
+    }
+    if (e.key === 'g' || e.key === 'G') { g = Date.now(); return; }
+    if (e.key === '?') { e.preventDefault(); showShortcuts(); return; }
+    if ((e.key === 'x' || e.key === 'X') && !document.body.classList.contains('reels-mode')) { e.preventDefault(); surpriseMe(); }
+  });
+}
 
 function buildShell() {
   const app = $('#app');
@@ -71,6 +101,7 @@ function buildShell() {
   const paintTheme = () => themeBtn.replaceChildren(icon(document.documentElement.dataset.theme === 'light' ? 'moon' : 'sun'));
   themeBtn.addEventListener('click', () => { prefs.theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'; paintTheme(); });
   paintTheme();
+  bus.on('theme', paintTheme);
 
   const savedBadge = h('span', { class: 'badge', style: { display: 'none', padding: '0 7px' } });
   const paintBadge = () => { const n = favorites.count(); savedBadge.textContent = n > 99 ? '99+' : n; savedBadge.style.display = n ? '' : 'none'; };
@@ -80,15 +111,16 @@ function buildShell() {
     h('a', { class: 'brand', href: href('/'), 'aria-label': 'PRISM home' }, icon('logo'), h('span', null, 'PRISM')),
     h('nav', { class: 'nav', 'aria-label': 'Primary' }, NAV.map(([key, path, label, ic]) => h('a', { href: href(path), dataset: { nav: key } }, icon(ic, 'sm'), label, key === 'saved' ? savedBadge : null))),
     h('div', { class: 'search' }, icon('search'), searchInput, h('span', { class: 'kbd hide-mobile' }, '/')),
-    h('div', { class: 'appbar-actions' }, themeBtn, h('a', { class: 'btn icon ghost hide-mobile', href: href('/admin'), 'aria-label': 'Admin', title: 'Admin' }, icon('sliders'))));
+    h('div', { class: 'appbar-actions' }, h('button', { class: 'btn icon ghost', 'aria-label': 'Command palette', title: 'Command palette (Ctrl/⌘ K)', onclick: openPalette }, icon('command')), themeBtn, h('a', { class: 'btn icon ghost hide-mobile', href: href('/admin'), 'aria-label': 'Admin', title: 'Admin' }, icon('sliders'))));
 
   const main = h('main', { id: 'main', tabindex: '-1' });
   const footer = h('footer', { class: 'footer' },
     h('span', null, 'PRISM — adults only (18+)'),
     h('a', { href: href('/browse') }, 'Browse'),
+    h('button', { onclick: showShortcuts }, 'Keyboard shortcuts'),
     h('button', { onclick: openTakedownForm }, 'Report content / takedown'),
     h('a', { href: href('/admin') }, 'Admin'));
-  const bottom = h('nav', { class: 'bottomnav', 'aria-label': 'Primary' }, NAV.filter((n) => !n[4]).map(([key, path, label, ic]) => h('a', { href: href(path), dataset: { nav: key } }, icon(ic, 'lg'), label)));
+  const bottom = h('nav', { class: 'bottomnav five', 'aria-label': 'Primary' }, NAV.filter((n) => !n[4]).map(([key, path, label, ic]) => h('a', { href: href(path), dataset: { nav: key } }, icon(ic, 'lg'), label)));
   const fab = h('button', { class: 'fab', hidden: true, 'aria-label': 'Back to top', onclick: () => window.scrollTo({ top: 0, behavior: 'smooth' }) }, icon('up'));
   window.addEventListener('scroll', () => { fab.hidden = window.scrollY < 900; }, { passive: true });
 
@@ -161,6 +193,7 @@ async function boot() {
   if (meta.ageGate && meta.ageGate.enforce && !meta.ageGate.verified) await ensureAgeGate();
 
   const shell = buildShell();
+  wireShortcuts();
   window.addEventListener('hashchange', () => render(shell));
   await render(shell);
   wireLiveUpdates(shell);

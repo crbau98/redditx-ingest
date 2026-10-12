@@ -14,7 +14,7 @@ export async function render(root) {
   const sel = (key, opts) => h('select', { class: 'select sm', style: { width: 'auto' }, onchange: (e) => set({ [key]: e.target.value, page: 0 }) }, opts.map(([v, l]) => h('option', { value: v, selected: f[key] === v }, l)));
   const host = h('div', { class: 'stack' });
   root.append(pageHead('Media', 'Browse everything in the library and moderate in bulk.'),
-    h('div', { class: 'toolbar' }, search, sel('state', [['published', 'Published'], ['review', 'In review'], ['hidden', 'Hidden'], ['removed', 'Removed']]), sel('type', [['', 'Photos & videos'], ['image', 'Photos'], ['video', 'Videos']]), sel('platform', [['', 'All sources'], ...['reddit', 'redgifs', 'bluesky', 'mastodon', 'lemmy', 'x', 'telegram', 'rss', 'web'].map((p) => [p, platformLabel(p) || p])])), host);
+    h('div', { class: 'toolbar' }, search, sel('state', [['published', 'Published'], ['review', 'In review'], ['hidden', 'Hidden'], ['removed', 'Removed']]), sel('type', [['', 'Photos & videos'], ['image', 'Photos'], ['video', 'Videos']]), sel('platform', [['', 'All sources'], ...['reddit', 'redgifs', 'bluesky', 'mastodon', 'misskey', 'lemmy', 'x', 'telegram', 'rss', 'web'].map((p) => [p, platformLabel(p) || p])])), host);
 
   async function load() {
     const r = await adminGet('/media', { state: f.state, platform: f.platform, type: f.type, q: f.q, page: f.page, limit: 48 });

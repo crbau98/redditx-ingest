@@ -53,6 +53,8 @@ function mediaFilters(q) {
     sort, seed: q.seed,
     since: ['day', 'week', 'month', 'year'].includes(q.since) ? q.since : undefined,
     level: q.level === 'explicit' || q.level === 'suggestive' ? q.level : undefined,
+    // "new since" for saved searches: an ISO timestamp, normalised so it compares correctly as text
+    after: typeof q.after === 'string' && !Number.isNaN(Date.parse(q.after)) ? new Date(q.after).toISOString() : undefined,
   };
 }
 
@@ -63,6 +65,7 @@ const discoverCached = ttl(30000, () => {
     ...d,
     trending: d.trending.map(publicMedia), freshVideos: d.freshVideos.map(publicMedia),
     topCreators: d.topCreators.map(publicCreator), newCreators: d.newCreators.map(publicCreator),
+    rising: d.rising.map((c) => ({ ...publicCreator(c), week_count: c.week_count })),
   };
 });
 const tagsCached = ttl(60000, () => repo.media.tags(120, 1));
@@ -171,6 +174,12 @@ router.get('/creators/:id/similar', (req, res) => {
   const c = repo.creators.get(req.params.id);
   if (!c || c.status !== 'active') return res.status(404).json({ error: 'Not found' });
   res.json(repo.creators.similar(c.id, repo.clampInt(req.query.limit, 1, 24, 12)).map(publicCreator));
+});
+
+router.get('/creators/:id/activity', (req, res) => {
+  const c = repo.creators.get(req.params.id);
+  if (!c || c.status !== 'active' || c.scope === 'excluded') return res.status(404).json({ error: 'Not found' });
+  res.json(repo.creators.activity(c.id));
 });
 
 router.get('/tags', (req, res) => res.json(tagsCached().slice(0, repo.clampInt(req.query.limit, 1, 200, 100))));

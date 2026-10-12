@@ -3,6 +3,8 @@
  * Bluesky adapter (AT Protocol).
  *
  *   user   - public AppView getAuthorFeed (no credentials needed)
+ *   feedgen - a custom feed (feed generator), at://<actor>/app.bsky.feed.generator/<rkey>
+ *   list    - a curated list of accounts, at://<actor>/app.bsky.graph.list/<rkey>
  *   search - app.bsky.feed.searchPosts. The public AppView now requires an
  *            authenticated session for search, so this kind needs
  *            BSKY_IDENTIFIER + BSKY_APP_PASSWORD (an app password, not your
@@ -90,6 +92,20 @@ function parsePostView(entry) {
   }));
 }
 
+const didCache = new Map();
+/** at://handle/... -> at://did:plc:.../... (the AppView wants DIDs in feed/list URIs). */
+async function resolveUri(uri) {
+  const m = String(uri).match(/^at:\/\/([^/]+)\/(.+)$/);
+  if (!m) throw new Error('Expected an at:// URI');
+  if (m[1].startsWith('did:')) return uri;
+  if (!didCache.has(m[1])) {
+    const r = await http.json(`${base}/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(m[1])}`);
+    if (!r.did) throw new Error(`Could not resolve ${m[1]}`);
+    didCache.set(m[1], r.did);
+  }
+  return `at://${didCache.get(m[1])}/${m[2]}`;
+}
+
 async function fetchProfile(actor) {
   try {
     const p = await http.json(`${base}/xrpc/app.bsky.actor.getProfile?actor=${encodeURIComponent(actor)}`);
@@ -104,9 +120,9 @@ module.exports = {
   platform: 'bluesky',
   label: 'Bluesky',
   color: '#0085ff',
-  kinds: ['user', 'search'],
-  intervalMin: { user: 180, search: 120 },
-  parsePostView, mediaOf,
+  kinds: ['user', 'search', 'feedgen', 'list'],
+  intervalMin: { user: 180, search: 120, feedgen: 90, list: 120 },
+  parsePostView, mediaOf, resolveUri,
   isConfigured(kind) {
     if (kind === 'search') {
       return config.creds.bskyIdentifier && config.creds.bskyPassword ? { ok: true } : { ok: false, note: 'Search needs BSKY_IDENTIFIER + BSKY_APP_PASSWORD' };
@@ -120,6 +136,9 @@ module.exports = {
     let newest = cursor.newestAt || null;
     let next = null;
     const maxPages = cursor.newestAt ? 2 : 4;
+    // Custom feeds are ranked, not chronological: never stop early on an "old" post, rely on dedupe instead.
+    const ranked = feed.kind === 'feedgen';
+    const uri = feed.kind === 'feedgen' || feed.kind === 'list' ? await resolveUri(feed.target) : null;
 
     for (let page = 0; page < maxPages; page++) {
       if (ctx.aborted()) break;
@@ -128,6 +147,10 @@ module.exports = {
         const jwt = await sessionToken();
         json = await http.json(`${config.baseUrls.bskyPds}/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(feed.target)}&sort=latest&limit=50${next ? `&cursor=${encodeURIComponent(next)}` : ''}`, { headers: { authorization: `Bearer ${jwt}` } });
         json.feed = (json.posts || []).map((post) => ({ post }));
+      } else if (feed.kind === 'feedgen') {
+        json = await http.json(`${base}/xrpc/app.bsky.feed.getFeed?feed=${encodeURIComponent(uri)}&limit=50${next ? `&cursor=${encodeURIComponent(next)}` : ''}`);
+      } else if (feed.kind === 'list') {
+        json = await http.json(`${base}/xrpc/app.bsky.feed.getListFeed?list=${encodeURIComponent(uri)}&limit=50${next ? `&cursor=${encodeURIComponent(next)}` : ''}`);
       } else {
         json = await http.json(`${base}/xrpc/app.bsky.feed.getAuthorFeed?actor=${encodeURIComponent(feed.target)}&filter=posts_with_media&limit=50&includePins=false${next ? `&cursor=${encodeURIComponent(next)}` : ''}`);
       }
@@ -135,7 +158,7 @@ module.exports = {
       for (const entry of json.feed || []) {
         for (const it of parsePostView(entry)) {
           if (it.postedAt && (!newest || it.postedAt > newest)) newest = it.postedAt;
-          if (cursor.newestAt && it.postedAt && it.postedAt <= cursor.newestAt && !ctx.force) { reachedKnown = true; continue; }
+          if (!ranked && cursor.newestAt && it.postedAt && it.postedAt <= cursor.newestAt && !ctx.force) { reachedKnown = true; continue; }
           items.push({ ...it, query: feed.kind === 'search' ? feed.target : null });
         }
       }
@@ -145,6 +168,6 @@ module.exports = {
 
     let profile;
     if (feed.kind === 'user' && (ctx.needProfile || !cursor.newestAt)) profile = await fetchProfile(feed.target);
-    return { items, cursor: newest ? { newestAt: newest } : undefined, profile, via: feed.kind === 'search' ? 'search' : 'appview' };
+    return { items, cursor: newest ? { newestAt: newest } : undefined, profile, via: feed.kind === 'search' ? 'search' : feed.kind === 'user' ? 'appview' : `appview-${feed.kind}` };
   },
 };

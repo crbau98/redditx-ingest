@@ -1,11 +1,39 @@
 import { h, icon, fmt, emptyState } from '../dom.js';
 import { get } from '../api.js';
 import { href, navigate } from '../router.js';
-import { platformLabel, platformColor, follows } from '../store.js';
+import { platformLabel, platformColor, follows, searches } from '../store.js';
 import { mediaCard } from '../components/card.js';
 import { creatorCard } from '../components/creator-card.js';
 import { createFeed } from '../components/feed.js';
 import { openLightbox } from '../components/lightbox.js';
+import { surpriseMe } from '../components/palette.js';
+
+/** Map a saved Explore search onto /api/media parameters. */
+function mediaQuery(q) {
+  const out = { ...q };
+  delete out.following;
+  if (out.sort === 'relevance') delete out.sort;
+  if (q.following) {
+    const ids = follows.list().map((c) => c.id).slice(0, 100);
+    out.creators = ids.length ? ids.join(',') : '00000000-0000-0000-0000-000000000000';
+  }
+  return out;
+}
+
+/** Saved searches with a live "N new since your last visit" count each. */
+function smartFeeds() {
+  const list = searches.list();
+  if (!list.length) return null;
+  const row = h('div', { class: 'smart-row' }, list.map((s) => {
+    const n = h('span', { class: 'zero' }, '…');
+    const chip = h('a', { class: 'smart-chip', href: href('/explore', s.query), onclick: () => searches.markSeen(s.id) }, icon('bookmark', 'sm'), s.name, n);
+    get('/api/media', { ...mediaQuery(s.query), after: s.seen, limit: 1 })
+      .then((r) => { if (r.total) n.replaceWith(h('span', { class: 'new' }, `${fmt.num(r.total)} new`)); else n.textContent = 'up to date'; })
+      .catch(() => { n.textContent = ''; });
+    return chip;
+  }));
+  return h('section', { class: 'section' }, sectionHead('bookmark', 'Your smart feeds', 'Saved searches, with what’s new since you last looked', { href: href('/saved', { tab: 'feeds' }), label: 'Manage' }), row);
+}
 
 function rail(items, { open }) {
   return h('div', { class: 'rail' }, items.map((it) => mediaCard(it, { open, compact: false })));
@@ -36,6 +64,10 @@ export async function home(root) {
     h('h1', null, 'Discover male creators ', h('em', null, 'across the web')),
     h('p', { class: 'lead' }, 'One feed for photos and videos from creators on Reddit, RedGIFs, Bluesky, Mastodon, X and more — fresh, searchable, and organised around the people who make it.'),
     h('div', { class: 'hero-search' }, icon('search', 'lg'), input, h('button', { class: 'btn primary', onclick: go }, 'Search')),
+    h('div', { class: 'hero-actions' },
+      h('a', { class: 'btn', href: href('/reels') }, icon('film', 'sm'), 'Watch Reels'),
+      h('button', { class: 'btn', onclick: surpriseMe }, icon('shuffle', 'sm'), 'Surprise me'),
+      h('a', { class: 'btn ghost hide-mobile', href: href('/browse') }, icon('layers', 'sm'), 'Browse everything')),
     h('div', { class: 'hero-stats' },
       h('div', null, h('b', { class: 'num' }, fmt.num(s.total)), h('span', null, 'items')),
       h('div', null, h('b', { class: 'num' }, fmt.num(s.creators)), h('span', null, 'creators')),
@@ -61,12 +93,18 @@ export async function home(root) {
 
   const open = (list) => (item) => openLightbox(list, Math.max(0, list.findIndex((x) => x.id === item.id)));
   const parts = [hero];
+  const smart = smartFeeds();
+  if (smart) parts.push(smart);
 
   if (fromFollowed.length) {
     parts.push(h('section', { class: 'section' }, sectionHead('heart', 'From creators you follow', 'Latest from the people you follow on this device', { href: href('/explore', { following: '1' }), label: 'See all' }), rail(fromFollowed, { open: open(fromFollowed) })));
   }
   if (data.trending.length) {
     parts.push(h('section', { class: 'section' }, sectionHead('flame', 'Trending now', 'What people are watching and saving', { href: href('/explore', { sort: 'trending' }), label: 'See all' }), rail(data.trending, { open: open(data.trending) })));
+  }
+  if (data.rising && data.rising.length) {
+    parts.push(h('section', { class: 'section' }, sectionHead('trend', 'Rising this week', 'Creators posting more — and getting more love — than usual', { href: href('/creators', { sort: 'recent' }), label: 'All creators' }),
+      h('div', { class: 'rail' }, data.rising.map((c) => creatorCard(c, { mini: true, badge: `+${c.week_count} this week` })))));
   }
   if (data.freshVideos.length) {
     parts.push(h('section', { class: 'section' }, sectionHead('video', 'Fresh videos', 'Newest clips from across all sources', { href: href('/explore', { type: 'video', sort: 'recent' }), label: 'More videos' }), rail(data.freshVideos, { open: open(data.freshVideos) })));

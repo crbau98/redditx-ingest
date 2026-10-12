@@ -58,6 +58,10 @@ const NOT_MASTODON_HOSTS = [
   'reddit.com', 'tumblr.com', 'linktr.ee', 'patreon.com',
 ];
 
+/** Misskey-family servers usually say so in their name; anything else is treated as Mastodon-compatible
+ * (and the Mastodon adapter still detects Misskey via NodeInfo at fetch time). */
+const isMisskeyHost = (h) => /(^|\.)(misskey|sharkey|firefish|iceshrimp|calckey|catodon)[.-]|^(misskey|sharkey)\./i.test(h);
+
 const host = (h) => String(h || '').toLowerCase().replace(/^www\./, '');
 const matches = (h, d) => h === d || h.endsWith('.' + d);
 
@@ -80,8 +84,16 @@ function parseProfile(input, hint = {}) {
   if (m) return out('reddit', 'community', m[1].toLowerCase(), { label: `r/${m[1]}` });
   m = raw.match(/^\/?u(?:ser)?\/([A-Za-z0-9_-]{3,40})\/?$/);
   if (m) return out('reddit', 'user', m[1], { label: `u/${m[1]}` });
+  m = raw.match(/^misskey:@?([A-Za-z0-9_]+)@([A-Za-z0-9.-]+\.[a-z]{2,})$/i);
+  if (m) return out('misskey', 'user', `${m[1]}@${m[2].toLowerCase()}`, { label: `@${m[1]}@${m[2]}` });
   m = raw.match(/^@?([A-Za-z0-9_]+)@([A-Za-z0-9.-]+\.[a-z]{2,})$/i);
-  if (m) return out('mastodon', 'user', `${m[1]}@${m[2].toLowerCase()}`, { label: `@${m[1]}@${m[2]}` });
+  if (m) {
+    const inst = m[2].toLowerCase();
+    const pl = hint.platform === 'misskey' || isMisskeyHost(inst) ? 'misskey' : 'mastodon';
+    return out(pl, 'user', `${m[1]}@${inst}`, { label: `@${m[1]}@${m[2]}` });
+  }
+  m = raw.match(/^at:\/\/([^/\s]+)\/app\.bsky\.(feed\.generator|graph\.list)\/([A-Za-z0-9._~-]+)$/);
+  if (m) return out('bluesky', m[2] === 'feed.generator' ? 'feedgen' : 'list', raw, { label: `${m[2] === 'feed.generator' ? 'Feed' : 'List'} ${m[3]} by ${m[1]}` });
   m = raw.match(/^@?([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\.(?:social|app|com|net|org|xyz|blog|dev|me|io|lol|gay|lgbt))$/i);
   if (m && !/^https?:/i.test(raw) && (hint.platform === 'bluesky' || /\.bsky\.|\.social$|\.xyz$|\.gay$/i.test(m[1]))) {
     return out('bluesky', 'user', m[1].toLowerCase(), { label: `@${m[1]}` });
@@ -116,7 +128,13 @@ function parseProfile(input, hint = {}) {
   }
 
   if (h === 'bsky.app') {
-    if (parts[0] === 'profile' && parts[1]) return out('bluesky', 'user', parts[1].toLowerCase(), { label: `@${parts[1]}`, url: url.href });
+    if (parts[0] === 'profile' && parts[1] && parts[2] === 'feed' && parts[3]) {
+      return out('bluesky', 'feedgen', `at://${parts[1].toLowerCase()}/app.bsky.feed.generator/${parts[3]}`, { label: `Feed ${parts[3]} by @${parts[1]}`, url: url.href });
+    }
+    if (parts[0] === 'profile' && parts[1] && parts[2] === 'lists' && parts[3]) {
+      return out('bluesky', 'list', `at://${parts[1].toLowerCase()}/app.bsky.graph.list/${parts[3]}`, { label: `List ${parts[3]} by @${parts[1]}`, url: url.href });
+    }
+    if (parts[0] === 'profile' && parts[1] && parts.length <= 2) return out('bluesky', 'user', parts[1].toLowerCase(), { label: `@${parts[1]}`, url: url.href });
     return null;
   }
 
@@ -152,6 +170,7 @@ function parseProfile(input, hint = {}) {
   if (!NOT_MASTODON_HOSTS.some((d) => matches(h, d))) {
     if (parts[0] && /^@[A-Za-z0-9_.-]+$/.test(parts[0]) && parts.length === 1) {
       const user = parts[0].slice(1);
+      if (isMisskeyHost(h)) return out('misskey', 'user', `${user}@${h}`, { label: `@${user}@${h}`, url: url.href });
       return out('mastodon', 'user', `${user}@${h}`, { label: `@${user}@${h}`, url: url.href });
     }
     if (parts[0] === 'users' && parts[1] && parts.length === 2) {
@@ -193,7 +212,12 @@ function profileUrl(platform, kind, target) {
   switch (platform) {
     case 'reddit': return kind === 'community' ? `https://www.reddit.com/r/${target}` : `https://www.reddit.com/user/${target}`;
     case 'x': return `https://x.com/${target}`;
-    case 'bluesky': return `https://bsky.app/profile/${target}`;
+    case 'bluesky': {
+      const m = String(target).match(/^at:\/\/([^/]+)\/app\.bsky\.(feed\.generator|graph\.list)\/(.+)$/);
+      if (m) return `https://bsky.app/profile/${m[1]}/${m[2] === 'feed.generator' ? 'feed' : 'lists'}/${m[3]}`;
+      return `https://bsky.app/profile/${target}`;
+    }
+    case 'misskey': { const [u, i] = String(target).split('@'); return i ? `https://${i}/@${u}` : null; }
     case 'redgifs': return kind === 'niche' ? `https://www.redgifs.com/niches/${target}` : `https://www.redgifs.com/users/${target}`;
     case 'telegram': return `https://t.me/${target}`;
     case 'mastodon': { const [u, i] = String(target).split('@'); return i ? `https://${i}/@${u}` : null; }
@@ -203,4 +227,4 @@ function profileUrl(platform, kind, target) {
   }
 }
 
-module.exports = { parseProfile, extractLinks, profileUrl, EXTERNAL, LINKINBIO };
+module.exports = { parseProfile, extractLinks, profileUrl, isMisskeyHost, EXTERNAL, LINKINBIO };

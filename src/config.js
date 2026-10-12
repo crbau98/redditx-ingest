@@ -66,6 +66,7 @@ module.exports = {
   // Federated sources: instances that adapters may talk to by default.
   mastodonInstances: list(env.MASTODON_INSTANCES, ['mastodon.social']),
   lemmyInstances: list(env.LEMMY_INSTANCES, ['lemmynsfw.com']),
+  misskeyInstances: list(env.MISSKEY_INSTANCES, ['misskey.io']),
 
   // Base-URL overrides so adapters can be pointed at a mock in tests.
   baseUrls: {
