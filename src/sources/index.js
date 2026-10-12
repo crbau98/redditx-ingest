@@ -8,6 +8,7 @@ const adapters = [
   require('./redgifs'),
   require('./bluesky'),
   require('./mastodon'),
+  require('./misskey'),
   require('./lemmy'),
   require('./x'),
   require('./telegram'),

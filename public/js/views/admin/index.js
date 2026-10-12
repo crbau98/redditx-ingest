@@ -7,6 +7,7 @@ const TABS = [
   ['overview', 'Overview', 'layers', () => import('./overview.js')],
   ['feeds', 'Feeds', 'rss', () => import('./feeds.js')],
   ['creators', 'Creators', 'users', () => import('./creators.js')],
+  ['discovery', 'Discovery', 'sparkle', () => import('./discovery.js')],
   ['moderation', 'Review queue', 'shield', () => import('./moderation.js')],
   ['reports', 'Reports', 'flag', () => import('./reports.js')],
   ['media', 'Media', 'image', () => import('./media.js')],
@@ -44,7 +45,7 @@ export async function admin(root, { params }) {
   const side = h('nav', { class: 'adm-side', 'aria-label': 'Admin sections' },
     h('h4', null, 'Manage'),
     TABS.map(([key, label, ic]) => h('a', { href: href(`/admin/${key}`), 'aria-current': key === tabKey ? 'page' : null }, icon(ic, 'sm'), label,
-      key === 'moderation' ? badge(overview.queues.review, 'warn') : key === 'reports' ? badge(overview.queues.reports, 'bad') : key === 'feeds' ? badge(overview.feeds.failing, 'bad') : null)));
+      key === 'moderation' ? badge(overview.queues.review, 'warn') : key === 'reports' ? badge(overview.queues.reports, 'bad') : key === 'feeds' ? badge(overview.feeds.failing, 'bad') : key === 'discovery' && overview.discovery ? badge(overview.discovery.pending, 'info') : null)));
   const main = h('div', { class: 'adm-main' });
   root.replaceChildren(h('div', { class: 'adm' }, side, main));
 

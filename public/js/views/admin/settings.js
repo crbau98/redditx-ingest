@@ -6,9 +6,10 @@ import { pageHead, toggle, act } from './ui.js';
 export async function render(root) {
   const s = await adminGet('/settings');
   const values = { ...s.values };
-  const rows = s.schema.map((d) => {
+  const rows = s.schema.filter((d) => d.group !== 'discovery').map((d) => {
     let control;
-    if (d.type === 'bool') control = toggle(values[d.key], (on) => save({ [d.key]: on }));
+    if (d.type === 'text') { control = h('textarea', { class: 'textarea', rows: 5 }); control.value = values[d.key] || ''; control.addEventListener('change', () => save({ [d.key]: control.value })); }
+    else if (d.type === 'bool') control = toggle(values[d.key], (on) => save({ [d.key]: on }));
     else if (d.type === 'enum') control = h('select', { class: 'select sm', onchange: (e) => save({ [d.key]: e.target.value }) }, d.values.map((v) => h('option', { value: v, selected: values[d.key] === v }, v)));
     else { control = h('input', { class: 'input sm', type: 'number', min: d.min, max: d.max, value: values[d.key] }); control.addEventListener('change', () => save({ [d.key]: control.value })); }
     return h('div', { class: 'setting' }, h('div', { class: 'l' }, d.label), control);
@@ -39,11 +40,14 @@ export async function render(root) {
 
   root.append(pageHead('Settings', 'Runtime behaviour. Changes apply immediately.'),
     h('div', { class: 'panel' }, h('h3', null, 'Ingestion'), rows),
+    h('div', { class: 'panel' }, h('h3', null, icon('sparkle', 'sm'), 'Discovery'), h('p', { class: 'muted', style: { fontSize: '13.5px', margin: 0 } }, 'Thresholds, budgets and search topics for automatic creator discovery live on the ', h('a', { href: '#/admin/discovery', style: { color: 'var(--accent)' } }, 'Discovery'), ' page.')),
     h('div', { class: 'panel' }, h('h3', null, icon('lock', 'sm'), 'Credentials (environment variables)'),
       h('p', { class: 'muted', style: { fontSize: '13.5px', marginBottom: '6px' } }, 'Secrets live in the server environment, never in the database. Every source works in a best-effort public mode without them; keys make it faster and far less likely to be rate-limited.'),
       cred('Reddit app (OAuth)', s.credentials.reddit, 'REDDIT_CLIENT_ID + REDDIT_CLIENT_SECRET — create a “script/web app” at reddit.com/prefs/apps'),
       cred('Bluesky (search)', s.credentials.bluesky, 'BSKY_IDENTIFIER + BSKY_APP_PASSWORD — an app password, not your login'),
-      cred('X API', s.credentials.x, 'X_BEARER_TOKEN'),
+      cred('X API', s.credentials.x, 'X_BEARER_TOKEN — reliable timelines and search; reads are counted against the monthly budget above'),
+      cred('Brave Search', s.credentials.brave, 'BRAVE_API_KEY — web search for discovering creators and their other accounts'),
+      cred('Telegram bot', s.credentials.telegramValid, s.credentials.telegram && !s.credentials.telegramValid ? 'TELEGRAM_API_KEY is set but is not a Bot API token (expected 123456:ABC… from @BotFather)' : 'TELEGRAM_API_KEY — channel checks and full channel descriptions'),
       cred('Mastodon token', s.credentials.mastodon, `MASTODON_ACCESS_TOKEN · instances: ${s.instances.mastodon.join(', ')}`)),
     h('div', { class: 'panel' }, h('h3', null, icon('shield', 'sm'), 'Security'),
       h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Admin key'), h('span', { class: `badge ${s.security.adminKeySet ? 'good' : 'warn'}` }, s.security.adminKeySet ? 'set' : 'NOT SET')),

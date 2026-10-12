@@ -87,15 +87,37 @@ function addCreator({ name, inputs, bio }) {
   return { creator: repo.creators.detail(creator.id), feeds, conflicts, skipped, links };
 }
 
-/** Bulk paste: each token becomes its own feed (communities, searches, feeds, accounts...). */
+const decodeXml = (s) => String(s).replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n))).replace(/&amp;/g, '&');
+
+/**
+ * OPML (the subscription-list format every feed reader exports) -> feed specs.
+ * Outlines are known to be feeds, so a URL we would otherwise treat as a web page becomes an RSS feed;
+ * URLs we recognise as a platform (e.g. a subreddit's .rss) become that platform's native feed instead.
+ */
+function parseOpml(text) {
+  const specs = [];
+  for (const tag of String(text).match(/<outline\b[^>]*>/gi) || []) {
+    const attr = (name) => { const m = tag.match(new RegExp(`\\b${name}\\s*=\\s*("([^"]*)"|'([^']*)')`, 'i')); return m ? decodeXml(m[2] ?? m[3]).trim() : ''; };
+    const url = attr('xmlUrl');
+    if (!/^https?:\/\//i.test(url)) continue;
+    const title = (attr('title') || attr('text')).slice(0, 120);
+    const p = registry.parseInput(url);
+    if (p && p.platform !== 'web' && p.platform !== 'linkinbio') specs.push(p);
+    else specs.push({ platform: 'rss', kind: 'feed', target: url, label: title || url, ingestable: true });
+  }
+  return specs;
+}
+
+/** Bulk paste: each token becomes its own feed (communities, searches, feeds, accounts...). Also accepts OPML. */
 function importTargets(text, { hint } = {}) {
   const out = { created: 0, exists: 0, external: 0, invalid: [], feeds: [] };
-  for (const raw of tokens(text)) {
+  const opml = /<opml[\s>]/i.test(String(text));
+  for (const raw of opml ? parseOpml(text) : tokens(text)) {
     const r = addSpec(raw, { hint, origin: 'import' });
     if (r.status === 'created') { out.created++; out.feeds.push(r.feed); }
     else if (r.status === 'exists') out.exists++;
     else if (r.status === 'external') out.external++;
-    else out.invalid.push({ input: raw, reason: r.reason || r.status });
+    else out.invalid.push({ input: typeof raw === 'string' ? raw : raw.target, reason: r.reason || r.status });
   }
   return out;
 }
@@ -103,7 +125,7 @@ function importTargets(text, { hint } = {}) {
 /** Public-safe list of a creator's account links. */
 function publicAccounts(creatorId) {
   return repo.feeds.list({ creatorId, limit: 50 }).items
-    .filter((f) => f.kind === 'user' || f.kind === 'feed')
+    .filter((f) => f.kind === 'user' || (f.kind === 'feed' && f.platform === 'rss'))
     .map((f) => ({ platform: f.platform, label: f.label || f.target, url: profileUrl(f.platform, f.kind, f.target) }))
     .filter((a) => a.url);
 }
@@ -123,4 +145,4 @@ function moderate(id, action, reason, actor = 'admin') {
   return repo.media.get(id);
 }
 
-module.exports = { addSpec, addCreator, importTargets, publicAccounts, moderate, tokens };
+module.exports = { addSpec, addCreator, importTargets, parseOpml, publicAccounts, moderate, tokens };

@@ -4,9 +4,9 @@ import { parse, navigate, href } from '../../router.js';
 import { platforms, platformLabel } from '../../store.js';
 import { table, pager, toggle, platBadge, statusDot, pageHead, act } from './ui.js';
 
-const KINDS = { reddit: ['community', 'user'], redgifs: ['search', 'user', 'niche'], bluesky: ['user', 'search'], mastodon: ['user', 'tag'], lemmy: ['community', 'user'], x: ['user', 'search'], telegram: ['user'], rss: ['feed'], web: ['page'], linkinbio: ['page'] };
+const KINDS = { reddit: ['community', 'user'], redgifs: ['search', 'user', 'niche'], bluesky: ['user', 'search', 'feedgen', 'list'], mastodon: ['user', 'tag'], misskey: ['user', 'tag'], lemmy: ['community', 'user'], x: ['user', 'search'], telegram: ['user'], rss: ['feed'], web: ['page'], linkinbio: ['page'] };
 const HINT = {
-  reddit: 'r/gaybros or u/someone', redgifs: 'a search term, or a username', bluesky: 'handle.bsky.social', mastodon: 'name@instance.social  /  hashtag',
+  reddit: 'r/gaybros or u/someone', redgifs: 'a search term, or a username', bluesky: 'handle.bsky.social  /  bsky.app/profile/…/feed/…  /  …/lists/…', mastodon: 'name@instance.social  /  hashtag', misskey: 'name@misskey.io  /  hashtag',
   lemmy: 'community@instance.tld', x: '@handle  /  search query (needs token)', telegram: 't.me/channelname (public preview)', rss: 'https://site.com/feed.xml', web: 'https://site.com/gallery', linkinbio: 'https://linktr.ee/name',
 };
 const INTERVALS = [[30, '30 min'], [60, '1 hour'], [90, '90 min'], [180, '3 hours'], [360, '6 hours'], [720, '12 hours'], [1440, '1 day'], [4320, '3 days']];
@@ -37,9 +37,12 @@ function addDialog(onDone, preset = {}) {
 }
 
 function importDialog(onDone) {
-  const text = h('textarea', { class: 'textarea', rows: 10, placeholder: 'One per line, or comma separated:\nr/gaybrosgonewild\nu/somecreator\nhttps://bsky.app/profile/someone.bsky.social\nhttps://example.com/feed.xml\n@name@mastodon.social' });
+  const text = h('textarea', { class: 'textarea', rows: 10, placeholder: 'One per line, or comma separated:\nr/gaybrosgonewild\nu/somecreator\nhttps://bsky.app/profile/someone.bsky.social\nhttps://bsky.app/profile/someone.bsky.social/feed/hot\nhttps://example.com/feed.xml\n@name@mastodon.social\n@name@misskey.io' });
+  const file = h('input', { type: 'file', accept: '.opml,.xml,.txt,text/xml,application/xml,text/plain', hidden: true });
+  file.addEventListener('change', async () => { const f = file.files[0]; if (f) { text.value = await f.text(); toast(`Loaded ${f.name}`); } file.value = ''; });
   const m = openModal({
-    title: 'Bulk import', sub: 'Paste communities, creators, feeds and links in any mix. Unrecognised lines are reported, never guessed.', wide: true, body: h('div', { class: 'field' }, text),
+    title: 'Bulk import', sub: 'Paste communities, creators, feeds and links in any mix — or load an OPML file exported from any feed reader. Unrecognised lines are reported, never guessed.', wide: true,
+    body: h('div', null, h('div', { class: 'field' }, text), h('button', { class: 'btn sm', onclick: () => file.click() }, icon('upload', 'sm'), 'Load OPML / text file'), file),
     actions: [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn primary', onclick: async (e) => {
       const r = await act(e.currentTarget, () => adminPost('/feeds/import', { text: text.value }));
       if (!r) return;

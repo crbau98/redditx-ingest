@@ -1,0 +1,116 @@
+import { h, icon, fmt, toast, avatar, debounce } from '../../dom.js';
+import { adminGet, adminPost, adminPut } from '../../api.js';
+import { parse, navigate } from '../../router.js';
+import { table, pager, toggle, platBadge, pageHead, act, kpi } from './ui.js';
+
+const STATUSES = [['pending', 'Waiting'], ['followed', 'Followed'], ['linked', 'Linked to a creator'], ['rejected', 'Rejected'], ['all', 'All']];
+const SIGNAL_LABEL = { identity: 'same name', mention: 'mentioned', cofollow: 'followed by', search: 'web search' };
+const SCOPE = { in: ['good', 'male-focused'], uncertain: ['', 'unclear'], excluded: ['bad', 'off-topic'] };
+
+function signalChips(sig) {
+  return h('div', { class: 'row wrap', style: { gap: '4px' } }, Object.entries(sig || {}).filter(([k, v]) => SIGNAL_LABEL[k] && v.length).map(([k, v]) =>
+    h('span', { class: `badge sig-${k}`, title: k === 'search' ? v.join('\n') : `${v.length} distinct source${v.length === 1 ? '' : 's'}` }, `${SIGNAL_LABEL[k]} ×${v.length}`)));
+}
+
+function scoreBar(score, threshold) {
+  const pct = Math.max(0, Math.min(100, (score / Math.max(threshold * 1.5, 1)) * 100));
+  return h('div', { class: 'scorebar', title: `Score ${score} (auto-follow at ${threshold})` }, h('div', { class: `fill${score >= threshold ? ' hot' : ''}`, style: { width: `${pct}%` } }), h('span', { class: 'num' }, score));
+}
+
+export async function render(root) {
+  const q = parse().query;
+  const f = { status: q.get('status') || 'pending', q: q.get('q') || '', sort: q.get('sort') || 'score', page: parseInt(q.get('page') || '0', 10) };
+  const set = (patch) => navigate('/admin/discovery', { ...f, ...patch }, { replace: true });
+  const head = h('div'); const kpis = h('div', { class: 'kpis' }); const tableHost = h('div'); const tune = h('div');
+  const selected = new Set();
+  let data;
+
+  const runBtn = h('button', { class: 'btn primary', onclick: (e) => act(e.currentTarget, async () => { await adminPost('/discovery/run'); toast('Discovery started — watch the Live log', 'ok'); setTimeout(load, 2500); }) }, icon('sparkle', 'sm'), 'Run discovery now');
+  head.append(pageHead('Discovery', 'Finds creators you are not following yet — from who your creators mention and follow, and from web searches — scores them, and follows the strong ones automatically.', runBtn));
+
+  const search = h('input', { class: 'input sm', type: 'search', placeholder: 'Search candidates…', value: f.q, style: { maxWidth: '220px' } });
+  search.addEventListener('input', debounce(() => set({ q: search.value.trim(), page: 0 }), 350));
+  const bar = h('div', { class: 'toolbar' },
+    h('div', { class: 'seg', role: 'group', 'aria-label': 'Status' }, STATUSES.map(([v, l]) => h('button', { class: f.status === v ? 'on' : '', onclick: () => set({ status: v, page: 0 }) }, l))),
+    search,
+    h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Sort', onchange: (e) => set({ sort: e.target.value }) }, [['score', 'Best score'], ['recent', 'Recently seen'], ['new', 'Newest']].map(([v, l]) => h('option', { value: v, selected: f.sort === v }, l))),
+    h('span', { class: 'grow' }),
+    h('button', { class: 'btn sm', onclick: (e) => bulk(e.currentTarget, 'follow') }, icon('check', 'sm'), 'Follow selected'),
+    h('button', { class: 'btn sm', onclick: (e) => bulk(e.currentTarget, 'reject') }, icon('x', 'sm'), 'Reject selected'));
+
+  async function bulk(btn, action) {
+    if (!selected.size) { toast('Select candidates first'); return; }
+    const r = await act(btn, () => adminPost('/discovery/candidates', { ids: [...selected], action }));
+    if (r) { toast(`${r.ok} ${action === 'follow' ? 'followed' : 'rejected'}${r.failed ? ` · ${r.failed} failed` : ''}`, r.failed ? '' : 'ok'); selected.clear(); load(); }
+  }
+  const decide = (c, action) => async (e) => {
+    const r = await act(e.currentTarget, () => adminPost(`/discovery/candidates/${c.id}`, { action }));
+    if (r) { toast(action === 'follow' ? `Following ${c.display_name || c.target} — first sync queued` : action === 'block' ? 'Blocked — it will never be suggested again' : 'Rejected', 'ok'); load(); }
+  };
+
+  function paintKpis(d) {
+    const last = d.last;
+    const lastLine = last ? `${fmt.ago(last.startedAt)} · ${last.promote ? `${last.promote.followed} followed, ${last.promote.linked} linked` : last.error || ''}` : 'never';
+    kpis.replaceChildren(
+      kpi({ value: fmt.int(d.counts.pending), label: 'Waiting for a decision', detail: `auto-follow at score ${d.threshold}` }),
+      kpi({ value: fmt.int(d.counts.followed), label: 'Creators followed', detail: `${fmt.int(d.counts.followedToday)} in the last 24h` }),
+      kpi({ value: fmt.int(d.counts.linked), label: 'Accounts linked', detail: 'other accounts of known creators' }),
+      kpi({ value: d.brave.configured ? `${d.brave.usage.count}/${d.brave.budget}` : '—', label: 'Web searches today', detail: d.brave.configured ? `${fmt.int(d.brave.usage.total)} all time (Brave)` : 'set BRAVE_API_KEY' }),
+      kpi({ value: d.running ? 'Running…' : d.auto ? 'On' : 'Manual', label: 'Discovery', detail: `last run ${lastLine}` }));
+  }
+
+  function paintTune(d, settings) {
+    const v = settings.values;
+    const save = async (patch) => { try { await adminPut('/settings', patch); toast('Saved', 'ok'); } catch (e) { toast(e.message, 'err'); } };
+    const num = (key, min, max) => { const el = h('input', { class: 'input sm', type: 'number', min, max, value: v[key], style: { width: '96px' } }); el.addEventListener('change', () => save({ [key]: el.value })); return el; };
+    const queries = h('textarea', { class: 'textarea', rows: 6, spellcheck: 'false' }); queries.value = v.discoveryQueries || '';
+    const keyBadge = (ok, label, hint) => h('span', { class: `badge ${ok ? 'good' : ''}`, title: hint }, ok ? icon('check', 'sm') : null, label);
+    tune.replaceChildren(h('details', { class: 'panel', open: !d.counts.followed && !d.counts.pending ? true : null },
+      h('summary', null, h('b', null, 'Tune discovery'), h('span', { class: 'muted', style: { marginLeft: '10px', fontSize: '13px' } }, 'signals, thresholds, search topics')),
+      h('div', { class: 'row wrap', style: { gap: '8px', margin: '12px 0' } },
+        keyBadge(d.brave.configured, 'Brave search', 'BRAVE_API_KEY — web search for profiles and identity matching'),
+        keyBadge(d.xApi, 'X API', 'X_BEARER_TOKEN — reliable X timelines and searches'),
+        keyBadge(d.telegramBot, 'Telegram bot', 'TELEGRAM_API_KEY — channel checks and full descriptions'),
+        keyBadge(true, 'Bluesky graph', 'Public, no key needed'), keyBadge(true, 'Mentions', 'Read from posts already ingested')),
+      h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Follow strong candidates automatically'), toggle(v.autoDiscover, (on) => save({ autoDiscover: on }))),
+      h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Read who your Bluesky creators follow'), toggle(v.discoveryGraph, (on) => save({ discoveryGraph: on }))),
+      h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Auto-follow at score'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'same name = 6 · each creator who mentions them = 3 · each who follows them = 1.5 · each search hit = 2 · male-focused bio = +2')), num('discoveryAutoFollowScore', 3, 60)),
+      h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Max follows per run'), num('discoveryMaxFollowsPerRun', 0, 100)),
+      h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Run every (minutes)'), num('discoveryIntervalMin', 15, 1440)),
+      h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Brave searches per day'), num('braveDailyBudget', 0, 2000)),
+      h('div', { class: 'field', style: { marginTop: '10px' } }, h('label', null, 'Web-search topics (one per line — one is searched per run, in rotation)'), queries,
+        h('button', { class: 'btn sm', style: { marginTop: '8px' }, onclick: () => save({ discoveryQueries: queries.value }) }, 'Save topics'))));
+  }
+
+  async function load() {
+    const [d, settings] = await Promise.all([adminGet('/discovery', { status: f.status, q: f.q, sort: f.sort, page: f.page, limit: 40 }), data ? Promise.resolve(null) : adminGet('/settings')]);
+    data = d;
+    paintKpis(d);
+    if (settings) paintTune(d, settings);
+    const r = d.candidates;
+    tableHost.replaceChildren(
+      table([
+        { label: '', width: '28px', render: (c) => { const cb = h('input', { type: 'checkbox', checked: selected.has(c.id), 'aria-label': `Select ${c.target}` }); cb.addEventListener('change', () => { if (cb.checked) selected.add(c.id); else selected.delete(c.id); }); return cb; } },
+        { label: 'Candidate', render: (c) => h('div', { class: 'row', style: { gap: '10px', minWidth: 0 } }, avatar({ display_name: c.display_name || c.target, avatar_url: c.avatar_url }, 34),
+          h('div', { style: { minWidth: 0 } },
+            h('a', { href: c.url || '#', target: '_blank', rel: 'noopener noreferrer nofollow', style: { fontWeight: 600 }, class: 'truncate', title: c.target }, c.display_name || c.label || c.target),
+            h('div', { class: 'sub truncate', style: { maxWidth: '320px' }, title: c.bio || '' }, c.bio ? c.bio.slice(0, 120) : c.target))) },
+        { label: 'Source', render: (c) => h('div', { class: 'cell-stack' }, platBadge(c.platform), c.kind !== 'user' ? h('span', { class: 'sub' }, c.kind) : null) },
+        { label: 'Why', render: (c) => h('div', { class: 'cell-stack' }, signalChips(c.signals), h('span', { class: `badge ${SCOPE[c.scope][0]}` }, SCOPE[c.scope][1]), c.reason && c.reason !== 'checked' ? h('span', { class: 'sub', style: { maxWidth: '220px' } }, c.reason) : null) },
+        { label: 'Score', width: '130px', render: (c) => scoreBar(c.score, d.threshold) },
+        { label: 'Seen', render: (c) => h('span', { class: 'sub' }, fmt.ago(c.last_seen)) },
+        { label: '', render: (c) => h('div', { class: 'actions' },
+          c.status === 'pending' ? [
+            h('button', { class: 'btn sm primary', onclick: decide(c, 'follow') }, 'Follow'),
+            h('button', { class: 'btn sm', onclick: decide(c, 'reject') }, 'Reject'),
+            h('button', { class: 'btn icon sm ghost', title: 'Block: never suggest or ingest', 'aria-label': 'Block', onclick: decide(c, 'block') }, icon('lock', 'sm'))]
+            : h('button', { class: 'btn sm ghost', onclick: decide(c, 'reset') }, 'Undo')) },
+      ], r.items, { empty: f.status === 'pending' ? 'Nothing waiting. Run discovery, or add search topics below — results also arrive on their own every hour.' : 'Nothing here yet.' }),
+      pager({ page: r.page, limit: r.limit, total: r.total, onPage: (p) => set({ page: p }) }));
+  }
+
+  root.append(head, kpis, tune, bar, tableHost);
+  await load();
+  const timer = setInterval(() => { if (root.isConnected && data && data.running) load().catch(() => {}); }, 5000);
+  return () => clearInterval(timer);
+}

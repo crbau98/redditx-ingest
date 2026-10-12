@@ -8,5 +8,10 @@
   "theme_color": "#09090d",
   "icons": [
     { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Reels", "short_name": "Reels", "url": "/#/reels", "icons": [{ "src": "/favicon.svg", "sizes": "any" }] },
+    { "name": "Explore", "url": "/#/explore", "icons": [{ "src": "/favicon.svg", "sizes": "any" }] },
+    { "name": "Your library", "short_name": "Library", "url": "/#/saved", "icons": [{ "src": "/favicon.svg", "sizes": "any" }] }
   ]
 }

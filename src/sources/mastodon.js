@@ -92,7 +92,17 @@ module.exports = {
     if (feed.kind === 'user') {
       const { name, host } = splitTarget(feed.target);
       if (!name || !host) throw new Error('Mastodon user target must look like name@instance.tld');
-      const acct = await lookup(host, name);
+      let acct;
+      try { acct = await lookup(host, name); } catch (e) {
+        // Misskey-family servers (Misskey, Sharkey, Firefish...) look like Mastodon from the outside but
+        // have their own API. Read them through it instead of failing the feed.
+        const misskey = require('./misskey');
+        if (misskey.isMisskeyFamily(await misskey.detectSoftware(host))) {
+          const r = await misskey.fetch(feed, ctx);
+          return { ...r, via: 'misskey-api', notes: [...(r.notes || []), `${host} runs Misskey-family software; read through its own API`] };
+        }
+        throw e;
+      }
       targets.push({ host, path: `/api/v1/accounts/${acct.id}/statuses?only_media=true&exclude_reblogs=true&exclude_replies=true` });
       if (ctx.needProfile || !cursor.newestAt) {
         const note = htmlToText(acct.note || '', 500);

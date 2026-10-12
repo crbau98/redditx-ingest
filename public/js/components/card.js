@@ -1,5 +1,5 @@
 import { h, icon, proxied, fmt, avatar } from '../dom.js';
-import { favorites, platformLabel, platformColor, bus } from '../store.js';
+import { favorites, history as viewHistory, prefs, platformLabel, platformColor, bus } from '../store.js';
 import { parse, href } from '../router.js';
 
 /* ---- hover / in-view video previews ------------------------------------
@@ -11,6 +11,7 @@ const live = new Set();
 const MAX_LIVE = 2;
 
 function startPreview(media, item) {
+  if (!prefs.previews) return;
   if (media.querySelector('video') || !item.media_url || /\.m3u8(\?|$)/i.test(item.media_url)) return;
   while (live.size >= MAX_LIVE) stopPreview([...live][0]);
   const v = h('video', { muted: true, loop: true, playsinline: true, preload: 'metadata', 'aria-hidden': 'true', tabindex: '-1' });
@@ -49,7 +50,9 @@ export function mediaCard(item, { open, compact = false } = {}) {
   const here = parse();
   const media = h('a', { class: 'card-media', href: href(here.path, { ...Object.fromEntries(here.query), m: item.id }), style: { aspectRatio: String(ratio) }, 'aria-label': item.title || 'Open media' });
   media._item = item;
-  media.appendChild(h('div', { class: 'ph' }));
+  // Placeholder tinted per item, so a loading grid reads as colour rather than grey boxes.
+  let hue = 0; for (let i = 0; i < 8 && i < item.id.length; i++) hue = (hue * 31 + item.id.charCodeAt(i)) % 360;
+  media.appendChild(h('div', { class: 'ph', style: { '--h': String(hue) } }));
   if (src) {
     const img = h('img', { class: 'loading', alt: item.title || '', loading: 'lazy', decoding: 'async', src: proxied(src) });
     img.addEventListener('load', () => { img.classList.remove('loading'); });
@@ -58,7 +61,8 @@ export function mediaCard(item, { open, compact = false } = {}) {
   }
   media.appendChild(h('div', { class: 'card-badges' },
     isVideo ? h('span', { class: 'pill' }, icon('play', 'fill'), item.duration ? fmt.duration(item.duration) : 'Video') : null,
-    item.nsfw_level === 'suggestive' ? h('span', { class: 'pill' }, 'Suggestive') : null));
+    item.nsfw_level === 'suggestive' ? h('span', { class: 'pill' }, 'Suggestive') : null,
+    viewHistory.has(item.id) ? h('span', { class: 'pill seen', title: 'You opened this before' }, icon('eye', 'sm'), 'Seen') : null));
   media.addEventListener('click', (e) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
     e.preventDefault();
@@ -72,7 +76,7 @@ export function mediaCard(item, { open, compact = false } = {}) {
   }
 
   const fav = h('button', { class: `card-fav${favorites.has(item.id) ? ' on' : ''}`, 'aria-label': 'Save', 'aria-pressed': String(favorites.has(item.id)),
-    onclick: (e) => { e.preventDefault(); e.stopPropagation(); favorites.toggle(item.id); } }, icon('heart'));
+    onclick: (e) => { e.preventDefault(); e.stopPropagation(); favorites.toggle(item.id, item); } }, icon('heart'));
   const off = bus.on('fav', (d) => {
     if (!media.isConnected) { off(); return; }
     if (!d.id || d.id === item.id) { const on = favorites.has(item.id); fav.classList.toggle('on', on); fav.setAttribute('aria-pressed', String(on)); }

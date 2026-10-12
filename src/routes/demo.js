@@ -36,6 +36,6 @@ router.get('/art/:seed/:w/:h.svg', (req, res) => {
   res.set({ 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=3600' }).send(svg);
 });
 
-router.get('/video.webm', (req, res) => res.sendFile(path.join(config.dataDir, 'demo', 'video.webm')));
+router.get('/video.webm', (req, res) => res.sendFile(path.resolve(config.dataDir, 'demo', 'video.webm')));
 
 module.exports = router;

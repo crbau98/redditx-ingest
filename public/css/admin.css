@@ -34,6 +34,9 @@
 .chart .bar { flex: 1; min-width: 3px; border-radius: 4px 4px 0 0; background: var(--grad); opacity: .9; position: relative; min-height: 2px; }
 .chart .bar.err::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: var(--bad); border-radius: 2px; }
 .chart .bar:hover { opacity: 1; filter: brightness(1.15); }
+.chart.stacked .col { flex: 1; min-width: 6px; display: flex; flex-direction: column-reverse; border-radius: 5px 5px 0 0; overflow: hidden; background: var(--surface-2, rgba(127,127,127,.15)); min-height: 2px; }
+.chart.stacked .col .seg { flex-basis: 0; min-height: 1px; }
+.chart.stacked .col:hover { filter: brightness(1.15); }
 .chart-axis { display: flex; justify-content: space-between; color: var(--muted); font-size: 11.5px; margin-top: 6px; }
 .hbars { display: grid; gap: 10px; }
 .hbar { display: grid; grid-template-columns: 96px 1fr 48px; gap: 10px; align-items: center; font-size: 13px; }
@@ -112,3 +115,18 @@
   .adm-side h4 { display: none; }
   .adm-side a { white-space: nowrap; background: var(--surface); border: 1px solid var(--line); }
 }
+
+/* ---------- v4.3: discovery ------------------------------------------------ */
+.scorebar { position: relative; height: 22px; border-radius: 999px; background: var(--surface-3); overflow: hidden; min-width: 96px; }
+.scorebar .fill { position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--accent-2) 55%, transparent); border-radius: 999px; transition: width .4s var(--ease); }
+.scorebar .fill.hot { background: var(--grad); }
+.scorebar span { position: relative; z-index: 1; display: block; text-align: center; font-size: 12px; font-weight: 700; line-height: 22px; }
+.badge.sig-identity { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
+.badge.sig-mention { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.badge.sig-cofollow { background: color-mix(in srgb, var(--info) 16%, transparent); color: var(--info); }
+.badge.sig-search { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+details.panel > summary { cursor: pointer; list-style: none; display: flex; align-items: center; }
+details.panel > summary::-webkit-details-marker { display: none; }
+details.panel > summary::before { content: '▸'; margin-right: 8px; color: var(--muted); transition: transform .2s; }
+details.panel[open] > summary::before { transform: rotate(90deg); }
+.cell-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }

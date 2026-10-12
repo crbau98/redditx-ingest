@@ -53,6 +53,10 @@ function mediaFilters(q) {
     sort, seed: q.seed,
     since: ['day', 'week', 'month', 'year'].includes(q.since) ? q.since : undefined,
     level: q.level === 'explicit' || q.level === 'suggestive' ? q.level : undefined,
+    // Infinite scroll only needs the total once; later pages skip the COUNT(*).
+    noCount: q.nocount === '1' && repo.clampInt(q.page, 0, 100000, 0) > 0,
+    // "new since" for saved searches: an ISO timestamp, normalised so it compares correctly as text
+    after: typeof q.after === 'string' && !Number.isNaN(Date.parse(q.after)) ? new Date(q.after).toISOString() : undefined,
   };
 }
 
@@ -63,6 +67,7 @@ const discoverCached = ttl(30000, () => {
     ...d,
     trending: d.trending.map(publicMedia), freshVideos: d.freshVideos.map(publicMedia),
     topCreators: d.topCreators.map(publicCreator), newCreators: d.newCreators.map(publicCreator),
+    rising: d.rising.map((c) => ({ ...publicCreator(c), week_count: c.week_count })),
   };
 });
 const tagsCached = ttl(60000, () => repo.media.tags(120, 1));
@@ -112,7 +117,7 @@ router.post('/report', reportLimiter, (req, res) => {
 });
 
 /* -------------------------------------------------------- age-gated content */
-router.use(['/discover', '/stats', '/suggest', '/media', '/creators', '/tags', '/communities', '/subreddits', '/platforms', '/stream'], age.requireAge);
+router.use(['/discover', '/stats', '/suggest', '/recommend', '/media', '/creators', '/tags', '/communities', '/subreddits', '/platforms', '/stream'], age.requireAge);
 
 router.get('/discover', (req, res) => res.json(discoverCached()));
 router.get('/stats', (req, res) => res.json(repo.publicStats()));
@@ -171,6 +176,30 @@ router.get('/creators/:id/similar', (req, res) => {
   const c = repo.creators.get(req.params.id);
   if (!c || c.status !== 'active') return res.status(404).json({ error: 'Not found' });
   res.json(repo.creators.similar(c.id, repo.clampInt(req.query.limit, 1, 24, 12)).map(publicCreator));
+});
+
+const csv = (v, re, max) => (typeof v === 'string' ? v.split(',').map((x) => x.trim()).filter((x) => re.test(x)).slice(0, max) : []);
+const UUID = /^[0-9a-f-]{36}$/i;
+router.get('/recommend', (req, res) => {
+  const q = req.query;
+  const video = q.video !== undefined && q.video !== '' && Number.isFinite(Number(q.video)) ? Math.min(1, Math.max(0, Number(q.video))) : null;
+  const r = repo.media.recommend({
+    tags: csv(q.tags, /^[\p{L}\p{N}-]{2,40}$/u, 20), creators: csv(q.creators, UUID, 40), platforms: csv(q.platforms, /^[a-z]{2,20}$/, 8),
+    video, exclude: csv(q.exclude, UUID, 200), seed: repo.clampInt(q.seed, 0, 2147483647, 1), type: q.type === 'image' || q.type === 'video' ? q.type : undefined,
+    page: repo.clampInt(q.page, 0, 1000, 0), limit: repo.clampInt(q.limit, 1, 60, 36),
+  });
+  // Nothing to go on yet (new visitor): fall back to what is trending, so the rail is never empty.
+  if (!r.personalized) {
+    const t = repo.media.list({ sort: 'trending', page: r.page, limit: r.limit, type: q.type === 'image' || q.type === 'video' ? q.type : undefined });
+    return res.json({ ...t, items: t.items.map(publicMedia), personalized: false });
+  }
+  res.json({ ...r, items: r.items.map(publicMedia) });
+});
+
+router.get('/creators/:id/activity', (req, res) => {
+  const c = repo.creators.get(req.params.id);
+  if (!c || c.status !== 'active' || c.scope === 'excluded') return res.status(404).json({ error: 'Not found' });
+  res.json(repo.creators.activity(c.id));
 });
 
 router.get('/tags', (req, res) => res.json(tagsCached().slice(0, repo.clampInt(req.query.limit, 1, 200, 100))));

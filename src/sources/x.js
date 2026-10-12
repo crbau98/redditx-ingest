@@ -16,6 +16,28 @@ const { toIso, clip } = require('./util');
 const { extractLinks } = require('../lib/links');
 
 const base = config.baseUrls.x;
+
+/* X API plans cap how many posts you may read per month. Count what we read and stop
+ * using the API (falling back to the keyless route for profiles) before the cap. */
+const month = () => new Date().toISOString().slice(0, 7);
+function usage() {
+  const repo = require('../db/repo');
+  let u = {}; try { u = JSON.parse(repo.settings.get('x.usage') || '{}'); } catch { u = {}; }
+  return u.month === month() ? { month: u.month, posts: u.posts || 0, calls: u.calls || 0 } : { month: month(), posts: 0, calls: 0 };
+}
+function spend(posts) {
+  const repo = require('../db/repo');
+  const u = usage();
+  repo.settings.set('x.usage', JSON.stringify({ month: u.month, posts: u.posts + (posts || 0), calls: u.calls + 1 }));
+}
+function budget() { try { return require('../settings').get().xMonthlyReadBudget; } catch { return 10000; } }
+const apiAvailable = () => !!config.creds.xBearer && usage().posts < budget();
+async function apiGet(url) {
+  if (usage().posts >= budget()) throw Object.assign(new Error(`X API monthly read budget reached (${budget()} posts) — using the keyless route until next month`), { budget: true });
+  const json = await http.json(url, { headers: bearer() });
+  spend((json.meta && json.meta.result_count) || (Array.isArray(json.data) ? json.data.length : json.data ? 1 : 0));
+  return json;
+}
 const bearer = () => ({ authorization: `Bearer ${config.creds.xBearer}` });
 const MEDIA_FIELDS = 'media.fields=url,preview_image_url,type,variants,width,height,duration_ms,alt_text';
 const TWEET_FIELDS = 'tweet.fields=created_at,public_metrics,possibly_sensitive,entities';
@@ -103,15 +125,33 @@ async function viaApi(feed, ctx, cursor) {
   const since = cursor.newestId && !ctx.force ? `&since_id=${cursor.newestId}` : '';
   if (feed.kind === 'search') {
     const q = `${feed.target} has:media -is:retweet -is:reply`;
-    const json = await http.json(`${base}/2/tweets/search/recent?query=${encodeURIComponent(q)}&max_results=100&expansions=attachments.media_keys,author_id&${MEDIA_FIELDS}&${TWEET_FIELDS}&user.fields=username,name,profile_image_url${since}`, { headers: bearer() });
-    return { items: parseApi(json, feed.target), newestId: json.meta && json.meta.newest_id, profile };
+    let newestId = null; let next = null;
+    for (let page = 0; page < (cursor.newestId && !ctx.force ? 1 : 2); page++) {
+      const json = await apiGet(`${base}/2/tweets/search/recent?query=${encodeURIComponent(q)}&max_results=100&expansions=attachments.media_keys,author_id&${MEDIA_FIELDS}&${TWEET_FIELDS}&user.fields=username,name,profile_image_url${since}${next ? `&next_token=${encodeURIComponent(next)}` : ''}`);
+      if (!newestId && json.meta) newestId = json.meta.newest_id;
+      items.push(...parseApi(json, feed.target));
+      next = json.meta && json.meta.next_token;
+      if (!next) break;
+    }
+    return { items, newestId, profile };
   }
-  const u = await http.json(`${base}/2/users/by/username/${encodeURIComponent(feed.target)}?user.fields=description,profile_image_url,name,entities`, { headers: bearer() });
+  const u = await apiGet(`${base}/2/users/by/username/${encodeURIComponent(feed.target)}?user.fields=description,profile_image_url,name,entities`);
   if (!u.data) throw Object.assign(new Error('X user not found or suspended'), { status: 404 });
   profile = { displayName: u.data.name, bio: u.data.description, avatarUrl: (u.data.profile_image_url || '').replace('_normal', '_400x400'), links: extractLinks(u.data.description || '') };
-  const json = await http.json(`${base}/2/users/${u.data.id}/tweets?max_results=100&exclude=retweets,replies&expansions=attachments.media_keys,author_id&${MEDIA_FIELDS}&${TWEET_FIELDS}&user.fields=username,name,profile_image_url${since}`, { headers: bearer() });
-  items.push(...parseApi(json, null));
-  return { items, newestId: json.meta && json.meta.newest_id, profile };
+  // First sync walks back a few pages so a newly followed creator arrives with a real back catalogue;
+  // later syncs are incremental via since_id.
+  let newestId = null; let next = null;
+  // Creators found by discovery start with one page: the monthly read budget goes further.
+  const pages = (cursor.newestId && !ctx.force) || feed.origin === 'discovered' ? 1 : 2;
+  for (let page = 0; page < pages; page++) {
+    if (ctx.aborted && ctx.aborted()) break;
+    const json = await apiGet(`${base}/2/users/${u.data.id}/tweets?max_results=100&exclude=retweets,replies&expansions=attachments.media_keys,author_id&${MEDIA_FIELDS}&${TWEET_FIELDS}&user.fields=username,name,profile_image_url${since}${next ? `&pagination_token=${encodeURIComponent(next)}` : ''}`);
+    if (!newestId && json.meta) newestId = json.meta.newest_id;
+    items.push(...parseApi(json, null));
+    next = json.meta && json.meta.next_token;
+    if (!next) break;
+  }
+  return { items, newestId, profile };
 }
 
 async function viaSyndication(feed) {
@@ -144,9 +184,13 @@ module.exports = {
   color: '#a1a1aa',
   kinds: ['user', 'search'],
   intervalMin: { user: 240, search: 180 },
-  parseApi, parseLegacyTweet, parseSyndication, fetchTweet,
+  parseApi, parseLegacyTweet, parseSyndication, fetchTweet, usage,
   isConfigured(kind) {
-    if (config.creds.xBearer) return { ok: true, note: 'Official API' };
+    if (config.creds.xBearer) {
+      const u = usage();
+      if (u.posts >= budget()) return kind === 'search' ? { ok: false, note: `Monthly X read budget used (${u.posts}/${budget()})` } : { ok: true, note: `Budget used (${u.posts}/${budget()}) — keyless fallback` };
+      return { ok: true, note: `Official API · ${u.posts.toLocaleString('en')} / ${budget().toLocaleString('en')} posts read this month` };
+    }
     return kind === 'search'
       ? { ok: false, note: 'Search needs X_BEARER_TOKEN' }
       : { ok: true, note: 'Keyless best-effort (syndication) — add X_BEARER_TOKEN for reliability' };
@@ -158,12 +202,17 @@ module.exports = {
 
   async fetch(feed, ctx) {
     const cursor = ctx.cursor || {};
-    if (config.creds.xBearer) {
-      const r = await viaApi(feed, ctx, cursor);
-      const newestAt = r.items.reduce((a, it) => (it.postedAt && (!a || it.postedAt > a) ? it.postedAt : a), cursor.newestAt || null);
-      return { items: r.items, cursor: { newestId: r.newestId || cursor.newestId, newestAt }, profile: r.profile, via: 'api' };
+    if (apiAvailable()) {
+      try {
+        const r = await viaApi(feed, ctx, cursor);
+        const newestAt = r.items.reduce((a, it) => (it.postedAt && (!a || it.postedAt > a) ? it.postedAt : a), cursor.newestAt || null);
+        return { items: r.items, cursor: { newestId: r.newestId || cursor.newestId, newestAt }, profile: r.profile, via: 'api' };
+      } catch (e) {
+        // Out of budget, or the plan does not include this endpoint (403): profiles still work keyless.
+        if (feed.kind === 'search' || !(e.budget || e.status === 403 || e.status === 429)) throw e;
+      }
     }
-    if (feed.kind === 'search') throw Object.assign(new Error('X search requires X_BEARER_TOKEN'), { skip: true });
+    if (feed.kind === 'search') throw Object.assign(new Error(config.creds.xBearer ? 'X API read budget used up for this month' : 'X search requires X_BEARER_TOKEN'), { skip: true });
     const items = await viaSyndication(feed);
     let newest = cursor.newestAt || null;
     const fresh = [];

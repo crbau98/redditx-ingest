@@ -61,11 +61,16 @@ module.exports = {
     bskyIdentifier: env.BSKY_IDENTIFIER || '',
     bskyPassword: env.BSKY_APP_PASSWORD || '',
     mastodonToken: env.MASTODON_ACCESS_TOKEN || '',
+    // Brave Search API (web search) — powers creator discovery and cross-platform identity matching.
+    braveKey: env.BRAVE_API_KEY || env.BRAVE_SEARCH_API_KEY || '',
+    // Telegram Bot API token (from @BotFather, "123456:ABC…"): channel metadata and existence checks.
+    telegramBot: env.TELEGRAM_API_KEY || env.TELEGRAM_BOT_TOKEN || '',
   },
 
   // Federated sources: instances that adapters may talk to by default.
   mastodonInstances: list(env.MASTODON_INSTANCES, ['mastodon.social']),
   lemmyInstances: list(env.LEMMY_INSTANCES, ['lemmynsfw.com']),
+  misskeyInstances: list(env.MISSKEY_INSTANCES, ['misskey.io']),
 
   // Base-URL overrides so adapters can be pointed at a mock in tests.
   baseUrls: {
@@ -78,6 +83,8 @@ module.exports = {
     x: env.X_BASE_URL || 'https://api.x.com',
     fxtwitter: env.FXTWITTER_BASE_URL || 'https://api.fxtwitter.com',
     xSyndication: env.X_SYNDICATION_URL || 'https://syndication.twitter.com',
+    brave: env.BRAVE_BASE_URL || 'https://api.search.brave.com',
+    telegramBot: env.TELEGRAM_BOT_BASE_URL || 'https://api.telegram.org',
   },
 
   // --- media cache for proxied images --------------------------------

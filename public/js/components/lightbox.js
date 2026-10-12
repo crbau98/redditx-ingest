@@ -1,14 +1,14 @@
-import { h, icon, proxied, fmt, avatar, toast, copyText, loadScript, emptyState } from '../dom.js';
+import { h, icon, proxied, fmt, avatar, toast, copyText, openModal } from '../dom.js';
 import { get, post } from '../api.js';
-import { favorites, follows, prefs, platformLabel, platformColor, bus } from '../store.js';
+import { favorites, follows, prefs, history as viewHistory, tastes, collections, platformLabel, platformColor, bus } from '../store.js';
 import { parse, href, setParam } from '../router.js';
 import { openReport } from './report.js';
-import { openModal } from '../dom.js';
+import { attachVideo, releaseVideo, isM3u8 } from './video.js';
+import { openCollectionPicker } from './collections.js';
 
 let S = null; // the single active lightbox session
 const viewed = new Set();
 const relCache = new Map(); // media id -> related items
-const isM3u8 = (u) => /\.m3u8(\?|$)/i.test(u || '');
 
 /* ------------------------------------------------------------------ public */
 export function openLightbox(items, index, { loadMore } = {}) {
@@ -49,7 +49,7 @@ async function openById(id) {
 /* ------------------------------------------------------------------- build */
 function start(items, loadMore) {
   const root = document.getElementById('lightbox-root');
-  S = { items, index: -1, loadMore, info: window.matchMedia('(min-width: 900px)').matches, root, hls: null, pushed: false, loading: false };
+  S = { items, index: -1, loadMore, info: window.matchMedia('(min-width: 900px)').matches, root, video: null, pushed: false, loading: false };
   S.el = h('div', { class: 'lb', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Media viewer' });
   S.top = h('div', { class: 'lb-top' });
   S.stage = h('div', { class: 'lb-stage' });
@@ -63,6 +63,7 @@ function start(items, loadMore) {
   document.addEventListener('keydown', onKey);
   S.offFav = bus.on('fav', () => S && paintTop());
   S.offFollow = bus.on('follow', () => S && paintInfo());
+  S.offColl = bus.on('collections', () => S && paintTop());
   wireGestures();
   render();
 }
@@ -71,7 +72,7 @@ function destroy() {
   if (!S) return;
   document.removeEventListener('keydown', onKey);
   clearSlide();
-  S.offFav && S.offFav(); S.offFollow && S.offFollow();
+  S.offFav && S.offFav(); S.offFollow && S.offFollow(); S.offColl && S.offColl();
   teardownVideo();
   S.root.replaceChildren();
   S = null;
@@ -122,6 +123,8 @@ function show(i, { push = false } = {}) {
   const n = S.items[i + 1];
   if (n && n.media_type === 'image') { const pre = new Image(); pre.src = proxied(n.media_url); }
   if (!viewed.has(it.id)) { viewed.add(it.id); post(`/api/media/${it.id}/view`).catch(() => {}); }
+  viewHistory.add(it.id);
+  tastes.record(it, 1);
 }
 
 /* ------------------------------------------------- download / slideshow / help */
@@ -160,7 +163,7 @@ function toggleSlideshow() {
 }
 
 function showHelp() {
-  const rows = [['← / →  (J / K)', 'Previous / next'], ['F', 'Save to favourites'], ['I', 'Show or hide details'], ['M', 'Mute video'], ['Space', 'Play / pause video'], ['S', 'Start / stop slideshow'], ['Esc', 'Close'], ['/', 'Search (outside the viewer)'], ['Double-click', 'Save the image'], ['Swipe ← →', 'Navigate (touch)'], ['Swipe ↓', 'Close (touch)']];
+  const rows = [['← / →  (J / K)', 'Previous / next'], ['F', 'Save to favourites'], ['C', 'Add to a collection'], ['I', 'Show or hide details'], ['M', 'Mute video'], ['Space', 'Play / pause video'], ['S', 'Start / stop slideshow'], ['Esc', 'Close'], ['/', 'Search (outside the viewer)'], ['Ctrl / ⌘ + K', 'Command palette (outside the viewer)'], ['Double-click', 'Save the image'], ['Swipe ← →', 'Navigate (touch)'], ['Swipe ↓', 'Close (touch)']];
   const m = openModal({ title: 'Keyboard shortcuts', body: h('dl', { class: 'kv', style: { gridTemplateColumns: 'auto 1fr' } }, rows.map(([k, d]) => [h('dt', null, h('kbd', { class: 'kbd' }, k)), h('dd', { style: { textAlign: 'left' } }, d)])), actions: [h('button', { class: 'btn primary', onclick: () => m.close() }, 'Got it')] });
 }
 
@@ -175,6 +178,7 @@ function paintTop() {
       h('div', { style: { minWidth: 0 } }, h('div', { class: 't' }, it.title || it.creator_name || 'Untitled'), h('div', { class: 's' }, [it.creator_name || it.author, platformLabel(it.platform), fmt.ago(it.posted_at)].filter(Boolean).join(' · ')))),
     h('span', { class: 'lb-count' }, `${S.index + 1} / ${S.items.length}`),
     h('button', { class: `btn icon fav${faved ? ' on' : ''}`, 'aria-label': faved ? 'Remove from saved' : 'Save', 'aria-pressed': String(faved), title: 'Save (F)', onclick: () => toggleFav(it) }, icon('heart')),
+    h('button', { class: `btn icon${collections.containing(it.id).length ? ' on' : ''}`, 'aria-label': 'Add to collection', title: 'Add to collection (C)', onclick: () => openCollectionPicker(it) }, icon('bookmark')),
     h('button', { class: 'btn icon', 'aria-label': 'Share link', title: 'Copy link', onclick: () => share(it) }, icon('share')),
     downloadLink(it),
     h('button', { class: `btn icon hide-mobile${S.slide ? ' on' : ''}`, 'aria-label': S.slide ? 'Stop slideshow' : 'Start slideshow', 'aria-pressed': String(!!S.slide), title: 'Slideshow (S)', onclick: toggleSlideshow }, icon(S.slide ? 'pause' : 'play', S.slide ? '' : 'fill')),
@@ -183,7 +187,7 @@ function paintTop() {
 }
 
 function toggleFav(it, burst = false) {
-  const on = favorites.toggle(it.id);
+  const on = favorites.toggle(it.id, it);
   if (burst && on) {
     const b = h('div', { class: 'lb-heart-burst' }, icon('heart', 'fill'));
     S.stage.appendChild(b); setTimeout(() => b.remove(), 750);
@@ -200,9 +204,8 @@ async function share(it) {
 /* ------------------------------------------------------------------ stage */
 function teardownVideo() {
   if (!S) return;
-  if (S.hls) { try { S.hls.destroy(); } catch { /* ignore */ } S.hls = null; }
-  const v = S.stage.querySelector('video');
-  if (v) { v.pause(); v.removeAttribute('src'); v.load(); }
+  if (S.video) { S.video.destroy(); S.video = null; }
+  releaseVideo(S.stage.querySelector('video'));
 }
 
 function paintStage(it) {
@@ -214,7 +217,7 @@ function paintStage(it) {
     v.muted = prefs.muted;
     v.addEventListener('volumechange', () => { prefs.muted = v.muted; });
     S.stage.replaceChildren(...keep, v);
-    attachVideo(v, it);
+    S.video = attachVideo(v, it);
     v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
   } else {
     const preview = it.preview_url || it.thumbnail_url;
@@ -229,29 +232,6 @@ function paintStage(it) {
     img.addEventListener('dblclick', () => { if (img.classList.contains('zoomed')) return; toggleFav(it, true); });
     img.addEventListener('error', () => S.stage.replaceChildren(...keep, h('div', { class: 'lb-loading' }, 'This image is no longer available at its source.')));
   }
-}
-
-async function attachVideo(v, it) {
-  const hls = it.hls_url || (isM3u8(it.media_url) ? it.media_url : null);
-  const mp4 = isM3u8(it.media_url) ? null : it.media_url;
-  const useHls = hls && (it.has_audio || !mp4);
-  const fallback = () => { if (mp4) { v.src = proxied(mp4); v.play().catch(() => {}); } };
-  if (!useHls) { v.src = proxied(mp4); return; }
-  const src = `/api/hls?url=${encodeURIComponent(hls)}`;
-  if (v.canPlayType('application/vnd.apple.mpegurl')) {
-    v.src = src;
-    v.addEventListener('error', fallback, { once: true });
-    return;
-  }
-  try { await loadScript('/vendor/hls.light.min.js'); } catch { fallback(); return; }
-  if (!S || !v.isConnected) return;
-  const Hls = window.Hls;
-  if (!Hls || !Hls.isSupported()) { fallback(); return; }
-  const inst = new Hls({ enableWorker: true });
-  S.hls = inst;
-  inst.on(Hls.Events.ERROR, (_, data) => { if (data.fatal) { try { inst.destroy(); } catch { /* ignore */ } if (S) S.hls = null; fallback(); } });
-  inst.loadSource(src);
-  inst.attachMedia(v);
 }
 
 /* ------------------------------------------------------------------- info */
@@ -305,6 +285,7 @@ function onKey(e) {
     case 'ArrowLeft': case 'k': nav(-1); break;
     case 'ArrowRight': case 'j': nav(1); break;
     case 'f': case 'F': if (it) toggleFav(it, true); break;
+    case 'c': case 'C': if (it) openCollectionPicker(it); break;
     case 'i': case 'I': S.info = !S.info; S.el.classList.toggle('info-open', S.info); paintTop(); break;
     case 's': case 'S': toggleSlideshow(); break;
     case '?': showHelp(); break;

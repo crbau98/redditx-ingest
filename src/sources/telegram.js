@@ -9,6 +9,7 @@ const cheerio = require('cheerio');
 const http = require('./http').forPlatform('telegram', 1500);
 const { toIso, clip } = require('./util');
 const { extractLinks } = require('../lib/links');
+const bot = require('../lib/telegram-bot');
 
 const bg = (style) => { const m = String(style || '').match(/url\((['"]?)(.*?)\1\)/); return m ? m[2] : null; };
 
@@ -85,7 +86,7 @@ module.exports = {
   kinds: ['user'], // a channel is the account
   intervalMin: { user: 240 },
   parsePage, toItems, parseCount,
-  isConfigured: () => ({ ok: true, note: 'Public channels with web preview enabled' }),
+  isConfigured: () => ({ ok: true, note: bot.configured() ? 'Public channels with web preview · bot token set (channel checks & full descriptions)' : 'Public channels with web preview enabled' }),
 
   async fetch(feed, ctx) {
     const channel = String(feed.target).replace(/^@/, '');
@@ -100,9 +101,23 @@ module.exports = {
       const html = await http.text(`https://t.me/s/${encodeURIComponent(channel)}${before ? `?before=${before}` : ''}`, { headers: { accept: 'text/html' }, maxBytes: 3_000_000 });
       const parsed = parsePage(html, channel);
       if (!parsed.hasChannel || (!parsed.messages.length && page === 0 && !/tgme_widget_message/.test(html))) {
-        throw Object.assign(new Error('Channel preview unavailable (web preview disabled, restricted or not found)'), { status: 404 });
+        // With a bot token we can at least tell "doesn't exist" from "exists but hides its preview".
+        let why = 'Channel preview unavailable (web preview disabled, restricted or not found)';
+        if (bot.configured()) {
+          const info = await bot.channelInfo(channel).catch(() => undefined);
+          if (info === null) why = 'Telegram says this channel does not exist (or is private)';
+          else if (info) why = `“${info.title || channel}” exists${info.members ? ` (${info.members.toLocaleString('en')} subscribers)` : ''} but has its public web preview turned off, so its posts cannot be read without joining`;
+        }
+        throw Object.assign(new Error(why), { status: 404 });
       }
-      if (page === 0 && (ctx.needProfile || !cursor.newestId)) profile = parsed.profile;
+      if (page === 0 && (ctx.needProfile || !cursor.newestId)) {
+        profile = parsed.profile;
+        // The bot API returns the full channel description (the preview truncates it) — more links to follow.
+        if (bot.configured()) {
+          const info = await bot.channelInfo(channel).catch(() => null);
+          if (info && info.description) profile = { ...profile, bio: profile.bio || info.description, displayName: profile.displayName || info.title, links: [...(profile.links || []), ...extractLinks(info.description)] };
+        }
+      }
       let reachedKnown = false;
       for (const msg of parsed.messages.sort((a, b) => b.id - a.id)) {
         if (msg.id > newestId) newestId = msg.id;
