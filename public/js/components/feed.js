@@ -10,9 +10,9 @@ import { openLightbox } from './lightbox.js';
  * lightbox "sequence" so next/prev walk the same list the user is looking at
  * (and keep loading more as they go).
  */
-export function createFeed({ query = {}, endpoint = '/api/media', pageSize, empty, onTotal, onDone, ids, hideSeen = false }) {
+export function createFeed({ query = {}, endpoint = '/api/media', pageSize, empty, onTotal, onDone, ids, hideSeen = false, why = null }) {
   const root = h('div', { class: 'feed' });
-  const masonry = createMasonry({ density: prefs.density, render: (item, d) => mediaCard(item, { open: openAt, compact: d === 's' }) });
+  const masonry = createMasonry({ density: prefs.density, render: (item, d) => mediaCard(item, { open: openAt, compact: d === 's', why: why ? why(item) : null }) });
   const sentinel = h('div', { class: 'loadmore' });
   root.append(masonry.el, sentinel);
 

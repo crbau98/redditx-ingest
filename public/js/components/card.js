@@ -48,7 +48,7 @@ const io = !canHover && 'IntersectionObserver' in window
 let eagerLeft = 0;
 export function primeEager(n = 6) { eagerLeft = n; }
 
-export function mediaCard(item, { open, compact = false } = {}) {
+export function mediaCard(item, { open, compact = false, why = null } = {}) {
   const ratio = item.width && item.height ? Math.min(Math.max(item.width / item.height, 0.55), 1.9) : 0.8;
   const isVideo = item.media_type === 'video';
   const src = item.preview_url || item.thumbnail_url || (!isVideo ? item.media_url : null);
@@ -66,6 +66,7 @@ export function mediaCard(item, { open, compact = false } = {}) {
     img.addEventListener('error', () => { img.remove(); });
     media.appendChild(img);
   }
+  if (why) media.appendChild(h('span', { class: 'card-why', title: 'Why you are seeing this' }, icon('sparkle', 'sm'), why));
   media.appendChild(h('div', { class: 'card-badges' },
     isVideo ? h('span', { class: 'pill' }, icon('play', 'fill'), item.duration ? fmt.duration(item.duration) : 'Video') : null,
     item.nsfw_level === 'suggestive' ? h('span', { class: 'pill' }, 'Suggestive') : null,

@@ -138,7 +138,7 @@ export async function explore(root, { query }) {
 
   const makeFeed = () => createFeed(forYou ? {
     // Personal ranking from this device's taste; other filters narrow by type only.
-    endpoint: '/api/recommend', hideSeen: prefs.hideSeen,
+    endpoint: '/api/recommend', hideSeen: prefs.hideSeen, why: (it) => tastes.why(it),
     query: { ...tastes.query({ exclude: viewHistory.list().slice(0, 100) }), type: f.type, seed: Math.floor(Math.random() * 1e6) },
     onTotal: (t) => { count.textContent = tastes.ready() ? `Picked for you from ${fmt.int(t)} matches` : 'Trending — save or watch a few things and this becomes yours'; },
   } : {

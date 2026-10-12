@@ -28,7 +28,7 @@ async function forYouSection(open) {
   return h('section', { class: 'section' },
     sectionHead('sparkle', 'For you', 'Picked from what you watch, save and follow — learned on this device only', { href: href('/explore', { sort: 'foryou' }), label: 'See all' }),
     chips,
-    h('div', { class: 'rail' }, res.items.map((it) => mediaCard(it, { open: open(res.items), compact: false }))),
+    h('div', { class: 'rail' }, res.items.map((it) => mediaCard(it, { open: open(res.items), compact: false, why: tastes.why(it) }))),
     h('a', { class: 'btn sm', href: href('/reels', { sort: 'foryou', type: 'all' }), style: { marginTop: '6px' } }, icon('film', 'sm'), 'Play For you as Reels'));
 }
 
