@@ -124,6 +124,10 @@ async function check(spec) {
 }
 
 (async () => {
+  const ws = require('../src/lib/websearch').status();
+  const imagefilter = require('../src/lib/imagefilter');
+  const imgReady = await imagefilter.available();
+  const imgErr = imagefilter.status().failed;
   const rows = [];
   for (const spec of plan()) {
     if (!flag('json')) process.stderr.write(`· ${spec.platform}:${spec.kind}:${spec.target || '-'} … `);
@@ -132,7 +136,7 @@ async function check(spec) {
     if (!flag('json')) process.stderr.write(`${r.skipped ? 'skipped' : r.error ? 'ERROR' : `${r.fetched} items`} (${r.ms} ms)\n`);
   }
   const bad = rows.filter((r) => !r.skipped && (r.error || r.would.publish + r.would.review === 0));
-  if (flag('json')) console.log(JSON.stringify({ ok: !bad.length, results: rows }, null, 2));
+  if (flag('json')) console.log(JSON.stringify({ ok: !bad.length, results: rows, webSearch: ws, imageFilter: { ready: imgReady, error: imgErr } }, null, 2));
   else {
     console.log('\nPRISM source self-test\n');
     for (const r of rows) {
@@ -149,6 +153,9 @@ async function check(spec) {
         for (const n of (r.notes || []).slice(0, 3)) console.log(`        note: ${n}`);
       }
     }
+    console.log('\nSupporting services');
+    console.log(`  web search : ${ws.configured ? ws.providers.filter((p) => p.configured).map((p) => p.name).join(' → ') : 'NOT CONFIGURED (set BRAVE_API_KEY or SEARXNG_URL; discovery and creator lookup need it)'}`);
+    console.log(`  image filter: ${imgReady ? 'ready (on-device face + gender model)' : `UNAVAILABLE${imgErr ? ` (${imgErr})` : ''} — run npm install so the optional ML packages are present`}`);
     console.log(`\n${bad.length ? `${bad.length} source(s) need attention.` : 'All checked sources returned usable content.'}`);
   }
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }

@@ -29,6 +29,7 @@ setTimeout(() => require('./src/routes/public').warm(), 1500).unref(); // pre-bu
 backup.start();
 discovery.start();
 health.start();
+maintenance.startImageSweep();
 
 function shutdown(signal) {
   console.log(`\n[${signal}] shutting down…`);
@@ -36,6 +37,7 @@ function shutdown(signal) {
   backup.stop();
   discovery.stop();
   health.stop();
+  maintenance.stopImageSweep();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 8000).unref();
 }

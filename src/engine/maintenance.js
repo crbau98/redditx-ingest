@@ -11,6 +11,8 @@ const { checkText } = require('../lib/safety');
 const { femaleCheck } = require('../lib/scope');
 const { hostBlocked, hostOf, isJunkTitle } = require('../lib/mediaurl');
 const { probeMedia } = require('./probe');
+const imagefilter = require('../lib/imagefilter');
+const settingsStore = require('../settings');
 
 // Bump whenever the safety or male-only scope rules get stricter: existing libraries are re-swept once.
 // v3: male-only scope (female / feminine / trans-feminine content is removed and blocklisted).
@@ -63,6 +65,62 @@ async function sweep({ probe = false, limit = 1_000_000 } = {}) {
   return res;
 }
 
+/* ------------------------------------------------------------- image sweep */
+const IMAGE_SWEEP_VERSION = '1'; // bump to re-check the whole library (e.g. after a better model)
+
+/**
+ * Re-check stored items with the image filter, oldest first, resuming from a cursor so a restart never starts over.
+ * A picture showing a woman removes the item and remembers its hash. Pictures that cannot be fetched (expired
+ * hotlinks, 403) are skipped, not removed: no verdict is not a verdict.
+ */
+async function imageSweep({ limit = 12, settings } = {}) {
+  const s = settings || settingsStore.get();
+  const res = { checked: 0, removed: 0, undecided: 0, errors: 0, done: false };
+  if (repo.settings.get('image_sweep_version') !== IMAGE_SWEEP_VERSION) {
+    repo.settings.set('image_sweep_version', IMAGE_SWEEP_VERSION); repo.settings.set('image_sweep_seq', '0');
+  }
+  let after = parseInt(repo.settings.get('image_sweep_seq') || '0', 10) || 0;
+  const rows = repo.db.prepare(`SELECT seq, id, media_type, media_url, preview_url, thumbnail_url FROM media
+    WHERE publish_state IN ('published','review') AND seq > ? ORDER BY seq LIMIT ?`).all(after, limit);
+  if (!rows.length) { res.done = true; return res; }
+  for (const row of rows) {
+    after = row.seq;
+    const v = await imagefilter.checkItem({ mediaType: row.media_type, mediaUrl: row.media_url, previewUrl: row.preview_url, thumbnailUrl: row.thumbnail_url },
+      { threshold: (s.imageFilterThreshold || 50) / 100 });
+    res.checked++;
+    if (v.female) { repo.media.block(row.id, 'image sweep: picture shows a woman', 'system'); res.removed++; }
+    else if (v.status === 'error' || v.status === 'unavailable') res.errors++;
+    else if (!v.decided) res.undecided++;
+  }
+  repo.settings.set('image_sweep_seq', String(after));
+  if (res.removed) events.log('OK', `Image sweep: removed ${res.removed} of ${res.checked} checked (women in the picture)`);
+  return res;
+}
+
+function imageSweepProgress() {
+  const cursor = parseInt(repo.settings.get('image_sweep_seq') || '0', 10) || 0;
+  const q = (cmp) => repo.db.prepare(`SELECT COUNT(*) AS n FROM media WHERE publish_state IN ('published','review') AND seq ${cmp} ?`).get(cursor).n;
+  return { cursor, checkedUpTo: q('<='), remaining: q('>'), version: IMAGE_SWEEP_VERSION };
+}
+
+let sweepTimer = null; let sweepBusy = false; let sweepGaveUp = false;
+/** Slow background loop: a few items a minute, only while there is work and the model is usable. */
+function startImageSweep() {
+  if (sweepTimer) return;
+  sweepTimer = setInterval(async () => {
+    if (sweepBusy || sweepGaveUp) return;
+    const s = settingsStore.get();
+    if (!s.imageFilter || !s.imageSweep || !s.imageSweepPerTick) return;
+    sweepBusy = true;
+    try {
+      if (!(await imagefilter.available())) { sweepGaveUp = true; return; } // logged once by the filter itself
+      await imageSweep({ limit: s.imageSweepPerTick, settings: s });
+    } catch (e) { events.log('WARN', `Image sweep: ${e.message}`); } finally { sweepBusy = false; }
+  }, 60 * 1000);
+  sweepTimer.unref();
+}
+function stopImageSweep() { if (sweepTimer) clearInterval(sweepTimer); sweepTimer = null; }
+
 /** Run the safety sweep once per rule-set version, in the background after boot. */
 function startupSweepIfNeeded() {
   if (repo.settings.get('safety_sweep_version') === SAFETY_SWEEP_VERSION) return;
@@ -72,4 +130,4 @@ function startupSweepIfNeeded() {
   }, 1500).unref();
 }
 
-module.exports = { sweep, startupSweepIfNeeded };
+module.exports = { sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, startImageSweep, stopImageSweep };

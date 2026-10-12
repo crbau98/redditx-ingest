@@ -78,6 +78,7 @@ export async function render(root, { overview: first }) {
         kpi({ value: fmt.int(o.queues.review), label: 'Awaiting review', detail: 'unclear scope or flagged', href: href('/admin/moderation'), tone: o.queues.review ? 'warn' : null }),
         kpi({ value: fmt.int(o.queues.reports), label: 'Open reports', detail: 'takedowns & safety', href: href('/admin/reports'), tone: o.queues.reports ? 'bad' : null }),
         kpi({ value: o.feeds.failing, label: 'Failing feeds', detail: `${o.last24h.blocked} blocked by safety in 24h`, href: href('/admin/feeds?status=error'), tone: o.feeds.failing ? 'warn' : null }),
+        o.imageFilter ? kpi({ value: o.imageFilter.enabled ? (o.imageFilter.failed ? 'unavailable' : fmt.int(o.imageFilter.female)) : 'off', label: 'Women filtered by picture', detail: o.imageFilter.failed ? 'optional ML packages missing — run npm install' : `${fmt.int(o.imageFilter.analyzed)} images checked · library re-check: ${fmt.int(o.imageFilter.sweep.remaining)} left`, href: href('/admin/settings'), tone: o.imageFilter.enabled && o.imageFilter.failed ? 'warn' : null }) : null,
         o.health ? kpi({ value: fmt.int(o.health.gone7d), label: 'Gone at source (7d)', detail: `${fmt.int(o.health.checked)} items checked · ${fmt.int(o.health.reports)} viewer reports`, href: href('/admin/media', { state: 'hidden' }) }) : null),
       onboarding,
       h('div', { class: 'grid-2' },

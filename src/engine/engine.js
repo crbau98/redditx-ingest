@@ -56,6 +56,8 @@ function computeNextRun(feed, failures, retryAfterMs = 0, factor = 1) {
   return new Date(Date.now() + Math.max(delay, retryAfterMs)).toISOString();
 }
 
+const ITEM_CONCURRENCY = 4;
+
 /* -------------------------------------------------------------- run a feed */
 async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
   const feed = typeof feedOrId === 'string' ? repo.feeds.get(feedOrId) : feedOrId;
@@ -90,8 +92,10 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     if (!conf.ok) throw Object.assign(new Error(conf.note || 'not configured'), { skip: true });
 
     const cursor = parseJson(feed.cursor);
+    // A deeper read (a creator lookup pulling in "everything") may ask for more than the routine per-run cap.
+    const runLimit = Math.min(Math.max(opts.limit || 0, cfg.itemsPerRun), 400);
     const ctx = {
-      limit: cfg.itemsPerRun,
+      limit: runLimit,
       cursor,
       force: !!opts.force,
       needProfile: !!feed.creator_id && (!feed.last_success_at || trigger === 'manual'),
@@ -105,7 +109,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
       if (seenKeys.has(k)) return false;
       seenKeys.add(k);
       return true;
-    }).slice(0, cfg.itemsPerRun * 4);
+    }).slice(0, runLimit * 4);
     stats.fetched = items.length;
 
     if (result.profile) applyProfile(feed, result.profile, cfg);
@@ -115,21 +119,30 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     }
     if (result.links && feed.creator_id) applyProfile(feed, { links: result.links }, cfg);
 
-    for (const raw of items) {
-      if (ctx.aborted()) break;
-      let r;
-      try { r = await processItem(raw, feed, adapter, cfg); } catch (e) { r = { outcome: 'skipped', reason: `error: ${e.message}` }; }
-      if (r.creatorId) touched.add(r.creatorId);
-      switch (r.outcome) {
-        case 'added': stats.added++; break;
-        case 'review': stats.review++; stats.added++; break;
-        case 'dupe': stats.dupes++; break;
-        case 'blocked': stats.blocked++; break;
-        default: stats.skipped++; reasons[r.reason || r.outcome] = (reasons[r.reason || r.outcome] || 0) + 1;
+    // Items are processed a few at a time: most of the wait is network (probing unknown hosts, resolving RedGIFs
+    // links, downloading a picture for the image filter), and the database steps between awaits are synchronous
+    // and idempotent (a duplicate hash simply loses the insert), so overlapping them is safe and much faster.
+    let next = 0;
+    const worker = async () => {
+      for (;;) {
+        if (ctx.aborted()) return;
+        const raw = items[next++];
+        if (!raw) return;
+        let r;
+        try { r = await processItem(raw, feed, adapter, cfg); } catch (e) { r = { outcome: 'skipped', reason: `error: ${e.message}` }; }
+        if (r.creatorId) touched.add(r.creatorId);
+        switch (r.outcome) {
+          case 'added': stats.added++; break;
+          case 'review': stats.review++; stats.added++; break;
+          case 'dupe': stats.dupes++; break;
+          case 'blocked': stats.blocked++; break;
+          default: stats.skipped++; reasons[r.reason || r.outcome] = (reasons[r.reason || r.outcome] || 0) + 1;
+        }
+        if (r.outcome === 'blocked' && /^safety:/.test(r.reason || '')) events.log('WARN', `Blocked by safety gate (${r.reason}) in ${tag}`);
+        entry.added = stats.added; entry.fetched = stats.fetched;
       }
-      if (r.outcome === 'blocked' && /^safety:/.test(r.reason || '')) events.log('WARN', `Blocked by safety gate (${r.reason}) in ${tag}`);
-      entry.added = stats.added; entry.fetched = stats.fetched;
-    }
+    };
+    await Promise.all(Array.from({ length: Math.min(ITEM_CONCURRENCY, items.length) }, worker));
 
     for (const id of touched) repo.creators.refreshStats(id);
     if (feed.creator_id) repo.creators.refreshStats(feed.creator_id);
@@ -188,7 +201,7 @@ function nextWork(cfg) {
     if (!feed) { state.queue.splice(i, 1); i--; continue; }
     if (platformBusy(feed.platform) || !breaker.canRun(feed.platform)) continue;
     state.queue.splice(i, 1);
-    return { feed, trigger: job.trigger, force: job.force };
+    return { feed, trigger: job.trigger, force: job.force, limit: job.limit };
   }
   // 2. scheduled work
   if (state.paused || !cfg.schedulerEnabled) return null;
@@ -211,17 +224,17 @@ async function tick() {
       const work = nextWork(cfg);
       if (!work) break;
       // fire and forget — runFeed never throws
-      runFeed(work.feed, work.trigger, { force: work.force }).catch((e) => events.log('ERR', `engine: ${e.message}`));
+      runFeed(work.feed, work.trigger, { force: work.force, limit: work.limit }).catch((e) => events.log('ERR', `engine: ${e.message}`));
     }
   } finally { state.ticking = false; }
 }
 
 /* ----------------------------------------------------------------- controls */
-function enqueue(feedIds, { force = false, trigger = 'manual', front = true } = {}) {
+function enqueue(feedIds, { force = false, trigger = 'manual', front = true, limit = 0 } = {}) {
   let n = 0;
   for (const feedId of feedIds) {
     if (state.running.has(feedId) || state.queue.some((q) => q.feedId === feedId)) continue;
-    const job = { feedId, force, trigger };
+    const job = { feedId, force, trigger, limit };
     if (front) state.queue.unshift(job); else state.queue.push(job);
     n++;
   }

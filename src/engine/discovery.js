@@ -24,6 +24,7 @@ const repo = require('../db/repo');
 const settingsStore = require('../settings');
 const events = require('./events');
 const brave = require('../lib/brave');
+const websearch = require('../lib/websearch');
 const tgBot = require('../lib/telegram-bot');
 const registry = require('../sources');
 const { parseProfile, extractLinks, profileUrl } = require('../lib/links');
@@ -214,7 +215,7 @@ async function braveIdentity({ creators = 3, budget, aborted = () => false } = {
     if (aborted()) break;
     const core = coreHandle(t.handle);
     let results;
-    try { results = await brave.search(`"${core}" (onlyfans OR bluesky OR twitter OR reddit OR redgifs OR telegram OR linktree)`, { budget }); searched++; } catch (e) {
+    try { results = await websearch.search(`"${core}" (onlyfans OR bluesky OR twitter OR reddit OR redgifs OR telegram OR linktree)`, { budget }); searched++; } catch (e) {
       if (e.budget || e.skip) break; // out of budget: try this creator again next time
       events.log('WARN', `Discovery: web search for ${t.handle} failed — ${e.message}`);
       results = [];
@@ -243,7 +244,7 @@ async function braveTopics({ queries = 1, budget, aborted = () => false } = {}) 
     const q = list[idx % list.length];
     idx++;
     let results;
-    try { results = await brave.search(q, { budget }); searched++; } catch (e) {
+    try { results = await websearch.search(q, { budget }); searched++; } catch (e) {
       if (e.budget || e.skip) break;
       events.log('WARN', `Discovery: web search "${q}" failed — ${e.message}`);
       continue;
@@ -559,7 +560,7 @@ async function run({ trigger = 'schedule' } = {}) {
   try {
     report.mentions = mineMentions();
     if (s.discoveryGraph) report.graph = await blueskyGraph({ aborted });
-    if (brave.configured() && s.braveDailyBudget > 0) {
+    if (websearch.configured() && (s.braveDailyBudget > 0 || websearch.PROVIDERS.searxng.configured())) {
       report.identity = await braveIdentity({ budget: s.braveDailyBudget, aborted });
       report.topics = await braveTopics({ budget: s.braveDailyBudget, aborted });
     }
@@ -611,6 +612,7 @@ function status() {
   return {
     running, last, counts: repo.candidates.counts(), yield: signalYield(),
     brave: { configured: brave.configured(), usage: brave.usage(), budget: s.braveDailyBudget },
+    websearch: websearch.status(),
     telegramBot: tgBot.configured(), xApi: !!config.creds.xBearer, communities: s.discoveryCommunities, autoCommunities: s.discoveryAutoCommunities, expand: s.discoveryExpand,
     auto: s.autoDiscover, intervalMin: s.discoveryIntervalMin, threshold: s.discoveryAutoFollowScore,
   };

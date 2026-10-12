@@ -7,11 +7,13 @@ const engine = require('../engine/engine');
 const events = require('../engine/events');
 const breaker = require('../engine/breaker');
 const maintenance = require('../engine/maintenance');
+const imagefilter = require('../lib/imagefilter');
 const settingsStore = require('../settings');
 const targets = require('../services/targets');
 const portability = require('../services/portability');
 const backup = require('../engine/backup');
 const discovery = require('../engine/discovery');
+const lookup = require('../engine/lookup');
 const { adminAuth } = require('../middleware/auth');
 
 const router = express.Router();
@@ -23,7 +25,7 @@ const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
 
 /* ---------------------------------------------------------------- overview */
 router.get('/overview', (req, res) => {
-  res.json({ ...repo.adminOverview(), engine: engine.status(), health: require('../engine/health').stats(), version: config.version, adminOpen: !config.adminKey });
+  res.json({ ...repo.adminOverview(), engine: engine.status(), health: require('../engine/health').stats(), imageFilter: { enabled: settingsStore.get().imageFilter, ...imagefilter.status(), sweep: maintenance.imageSweepProgress() }, version: config.version, adminOpen: !config.adminKey });
 });
 
 router.get('/stream', (req, res) => {
@@ -254,10 +256,47 @@ router.post('/discovery/candidates', (req, res) => {
   res.json(out);
 });
 
+/* ------------------------------------------------------------ creator lookup */
+// Find a person by name, performer name, handle or link across platforms (read-only), then follow the chosen accounts.
+router.post('/lookup', async (req, res) => {
+  try {
+    const q = String((req.body && req.body.query) || '').trim();
+    if (!q) return res.status(400).json({ error: 'Type a name, a handle or a profile link' });
+    const out = await lookup.lookup(q);
+    res.status(out.error ? 400 : 200).json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+router.post('/lookup/follow', (req, res) => {
+  try {
+    const b = req.body || {};
+    const out = lookup.follow({ name: b.name, selections: Array.isArray(b.selections) ? b.selections : [], externalLinks: Array.isArray(b.externalLinks) ? b.externalLinks : [], bio: b.bio, creatorId: typeof b.creatorId === 'string' ? b.creatorId : null });
+    res.status(out.error ? 400 : 200).json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// One step: look up and follow every strong, new match.
+router.post('/lookup/auto', async (req, res) => {
+  try {
+    const q = String((req.body && req.body.query) || '').trim();
+    if (!q) return res.status(400).json({ error: 'Type a name, a handle or a profile link' });
+    const out = await lookup.findAndFollow(q, { minConfidence: Math.min(Math.max(Number(req.body.minConfidence) || 0.7, 0.4), 0.95) });
+    res.status(out.error ? 400 : 200).json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 /* ------------------------------------------------------------- maintenance */
 router.post('/maintenance/sweep', async (req, res) => {
   try { res.json({ ok: true, ...(await maintenance.sweep({ probe: !!(req.body && req.body.probe) })) }); }
   catch (e) { res.status(500).json({ error: e.message }); }
+});
+router.get('/maintenance/image-filter', async (req, res) => {
+  const s = settingsStore.get();
+  res.json({ enabled: s.imageFilter, threshold: s.imageFilterThreshold, sweep: { enabled: s.imageSweep, perMinute: s.imageSweepPerTick, ...maintenance.imageSweepProgress() }, model: { available: await imagefilter.available(), ...imagefilter.status() } });
+});
+router.post('/maintenance/image-sweep', async (req, res) => {
+  try {
+    const n = Math.min(Math.max(parseInt(req.body && req.body.limit, 10) || 50, 1), 300);
+    res.json({ ok: true, ...(await maintenance.imageSweep({ limit: n })), ...maintenance.imageSweepProgress() });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 router.post('/maintenance/recompute', (req, res) => res.json({ ok: true, updated: repo.media.recomputeHot() }));
 

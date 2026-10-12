@@ -9,7 +9,7 @@ const repo = require('./db/repo');
 const SCHEMA = {
   schedulerEnabled: { type: 'bool', default: config.schedulerEnabled, label: 'Run the scheduler automatically' },
   tickSeconds: { type: 'int', default: 30, min: 5, max: 600, label: 'Scheduler tick (seconds)' },
-  maxConcurrentFeeds: { type: 'int', default: 2, min: 1, max: 8, label: 'Feeds synced at once' },
+  maxConcurrentFeeds: { type: 'int', default: 4, min: 1, max: 12, label: 'Feeds synced at once' },
   itemsPerRun: { type: 'int', default: 100, min: 10, max: 300, label: 'Max items per feed run' },
   scopeMode: { type: 'enum', values: ['strict', 'open'], default: 'strict', label: 'Unclear male-focus items: strict = review queue, open = publish' },
   autoTrack: { type: 'bool', default: true, label: 'Auto-follow creators discovered in communities' },
@@ -22,6 +22,11 @@ const SCHEMA = {
   backupKeep: { type: 'int', default: 3, min: 1, max: 30, label: 'Backups to keep' },
   keepRunHistoryDays: { type: 'int', default: 30, min: 1, max: 365, label: 'Run history retention (days)' },
   xMonthlyReadBudget: { type: 'int', default: 10000, min: 0, max: 10000000, label: 'X API: max posts read per month (match your plan)' },
+  // --- image filter (v4.10) ---
+  imageFilter: { type: 'bool', default: true, label: 'Image filter: exclude pictures that show a woman (on-device face + gender model)', group: 'safety' },
+  imageFilterThreshold: { type: 'int', default: 50, min: 25, max: 95, label: 'Image filter: confidence (%) needed to call a face female — lower = stricter', group: 'safety' },
+  imageSweep: { type: 'bool', default: true, label: 'Re-check the existing library with the image filter in the background', group: 'safety' },
+  imageSweepPerTick: { type: 'int', default: 12, min: 0, max: 200, label: 'Items re-checked per minute by the image sweep', group: 'safety' },
   // --- discovery (v4.3) ---
   autoDiscover: { type: 'bool', default: true, label: 'Discover new creators automatically (mentions, follow graphs, web search)', group: 'discovery' },
   discoveryIntervalMin: { type: 'int', default: 60, min: 15, max: 1440, label: 'Discovery runs every (minutes)', group: 'discovery' },
