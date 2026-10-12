@@ -121,7 +121,7 @@ export async function reels(root, { query }) {
     if (s.isVideo) {
       const v = h('video', { playsinline: true, loop: true, preload: 'none', poster: s.poster ? proxied(s.poster) : null, 'aria-label': s.it.title || 'Video' });
       v.muted = prefs.muted;
-      for (const ev of ['playing', 'seeked', 'ratechange']) v.addEventListener(ev, () => syncProgress(s));
+      for (const ev of ['playing', 'seeked', 'ratechange', 'durationchange']) v.addEventListener(ev, () => syncProgress(s));
       for (const ev of ['pause', 'waiting']) v.addEventListener(ev, () => { if (s.prog) s.prog.pause(); });
       s.stage.replaceChildren(v);
     } else {
@@ -140,7 +140,8 @@ export async function reels(root, { query }) {
     s.stage.replaceChildren();
   }
   // Progress bar: a compositor animation matched to the video's clock, re-synced whenever the clock
-  // jumps (play, seek, loop, rate change) and paused with it. No per-frame JavaScript; the old bar
+  // jumps (play, seek, loop, rate change) or the duration becomes known (HLS can start playing before
+  // it reports a finite length) and paused with it. No per-frame JavaScript; the old bar
   // followed timeupdate (~4×/s), so it stepped visibly and re-laid-out the slide each time.
   function syncProgress(s) {
     const v = s.stage.querySelector('video'); const bar = s.bar.firstChild;
