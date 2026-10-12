@@ -44,8 +44,12 @@ export function createMasonry({ density = 'm', render }) {
     for (const item of items) {
       let target = 0;
       for (let i = 1; i < colCount; i++) if (heights[i] < heights[target]) target = i;
-      cols[target].appendChild(render(item, cur));
-      heights[target] += estimate(item) + GAP[cur];
+      const est = estimate(item);
+      const card = render(item, cur);
+      // the size a card stands in for while the browser skips rendering it off-screen (see app.css)
+      card.style.containIntrinsicSize = `auto ${Math.round(est)}px`;
+      cols[target].appendChild(card);
+      heights[target] += est + GAP[cur];
     }
   }
 

@@ -110,10 +110,13 @@ export function initRails(root = document.body) {
   // which is where it is unobserved, so views that come and go never leave observers behind.
   const updaters = new WeakMap();
   const sizes = new ResizeObserver((entries) => {
+    const todo = [];
     for (const e of entries) {
       if (!e.target.isConnected) { sizes.unobserve(e.target); updaters.delete(e.target); continue; }
-      const fn = updaters.get(e.target); if (fn) fn();
+      const u = updaters.get(e.target); if (u) todo.push(u);
     }
+    const states = todo.map((u) => u.measure()); // all reads first…
+    todo.forEach((u, i) => u.apply(states[i])); // …then all writes: one layout, not one per rail
   });
   const enhance = (rail) => {
     if (rail.dataset.fx) return;
@@ -132,15 +135,19 @@ export function initRails(root = document.body) {
       return b;
     };
     const prev = mk('prev'); const next = mk('next');
-    const update = () => {
-      const max = rail.scrollWidth - rail.clientWidth - 4;
-      wrap.classList.toggle('at-start', rail.scrollLeft <= 4);
-      wrap.classList.toggle('at-end', rail.scrollLeft >= max);
-      prev.hidden = rail.scrollLeft <= 4; next.hidden = rail.scrollLeft >= max;
+    // Read, then write only what changed. Writing unconditionally restyled the rail's edge mask on
+    // every scroll event, and on load each rail's write forced layout for the next rail's read.
+    let atStart = null; let atEnd = null;
+    const measure = () => { const x = rail.scrollLeft; return [x <= 4, x >= rail.scrollWidth - rail.clientWidth - 4]; };
+    const apply = ([s, e]) => {
+      if (s !== atStart) { atStart = s; wrap.classList.toggle('at-start', s); prev.hidden = s; }
+      if (e !== atEnd) { atEnd = e; wrap.classList.toggle('at-end', e); next.hidden = e; }
     };
-    rail.addEventListener('scroll', update, { passive: true });
-    updaters.set(rail, update); sizes.observe(rail);
-    update();
+    let raf = 0;
+    rail.addEventListener('scroll', () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; apply(measure()); }); }, { passive: true });
+    // No first measure here: observing delivers an initial size for every new rail in one batch,
+    // after layout and before paint, so the arrows and fades are right on the first frame.
+    updaters.set(rail, { measure, apply }); sizes.observe(rail);
   };
   root.querySelectorAll('.rail').forEach(enhance);
   new MutationObserver((muts) => {
@@ -218,6 +225,48 @@ export function dominantColor(src) {
     img.src = src;
   });
   colourCache.set(src, p);
+  return p;
+}
+
+/* ------------------------------------------------- ambient backdrop from an image
+ * A soft, dark colour field made from an image: what `filter: blur(38px) brightness(.42)` on the full
+ * picture looks like, baked once into a tiny bitmap. The browser stretches it smoothly, so the
+ * backdrop costs nothing per frame (a live CSS blur was re-rendered on every frame of a swipe).
+ * Resolves to a data: URL, or null when the image cannot be read. */
+const ambientCache = new Map();
+export function ambientBackdrop(src, { brightness = 0.42, saturate = 1.3 } = {}) {
+  if (!src) return Promise.resolve(null);
+  const key = `${src}|${brightness}|${saturate}`;
+  if (ambientCache.has(key)) return ambientCache.get(key);
+  const p = new Promise((resolve) => {
+    const img = new Image();
+    img.decoding = 'async';
+    img.onload = () => {
+      try {
+        const small = document.createElement('canvas'); small.width = 10; small.height = 10;
+        const sg = small.getContext('2d', { willReadFrequently: true });
+        sg.imageSmoothingQuality = 'high';
+        sg.drawImage(img, 0, 0, 10, 10);
+        const px = sg.getImageData(0, 0, 10, 10); const d = px.data;
+        for (let i = 0; i < d.length; i += 4) {
+          const l = 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+          for (let k = 0; k < 3; k++) d[i + k] = Math.max(0, Math.min(255, (l + (d[i + k] - l) * saturate) * brightness));
+          d[i + 3] = 255;
+        }
+        sg.putImageData(px, 0, 0);
+        // two smooth upscales read as a blur; the element then stretches the result
+        const out = document.createElement('canvas'); out.width = 40; out.height = 40;
+        const og = out.getContext('2d');
+        og.imageSmoothingEnabled = true; og.imageSmoothingQuality = 'high';
+        og.drawImage(small, 0, 0, 40, 40);
+        resolve(out.toDataURL());
+      } catch { resolve(null); }
+    };
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+  ambientCache.set(key, p);
+  if (ambientCache.size > 200) ambientCache.delete(ambientCache.keys().next().value);
   return p;
 }
 

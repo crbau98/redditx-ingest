@@ -1,5 +1,32 @@
 # UI changelog
 
+## 2026-10-12 — v4.13 "Fluid"
+
+**Audit findings** (measured with the new `scripts/perf-audit.js`: phone 390×844 @2x with touch, 4× CPU slowdown, 150 ms / 12 Mbps link for loads, demo library, median of 3 runs): an **untouched** Explore page spent ~2.4 s of main-thread and raster work in every 3 s, because every card's loading shimmer kept animating `background-position` under the finished image, forever. Flinging through the whole 158-card feed ran at **9 fps** with 12.6 s of long tasks. On Home, each rail's arrow/fade update forced a layout for the next rail (≈0.5 s at 4× slowdown). In Reels, the full-screen `blur(38px)` backdrop and the backdrop-blurred action buttons were re-rendered on every frame of a swipe (≈1.9 s of raster in 8 swipes), and the progress bar stepped ~4×/s via `timeupdate` + `width`. Smaller things: a growing `box-shadow` pulse and an animated conic-gradient ring repainted every frame; every card subscribed its own save listener that was only dropped at the next save; touch video previews started the moment Explore loaded; the galaxy view (the heaviest) was preloaded on every visit; on narrow cards the "Seen" badge ran under the save button.
+
+| Change | Files | Measured (before → after) |
+|---|---|---|
+| Card placeholder shimmer is transform-only and switched off once the image loads (or fails); skeleton shimmer likewise | `components/card.js`, `app.css` | idle Explore, work per 3 s: paint 2,081 → 8 ms, raster 275 → 0, style 267 → 0 |
+| Every looping animation is compositor-only: live-dot pulse is a scaling ring, the profile "posted recently" ring rotates as a layer, the hero glow is its own layer, the headline sheen sweeps once and rests | `app.css` | guarded by a new test: no `infinite` animation may animate anything but transform/opacity |
+| No live blur on the chips every card carries (video pill, save button, "why" chip): dense tint + hairline instead | `app.css` | whole-feed fling: **9.3 → 31 fps**, dropped frames 85% → 48%, long tasks 12.6 s → 0.6 s, paint 6.1 s → 0.13 s, raster 2.6 s → 0 |
+| Phones: off-screen feed cards skip style/layout/paint (`content-visibility: auto`), each carrying its estimated height from the masonry so nothing jumps | `components/masonry.js`, `app.css` | (part of the fling numbers above); estimates are within ~5 px of the real height |
+| Rails measure all, then write only what changed, once per frame on scroll | `components/fx.js` | Home load: total blocking time 996 → 734 ms (together with the shimmer fix) |
+| One save-button listener for the whole page instead of one per card | `components/card.js` | flat cost over long sessions |
+| Touch previews start 1.2 s after the page has loaded, never on data saver / 2G / 3G | `components/card.js` | first screen of images no longer competes with clips |
+| Galaxy view is loaded on first visit instead of preloaded | `main.js` | JS transferred on first load 124 → 118 KB; 29 modules preloaded instead of 30 |
+| **Reels backdrop baked once** into a tiny bitmap (same look as the live blur, no per-frame cost); live blur kept only as a fallback | `components/fx.js` (`ambientBackdrop`), `views/reels.js`, `app.css` | 8 swipes: raster 1,936 → 363 ms, composite 789 → 241 ms, worst frame 150 → 83 ms |
+| Reels action buttons and tags drop their backdrop blur (it was recomputed for every video frame behind them) | `app.css` | (in the swipe numbers above) |
+| **Reels progress bar** is a compositor animation synced to the video clock (play, seek, loop, rate, pause, stall): smooth instead of 4 steps a second | `views/reels.js`, `app.css` | no per-frame JavaScript |
+| HLS: start at a level that fits the player; a warmed (next) video buffers ~6 s instead of 30 s until it becomes the one on screen | `components/video.js`, `views/reels.js` | less bandwidth taken from the playing video |
+| **Motion polish**: spring easing token (`linear()` where supported); save heart pops on a spring (cards and Reels); cards give under the finger on touch; Reels caption and action rail rise in for the slide on screen (rail a beat later); progress bar shows only on the active slide; softer image fade-in | `app.css`, `views/reels.js` | reduced-motion users get none of it (global rule) |
+| Card badges wrap instead of running under the save button | `app.css` | |
+
+**Tried and dropped**: a scale-settle on card images as they load. It delayed Explore's largest paint by ~250 ms (2.64 → 2.86 s), so only the fade stayed.
+
+**Unchanged, for the record**: first paint ~0.47 s and LCP (Home 2.81 → 2.68 s, Explore 2.66 → 2.67 s, Reels 2.10 → 1.97 s) are within run-to-run noise; Reels swipe-to-first-frame stays ~350 ms (it is the length of the smooth-scroll animation; the next video is already buffered). The Reels style/paint totals went up a little (style 82 → 476 ms over 8 swipes at 4× slowdown) from the caption/rail transitions; the raster and composite savings are several times larger.
+
+**Verification**: 468 unit tests (4 new in `tests/v413.test.js`: compositor-only loops, shimmer stops on load, no live blur behind Reels or on card chips, galaxy not preloaded; the loop guard fails on the v4.12 CSS). Screenshots of Reels (at rest and mid-swipe), Explore, Home and a creator page compared against v4.12 on a phone viewport with no console errors. Re-run the numbers with `NODE_PATH=$(npm root -g) node scripts/perf-audit.js http://localhost:3999 3` against the demo seed.
+
 ## 2026-10-12 — v4.8 "Self-healing"
 
 **Audit findings**: when a post was deleted at its source, its card stayed in every feed forever, showing a broken image or a dead video. Nothing told the server, and nothing ever re-checked old items. Returning visitors had no quick way to see what had arrived while they were away; the "N new" counts existed only per smart feed. In Reels, each swipe started a fresh download, so every new video opened on a spinner. An automated accessibility pass (6 pages plus the viewer, dark and light) found one unnamed link: the viewer's creator avatar.

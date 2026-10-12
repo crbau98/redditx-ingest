@@ -12,7 +12,13 @@ export const isM3u8 = (u) => /\.m3u8(\?|$)/i.test(u || '');
 export function attachVideo(v, it) {
   // autoplay: false while a video only buffers off-screen (Reels warms the next one), so a
   // fallback to the MP4 does not start it playing in the background.
-  const handle = { hls: null, dead: false, autoplay: true, destroy() { this.dead = true; if (this.hls) { try { this.hls.destroy(); } catch { /* ignore */ } this.hls = null; } } };
+  // promote(): a warmed video became the one on screen. It buffered only a few seconds while it
+  // waited (so it did not compete with the playing video for bandwidth); now it may buffer normally.
+  const handle = {
+    hls: null, dead: false, autoplay: true,
+    destroy() { this.dead = true; if (this.hls) { try { this.hls.destroy(); } catch { /* ignore */ } this.hls = null; } },
+    promote() { this.autoplay = true; if (this.hls) { this.hls.config.maxBufferLength = 30; this.hls.config.maxMaxBufferLength = 60; } },
+  };
   const hls = it.hls_url || (isM3u8(it.media_url) ? it.media_url : null);
   const mp4 = isM3u8(it.media_url) ? null : it.media_url;
   const useHls = hls && (it.has_audio || !mp4);
@@ -36,7 +42,8 @@ export function attachVideo(v, it) {
     if (handle.dead || !v.isConnected) return;
     const Hls = window.Hls;
     if (!Hls || !Hls.isSupported()) { fallback(); return; }
-    const inst = new Hls({ enableWorker: true });
+    // Start at a level that suits the player size and buffer a little ahead when only warming.
+    const inst = new Hls({ enableWorker: true, capLevelToPlayerSize: true, backBufferLength: 15, maxBufferLength: handle.autoplay ? 30 : 6, maxMaxBufferLength: handle.autoplay ? 60 : 8 });
     handle.hls = inst;
     inst.on(Hls.Events.ERROR, (_, data) => { if (data.fatal) { try { inst.destroy(); } catch { /* ignore */ } handle.hls = null; fallback(); } });
     inst.loadSource(src);
