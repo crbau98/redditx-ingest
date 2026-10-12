@@ -228,10 +228,13 @@ async function searchWeb(q, pl, notes) {
   const term = (q.name || q.raw).replace(/"/g, '');
   const queries = [`"${term}" (onlyfans OR twitter OR bluesky OR reddit OR redgifs OR telegram OR linktree OR tumblr)`, `"${term}" gay creator links`];
   if (q.handles[0] && compact(q.handles[0]) !== compact(term)) queries.unshift(`"${q.handles[0]}" (onlyfans OR twitter OR bluesky OR reddit OR redgifs OR linktree)`);
+  // Site-restricted searches find the profile pages themselves (where the bio lives), which general results bury.
+  const jobs = queries.slice(0, 3).map((query) => ({ query }));
+  for (const site of ['linktr.ee', 'bsky.app', 'x.com']) jobs.push({ query: `"${term}"`, site });
   let provider = null;
-  for (const query of queries.slice(0, 3)) {
+  for (const { query, site } of jobs) {
     try {
-      const results = await websearch.search(query, { count: 20, budget: 200 });
+      const results = await websearch.search(query, { count: 20, budget: 200, site });
       provider = results.provider || provider;
       for (const r of results) {
         const text = `${r.title} ${r.description}`;

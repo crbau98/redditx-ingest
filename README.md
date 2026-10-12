@@ -168,7 +168,7 @@ It uses the real adapters and the real safety + male-only gates but writes nothi
 Admin → Creators → **Find a creator** (also *Find more accounts* inside a creator): type a **name, performer name, @handle or profile link**.
 
 1. the handle (and name-derived variants such as `jaxstone`, `jax_stone`) is probed on Reddit, RedGIFs, Bluesky, Mastodon, Misskey, X, Telegram and Tumblr through the real adapters, so “found” means *exists and has posts*;
-2. Bluesky people search, RedGIFs creator search and a web search of the name (Brave and/or a SearXNG instance — `BRAVE_API_KEY`, `SEARXNG_URL`) add accounts the handle guess missed;
+2. Bluesky people search, RedGIFs creator search and a web search of the name (Keenable, Brave and/or a SearXNG instance, tried in that order with fallback and caching — `KEENABLE_API_KEY`, `BRAVE_API_KEY`, `SEARXNG_URL`; site-restricted searches on linktr.ee, bsky.app and x.com find the profile pages themselves) add accounts the handle guess missed;
 3. bios and link-in-bio pages (Linktree, Beacons, AllMyLinks…) of what was found reveal the person's other accounts, which are verified the same way; paywalled links (OnlyFans, Throne…) are kept on the profile and never read;
 4. every candidate is scored (name similarity, exact handle, cross-links, independent sources, has content) and shown with its evidence; female / feminine candidates, minors and avatars showing a woman are hidden;
 5. **Follow selected** creates one creator with all chosen accounts and queues a deep first read (up to 300 posts per account); **Find & follow strong matches** does both steps at once. API: `POST /api/admin/lookup`, `/lookup/follow`, `/lookup/auto`.

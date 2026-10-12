@@ -71,13 +71,15 @@ module.exports = {
     misskeyToken: env.MISSKEY_ACCESS_TOKEN || '',
     // Brave Search API (web search) — powers creator discovery and cross-platform identity matching.
     braveKey: env.BRAVE_API_KEY || env.BRAVE_SEARCH_API_KEY || '',
+    // Keenable web search (an AI-agent search engine, MCP over HTTP). Used by creator lookup and discovery.
+    keenableKey: env.KEENABLE_API_KEY || '',
     // Telegram Bot API token (from @BotFather, "123456:ABC…"): channel metadata and existence checks.
     telegramBot: env.TELEGRAM_API_KEY || env.TELEGRAM_BOT_TOKEN || '',
   },
 
   // Web search backends (discovery + creator lookup), tried in this order. SearXNG needs no key: point it at any instance with the JSON format enabled.
   searxngUrl: String(env.SEARXNG_URL || '').trim(),
-  searchProviders: list(env.SEARCH_PROVIDERS, ['brave', 'searxng']),
+  searchProviders: list(env.SEARCH_PROVIDERS, ['keenable', 'brave', 'searxng']),
 
   // Federated sources: instances that adapters may talk to by default. Every hashtag/keyword feed is queried
   // on EACH instance below, so a longer list means more surface (and more requests): override from the
@@ -112,6 +114,7 @@ module.exports = {
     xSyndication: env.X_SYNDICATION_URL || 'https://syndication.twitter.com',
     brave: env.BRAVE_BASE_URL || 'https://api.search.brave.com',
     telegramBot: env.TELEGRAM_BOT_BASE_URL || 'https://api.telegram.org',
+    keenable: env.KEENABLE_BASE_URL || 'https://api.keenable.ai/mcp',
     // Tumblr's global tag feeds (blog feeds live on <blog>.tumblr.com or the blog's own domain).
     tumblr: String(env.TUMBLR_BASE_URL || 'https://www.tumblr.com').replace(/\/+$/, ''),
   },
