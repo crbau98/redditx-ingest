@@ -38,6 +38,7 @@ function shutdown(signal) {
   discovery.stop();
   health.stop();
   maintenance.stopImageSweep();
+  require('./src/lib/imagefilter').shutdown().catch(() => {});
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 8000).unref();
 }

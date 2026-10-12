@@ -21,7 +21,7 @@ before(async () => {
   maintenance = require('../src/engine/maintenance');
   feed = repo.feeds.upsert({ platform: 'reddit', kind: 'community', target: 'gaybrosgonewild', trusted: 1, origin: 'admin' }).feed;
 });
-after(async () => { imagefilter._reset(); await mock.close(); });
+after(async () => { imagefilter._reset(); await imagefilter.shutdown(); await mock.close(); });
 
 const settings = { probeUnknownHosts: false, scopeMode: 'open', imageFilter: true, imageFilterThreshold: 50 };
 const item = (o) => ({ sourceId: `p${++n}`, title: 'Gym selfie', author: `bro${n}`, community: 'gaybrosgonewild', mediaType: 'image', trusted: true, mediaUrl: `https://i.redd.it/img${n}.jpg`, ...o });

@@ -646,9 +646,9 @@ const mediaQ = {
   byKey: db.prepare('SELECT id FROM media WHERE source_key = ?'),
   byPost: db.prepare('SELECT 1 AS ok FROM media WHERE post_key = ? LIMIT 1'),
   insert: db.prepare(`INSERT INTO media (id, creator_id, feed_id, platform, source_id, source_key, post_key, position, source_url, community, author, title, description,
-      media_type, media_url, preview_url, thumbnail_url, hls_url, has_audio, width, height, duration, mime_type, score, hash, nsfw_level, scope, publish_state, review_reason, posted_at)
+      media_type, media_url, preview_url, thumbnail_url, hls_url, has_audio, width, height, duration, mime_type, score, hash, nsfw_level, scope, publish_state, review_reason, posted_at, phash)
     VALUES (@id, @creator_id, @feed_id, @platform, @source_id, @source_key, @post_key, @position, @source_url, @community, @author, @title, @description,
-      @media_type, @media_url, @preview_url, @thumbnail_url, @hls_url, @has_audio, @width, @height, @duration, @mime_type, @score, @hash, @nsfw_level, @scope, @publish_state, @review_reason, @posted_at)`),
+      @media_type, @media_url, @preview_url, @thumbnail_url, @hls_url, @has_audio, @width, @height, @duration, @mime_type, @score, @hash, @nsfw_level, @scope, @publish_state, @review_reason, @posted_at, @phash)`),
   state: db.prepare("UPDATE media SET publish_state = ?, review_reason = COALESCE(?, review_reason), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?"),
   like: db.prepare('UPDATE media SET likes = likes + 1 WHERE id = ?'),
   unlike: db.prepare('UPDATE media SET likes = MAX(0, likes - 1) WHERE id = ?'),
@@ -751,7 +751,29 @@ cachedCount.rows = function cachedRows(sql, args = []) {
 };
 const relatedCache = new Map(); // tags|mode|limit -> { lib, value } (valid while the library snapshot is the same object)
 
+/** Listeners told when a picture's publish state changes (the perceptual-duplicate index keeps itself current this way). */
+const stateHooks = [];
+const blockedHooks = [];
+const notifyBlocked = (hex) => { for (const fn of blockedHooks) { try { fn(hex); } catch { /* ignore */ } } };
+const notifyState = (id, state) => { for (const fn of stateHooks) { try { fn(id, state); } catch { /* an index must never break moderation */ } } };
+
 const media = {
+  /** Subscribe to publish-state changes: fn(id, state). */
+  onState(fn) { stateHooks.push(fn); },
+  onPhashBlocked(fn) { blockedHooks.push(fn); },
+  setPhash(id, hex) { db.prepare('UPDATE media SET phash = ? WHERE id = ?').run(hex || null, id); },
+  /** Pictures that already have a perceptual hash and are visible or awaiting review (feeds the in-memory index). */
+  hashedRows() { return db.prepare("SELECT id, phash, media_type, width, height FROM media WHERE phash IS NOT NULL AND publish_state IN ('published','review')").all(); },
+  hashInfo(id) { return db.prepare('SELECT phash, media_type, width, height, publish_state FROM media WHERE id = ?').get(id); },
+  /** Another place the SAME picture was posted. */
+  addAltSource(mediaId, { platform, source_url, author = null, community = null, posted_at = null }) {
+    if (!mediaId || !source_url) return false;
+    return db.prepare('INSERT OR IGNORE INTO media_alt_sources (media_id, platform, source_url, author, community, posted_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(mediaId, platform || 'web', String(source_url).slice(0, 600), author, community, posted_at).changes > 0;
+  },
+  altSources(id, limit = 8) { return db.prepare('SELECT platform, source_url, author, community, posted_at FROM media_alt_sources WHERE media_id = ? ORDER BY posted_at ASC, id ASC LIMIT ?').all(id, limit); },
+  phashBlocked() { return db.prepare('SELECT phash FROM phash_blocklist').all().map((r) => r.phash); },
+  blockPhash(hex, reason) { return !!hex && db.prepare('INSERT OR IGNORE INTO phash_blocklist (phash, reason) VALUES (?, ?)').run(hex, reason || null).changes > 0; },
   serialize: serializeMedia,
   get(id) { return serializeMedia(mediaQ.get.get(id)); },
   getFull(id) {
@@ -773,7 +795,7 @@ const media = {
           id, creator_id: null, feed_id: null, source_id: null, source_key: null, post_key: null, position: 0, source_url: null,
           community: null, author: null, title: null, description: null, preview_url: null, thumbnail_url: null, hls_url: null,
           has_audio: 0, width: null, height: null, duration: null, mime_type: null, score: 0, nsfw_level: 'explicit', scope: 'in',
-          publish_state: 'published', review_reason: null, posted_at: nowIso(), ...row,
+          publish_state: 'published', review_reason: null, posted_at: nowIso(), phash: null, ...row,
         });
       } catch (e) {
         // Duplicate hash / source_key: expected and harmless. Anything else is a real bug.
@@ -792,6 +814,7 @@ const media = {
     const m = db.prepare('SELECT creator_id FROM media WHERE id = ?').get(id);
     mediaQ.state.run(state, reason || null, id);
     if (m && m.creator_id) creators.refreshStats(m.creator_id);
+    notifyState(id, state);
   },
 
   update(id, patch) {
@@ -809,20 +832,25 @@ const media = {
     db.prepare(`UPDATE media SET ${sets.join(', ')} WHERE id = @id`).run(params);
     const m = db.prepare('SELECT creator_id FROM media WHERE id = ?').get(id);
     if (m && m.creator_id) creators.refreshStats(m.creator_id);
+    if (params.publish_state) notifyState(id, params.publish_state);
     return media.get(id);
   },
 
   /** Remove and remember (so ingestion never brings it back). */
   block(id, reason, actor = 'admin') {
-    const m = db.prepare('SELECT id, hash, source_key, post_key, creator_id FROM media WHERE id = ?').get(id);
+    const m = db.prepare('SELECT id, hash, source_key, post_key, creator_id, phash FROM media WHERE id = ?').get(id);
     if (!m) return null;
     db.transaction(() => {
       mediaQ.state.run('removed', reason || null, id);
       if (m.hash) blocklist.add('hash', m.hash, reason);
       if (m.source_key) blocklist.add('source_key', m.source_key, reason);
+      // the same picture re-uploaded anywhere else stays blocked too
+      if (m.phash) db.prepare('INSERT OR IGNORE INTO phash_blocklist (phash, reason) VALUES (?, ?)').run(m.phash, reason || null);
       logAction('media', id, 'block', reason, actor);
       if (m.creator_id) creators.refreshStats(m.creator_id);
     })();
+    notifyState(id, 'removed');
+    if (m.phash) notifyBlocked(m.phash);
     return true;
   },
 

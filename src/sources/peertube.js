@@ -21,6 +21,7 @@ const { toIso, clip, originOf } = require('./util');
 const { extractLinks } = require('../lib/links');
 
 const PAGE = 40;
+const DETAIL_CONCURRENCY = 4;
 const MAX_DETAILS = 60;      // detail lookups (= videos) per run
 const MAX_HEIGHT = 1080;
 
@@ -211,17 +212,21 @@ module.exports = {
 
     const items = [];
     const cap = Math.min(ctx.limit || 40, MAX_DETAILS);
-    let looked = 0;
-    for (const { video, host } of fresh.values()) {
-      if (ctx.aborted() || looked >= cap) break;
-      if (!host) continue;
-      looked++;
-      try {
-        const detail = await http.json(`${originOf(host)}/api/v1/videos/${encodeURIComponent(video.uuid)}`, { minIntervalMs: 250 });
-        const it = parseVideo(video, { ...detail, __host: host }, host);
-        if (it) items.push({ ...it, query: open ? feed.target : null });
-      } catch (e) { if (errors.length < 5) errors.push(`${host}/${video.uuid}: ${e.message}`); }
-    }
+    const queue = [];
+    for (const entry of fresh.values()) { if (queue.length >= cap) break; if (entry.host) queue.push(entry); }
+    // detail documents are independent requests: a few at a time (net.js still spaces calls per host)
+    let next = 0;
+    const lookup = async () => {
+      while (next < queue.length && !ctx.aborted()) {
+        const { video, host } = queue[next++];
+        try {
+          const detail = await http.json(`${originOf(host)}/api/v1/videos/${encodeURIComponent(video.uuid)}`, { minIntervalMs: 250 });
+          const it = parseVideo(video, { ...detail, __host: host }, host);
+          if (it) items.push({ ...it, query: open ? feed.target : null });
+        } catch (e) { if (errors.length < 5) errors.push(`${host}/${video.uuid}: ${e.message}`); }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(DETAIL_CONCURRENCY, queue.length) }, lookup));
     return { items, cursor: newest ? { newestAt: newest } : undefined, profile, via: 'api', notes: errors };
   },
 };

@@ -88,7 +88,7 @@ module.exports = {
   // environment to narrow or widen it. The first Mastodon instance is the one MASTODON_ACCESS_TOKEN applies to.
   // Only well-established servers are listed; an unreachable one is reported in the feed's notes, never fatal.
   mastodonInstances: list(env.MASTODON_INSTANCES, [
-    'mastodon.social', 'pawoo.net', 'mstdn.jp', 'fedibird.com', 'mastodon.online', 'mas.to', 'mstdn.social', 'mastodon.world', 'lgbt.io',
+    'mastodon.social', 'pawoo.net', 'mstdn.jp', 'fedibird.com', 'mastodon.online', 'mas.to', 'mastodon.world',
   ]),
   lemmyInstances: list(env.LEMMY_INSTANCES, [
     'lemmynsfw.com', 'lemmy.world', 'sh.itjust.works', 'lemmy.ml', 'lemm.ee', 'lemmy.dbzer0.com', 'reddthat.com',

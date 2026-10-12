@@ -27,7 +27,9 @@ const SCHEMA = {
   // --- image filter (v4.10) ---
   imageFilter: { type: 'bool', default: true, label: 'Image filter: exclude pictures that show a woman (on-device face + gender model)', group: 'safety' },
   imageFilterThreshold: { type: 'int', default: 50, min: 25, max: 95, label: 'Image filter: confidence (%) needed to call a face female — lower = stricter', group: 'safety' },
-  imageSweep: { type: 'bool', default: true, label: 'Re-check the existing library with the image filter in the background', group: 'safety' },
+  dedupe: { type: 'bool', default: true, label: 'Collapse the same picture posted again (perceptual hash): one item, with "also posted on" sources', group: 'safety' },
+  dedupeDistance: { type: 'int', default: 6, min: 0, max: 7, label: 'Duplicate sensitivity: bits of difference still counted as the same picture (0 = identical only, 7 = loosest)', group: 'safety' },
+  imageSweep: { type: 'bool', default: true, label: 'Re-check the existing library (women in pictures, duplicate pictures) in the background', group: 'safety' },
   imageSweepPerTick: { type: 'int', default: 12, min: 0, max: 200, label: 'Items re-checked per minute by the image sweep', group: 'safety' },
   // --- discovery (v4.3) ---
   autoDiscover: { type: 'bool', default: true, label: 'Discover new creators automatically (mentions, follow graphs, web search)', group: 'discovery' },

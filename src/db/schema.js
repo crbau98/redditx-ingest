@@ -406,7 +406,36 @@ function v5(db) {
   `);
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5];
+/**
+ * v6 (PRISM 4.11): perceptual duplicates. `phash` is the picture's perceptual hash (32 hex chars, lib/phash);
+ * `media_alt_sources` remembers every other place the SAME picture was posted (so duplicates collapse into one item that
+ * says "also on Reddit · X"); `phash_blocklist` makes a removed picture stay removed even when it is re-uploaded.
+ */
+function v6(db) {
+  const cols = db.prepare('PRAGMA table_info(media)').all().map((c) => c.name);
+  if (!cols.includes('phash')) db.exec('ALTER TABLE media ADD COLUMN phash TEXT');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS media_alt_sources (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      media_id TEXT NOT NULL REFERENCES media(id) ON DELETE CASCADE,
+      platform TEXT NOT NULL,
+      source_url TEXT NOT NULL,
+      author TEXT,
+      community TEXT,
+      posted_at TEXT,
+      added_at TEXT NOT NULL DEFAULT (${NOW}),
+      UNIQUE (media_id, source_url)
+    );
+    CREATE INDEX IF NOT EXISTS ix_alt_sources_media ON media_alt_sources(media_id);
+    CREATE TABLE IF NOT EXISTS phash_blocklist (
+      phash TEXT PRIMARY KEY,
+      reason TEXT,
+      created_at TEXT NOT NULL DEFAULT (${NOW})
+    );
+  `);
+}
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });
