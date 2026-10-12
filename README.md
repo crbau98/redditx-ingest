@@ -59,7 +59,7 @@ DEMO_ART=1 DB_PATH=./data/demo.db ADMIN_KEY=dev node server.js
 ### Tests
 
 ```bash
-npm test      # 412 tests: safety, SSRF, migration from a real v3 DB, adapters, engine resilience, HTTP API, proxy
+npm test      # 422 tests: safety, SSRF, migration from a real v3 DB, adapters, engine resilience, HTTP API, proxy
 ```
 
 ---
@@ -137,6 +137,8 @@ No system can enumerate "the whole web". PRISM grows its coverage in layers:
 ---
 
 ## Verifying the sources
+
+**Verified live (v4.10.1)** from a datacenter IP through the real engine, filters and image model: Reddit (via the archive fallback — Reddit blocks anonymous datacenter reads, set `REDDIT_CLIENT_ID/SECRET`), RedGIFs niches, Lemmy, Mastodon, Misskey, PeerTube, Telegram, Bluesky user feeds, Tumblr blogs and RSS all returned content that passed the gates and whose media loads. Needing credentials or a better IP: Reddit OAuth, Bluesky search (app password), X (token), `lemmynsfw.com` images (Cloudflare challenges some datacenter IPs — such items are skipped and logged instead of being published unloadable), Brave/SearXNG web search. Findings that changed the code: RedGIFs free-text search returns ~75% female-tagged results (replaced by curated niches), Tumblr removed site-wide tag feeds, Reddit's edge answers blocked requests with bare 404s (a community is now "gone" only when every transport agrees).
 
 Sources depend on the open web, so check them from the machine that runs PRISM (a sandbox without outbound network cannot):
 

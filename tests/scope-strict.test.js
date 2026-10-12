@@ -15,7 +15,7 @@ describe('male-only scope: hard exclusions win over every male signal and over f
     'shemale', 'she-male gay', 'tranny', 'ladyboy gay', 'tgirl', 't-girl gay', 'trans girl gay', 'trans woman', 'transgender gay', 'transsexual', 'trans gay men', 'ts model gay', 'mtf gay',
     'femboy', 'femboy_uwu gay', 'FemboyUwU', 'femboi gay', 'sissy gay', 'sissification gay', 'feminization gay', 'feminine gay', 'crossdresser gay', 'cross-dressing gay', 'drag queen gay', 'futanari gay', 'bimbo gay', 'girly gay',
     'ニューハーフ ゲイ', '男の娘 ゲイ', '女装 ゲイ', '女 ゲイ', 'おっぱい ゲイ', '人妻 ゲイ', 'ふたなり', '여자 게이', 'ผู้หญิง', 'กะเทย',
-    'mujer gay', 'chica gay', 'garota gay', 'mulher gay', 'madchen gay', 'девушка гей', 'женщина гей', 'ftm gay', 'm4t', 't4m',
+    'mujer gay', 'chica gay', 'garota gay', 'mulher gay', 'madchen gay', 'девушка гей', 'женщина гей', 'ftm gay', 'm4t', 't4m', '20 top bottom and fems dm me x', 'looking for fems',
   ];
   for (const t of female) test(`excluded: ${t}`, () => { excluded(t); excluded(t, { trusted: true }); });
 
@@ -28,7 +28,7 @@ describe('male-only scope: hard exclusions win over every male signal and over f
 describe('male-only scope: gay-male posts are accepted', () => {
   const male = [
     'hung gay stud', 'Gym selfie gay', 'bear hug', 'bearded daddy', 'muscle jock', 'm4m', '[M] 28 here', '(m) hi', 'twink', 'otter', 'jockstrap bulge', 'big traps and delts gay',
-    'trapezius gay men', 'Gladys and the bros', 'the shell game gay', 'softmax bros', 'gay couple on the beach', 'hairy men', 'ゲイ', 'ガチムチ筋肉', '筋肉', 'гей мужчины', '게이',
+    'trapezius gay men', 'Gladys and the gay bros', 'the shell game gay', 'softmax gay bros', 'gay couple on the beach', 'hairy men', 'ゲイ', 'ガチムチ筋肉', '筋肉', 'гей мужчины', '게이',
     'hombres gay', 'homem gay', 'schwul',
   ];
   for (const t of male) test(`accepted: ${t}`, () => inScope(t));
@@ -37,7 +37,7 @@ describe('male-only scope: gay-male posts are accepted', () => {
 });
 
 describe('male-only scope: ambiguous / feminine-adjacent wording is always held for a human', () => {
-  for (const t of ['boy pussy gay', 'man tits gay', 'manpussy', 'gay lingerie', 'panties gay men', 'heels gay', 'makeup gay', 'non-binary gay', 'enby gay', 'babe gay', 'trap gay', 'cuck gay'])
+  for (const t of ['boy pussy gay', 'man tits gay', 'gay manpussy', 'gay lingerie', 'panties gay men', 'heels gay', 'makeup gay', 'non-binary gay', 'enby gay', 'babe gay', 'trap gay', 'cuck gay'])
     test(`held: ${t}`, () => { review(t); review(t, { trusted: true }); });
 });
 
@@ -52,5 +52,23 @@ describe('femaleCheck (creators, handles, bios, feeds)', () => {
   test('camelCase handles are read word by word', () => {
     assert.equal(femaleCheck('CrossDresserDiary').level, 'hard');
     assert.equal(femaleCheck('GayBrosGoneWild').level, null);
+  });
+});
+
+describe('male evidence: strong vs weak, and the search query never counts', () => {
+  test('anatomy / relationship words alone are not enough for an open feed', () => {
+    for (const t of ['big cock', 'thick dick blowjob', 'hot bulge', 'my boyfriend and me', 'abs and pecs', 'bros']) assert.equal(classify(t).scope, 'uncertain', t);
+    for (const t of ['big cock', 'my boyfriend']) assert.equal(classify(t, { trusted: true }).scope, 'in', 'trusted communities are unaffected');
+    assert.equal(classify('big cock gay').scope, 'in');
+  });
+  test('soft female wording without a male statement of its own is excluded, not queued', () => {
+    assert.equal(classify('Amateur Big Tits OnlyFans Tits', { screen: ['gay'] }).scope, 'excluded');
+    assert.equal(classify('Amateur Boobs Cute Pussy Solo').scope, 'excluded');
+    assert.equal(classify('gay guy in panties').scope, 'uncertain');
+  });
+  test('the query a feed ran is screened for female words but is never male evidence', () => {
+    assert.equal(classify('Amateur Cum Cumshot', { screen: ['gay'] }).scope, 'uncertain');
+    assert.equal(classify('Amateur Cum Cumshot', { screen: ['lesbian'] }).scope, 'excluded');
+    assert.equal(classify('Amateur Cum Gay', { screen: ['gay'] }).scope, 'in');
   });
 });

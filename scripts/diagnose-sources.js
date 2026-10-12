@@ -107,7 +107,7 @@ async function check(spec) {
       if (hostBlocked(host)) { skip(`blocked host ${host}`); continue; }
       if (safety.level === 'review' || sc.femaleSoft || sc.scope === 'uncertain') { row.would.review++; continue; }
       row.would.publish++;
-      if (!firstOk && !it.resolve) firstOk = it;
+      if (!firstOk && !it.resolve && !/redgifs\.com\/(?:watch|ifr)\//i.test(it.mediaUrl)) firstOk = it;
     }
     if (firstOk && !/\.m3u8(\?|$)/i.test(firstOk.mediaUrl)) {
       const p = await probeMedia(firstOk.mediaUrl, firstOk.mediaType);

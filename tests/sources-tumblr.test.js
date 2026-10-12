@@ -37,18 +37,18 @@ test('blog feed: images upgraded to the largest size, reblogs and text posts ski
   assert.equal(r.profile.displayName, 'gymbro');
 });
 
-test('tag feed is read from the Tumblr-wide tag endpoint and every item carries the tag as its query', async () => {
-  const r = await tumblr.fetch({ kind: 'tag', target: 'gay muscle' }, ctx());
+test('tag feeds are per blog (site-wide tag feeds no longer exist) and every item carries the tag as its query', async () => {
+  const r = await tumblr.fetch({ kind: 'tag', target: `gay muscle@${host}` }, ctx());
   assert.ok(r.items.length >= 2);
   assert.ok(r.items.every((i) => i.query === 'gay muscle' && i.tags.includes('gay muscle')));
-  assert.equal(r.items[0].author, 'gymbro', 'the posting blog (not the tag) becomes the creator');
+  await assert.rejects(() => tumblr.fetch({ kind: 'tag', target: 'gay muscle' }, ctx()), (e) => e.skip === true && /site-wide/.test(e.message));
 });
 
 test('unchanged feeds and dead blogs', async () => {
   const first = await tumblr.fetch({ kind: 'user', target: host }, ctx());
   const again = await tumblr.fetch({ kind: 'user', target: host }, ctx({ cursor: first.cursor }));
   assert.equal(again.items.length, 0, 'cursor skips already-seen entries');
-  await assert.rejects(() => tumblr.fetch({ kind: 'tag', target: 'nosuchtag' }, ctx()), (e) => e.status === 404);
+  await assert.rejects(() => tumblr.fetch({ kind: 'tag', target: `nosuchtag@${host}` }, ctx()), (e) => e.status === 404);
 });
 
 test('feed urls and link parsing', () => {

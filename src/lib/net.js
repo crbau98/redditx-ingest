@@ -13,6 +13,7 @@ const http = require('http');
 const https = require('https');
 const dns = require('dns');
 const net = require('net');
+const tls = require('tls');
 const zlib = require('zlib');
 const { URL } = require('url');
 const config = require('../config');
@@ -89,6 +90,32 @@ const agentOpts = { keepAlive: true, maxSockets: 32, timeout: 30000, lookup: saf
 const httpAgent = new http.Agent(agentOpts);
 const httpsAgent = new https.Agent(agentOpts);
 
+/**
+ * Optional egress through an HTTP CONNECT proxy (OUTBOUND_PROXY=http://host:port), for networks that only allow
+ * outbound traffic via a proxy. Trade-off, stated plainly: the proxy resolves DNS, so the resolved-address check in
+ * safeLookup cannot run for these connections; literal-IP and local-name checks still apply, and the proxy
+ * itself is what keeps private ranges unreachable. Off by default.
+ */
+class ProxyTunnelAgent extends https.Agent {
+  constructor(proxyUrl, opts) { super(opts); this.proxy = new URL(proxyUrl); }
+  createConnection(options, cb) {
+    const host = options.host || options.hostname; const port = options.port || 443;
+    const headers = { host: `${host}:${port}` };
+    if (this.proxy.username) headers['proxy-authorization'] = `Basic ${Buffer.from(`${decodeURIComponent(this.proxy.username)}:${decodeURIComponent(this.proxy.password)}`).toString('base64')}`;
+    const req = http.request({ host: this.proxy.hostname, port: this.proxy.port || 80, method: 'CONNECT', path: `${host}:${port}`, headers, agent: false, timeout: 15000 });
+    req.once('connect', (res, socket) => {
+      if (res.statusCode !== 200) { socket.destroy(); return cb(Object.assign(new Error(`proxy refused CONNECT to ${host} (HTTP ${res.statusCode})`), { code: 'EPROXY', status: res.statusCode })); }
+      const secure = tls.connect({ socket, servername: options.servername || host, ALPNProtocols: ['http/1.1'] });
+      secure.once('secureConnect', () => cb(null, secure));
+      secure.once('error', cb);
+    });
+    req.once('timeout', () => req.destroy(Object.assign(new Error('proxy CONNECT timed out'), { code: 'ETIMEDOUT' })));
+    req.once('error', cb);
+    req.end();
+  }
+}
+const proxiedHttpsAgent = config.outboundProxy ? new ProxyTunnelAgent(config.outboundProxy, { keepAlive: true, maxSockets: 32, timeout: 30000 }) : null;
+
 class HttpError extends Error {
   constructor(message, { status = 0, url = '', retryAfter = 0, body = null, code = '' } = {}) {
     super(message);
@@ -158,7 +185,7 @@ function open(url, { method: method0 = 'GET', headers = {}, timeout = 20000, max
       const req = lib.request(parsed, {
         method,
         headers: hdrs,
-        agent: parsed.protocol === 'https:' ? httpsAgent : httpAgent,
+        agent: parsed.protocol === 'https:' ? (proxiedHttpsAgent || httpsAgent) : httpAgent,
       }, (res) => {
         const loc = res.headers.location;
         if ([301, 302, 303, 307, 308].includes(res.statusCode) && loc) {

@@ -26,7 +26,9 @@ before(async () => {
     '/r/laddertest/hot.rss': () => ({ headers: { 'content-type': 'application/atom+xml' }, body: atom }),
     '/r/archonly/top.json': () => ({ status: 403, json: {} }), '/r/archonly/hot.json': () => ({ status: 403, json: {} }),
     '/r/archonly/top.rss': () => ({ status: 403, body: 'no' }), '/r/archonly/hot.rss': () => ({ status: 403, body: 'no' }),
-    '/api/posts/search': () => ({ json: archive }),
+    '/api/posts/search': (req, res, url) => ({ json: url.searchParams.get('subreddit') === 'banned' ? { data: [] } : archive }),
+    '/r/edge404/top.json': () => ({ status: 403, json: {} }), '/r/edge404/hot.json': () => ({ status: 403, json: {} }),
+    '/r/edge404/top.rss': () => ({ headers: { 'content-type': 'application/atom+xml' }, body: atom }), '/r/edge404/hot.rss': () => ({ headers: { 'content-type': 'application/atom+xml' }, body: atom }),
     '/r/banned/top.json': () => ({ status: 404, json: {} }), '/r/banned/hot.json': () => ({ status: 404, json: {} }),
   });
   prepareEnv({ REDDIT_BASE_URL: mock.url, REDDIT_ARCHIVE_URL: mock.url });
@@ -55,11 +57,16 @@ describe('reddit transport ladder', () => {
     assert.equal(r.items[0].sourceId, 'arc1');
     assert.equal(r.items[0].mediaUrl, 'https://i.redd.it/arc1.jpg');
   });
-  test('a banned/missing community fails fast instead of walking every mirror', async () => {
+  test('a community is "gone" only when EVERY transport says 404 (Reddit answers blocked requests with bare 404s too)', async () => {
     const reddit = require('../src/sources/reddit');
     mock.hits.length = 0;
     await assert.rejects(() => reddit.fetch({ kind: 'community', target: 'banned' }, { cursor: {}, limit: 25, aborted: () => false }), (e) => e.status === 404);
-    assert.ok(mock.hits.every((h) => !h.includes('/api/posts/search')), 'archive never queried for a 404');
+    assert.ok(mock.hits.some((h) => h.includes('/api/posts/search')), 'the archive is asked too before declaring it gone');
+  });
+  test('one transport answering 404 (edge block) does not condemn a community the others can read', async () => {
+    const reddit = require('../src/sources/reddit');
+    const r = await reddit.fetch({ kind: 'community', target: 'edge404' }, { cursor: {}, limit: 25, aborted: () => false });
+    assert.equal(r.via, 'rss'); assert.ok(r.items.length >= 1);
   });
 });
 

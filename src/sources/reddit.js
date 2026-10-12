@@ -288,12 +288,17 @@ async function fetchPage(feed, sort, params, dead = new Set()) {
   const usable = attempts.filter(([name]) => !dead.has(name));
   const notes = [];
   const failed = [];
-  let firstErr; let empty = null;
+  let firstErr; let empty = null; let gone = 0;
   for (const [name, attempt] of usable.length ? usable : attempts) {
     try {
       const page = await attempt();
       if (!page) continue; // OAuth not configured
-      if (!paged && name !== 'archive' && page.rawCount === 0) { empty = empty || page; failed.push(`${name} empty`); notes.push(`${name}: empty listing`); continue; }
+      if (!paged && page.rawCount === 0) {
+        failed.push(`${name} empty`); notes.push(`${name}: empty listing`);
+        if (name === 'archive') gone++; // the archive knowing nothing about the community counts as a vote for "does not exist"
+        else empty = empty || page;
+        continue;
+      }
       page.notes = notes;
       return page;
     } catch (e) {
@@ -303,12 +308,15 @@ async function fetchPage(feed, sort, params, dead = new Set()) {
       notes.push(`${e.status || e.code || 'err'} ${String(e.message).slice(0, 80)}`);
       const tr = targetReason(e);
       if (tr) throw Object.assign(new Error(`${label} ${tr.text} (Reddit says "${tr.reason}")`), { status: 403, perTarget: true, targetGone: true });
-      if (e.status === 404 || e.status === 410) {
-        throw Object.assign(new Error(`${label} not found (HTTP ${e.status}: banned, suspended, private or misspelled)`), { status: e.status, retryAfter: e.retryAfter || 0 });
-      }
+      // A 404 from ONE transport proves nothing: Reddit's edge answers blocked datacenter requests to some endpoints
+      // (old.reddit.com JSON) with a bare "404 Not Found". Keep walking; only unanimity makes it "gone".
+      if (e.status === 404 || e.status === 410) gone++;
     }
   }
   if (empty) { empty.notes = notes; return empty; }
+  if (gone && gone === failed.length) {
+    throw Object.assign(new Error(`${label} not found (every transport says HTTP 404/410: banned, suspended, private or misspelled)`), { status: 404, retryAfter: 0 });
+  }
   if (!firstErr) firstErr = new Error('no Reddit transport available');
   // One actionable line: what failed where. Keep the first failure's status so the engine/breaker can reason about it.
   throw Object.assign(new Error(`Reddit unavailable for ${label} on every transport: ${failed.join(', ')}`), { status: firstErr.status || 0, retryAfter: firstErr.retryAfter || 0, code: firstErr.code || '' });

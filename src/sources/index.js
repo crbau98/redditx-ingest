@@ -32,19 +32,23 @@ const resolvers = [
  * 404) on many instances, and from discovery (Admin → Discovery), which searches for real communities itself.
  * Every untrusted (tag / search) seed carries unmistakable male wording: items must read male-focused to publish.
  */
-const SEED_VERSION = 5;
+const SEED_VERSION = 6;
 const seeds = (platform, kind, targets, extra) => targets.map((target) => ({ platform, kind, target, ...extra }));
 const SEEDS = [
   ...seeds('reddit', 'community', ['gaybrosgonewild', 'vlinesabsanddick', 'gaynsfw', 'twinks', 'massivecocks', 'gaymuscle',
     'broslikeus', 'malepubes', 'cock', 'bulges', 'jockstraps', 'gayporn', 'mangonewild', 'otters', 'bearsgonewild', 'gaybrosgonemild', 'ratemycock'],
   { trusted: true, intervalMin: 90 }),
-  ...seeds('redgifs', 'search', ['gay', 'twink', 'muscle', 'jock', 'otter', 'bear', 'bulge',
-    'gay muscle', 'gay daddy', 'gay bear', 'gay hairy', 'gay couple', 'gay amateur', 'gay hunk', 'gay jock', 'gay bulge', 'gay big cock', 'gay jerking off'],
-  { trusted: false, intervalMin: 180 }),
+  // RedGIFs: curated niches, not free-text search. Measured live: a text search for "gay" returned ~75% female-tagged
+  // results, while these niches are mostly men (and carry the Gay tag, which is what an untrusted feed needs).
+  ...seeds('redgifs', 'niche', ['gay-muscle', 'gay-blowjobs', 'gay-couples', 'male-pissing', 'interracial-gay', 'gay-cock-milking', 'gay-creampie', 'male-sex-toys', 'gay-cumming'],
+    { trusted: false, intervalMin: 120 }),
   ...seeds('x', 'search', ['gay muscle', 'gay jock', 'gaymuscle'], { trusted: false, intervalMin: 240 }),
   ...seeds('mastodon', 'tag', ['gay', 'gaymuscle', 'gaybear', 'gayotter', 'gaydaddy', 'gaynsfw', 'malenude', 'gaycock'], { trusted: false, intervalMin: 180 }),
   ...seeds('misskey', 'tag', ['ゲイ', 'ガチムチ', '筋肉', 'gay', 'gaymuscle'], { trusted: false, intervalMin: 180 }),
-  ...seeds('tumblr', 'tag', ['gay', 'gay muscle', 'gay bear', 'gay daddy', 'gay amateur', 'hairy men', 'muscle men', 'gay jock'], { trusted: false, intervalMin: 180 }),
+  // Lemmy communities verified live on lemmynsfw.com (names, activity and the posts API). The directory community
+  // "nsfwgaycommunities" and the daily NSFW community listing in discovery find more by themselves.
+  ...seeds('lemmy', 'community', ['gayporn@lemmynsfw.com', 'gaybrosgonewild@lemmynsfw.com', 'gayporngifs@lemmynsfw.com'], { trusted: true, intervalMin: 120 }),
+  ...seeds('lemmy', 'community', ['bulge@lemmynsfw.com', 'cocks@lemmynsfw.com', 'iwanttosuckcock@lemmynsfw.com'], { trusted: false, intervalMin: 120 }),
   ...seeds('peertube', 'search', ['gay', 'gay muscle', 'gay amateur', 'gay bear'], { trusted: false, intervalMin: 240 }),
   ...seeds('peertube', 'tag', ['gay'], { trusted: false, intervalMin: 240 }),
   ...seeds('bluesky', 'search', ['gaymuscle', 'gaybear', 'gaydaddy', 'gayotter', 'gaynsfw', 'malenude'], { trusted: false, intervalMin: 180 }),
@@ -53,7 +57,33 @@ const SEEDS = [
 /** Seeds from earlier versions that are not clearly male-only. Existing databases switch them off (origin 'seed' only). */
 const RETIRED_SEEDS = [
   { platform: 'reddit', kind: 'community', target: 'hardbodies' },   // mixed / women-heavy fitness community
-  { platform: 'reddit', kind: 'community', target: 'boyswithabs' },  // "boys" wording: youth-adjacent, never worth the risk
+  { platform: 'reddit', kind: 'community', target: 'boyswithabs' },
+  { platform: 'tumblr', kind: 'tag', target: 'gay' },   // Tumblr removed site-wide tag feeds (404)
+  { platform: 'tumblr', kind: 'tag', target: 'gay muscle' },   // Tumblr removed site-wide tag feeds (404)
+  { platform: 'tumblr', kind: 'tag', target: 'gay bear' },   // Tumblr removed site-wide tag feeds (404)
+  { platform: 'tumblr', kind: 'tag', target: 'gay daddy' },   // Tumblr removed site-wide tag feeds (404)
+  { platform: 'tumblr', kind: 'tag', target: 'gay amateur' },   // Tumblr removed site-wide tag feeds (404)
+  { platform: 'tumblr', kind: 'tag', target: 'hairy men' },   // Tumblr removed site-wide tag feeds (404)
+  { platform: 'tumblr', kind: 'tag', target: 'muscle men' },   // Tumblr removed site-wide tag feeds (404)
+  { platform: 'tumblr', kind: 'tag', target: 'gay jock' },   // Tumblr removed site-wide tag feeds (404)  // "boys" wording: youth-adjacent, never worth the risk
+  { platform: 'redgifs', kind: 'search', target: 'gay' },
+  { platform: 'redgifs', kind: 'search', target: 'twink' },
+  { platform: 'redgifs', kind: 'search', target: 'muscle' },
+  { platform: 'redgifs', kind: 'search', target: 'jock' },
+  { platform: 'redgifs', kind: 'search', target: 'otter' },
+  { platform: 'redgifs', kind: 'search', target: 'bear' },
+  { platform: 'redgifs', kind: 'search', target: 'bulge' },
+  { platform: 'redgifs', kind: 'search', target: 'gay muscle' },
+  { platform: 'redgifs', kind: 'search', target: 'gay daddy' },
+  { platform: 'redgifs', kind: 'search', target: 'gay bear' },
+  { platform: 'redgifs', kind: 'search', target: 'gay hairy' },
+  { platform: 'redgifs', kind: 'search', target: 'gay couple' },
+  { platform: 'redgifs', kind: 'search', target: 'gay amateur' },
+  { platform: 'redgifs', kind: 'search', target: 'gay hunk' },
+  { platform: 'redgifs', kind: 'search', target: 'gay jock' },
+  { platform: 'redgifs', kind: 'search', target: 'gay bulge' },
+  { platform: 'redgifs', kind: 'search', target: 'gay big cock' },
+  { platform: 'redgifs', kind: 'search', target: 'gay jerking off' },
 ];
 
 function get(platform) { return byPlatform.get(platform) || null; }
