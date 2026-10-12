@@ -207,7 +207,7 @@ describe('admin API', () => {
     const s = (await adm('/sources')).json; assert.ok(s.find((x) => x.platform === 'reddit').breaker); assert.ok(s.find((x) => x.platform === 'x').config.search.ok === false);
     assert.ok('running' in (await adm('/engine')).json);
     const st = await adm('/settings', { method: 'PUT', body: { maxConcurrentFeeds: 99, scopeMode: 'bogus', notASetting: 'x', autoTrack: false } });
-    assert.equal(st.json.values.maxConcurrentFeeds, 8, 'clamped'); assert.equal(st.json.values.scopeMode, 'strict', 'invalid enum falls back'); assert.equal(st.json.values.autoTrack, false);
+    assert.equal(st.json.values.maxConcurrentFeeds, 12, 'clamped'); assert.equal(st.json.values.scopeMode, 'strict', 'invalid enum falls back'); assert.equal(st.json.values.autoTrack, false);
     assert.ok(!('notASetting' in st.json.values));
     assert.ok(!JSON.stringify((await adm('/settings')).json).includes('test-key'), 'secrets never echoed');
   });

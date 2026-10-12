@@ -68,6 +68,10 @@ module.exports = {
     telegramBot: env.TELEGRAM_API_KEY || env.TELEGRAM_BOT_TOKEN || '',
   },
 
+  // Web search backends (discovery + creator lookup), tried in this order. SearXNG needs no key: point it at any instance with the JSON format enabled.
+  searxngUrl: String(env.SEARXNG_URL || '').trim(),
+  searchProviders: list(env.SEARCH_PROVIDERS, ['brave', 'searxng']),
+
   // Federated sources: instances that adapters may talk to by default. Every hashtag/keyword feed is queried
   // on EACH instance below, so a longer list means more surface (and more requests): override from the
   // environment to narrow or widen it. The first Mastodon instance is the one MASTODON_ACCESS_TOKEN applies to.

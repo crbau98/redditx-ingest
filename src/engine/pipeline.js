@@ -13,6 +13,7 @@ const { checkItem, checkText } = require('../lib/safety');
 const { classify, femaleCheck } = require('../lib/scope');
 const { canonicalUrl, hostOf, hostBlocked, hostTrusted, looksLikeDirectMedia, normalizeMediaUrl, isJunkTitle } = require('../lib/mediaurl');
 const { probeMedia } = require('./probe');
+const imagefilter = require('../lib/imagefilter');
 const events = require('./events');
 
 const SKIP_AUTHORS = new Set(['[deleted]', 'deleted', 'automoderator', 'web', 'null', 'undefined', '']);
@@ -20,6 +21,22 @@ const REDGIFS_PAGE = /redgifs\.com\/(?:watch|ifr)\//i;
 const md5 = (s) => crypto.createHash('md5').update(s).digest('hex');
 
 const cleanHandle = (a) => String(a || '').replace(/^[@/]+/, '').replace(/^u\//i, '').trim().slice(0, 80);
+
+const IMAGE_STRIKES_TO_BLOCK = 3;
+
+/** Each excluded picture counts against the account that posted it; repeated offenders are blocked for good. */
+function noteImageStrike(item, feed) {
+  const handle = cleanHandle(item.author);
+  if (!handle || SKIP_AUTHORS.has(handle.toLowerCase())) return;
+  const key = `${feed.platform}:${handle.toLowerCase()}`;
+  repo.logAction('account', key, 'image-female', 'picture shows a woman', 'system');
+  const strikes = repo.db.prepare("SELECT COUNT(*) AS n FROM moderation_actions WHERE target_type = 'account' AND target_id = ? AND action = 'image-female'").get(key).n;
+  if (strikes < IMAGE_STRIKES_TO_BLOCK) return;
+  const reason = `image filter: ${strikes} pictures with women`;
+  const creator = (feed.creator_id && ['user', 'feed', 'page'].includes(feed.kind) ? repo.creators.get(feed.creator_id) : null) || repo.creators.byAccount(feed.platform, handle);
+  if (creator && creator.status === 'active') { repo.creators.block(creator.id, reason, 'system'); events.log('WARN', `Creator ${creator.handle} blocked: ${reason}`); }
+  else repo.blocklist.add('creator', key, reason);
+}
 
 /** Block the creator behind an item whose own profile text is female / feminine, and remember the account. */
 function blockFemaleCreator(item, feed, rule) {
@@ -129,6 +146,18 @@ async function processItem(rawItem, feed, adapter, settings) {
 
   // ---- 6. dedupe ----------------------------------------------------------------
   if (repo.media.hashExists(hash) || repo.media.keyExists(sourceKey)) return { outcome: 'dupe' };
+
+  // ---- 6b. image filter: is there a woman in the picture? ---------------------------
+  // Text can say nothing at all about a photo, so the picture itself is checked (on-device face + gender model).
+  // No face / no image / model unavailable = no verdict: the text gates above already decided.
+  if (settings.imageFilter === true) {
+    const ir = await imagefilter.checkItem(item, { threshold: (settings.imageFilterThreshold || 50) / 100 });
+    if (ir.female) {
+      repo.blocklist.add('hash', hash, 'image filter: female face');
+      noteImageStrike(item, feed);
+      return { outcome: 'excluded', reason: 'image:female-face' };
+    }
+  }
 
   // ---- 7. creator -----------------------------------------------------------------
   const creator = resolveCreator(item, feed, adapter);

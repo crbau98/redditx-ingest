@@ -138,6 +138,7 @@ describe('web search (Brave)', () => {
     assert.ok(repo.candidates.find('linkinbio', 'page', 'https://linktr.ee/topicguy'), 'link-in-bio pages are leads too');
     assert.ok(repo.candidates.find('bluesky', 'user', 'blogfound.bsky.social'), 'links inside result snippets count');
     await discovery.braveTopics({ budget: 2 });
+    require('../src/lib/websearch')._clear(); // repeated queries are served from a 10-minute cache; the budget check is about real requests
     const before = state.braveCalls;
     const r3 = await discovery.braveTopics({ budget: 2 });
     assert.equal(r3.searched, 0); assert.equal(state.braveCalls, before, 'no request once the budget is spent');
