@@ -79,7 +79,7 @@ async function withTimeout(promise, ms) {
 
 async function check(spec) {
   const adapter = registry.get(spec.platform);
-  const row = { platform: spec.platform, kind: spec.kind, target: spec.target, reachable: false, fetched: 0, usable: 0, would: { publish: 0, review: 0, excluded: 0, blocked: 0, skipped: 0 }, skipReasons: {}, probe: null, error: null, hint: null, note: null, ms: 0 };
+  const row = { platform: spec.platform, kind: spec.kind, target: spec.target, reachable: false, fetched: 0, usable: 0, would: { publish: 0, review: 0, excluded: 0, dropped: 0, blocked: 0, skipped: 0 }, skipReasons: {}, probe: null, error: null, hint: null, note: null, ms: 0 };
   if (!adapter) { row.error = 'unknown platform'; return row; }
   if (!spec.target) { row.note = 'no sample target: pass --target platform:kind:target'; row.skipped = true; return row; }
   const conf = adapter.isConfigured(spec.kind);
@@ -101,8 +101,11 @@ async function check(spec) {
       row.usable++;
       const safety = checkItem(it);
       if (safety.level === 'block') { row.would.blocked++; continue; }
-      const sc = classify([it.title, it.text, it.altText, it.community, it.author, it.authorName, it.authorBio, it.tags, it.labels, it.query], { trusted: !!spec.trusted });
+      // exactly what the pipeline does: the query is screened for female words but is never male evidence
+      const sc = classify([it.title, it.text, it.altText, it.community, it.author, it.authorName, it.authorBio, it.tags, it.labels], { trusted: !!spec.trusted, screen: [it.query] });
       if (sc.scope === 'excluded') { row.would.excluded++; continue; }
+      // open searches/tags with no male wording at all are dropped by default (setting "untrustedUnclear")
+      if (sc.scope === 'uncertain' && !sc.femaleSoft && !spec.trusted) { row.would.dropped++; continue; }
       const host = hostOf(normalizeMediaUrl(it.mediaUrl));
       if (hostBlocked(host)) { skip(`blocked host ${host}`); continue; }
       if (safety.level === 'review' || sc.femaleSoft || sc.scope === 'uncertain') { row.would.review++; continue; }
@@ -146,7 +149,7 @@ async function check(spec) {
       if (r.hint) console.log(`        fix:   ${r.hint}`);
       if (r.note) console.log(`        note:  ${r.note}`);
       if (!r.skipped && !r.error) {
-        console.log(`        ${r.fetched} fetched · ${r.usable} with usable media · would publish ${r.would.publish}, review ${r.would.review}, excluded (not male-only) ${r.would.excluded}, blocked (safety) ${r.would.blocked}, skipped ${r.would.skipped}`);
+        console.log(`        ${r.fetched} fetched · ${r.usable} with usable media · would publish ${r.would.publish}, review ${r.would.review}, excluded (not male-only) ${r.would.excluded}, dropped (no male wording) ${r.would.dropped}, blocked (safety) ${r.would.blocked}, skipped ${r.would.skipped}`);
         const reasons = Object.entries(r.skipReasons).map(([k, v]) => `${k} ×${v}`).join(', ');
         if (reasons) console.log(`        skip reasons: ${reasons}`);
         if (r.probe) console.log(`        first media: ${r.probe}`);

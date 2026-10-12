@@ -288,14 +288,14 @@ async function fetchPage(feed, sort, params, dead = new Set()) {
   const usable = attempts.filter(([name]) => !dead.has(name));
   const notes = [];
   const failed = [];
-  let firstErr; let empty = null; let gone = 0; const errs = [];
+  let firstErr; let empty = null; let gone = 0; let explicitGone = 0; const errs = [];
   for (const [name, attempt] of usable.length ? usable : attempts) {
     try {
       const page = await attempt();
       if (!page) continue; // OAuth not configured
       if (!paged && page.rawCount === 0) {
         failed.push(`${name} empty`); notes.push(`${name}: empty listing`);
-        if (name === 'archive') gone++; // the archive knowing nothing about the community counts as a vote for "does not exist"
+        if (name === 'archive') gone++; // an archive that knows nothing agrees with "does not exist" - but only as a tie-breaker (see below)
         else empty = empty || page;
         continue;
       }
@@ -311,11 +311,13 @@ async function fetchPage(feed, sort, params, dead = new Set()) {
       if (tr) throw Object.assign(new Error(`${label} ${tr.text} (Reddit says "${tr.reason}")`), { status: 403, perTarget: true, targetGone: true });
       // A 404 from ONE transport proves nothing: Reddit's edge answers blocked datacenter requests to some endpoints
       // (old.reddit.com JSON) with a bare "404 Not Found". Keep walking; only unanimity makes it "gone".
-      if (e.status === 404 || e.status === 410) gone++;
+      if (e.status === 404 || e.status === 410) { gone++; explicitGone++; }
     }
   }
   if (empty) { empty.notes = notes; return empty; }
-  if (gone && gone === failed.length) {
+  // "Gone" needs EXPLICIT 404/410 answers from at least two live transports with nothing contradicting them; an archive
+  // that merely has no rows (it can lag, or not index a small community) is never enough on its own.
+  if (explicitGone >= 2 && gone === failed.length) {
     throw Object.assign(new Error(`${label} not found (every transport says HTTP 404/410: banned, suspended, private or misspelled)`), { status: 404, retryAfter: 0 });
   }
   if (!firstErr) firstErr = new Error('no Reddit transport available');
