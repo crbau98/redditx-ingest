@@ -224,7 +224,7 @@ router.get('/understand', (req, res) => {
 
 router.get('/tags/related', (req, res) => {
   const names = typeof req.query.tags === 'string' ? req.query.tags.split(',').slice(0, 4) : [];
-  res.json(repo.tagIntel.related(names, repo.clampInt(req.query.limit, 1, 30, 12)));
+  res.json(repo.tagIntel.related(names, repo.clampInt(req.query.limit, 1, 30, 12), { all: req.query.mode !== 'any' }));
 });
 
 router.get('/topics', (req, res) => res.json(topicsCached()));

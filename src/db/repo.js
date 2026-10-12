@@ -853,21 +853,26 @@ const tagIntel = {
   /**
    * Tags that travel with the given ones: co-occurrence on published media, ranked by
    * how much more often they appear together than their overall frequency predicts.
+   * `all` (default) measures against media carrying every given tag — the set a "narrow
+   * with" refinement actually narrows; `all: false` uses media carrying any of them (topics).
    */
-  related(names, limit = 12) {
+  related(names, limit = 12, { all = true } = {}) {
     const list = [...new Set((names || []).map(cleanTag).filter(Boolean))].slice(0, 4);
     if (!list.length) return [];
     const total = db.prepare("SELECT COUNT(*) AS n FROM media WHERE publish_state = 'published' AND scope != 'excluded'").get().n || 1;
-    const base = db.prepare(`SELECT COUNT(DISTINCT mt.media_id) AS n FROM media_tags mt JOIN tags t ON t.id = mt.tag_id JOIN media m ON m.id = mt.media_id
-      WHERE t.name IN (${list.map(() => '?').join(',')}) AND m.publish_state = 'published' AND m.scope != 'excluded'`).get(...list).n;
+    const marks = list.map(() => '?').join(',');
+    const baseSet = `SELECT mt2.media_id FROM media_tags mt2 JOIN tags t2 ON t2.id = mt2.tag_id JOIN media m ON m.id = mt2.media_id
+      WHERE t2.name IN (${marks}) AND m.publish_state = 'published' AND m.scope != 'excluded'
+      GROUP BY mt2.media_id${all ? ' HAVING COUNT(DISTINCT mt2.tag_id) = ?' : ''}`;
+    const baseArgs = all ? [...list, list.length] : list;
+    const base = db.prepare(`SELECT COUNT(*) AS n FROM (${baseSet})`).get(...baseArgs).n;
     if (!base) return [];
     const rows = db.prepare(`SELECT t.name, COUNT(DISTINCT mt.media_id) AS co,
         (SELECT COUNT(*) FROM media_tags x JOIN media xm ON xm.id = x.media_id WHERE x.tag_id = t.id AND xm.publish_state = 'published' AND xm.scope != 'excluded') AS freq
       FROM media_tags mt JOIN tags t ON t.id = mt.tag_id
-      WHERE mt.media_id IN (SELECT mt2.media_id FROM media_tags mt2 JOIN tags t2 ON t2.id = mt2.tag_id JOIN media m ON m.id = mt2.media_id
-                            WHERE t2.name IN (${list.map(() => '?').join(',')}) AND m.publish_state = 'published' AND m.scope != 'excluded')
-        AND t.name NOT IN (${list.map(() => '?').join(',')}) AND t.name NOT IN (${PLATFORM_TAGS_SQL})
-      GROUP BY t.id HAVING co >= 2`).all(...list, ...list);
+      WHERE mt.media_id IN (${baseSet})
+        AND t.name NOT IN (${marks}) AND t.name NOT IN (${PLATFORM_TAGS_SQL})
+      GROUP BY t.id HAVING co >= 2`).all(...baseArgs, ...list);
     const communities = new Set(db.prepare("SELECT DISTINCT community FROM media WHERE community IS NOT NULL").all().map((r) => cleanTag(r.community)));
     return rows.filter((r) => !communities.has(r.name)).map((r) => {
       const lift = (r.co / base) / (r.freq / total);

@@ -29,7 +29,7 @@ before(async () => {
     '/2/users/by': (req, res, url) => {
       state.xLookups++;
       const names = (url.searchParams.get('usernames') || '').split(',');
-      return { json: { data: names.filter((u) => u !== 'gone').map((u) => ({ username: u, name: `X ${u}`, description: u.startsWith('musc') ? 'Gay muscle model, 18+' : 'just vibes', public_metrics: { followers_count: 12000 }, profile_image_url: `https://pbs.twimg.com/p/${u}_normal.jpg` })) } };
+      return { json: { data: names.filter((u) => u !== 'gone').map((u) => ({ username: u, name: u === 'cleanhandle' ? 'ChildModel' : `X ${u}`, description: u.startsWith('musc') ? 'Gay muscle model, 18+' : 'just vibes', public_metrics: { followers_count: 12000 }, profile_image_url: `https://pbs.twimg.com/p/${u}_normal.jpg` })) } };
     },
   });
   prepareEnv({ AGE_GATE_ENFORCE: 'true', REDDIT_BASE_URL: mock.url, BSKY_BASE_URL: mock.url, X_BEARER_TOKEN: 'xt', X_BASE_URL: mock.url, LEMMY_INSTANCES: 'lemmy.test' });
@@ -113,6 +113,13 @@ describe('tag intelligence', () => {
     assert.ok(!repo.tagIntel.related(['gym']).some((t) => t.name === 'hiddenonly'));
     assert.ok(!repo.tagIntel.vocabulary().tags.some((t) => t.name === 'hiddenonly'));
   });
+  test('with several tags, suggestions narrow the set that has all of them', () => {
+    // no post is both #gym and #beach, so there is nothing to narrow — even though each alone has partners
+    assert.deepEqual(repo.tagIntel.related(['gym', 'beach']), []);
+    const gm = repo.tagIntel.related(['gym', 'muscle']).map((t) => t.name);
+    assert.ok(gm.includes('mirror') || gm.includes('flex'), gm.join());
+    assert.ok(!gm.includes('surf'));
+  });
   test('topics group co-occurring tags with previews', () => {
     const topics = repo.tagIntel.topics({ minCount: 2 });
     assert.ok(topics.length >= 2, JSON.stringify(topics));
@@ -134,6 +141,8 @@ describe('tag intelligence', () => {
     assert.equal(media.json.total, 2);
     assert.equal((await call('/api/media?anytags=surf,mirror')).json.total, 9);
     assert.ok((await call('/api/tags/related?tags=beach')).json.some((t) => t.name === 'surf'));
+    assert.deepEqual((await call('/api/tags/related?tags=gym,surf')).json, [], 'default: narrowing needs posts with all the tags');
+    assert.ok(Array.isArray((await call('/api/tags/related?tags=gym,surf&mode=any')).json));
     assert.ok(Array.isArray((await call('/api/topics')).json));
     for (const p of ['/api/understand?q=x', '/api/topics', '/api/tags/related?tags=gym']) assert.equal((await call(p, {})).status, 403, p);
   });
@@ -249,6 +258,21 @@ describe('far-reaching discovery', () => {
     assert.equal(repo.candidates.find('x', 'user', 'gone').reason, 'checked', 'missing accounts are not looked up again');
     await discovery.enrich();
     assert.equal(state.xLookups, before + 1, 'nothing left to look up');
+  });
+  test('profile lookups use the strict gate and never clear an earlier review flag', async () => {
+    const { parseProfile } = require('../src/lib/links');
+    // the handle reads clean; only the looked-up display name ("ChildModel") gives it away
+    const hidden = discovery.consider(parseProfile('https://x.com/cleanhandle'), 'mention', 'c1');
+    assert.equal(hidden.status, 'pending');
+    // flagged for review on the way in ("TeenBoys"), then a clean-looking profile comes back
+    const flagged = discovery.consider(parseProfile('https://x.com/reviewme'), 'mention', 'c1', { displayName: 'TeenBoys' });
+    assert.match(flagged.reason, /needs review/);
+    await discovery.enrich();
+    const h = repo.candidates.get(hidden.id);
+    assert.equal(h.status, 'rejected'); assert.match(h.reason, /safety/);
+    const f = repo.candidates.get(flagged.id);
+    assert.equal(f.status, 'pending'); assert.match(f.reason, /needs review/, 'a lookup never clears the flag');
+    assert.ok(!repo.candidates.promotable(0, 500).some((c) => c.id === flagged.id), 'so it is never auto-followed');
   });
   test('settings and status expose the new controls', () => {
     const s = settings.get();
