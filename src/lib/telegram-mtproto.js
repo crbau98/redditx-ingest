@@ -63,8 +63,10 @@ async function client() {
       if (!conf.ok) throw Object.assign(new Error(conf.note), { skip: true, prism: true });
       const { TelegramClient } = require('telegram');
       const { StringSession } = require('telegram/sessions');
+      // useWSS: true only moves GramJS's first connection from port 80 to 443 (still plain MTProto over TCP in Node). Port 80 to
+      // Telegram is blocked on some hosts (GitHub Codespaces, many cloud firewalls); every other DC connection already uses 443.
       const c = new TelegramClient(new StringSession(sessionString()), config.telegram.apiId, config.telegram.apiHash, {
-        connectionRetries: 3, floodSleepThreshold: 30, deviceModel: 'PRISM', appVersion: config.version, useWSS: false,
+        connectionRetries: 3, floodSleepThreshold: 30, deviceModel: 'PRISM', appVersion: config.version, useWSS: true,
       });
       c.setLogLevel('error');
       await c.connect();

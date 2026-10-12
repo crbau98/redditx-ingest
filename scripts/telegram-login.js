@@ -38,7 +38,7 @@ function askHidden(q) {
 
   const { TelegramClient } = require('telegram');
   const { StringSession } = require('telegram/sessions');
-  const client = new TelegramClient(new StringSession(''), apiId, apiHash, { connectionRetries: 5, deviceModel: 'PRISM', appVersion: config.version });
+  const client = new TelegramClient(new StringSession(''), apiId, apiHash, { connectionRetries: 5, deviceModel: 'PRISM', appVersion: config.version, useWSS: true }  // port 443, see src/lib/telegram-mtproto.js);
   client.setLogLevel('error');
   await client.start({
     phoneNumber: () => ask('Phone number with country code (+15551234567): '),
