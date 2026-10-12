@@ -270,6 +270,10 @@ function open(url, { method: method0 = 'GET', headers = {}, timeout = 20000, max
     const go = (target, hdrs) => {
       let parsed;
       try { parsed = new URL(target); } catch (e) { return reject(new HttpError('Invalid URL', { url: String(target) })); }
+      // Media PRISM keeps in its own object store (see lib/objectstore): answered from the bucket, never by DNS.
+      if (hops === 0 && parsed.hostname.toLowerCase() === config.storeHost) {
+        return require('./objectstore').open(target, { method, headers: hdrs }).then(resolve, (e) => reject(e instanceof HttpError ? e : new HttpError(e.message, { url: target, code: e.code || '', status: e.status })));
+      }
       if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
         return reject(new HttpError('Unsupported protocol', { url: target }));
       }
@@ -310,8 +314,8 @@ function open(url, { method: method0 = 'GET', headers = {}, timeout = 20000, max
       });
       req.on('error', (e) => reject(new HttpError(e.message, { url: target, code: e.code || '' })));
       req.setTimeout(timeout, () => { req.destroy(new Error('Timeout')); });
-      if (body) req.write(body);
-      req.end();
+      if (body && typeof body.pipe === 'function') { body.on('error', (e) => req.destroy(e)); body.pipe(req); } // an upload streamed from disk
+      else { if (body) req.write(body); req.end(); }
     };
     go(url, { 'user-agent': config.userAgent, accept: '*/*', 'accept-encoding': 'gzip, deflate, br', ...lower(headers) });
   });

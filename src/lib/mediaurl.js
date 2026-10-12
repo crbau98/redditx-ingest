@@ -3,6 +3,7 @@
  * URL-level media helpers: host classification, junk detection, normalisation.
  * (No network here — the engine decides when a probe is warranted.)
  */
+const config = require('../config');
 const { hostnameOf } = require('./net');
 
 // Stock-photo / search / generic hosts that are never creator media.
@@ -17,7 +18,12 @@ const BLOCKED_HOSTS = [
 ];
 
 // CDNs that serve user media directly.
+// Media we keep ourselves (Telegram downloads) lives in the object store under a reserved name that never resolves
+// (config.storeHost; lib/net.js serves it straight from the bucket, so no DNS or third party is involved).
+const STORE_HOST = config.storeHost;
+
 const TRUSTED_HOSTS = [
+  STORE_HOST,
   'redd.it', 'redditmedia.com', 'redditstatic.com', 'imgur.com', 'redgifs.com',
   'gfycat.com', 'twimg.com', 'bsky.app', 'bsky.social', 'bsky.network',
 ];
@@ -71,7 +77,7 @@ function canonicalUrl(url) {
 }
 
 module.exports = {
-  BLOCKED_HOSTS, TRUSTED_HOSTS, hostOf, hostMatches, hostBlocked, hostTrusted,
+  STORE_HOST, BLOCKED_HOSTS, TRUSTED_HOSTS, hostOf, hostMatches, hostBlocked, hostTrusted,
   looksLikeDirectMedia, looksLikeVideo, normalizeMediaUrl, normalizeImgur,
   isJunkTitle, canonicalUrl,
 };

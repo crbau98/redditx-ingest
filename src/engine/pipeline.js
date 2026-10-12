@@ -124,7 +124,7 @@ function resolveCreator(item, feed, adapter) {
 /**
  * @returns {Promise<{outcome: 'added'|'dupe'|'blocked'|'review'|'skipped'|'excluded', reason?: string, mediaId?: string, creatorId?: string}>}
  */
-async function processItem(rawItem, feed, adapter, settings) {
+async function processItemInner(rawItem, feed, adapter, settings) {
   const item = { ...rawItem, tags: [...(rawItem.tags || [])] };
   const platform = feed.platform;
 
@@ -191,6 +191,13 @@ async function processItem(rawItem, feed, adapter, settings) {
 
   // ---- 6. dedupe ----------------------------------------------------------------
   if (repo.media.hashExists(hash) || repo.media.keyExists(sourceKey)) return { outcome: 'dupe' };
+
+  // ---- 6a. fetch the media into our own storage -----------------------------------------
+  // Sources whose files cannot be hotlinked (Telegram) hand over a `materialize()` instead of a finished URL. It runs only now,
+  // after the cheap text gates and the duplicate check, so rejected posts never cost a download or any storage.
+  if (typeof item.materialize === 'function') {
+    try { await item.materialize(item); } catch (e) { return { outcome: 'skipped', reason: `download: ${String(e.message || e).slice(0, 160)}` }; }
+  }
 
   // ---- 6b. image filter: is there a woman in the picture? ---------------------------
   // Text can say nothing at all about a photo, so the picture itself is checked (on-device face + gender model).
@@ -271,6 +278,20 @@ async function processItem(rawItem, feed, adapter, settings) {
 
   if (state === 'published') events.newItems(1);
   return { outcome: state === 'review' ? 'review' : 'added', mediaId, creatorId: creator ? creator.id : null, reason: reviewReason };
+}
+
+/**
+ * Run one item through every gate. Anything a source stored for the item (`discard()`) is removed again unless the item was kept:
+ * a rejected, duplicate or failed post must not leave files behind.
+ */
+async function processItem(rawItem, feed, adapter, settings) {
+  let result;
+  try { result = await processItemInner(rawItem, feed, adapter, settings); } catch (e) { result = { outcome: 'error', error: e }; }
+  if (typeof rawItem.discard === 'function' && result.outcome !== 'added' && result.outcome !== 'review') {
+    try { await rawItem.discard(); } catch { /* best effort */ }
+  }
+  if (result.outcome === 'error') throw result.error;
+  return result;
 }
 
 module.exports = { processItem, resolveCreator, cleanHandle, _hostState: hostState };
