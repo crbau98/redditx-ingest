@@ -333,7 +333,45 @@ function v2(db) {
   scan("SELECT DISTINCT substr(avatar_url, 1, instr(substr(avatar_url, 9), '/') + 8) AS u FROM creators WHERE avatar_url IS NOT NULL");
 }
 
-const MIGRATIONS = [v1, v2];
+/**
+ * v3 (PRISM 4.3): the discovery queue and its bookkeeping, plus indexes for the
+ * newer read paths (ingest-time filters, rising creators, recommendations).
+ */
+function v3(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS candidates (
+      id TEXT PRIMARY KEY,
+      platform TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      target TEXT NOT NULL COLLATE NOCASE,
+      label TEXT,
+      url TEXT,
+      display_name TEXT,
+      avatar_url TEXT,
+      bio TEXT,
+      score REAL NOT NULL DEFAULT 0,
+      signals TEXT NOT NULL DEFAULT '{}',
+      scope TEXT NOT NULL DEFAULT 'uncertain',
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','followed','rejected','linked')),
+      reason TEXT,
+      creator_id TEXT REFERENCES creators(id) ON DELETE SET NULL,
+      first_seen TEXT NOT NULL DEFAULT (${NOW}),
+      last_seen TEXT NOT NULL DEFAULT (${NOW}),
+      decided_at TEXT,
+      UNIQUE (platform, kind, target)
+    );
+    CREATE INDEX IF NOT EXISTS ix_candidates_queue ON candidates(status, score DESC);
+    CREATE TABLE IF NOT EXISTS discovery_state (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      updated_at TEXT NOT NULL DEFAULT (${NOW})
+    );
+    CREATE INDEX IF NOT EXISTS ix_media_ingested ON media(ingested_at DESC) WHERE publish_state = 'published';
+    CREATE INDEX IF NOT EXISTS ix_media_creator_pub ON media(creator_id, publish_state, posted_at DESC);
+  `);
+}
+
+const MIGRATIONS = [v1, v2, v3];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

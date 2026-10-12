@@ -15,11 +15,24 @@ const SCHEMA = {
   autoTrack: { type: 'bool', default: true, label: 'Auto-follow creators discovered in communities' },
   autoTrackMinItems: { type: 'int', default: 2, min: 1, max: 20, label: 'Posts before a creator is auto-followed' },
   autoLinkProfiles: { type: 'bool', default: true, label: 'Follow creators’ other public accounts found in their bios' },
+  adaptiveScheduling: { type: 'bool', default: true, label: 'Adaptive scheduling: check busy feeds sooner, quiet ones less often' },
   maxFeeds: { type: 'int', default: 600, min: 10, max: 5000, label: 'Cap on enabled feeds' },
   probeUnknownHosts: { type: 'bool', default: true, label: 'Verify media from unknown hosts before publishing' },
   backupEnabled: { type: 'bool', default: config.isProd, label: 'Back up the database nightly' },
   backupKeep: { type: 'int', default: 3, min: 1, max: 30, label: 'Backups to keep' },
   keepRunHistoryDays: { type: 'int', default: 30, min: 1, max: 365, label: 'Run history retention (days)' },
+  xMonthlyReadBudget: { type: 'int', default: 10000, min: 0, max: 10000000, label: 'X API: max posts read per month (match your plan)' },
+  // --- discovery (v4.3) ---
+  autoDiscover: { type: 'bool', default: true, label: 'Discover new creators automatically (mentions, follow graphs, web search)', group: 'discovery' },
+  discoveryIntervalMin: { type: 'int', default: 60, min: 15, max: 1440, label: 'Discovery runs every (minutes)', group: 'discovery' },
+  discoveryAutoFollowScore: { type: 'int', default: 8, min: 3, max: 60, label: 'Auto-follow a candidate at this score', group: 'discovery' },
+  discoveryMaxFollowsPerRun: { type: 'int', default: 10, min: 0, max: 100, label: 'Max creators auto-followed per run', group: 'discovery' },
+  discoveryGraph: { type: 'bool', default: true, label: 'Read who followed Bluesky creators follow', group: 'discovery' },
+  braveDailyBudget: { type: 'int', default: 40, min: 0, max: 2000, label: 'Brave searches per day (budget)', group: 'discovery' },
+  discoveryQueries: {
+    type: 'text', group: 'discovery', label: 'Web-search topics (one per line; rotated, one per run)',
+    default: ['gay male model bluesky', 'male fitness model onlyfans x.com', 'gay creator linktree 18+', 'muscle model telegram channel', 'gay twink creator redgifs', 'bear daddy creator onlyfans bluesky', 'gay amateur couple onlyfans twitter', 'male model throne wishlist'].join('\n'),
+  },
 };
 
 function coerce(def, raw) {
@@ -30,6 +43,7 @@ function coerce(def, raw) {
     return Number.isFinite(n) ? Math.min(Math.max(n, def.min), def.max) : def.default;
   }
   if (def.type === 'enum') return def.values.includes(raw) ? raw : def.default;
+  if (def.type === 'text') return String(raw).replace(/\r/g, '').split('\n').map((l) => l.trim().slice(0, 160)).filter(Boolean).slice(0, 60).join('\n');
   return raw;
 }
 
@@ -50,7 +64,7 @@ function update(patch) {
 }
 
 function describe() {
-  return Object.entries(SCHEMA).map(([key, d]) => ({ key, type: d.type, label: d.label, min: d.min, max: d.max, values: d.values, default: d.default }));
+  return Object.entries(SCHEMA).map(([key, d]) => ({ key, type: d.type, label: d.label, min: d.min, max: d.max, values: d.values, default: d.default, group: d.group || 'ingestion' }));
 }
 
 module.exports = { get, update, describe, SCHEMA };

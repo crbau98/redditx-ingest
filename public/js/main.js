@@ -4,6 +4,7 @@ import { parse, href, navigate, matchRoute, routeKey } from './router.js';
 import { prefs, favorites, follows, platforms, bus } from './store.js';
 import { syncFromUrl, isOpen } from './components/lightbox.js';
 import { openPalette, paletteOpen, surpriseMe } from './components/palette.js';
+import { openDisplaySettings } from './components/display.js';
 import { openTakedownForm } from './components/report.js';
 import { attachSuggest } from './components/suggest.js';
 import { home } from './views/home.js';
@@ -111,13 +112,14 @@ function buildShell() {
     h('a', { class: 'brand', href: href('/'), 'aria-label': 'PRISM home' }, icon('logo'), h('span', null, 'PRISM')),
     h('nav', { class: 'nav', 'aria-label': 'Primary' }, NAV.map(([key, path, label, ic]) => h('a', { href: href(path), dataset: { nav: key } }, icon(ic, 'sm'), label, key === 'saved' ? savedBadge : null))),
     h('div', { class: 'search' }, icon('search'), searchInput, h('span', { class: 'kbd hide-mobile' }, '/')),
-    h('div', { class: 'appbar-actions' }, h('button', { class: 'btn icon ghost', 'aria-label': 'Command palette', title: 'Command palette (Ctrl/⌘ K)', onclick: openPalette }, icon('command')), themeBtn, h('a', { class: 'btn icon ghost hide-mobile', href: href('/admin'), 'aria-label': 'Admin', title: 'Admin' }, icon('sliders'))));
+    h('div', { class: 'appbar-actions' }, h('button', { class: 'btn icon ghost hide-mobile', 'aria-label': 'Command palette', title: 'Command palette (Ctrl/⌘ K)', onclick: openPalette }, icon('command')), themeBtn, h('button', { class: 'btn icon ghost', 'aria-label': 'Display settings', title: 'Display settings', onclick: openDisplaySettings }, icon('palette')), h('a', { class: 'btn icon ghost hide-mobile', href: href('/admin'), 'aria-label': 'Admin', title: 'Admin' }, icon('sliders'))));
 
   const main = h('main', { id: 'main', tabindex: '-1' });
   const footer = h('footer', { class: 'footer' },
     h('span', null, 'PRISM — adults only (18+)'),
     h('a', { href: href('/browse') }, 'Browse'),
     h('button', { onclick: showShortcuts }, 'Keyboard shortcuts'),
+    h('button', { onclick: openDisplaySettings }, 'Display settings'),
     h('button', { onclick: openTakedownForm }, 'Report content / takedown'),
     h('a', { href: href('/admin') }, 'Admin'));
   const bottom = h('nav', { class: 'bottomnav five', 'aria-label': 'Primary' }, NAV.filter((n) => !n[4]).map(([key, path, label, ic]) => h('a', { href: href(path), dataset: { nav: key } }, icon(ic, 'lg'), label)));

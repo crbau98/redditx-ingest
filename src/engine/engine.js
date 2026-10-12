@@ -33,9 +33,24 @@ const RUN_TIMEOUT_MS = 150_000;
 const parseJson = (s) => { try { return s ? JSON.parse(s) : {}; } catch { return {}; } };
 const withTimeout = (p, ms, label) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error(`${label} timed out after ${ms / 1000}s`), { status: 0 })), ms).unref())]);
 
+/**
+ * Adaptive tempo: a feed that keeps producing is checked sooner (down to half its interval),
+ * one that keeps coming back empty is checked less often (up to 3x, never beyond a day).
+ */
+function tempo(feed, added) {
+  if (!settingsStore.get().adaptiveScheduling) return 1;
+  if (added >= 10) return 0.5;
+  if (added >= 3) return 0.75;
+  if (added > 0) return 1;
+  const prev = repo.runs.recentAdded(feed.id, 3);
+  let streak = 1;
+  for (const a of prev) { if (a > 0) break; streak++; }
+  return Math.min(3, 1 + 0.5 * (streak - 1));
+}
+
 /** next_run_at after a run: jittered interval on success, exponential backoff on failure. */
-function computeNextRun(feed, failures, retryAfterMs = 0) {
-  const base = Math.max(5, feed.interval_min) * 60000;
+function computeNextRun(feed, failures, retryAfterMs = 0, factor = 1) {
+  const base = Math.min(Math.max(5, feed.interval_min) * 60000 * factor, Math.max(24 * 3600000, feed.interval_min * 60000));
   const jitter = 0.9 + Math.random() * 0.2;
   const delay = failures > 0 ? Math.min(base * 2 ** (failures - 1), 24 * 3600000) * jitter : base * jitter;
   return new Date(Date.now() + Math.max(delay, retryAfterMs)).toISOString();
@@ -123,7 +138,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     const status = stats.fetched === 0 ? 'empty' : 'ok';
     repo.feeds.finishRun(feed.id, {
       status, cursor: result.cursor, addedItems: stats.added, failures: 0,
-      nextRunAt: computeNextRun(feed, 0), error: (result.notes && result.notes.length) ? `via ${result.via}: ${result.notes[0]}` : null,
+      nextRunAt: computeNextRun(feed, 0, 0, tempo(feed, stats.added)), error: (result.notes && result.notes.length) ? `via ${result.via}: ${result.notes[0]}` : null,
     });
     breaker.success(feed.platform);
     const skipSummary = Object.entries(reasons).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k}×${v}`).join(', ');
@@ -263,4 +278,4 @@ function shutdown() {
   state.timer = null; state.hotTimer = null; state.stopRequested = true;
 }
 
-module.exports = { start, shutdown, tick, runFeed, enqueue, enqueuePlatforms, stopAll, pause, resume, status, seedDefaults, computeNextRun, _state: state };
+module.exports = { start, shutdown, tick, runFeed, enqueue, enqueuePlatforms, stopAll, pause, resume, status, seedDefaults, computeNextRun, tempo, _state: state };

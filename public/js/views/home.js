@@ -1,12 +1,59 @@
 import { h, icon, fmt, emptyState } from '../dom.js';
 import { get } from '../api.js';
 import { href, navigate } from '../router.js';
-import { platformLabel, platformColor, follows, searches } from '../store.js';
+import { platformLabel, platformColor, follows, searches, tastes, history as viewHistory, prefs } from '../store.js';
 import { mediaCard } from '../components/card.js';
 import { creatorCard } from '../components/creator-card.js';
 import { createFeed } from '../components/feed.js';
 import { openLightbox } from '../components/lightbox.js';
 import { surpriseMe } from '../components/palette.js';
+
+/** "For you": a rail ranked from this device's taste, with the taste shown (and editable) right there. */
+async function forYouSection(open) {
+  if (!tastes.ready()) return null;
+  let res;
+  try { res = await get('/api/recommend', { ...tastes.query({ exclude: viewHistory.list().slice(0, 60) }), limit: 18, seed: Math.floor(Math.random() * 1e6) }); } catch { return null; }
+  if (!res.items.length) return null;
+  const chips = h('div', { class: 'row wrap taste-chips' });
+  const paintChips = () => chips.replaceChildren(h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Tuned to'),
+    tastes.topTags(6).map((t) => h('button', { class: 'chip sm x', title: `Show less #${t}`, 'aria-label': `Stop tuning to ${t}`, onclick: () => { tastes.forgetTag(t); paintChips(); } }, `#${t}`)),
+    h('button', { class: 'chip sm', onclick: () => { tastes.reset(); chips.closest('section').remove(); } }, 'Reset'));
+  paintChips();
+  return h('section', { class: 'section' },
+    sectionHead('sparkle', 'For you', 'Picked from what you watch, save and follow — learned on this device only', { href: href('/explore', { sort: 'foryou' }), label: 'See all' }),
+    chips,
+    h('div', { class: 'rail' }, res.items.map((it) => mediaCard(it, { open: open(res.items), compact: false }))),
+    h('a', { class: 'btn sm', href: href('/reels', { sort: 'foryou', type: 'all' }), style: { marginTop: '6px' } }, icon('film', 'sm'), 'Play For you as Reels'));
+}
+
+/** First visit: let people pick a few interests so "For you" works from minute one. */
+function interestPicker(tags, onDone) {
+  if (tastes.ready() || prefs.introDone || !tags.length) return null;
+  const picked = new Set();
+  const go = h('button', { class: 'btn primary', disabled: true }, icon('sparkle', 'sm'), 'Build my feed');
+  const count = h('span', { class: 'muted', style: { fontSize: '13px' } }, 'Pick 3 or more');
+  const chipEls = tags.slice(0, 24).map((t) => {
+    const b = h('button', { class: 'chip', 'aria-pressed': 'false' }, `#${t.name}`);
+    b.addEventListener('click', () => {
+      if (picked.has(t.name)) picked.delete(t.name); else picked.add(t.name);
+      b.classList.toggle('on', picked.has(t.name)); b.setAttribute('aria-pressed', String(picked.has(t.name)));
+      go.disabled = picked.size < 3; count.textContent = picked.size < 3 ? `Pick ${3 - picked.size} more` : `${picked.size} picked`;
+    });
+    return b;
+  });
+  const card = h('section', { class: 'section intro-card' },
+    h('div', { class: 'row', style: { justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px' } },
+      h('div', null, h('h2', null, icon('sparkle'), 'What are you into?'), h('p', { class: 'muted', style: { margin: '6px 0 0' } }, 'Pick a few and PRISM tunes a “For you” feed around them. It keeps learning from what you watch and save — on this device only.')),
+      h('button', { class: 'btn icon ghost', 'aria-label': 'Dismiss', onclick: () => { prefs.introDone = true; card.remove(); } }, icon('x'))),
+    h('div', { class: 'row wrap', style: { gap: '8px', margin: '14px 0' } }, chipEls),
+    h('div', { class: 'row', style: { gap: '12px' } }, go, count));
+  go.addEventListener('click', () => {
+    for (const t of picked) tastes.record({ tags: [t] }, 3);
+    prefs.introDone = true;
+    onDone();
+  });
+  return card;
+}
 
 /** Map a saved Explore search onto /api/media parameters. */
 function mediaQuery(q) {
@@ -73,7 +120,7 @@ export async function home(root) {
       h('div', null, h('b', { class: 'num' }, fmt.num(s.creators)), h('span', null, 'creators')),
       h('div', null, h('b', { class: 'num' }, fmt.num(s.videos)), h('span', null, 'videos')),
       h('div', null, h('b', { class: 'num' }, data.platforms.length), h('span', null, 'sources'))),
-    data.tags.length ? h('div', { class: 'hero-chips' }, data.tags.slice(0, 10).map((t) => h('a', { class: 'chip', href: href('/explore', { tag: t.name }) }, `#${t.name}`, h('span', { class: 'n' }, fmt.num(t.count))))) : null);
+    data.tags.length && !(!tastes.ready() && !prefs.introDone) ? h('div', { class: 'hero-chips' }, data.tags.slice(0, 10).map((t) => h('a', { class: 'chip', href: href('/explore', { tag: t.name }) }, `#${t.name}`, h('span', { class: 'n' }, fmt.num(t.count))))) : null);
 
   if (!s.total) {
     root.replaceChildren(hero, emptyState({
@@ -91,8 +138,12 @@ export async function home(root) {
     try { fromFollowed = (await get('/api/media', { creators: followIds.join(','), sort: 'recent', limit: 14 })).items; } catch { /* rail is optional */ }
   }
 
-  const open = (list) => (item) => openLightbox(list, Math.max(0, list.findIndex((x) => x.id === item.id)));
   const parts = [hero];
+  const open = (list) => (item) => openLightbox(list, Math.max(0, list.findIndex((x) => x.id === item.id)));
+  const picker = interestPicker(data.tags, async () => { const sec = await forYouSection(open); if (picker.isConnected) { if (sec) picker.replaceWith(sec); else picker.remove(); } });
+  if (picker) parts.push(picker);
+  const forYou = await forYouSection(open);
+  if (forYou) parts.push(forYou);
   const smart = smartFeeds();
   if (smart) parts.push(smart);
 

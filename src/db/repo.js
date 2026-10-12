@@ -483,6 +483,10 @@ const runs = {
         SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS errors
       FROM feed_runs WHERE started_at >= ? GROUP BY hour ORDER BY hour`).all(since);
   },
+  /** Items added by a feed's last few finished runs, newest first (for adaptive scheduling). */
+  recentAdded(feedId, n = 4) {
+    return db.prepare("SELECT added FROM feed_runs WHERE feed_id = ? AND status IN ('ok','empty') ORDER BY started_at DESC LIMIT ?").all(feedId, n).map((r) => r.added || 0);
+  },
   prune(keepDays = 30) {
     db.prepare('DELETE FROM feed_runs WHERE started_at < ?').run(new Date(Date.now() - keepDays * 86400000).toISOString());
   },
@@ -694,6 +698,48 @@ const media = {
     return out;
   },
 
+  /**
+   * Personal recommendations from a taste profile the *client* sends (tags, creators, sources it
+   * engages with — the server keeps nothing per visitor). Items matching the taste rank by how
+   * well they match, blended with freshness/popularity and a little seeded jitter for variety;
+   * no creator takes more than two slots per page.
+   */
+  recommend({ tags = [], creators: cids = [], platforms: plats = [], video = null, type, exclude = [], seed = 1, page = 0, limit = 36 } = {}) {
+    const tagIds = tags.length ? db.prepare(`SELECT id FROM tags WHERE name IN (${tags.map(() => '?').join(',')})`).all(...tags.map(cleanTag)).map((r) => r.id) : [];
+    if (!tagIds.length && !cids.length) return { items: [], total: 0, page, limit, personalized: false };
+    const inList = (arr) => arr.map(() => '?').join(',');
+    const match = [];
+    const matchParams = [];
+    if (cids.length) { match.push(`m.creator_id IN (${inList(cids)})`); matchParams.push(...cids); }
+    if (tagIds.length) { match.push(`m.id IN (SELECT media_id FROM media_tags WHERE tag_id IN (${inList(tagIds)}))`); matchParams.push(...tagIds); }
+    const where = ["m.publish_state = 'published'", "m.scope != 'excluded'", "(m.creator_id IS NULL OR m.creator_id NOT IN (SELECT id FROM creators WHERE status != 'active'))", `(${match.join(' OR ')})`];
+    const whereParams = [...matchParams];
+    if (exclude.length) { where.push(`m.id NOT IN (${inList(exclude)})`); whereParams.push(...exclude); }
+    if (type === 'image' || type === 'video') { where.push('m.media_type = ?'); whereParams.push(type); }
+    const scoreSql = `
+      (CASE WHEN ${cids.length ? `m.creator_id IN (${inList(cids)})` : '0'} THEN 3.0 ELSE 0 END)
+      + ${tagIds.length ? `1.2 * (SELECT COUNT(*) FROM media_tags mt WHERE mt.media_id = m.id AND mt.tag_id IN (${inList(tagIds)}))` : '0'}
+      + (CASE WHEN ${plats.length ? `m.platform IN (${inList(plats)})` : '0'} THEN 0.5 ELSE 0 END)
+      + (CASE WHEN ? IS NULL THEN 0 WHEN m.media_type = 'video' THEN ? ELSE 1 - ? END)
+      + MIN(m.hot, 10) / 5.0
+      + (hash_seed(m.id, ?) % 1000) / 1400.0`;
+    const scoreParams = [...cids, ...tagIds, ...plats, video, video, video, seed | 0];
+    const total = db.prepare(`SELECT COUNT(*) AS n FROM media m WHERE ${where.join(' AND ')}`).get(...whereParams).n;
+    const pool = db.prepare(`SELECT m.*, c.handle AS creator_handle, c.display_name AS creator_name, c.avatar_url AS creator_avatar, ${scoreSql} AS rec
+      FROM media m LEFT JOIN creators c ON c.id = m.creator_id WHERE ${where.join(' AND ')}
+      ORDER BY rec DESC, m.seq DESC LIMIT ? OFFSET ?`).all(...scoreParams, ...whereParams, limit * 2, page * limit * 2);
+    // Diversity: walk the pool in score order, letting each creator take at most two slots per page.
+    const perCreator = new Map(); const out = []; const spill = [];
+    for (const r of pool) {
+      const k = r.creator_id || r.id;
+      const n = perCreator.get(k) || 0;
+      if (n < 2) { perCreator.set(k, n + 1); out.push(r); } else spill.push(r);
+      if (out.length >= limit) break;
+    }
+    while (out.length < limit && spill.length) out.push(spill.shift());
+    return { items: out.map((r) => { const m = serializeMedia(r); delete m.rec; return m; }), total, page, limit, personalized: true };
+  },
+
   recomputeHot() {
     const now = Date.now();
     return db.prepare(`UPDATE media SET hot = hot_score(score, likes, views, epoch_ms(posted_at), ?) WHERE publish_state = 'published'`).run(now).changes;
@@ -792,6 +838,7 @@ function adminOverview() {
     last24h: db.prepare(`SELECT COALESCE(SUM(added),0) AS added, COALESCE(SUM(dupes),0) AS dupes, COALESCE(SUM(skipped),0) AS skipped,
         COALESCE(SUM(blocked),0) AS blocked, COUNT(*) AS runs FROM feed_runs WHERE started_at >= ?`).get(new Date(Date.now() - 86400000).toISOString()),
     blocklist: blockQ.count.get().c,
+    discovery: candidates.counts(),
     ingestDaily: db.prepare(`SELECT substr(ingested_at, 1, 10) AS day, platform, COUNT(*) AS n FROM media
       WHERE ingested_at >= ? GROUP BY day, platform ORDER BY day`).all(new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10)),
   };
@@ -812,7 +859,95 @@ function discover() {
   };
 }
 
+/* ------------------------------------------------------------- discovery */
+const parseSignals = (row) => { if (!row) return null; let sig = {}; try { sig = JSON.parse(row.signals || '{}'); } catch { sig = {}; } return { ...row, signals: sig }; };
+const candidates = {
+  get(id) { return parseSignals(db.prepare('SELECT * FROM candidates WHERE id = ?').get(id)); },
+  find(platform, kind, target) { return parseSignals(db.prepare('SELECT * FROM candidates WHERE platform = ? AND kind = ? AND target = ? COLLATE NOCASE').get(platform, kind, String(target))); },
+  insert(row) {
+    const id = uuid();
+    db.prepare(`INSERT INTO candidates (id, platform, kind, target, label, url, display_name, avatar_url, bio, score, signals, scope, status, reason, creator_id)
+      VALUES (@id, @platform, @kind, @target, @label, @url, @display_name, @avatar_url, @bio, @score, @signals, @scope, @status, @reason, @creator_id)`).run({
+      id, label: null, url: null, display_name: null, avatar_url: null, bio: null, score: 0, scope: 'uncertain', status: 'pending', reason: null, creator_id: null,
+      ...row, signals: JSON.stringify(row.signals || {}),
+    });
+    hosts.add(row.avatar_url);
+    return candidates.get(id);
+  },
+  update(id, patch) {
+    const cols = ['label', 'url', 'display_name', 'avatar_url', 'bio', 'score', 'scope', 'status', 'reason', 'creator_id', 'decided_at'];
+    const sets = []; const params = { id };
+    for (const c of cols) if (patch[c] !== undefined) { sets.push(`${c} = @${c}`); params[c] = patch[c]; }
+    if (patch.signals !== undefined) { sets.push('signals = @signals'); params.signals = JSON.stringify(patch.signals); }
+    sets.push(`last_seen = strftime('%Y-%m-%dT%H:%M:%fZ','now')`);
+    db.prepare(`UPDATE candidates SET ${sets.join(', ')} WHERE id = @id`).run(params);
+    if (patch.avatar_url) hosts.add(patch.avatar_url);
+    return candidates.get(id);
+  },
+  list({ status = 'pending', page = 0, limit = 50, q: query, platform, sort = 'score' } = {}) {
+    const where = []; const params = [];
+    if (status && status !== 'all') { where.push('status = ?'); params.push(status); }
+    if (platform) { where.push('platform = ?'); params.push(platform); }
+    if (query) { where.push("(target LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\')"); const l = `%${String(query).replace(/[\\%_]/g, (m) => `\\${m}`)}%`; params.push(l, l); }
+    const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const order = sort === 'recent' ? 'last_seen DESC' : sort === 'new' ? 'first_seen DESC' : 'score DESC, last_seen DESC';
+    const total = db.prepare(`SELECT COUNT(*) AS n FROM candidates ${w}`).get(...params).n;
+    const items = db.prepare(`SELECT * FROM candidates ${w} ORDER BY ${order} LIMIT ? OFFSET ?`).all(...params, limit, page * limit).map(parseSignals);
+    return { items, total, page, limit };
+  },
+  /** Highest-scoring undecided candidates (for auto-follow). */
+  promotable(minScore, limit) {
+    return db.prepare("SELECT * FROM candidates WHERE status = 'pending' AND score >= ? AND scope != 'excluded' AND (reason IS NULL OR reason NOT LIKE 'needs review%') ORDER BY score DESC LIMIT ?").all(minScore, limit).map(parseSignals);
+  },
+  /** Pending candidates that still need details (bio/name) looked up. */
+  needingDetails(platform, limit) {
+    return db.prepare("SELECT * FROM candidates WHERE status = 'pending' AND platform = ? AND bio IS NULL AND (reason IS NULL OR reason != 'checked') ORDER BY score DESC LIMIT ?").all(platform, limit).map(parseSignals);
+  },
+  counts() {
+    const o = { pending: 0, followed: 0, linked: 0, rejected: 0 };
+    for (const r of db.prepare('SELECT status, COUNT(*) AS n FROM candidates GROUP BY status').all()) o[r.status] = r.n;
+    o.followedToday = db.prepare("SELECT COUNT(*) AS n FROM candidates WHERE status IN ('followed','linked') AND decided_at >= ?").get(new Date(Date.now() - 86400000).toISOString()).n;
+    return o;
+  },
+  /** Drop old, low-value pending rows so the queue stays useful. */
+  prune(days = 45, maxScore = 3) {
+    return db.prepare("DELETE FROM candidates WHERE status = 'pending' AND score < ? AND last_seen < ?").run(maxScore, new Date(Date.now() - days * 86400000).toISOString()).changes;
+  },
+};
+
+const discoveryState = {
+  get(key, fallback = null) { const r = db.prepare('SELECT value FROM discovery_state WHERE key = ?').get(key); return r ? r.value : fallback; },
+  set(key, value) {
+    db.prepare(`INSERT INTO discovery_state (key, value, updated_at) VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`).run(key, value === null || value === undefined ? null : String(value));
+  },
+  /** ISO time a key was last written (null if never). */
+  touchedAt(key) { const r = db.prepare('SELECT updated_at FROM discovery_state WHERE key = ?').get(key); return r ? r.updated_at : null; },
+};
+
+/** Recently ingested text from active creators — raw material for mention mining. */
+function mentionSource(afterIso, limit = 2000) {
+  return db.prepare(`SELECT m.platform, m.title, m.description, m.creator_id, m.ingested_at FROM media m JOIN creators c ON c.id = m.creator_id
+    WHERE m.ingested_at > ? AND m.publish_state = 'published' AND c.status = 'active' AND (m.title IS NOT NULL OR m.description IS NOT NULL)
+    ORDER BY m.ingested_at ASC LIMIT ?`).all(afterIso || '', limit);
+}
+
+/** Creators worth investigating, least recently checked first (by a discovery_state key prefix). */
+function discoveryTargets({ platform, prefix, staleDays, limit, minMedia = 1, maxAccounts = 99 }) {
+  const since = new Date(Date.now() - staleDays * 86400000).toISOString();
+  const platformJoin = platform ? 'JOIN feeds f ON f.creator_id = c.id AND f.platform = @platform AND f.kind = \'user\' AND f.enabled = 1' : '';
+  return db.prepare(`SELECT c.id, c.handle, c.display_name, c.media_count, ${platform ? 'f.target AS target' : 'NULL AS target'},
+      (SELECT COUNT(*) FROM feeds x WHERE x.creator_id = c.id AND x.kind IN ('user','page')) AS accounts,
+      ds.updated_at AS checked
+    FROM creators c ${platformJoin}
+    LEFT JOIN discovery_state ds ON ds.key = @prefix || c.id
+    WHERE c.status = 'active' AND c.scope != 'excluded' AND c.media_count >= @minMedia AND (ds.updated_at IS NULL OR ds.updated_at < @since)
+    GROUP BY c.id HAVING accounts <= @maxAccounts
+    ORDER BY ds.updated_at IS NOT NULL, ds.updated_at ASC, c.media_count DESC LIMIT @limit`).all({ platform: platform || null, prefix, since, limit, minMedia, maxAccounts });
+}
+
 module.exports = {
   db, nowIso, clampInt, cleanTag, ftsQuery, settings, hosts, blocklist, logAction, suggest, audit,
   creators, feeds, runs, media, reports, addTags, publicStats, adminOverview, discover,
+  candidates, discoveryState, mentionSource, discoveryTargets, PLATFORM_TAGS,
 };

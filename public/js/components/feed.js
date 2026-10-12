@@ -38,11 +38,11 @@ export function createFeed({ query = {}, endpoint = '/api/media', pageSize, empt
     sentinel.replaceChildren(h('div', { class: 'spinner' }));
     try {
       const idSlice = ids ? ids.slice(page * limit, (page + 1) * limit) : undefined;
-      const res = await get(endpoint, { ...query, page: ids ? 0 : page, limit, seed: query.sort === 'random' ? seed : undefined, ids: idSlice ? idSlice.join(',') : undefined });
+      const res = await get(endpoint, { ...query, page: ids ? 0 : page, limit, seed: query.sort === 'random' ? seed : query.seed, ids: idSlice ? idSlice.join(',') : undefined, nocount: !ids && page > 0 ? '1' : undefined });
       if (destroyed) return;
       if (ids) res.items.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id)); // keep "most recently saved first"
-      total = ids ? ids.length : res.total;
-      if (onTotal) onTotal(total);
+      if (ids) total = ids.length; else if (res.total !== null && res.total !== undefined) total = res.total;
+      if (onTotal && (page === 0 || ids)) onTotal(total);
       // "Hide seen": drop anything this device already opened. Paging still follows the server's pages.
       const fresh = hideSeen ? res.items.filter((it) => !history.has(it.id)) : res.items;
       hidden += res.items.length - fresh.length;

@@ -17,10 +17,18 @@ export const bus = {
 export const prefs = {
   get density() { return read('prism.density', 'm'); },
   set density(v) { write('prism.density', v); bus.emit('density', v); },
+  get previews() { return read('prism.previews', true); },
+  set previews(v) { write('prism.previews', !!v); },
   get muted() { return read('prism.muted', true); },
   set muted(v) { write('prism.muted', !!v); },
   get hideSeen() { return read('prism.hideSeen', false); },
   set hideSeen(v) { write('prism.hideSeen', !!v); bus.emit('hideSeen', !!v); },
+  get reelsHint() { return read('prism.reelsHint', false); },
+  set reelsHint(v) { write('prism.reelsHint', !!v); },
+  get introDone() { return read('prism.introDone', false); },
+  set introDone(v) { write('prism.introDone', !!v); },
+  get accent() { return read('prism.accent', 'prism'); },
+  set accent(v) { write('prism.accent', v); document.documentElement.dataset.accent = v; bus.emit('accent', v); },
   get historyOff() { return read('prism.historyOff', false); },
   set historyOff(v) { write('prism.historyOff', !!v); },
   get theme() { return read('prism.theme', 'auto'); },
@@ -40,9 +48,10 @@ export const favorites = {
   has: (id) => favSet.has(id),
   list: () => [...favs],
   count: () => favs.length,
-  toggle(id) {
+  /** `item` (optional) teaches the taste model what was saved. */
+  toggle(id, item) {
     if (favSet.has(id)) { favSet.delete(id); favs = favs.filter((x) => x !== id); }
-    else { favSet.add(id); favs.unshift(id); favs = favs.slice(0, MAX_FAVS); }
+    else { favSet.add(id); favs.unshift(id); favs = favs.slice(0, MAX_FAVS); if (item) tastes.record(item, 4); }
     write('prism.favs', favs);
     bus.emit('fav', { id, on: favSet.has(id) });
     return favSet.has(id);
@@ -80,7 +89,7 @@ export const follows = {
   count: () => followsList.length,
   toggle(creator) {
     if (followSet.has(creator.id)) { followSet.delete(creator.id); followsList = followsList.filter((c) => c.id !== creator.id); }
-    else { followSet.add(creator.id); followsList.unshift({ id: creator.id, handle: creator.handle, name: creator.display_name, seen: new Date().toISOString() }); }
+    else { followSet.add(creator.id); followsList.unshift({ id: creator.id, handle: creator.handle, name: creator.display_name, seen: new Date().toISOString() }); tastes.recordCreator(creator.id, 5); }
     write('prism.follows', followsList);
     bus.emit('follow', { id: creator.id, on: followSet.has(creator.id) });
     return followSet.has(creator.id);
@@ -163,6 +172,56 @@ export const searches = {
   remove(id) { searchList = searchList.filter((x) => x.id !== id); saveSearches(); },
   rename(id, name) { const s = searchList.find((x) => x.id === id); if (s && name) { s.name = String(name).slice(0, 60); saveSearches(); } },
   markSeen(id) { const s = searchList.find((x) => x.id === id); if (s) { s.seen = new Date().toISOString(); saveSearches(); } },
+};
+
+/* ---------------------------------------------------------------- taste */
+// A small, decaying model of what this device likes: tags, creators, sources and the
+// photo/video mix, learned from views, saves, collections and follows. It powers "For you"
+// and is sent to the server only as a short query (top tags / creators), never stored there.
+const TASTE_KEY = 'prism.taste';
+const HALF_LIFE_DAYS = 21;
+let taste = read(TASTE_KEY, { t: {}, c: {}, p: {}, video: 0, image: 0, at: Date.now(), events: 0 });
+const decayTaste = () => {
+  const days = (Date.now() - (taste.at || Date.now())) / 86400000;
+  if (days < 0.5) return;
+  const f = 0.5 ** (days / HALF_LIFE_DAYS);
+  for (const k of ['t', 'c', 'p']) for (const key of Object.keys(taste[k])) { taste[k][key] *= f; if (taste[k][key] < 0.05) delete taste[k][key]; }
+  taste.video *= f; taste.image *= f; taste.at = Date.now();
+};
+const trim = (obj, n) => Object.fromEntries(Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, n));
+let tasteTimer = null;
+const saveTaste = () => { clearTimeout(tasteTimer); tasteTimer = setTimeout(() => { write(TASTE_KEY, taste); bus.emit('taste', null); }, 400); };
+const GENERIC = new Set(['reddit', 'redgifs', 'bluesky', 'mastodon', 'misskey', 'lemmy', 'x', 'telegram', 'rss', 'web', 'gay', 'nsfw']);
+export const tastes = {
+  /** weight: view 1 · collect 3 · save 4 · follow 5 */
+  record(item, weight = 1) {
+    if (!item || prefs.historyOff) return;
+    decayTaste();
+    for (const tg of (item.tags || []).filter((x) => !GENERIC.has(x)).slice(0, 8)) taste.t[tg] = (taste.t[tg] || 0) + weight;
+    if (item.creator_id) taste.c[item.creator_id] = (taste.c[item.creator_id] || 0) + weight * 1.5;
+    if (item.platform) taste.p[item.platform] = (taste.p[item.platform] || 0) + weight * 0.5;
+    if (item.media_type === 'video') taste.video += weight; else taste.image += weight;
+    taste.events = (taste.events || 0) + 1;
+    taste.t = trim(taste.t, 80); taste.c = trim(taste.c, 80); taste.p = trim(taste.p, 12);
+    saveTaste();
+  },
+  recordCreator(id, weight = 5) { if (!id || prefs.historyOff) return; decayTaste(); taste.c[id] = (taste.c[id] || 0) + weight; taste.c = trim(taste.c, 80); saveTaste(); },
+  forgetTag(tag) { delete taste.t[tag]; saveTaste(); },
+  reset() { taste = { t: {}, c: {}, p: {}, video: 0, image: 0, at: Date.now(), events: 0 }; write(TASTE_KEY, taste); bus.emit('taste', null); },
+  /** Enough signal to personalise? */
+  ready: () => (taste.events || 0) >= 3 && (Object.keys(taste.t).length > 0 || Object.keys(taste.c).length > 0),
+  topTags: (n = 8) => Object.entries(taste.t).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k]) => k),
+  /** Query parameters for /api/recommend. */
+  query({ exclude = [] } = {}) {
+    decayTaste();
+    const top = (obj, n) => Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k]) => k);
+    const total = taste.video + taste.image;
+    return {
+      tags: top(taste.t, 12).join(','), creators: top(taste.c, 25).join(','), platforms: top(taste.p, 4).join(','),
+      video: total >= 5 ? (taste.video / total).toFixed(2) : undefined,
+      exclude: exclude.slice(0, 150).join(',') || undefined,
+    };
+  },
 };
 
 /* ---------------------------------------------------------- admin session */

@@ -115,3 +115,18 @@
   .adm-side h4 { display: none; }
   .adm-side a { white-space: nowrap; background: var(--surface); border: 1px solid var(--line); }
 }
+
+/* ---------- v4.3: discovery ------------------------------------------------ */
+.scorebar { position: relative; height: 22px; border-radius: 999px; background: var(--surface-3); overflow: hidden; min-width: 96px; }
+.scorebar .fill { position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--accent-2) 55%, transparent); border-radius: 999px; transition: width .4s var(--ease); }
+.scorebar .fill.hot { background: var(--grad); }
+.scorebar span { position: relative; z-index: 1; display: block; text-align: center; font-size: 12px; font-weight: 700; line-height: 22px; }
+.badge.sig-identity { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
+.badge.sig-mention { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.badge.sig-cofollow { background: color-mix(in srgb, var(--info) 16%, transparent); color: var(--info); }
+.badge.sig-search { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+details.panel > summary { cursor: pointer; list-style: none; display: flex; align-items: center; }
+details.panel > summary::-webkit-details-marker { display: none; }
+details.panel > summary::before { content: '▸'; margin-right: 8px; color: var(--muted); transition: transform .2s; }
+details.panel[open] > summary::before { transform: rotate(90deg); }
+.cell-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }

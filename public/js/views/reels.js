@@ -1,12 +1,12 @@
 import { h, icon, proxied, fmt, avatar, toast, copyText, emptyState } from '../dom.js';
 import { get, post } from '../api.js';
 import { navigate, href } from '../router.js';
-import { prefs, favorites, follows, history as viewHistory, collections, platformLabel, bus } from '../store.js';
+import { prefs, favorites, follows, history as viewHistory, tastes, collections, platformLabel, bus } from '../store.js';
 import { attachVideo, releaseVideo } from '../components/video.js';
 import { openCollectionPicker } from '../components/collections.js';
 import { openLightbox, isOpen as lightboxOpen } from '../components/lightbox.js';
 
-const SORTS = [['trending', 'Trending'], ['random', 'Shuffle'], ['recent', 'Newest'], ['top', 'Top']];
+const SORTS = [['foryou', 'For you'], ['trending', 'Trending'], ['random', 'Shuffle'], ['recent', 'Newest'], ['top', 'Top']];
 const PAGE = 12;
 
 /**
@@ -17,7 +17,7 @@ const PAGE = 12;
 export async function reels(root, { query }) {
   document.title = 'Reels — PRISM';
   const f = {
-    type: query.get('type') ?? 'video', sort: query.get('sort') || 'trending', platform: query.get('platform') || '', tag: query.get('tag') || '',
+    type: query.get('type') ?? 'video', sort: query.get('sort') || (tastes.ready() ? 'foryou' : 'trending'), platform: query.get('platform') || '', tag: query.get('tag') || '',
     community: query.get('community') || '', creator: query.get('creator') || '', q: query.get('q') || '', following: query.get('following') || '',
   };
   const set = (patch) => navigate('/reels', { ...f, ...patch }, { replace: true });
@@ -34,7 +34,7 @@ export async function reels(root, { query }) {
   const paintMute = () => muteBtn.replaceChildren(icon(prefs.muted ? 'mute' : 'volume'));
   paintMute();
 
-  const context = f.creator ? 'Creator' : f.following ? 'Following' : f.tag ? `#${f.tag}` : f.community || (f.q ? `“${f.q}”` : (f.platform ? platformLabel(f.platform) : 'For you'));
+  const context = f.sort === 'foryou' && !f.creator && !f.tag && !f.community && !f.q && !f.following && !f.platform ? 'For you' : f.creator ? 'Creator' : f.following ? 'Following' : f.tag ? `#${f.tag}` : f.community || (f.q ? `“${f.q}”` : (f.platform ? platformLabel(f.platform) : 'For you'));
   const top = h('div', { class: 'reels-top' },
     h('button', { class: 'btn icon ghost', 'aria-label': 'Back', title: 'Back', onclick: () => (window.history.length > 1 ? window.history.back() : navigate('/')) }, icon('chev-l')),
     h('div', { class: 'reels-title truncate' }, icon('film', 'sm'), context),
@@ -59,7 +59,7 @@ export async function reels(root, { query }) {
     const bar = h('div', { class: 'reel-progress' }, h('i'));
     const favBtn = h('button', { class: 'reel-act', 'aria-label': 'Save' }, icon('heart'), h('span', null, 'Save'));
     const paintFav = () => { const on = favorites.has(it.id); favBtn.classList.toggle('on', on); favBtn.setAttribute('aria-pressed', String(on)); favBtn.querySelector('svg').classList.toggle('fill', on); };
-    favBtn.addEventListener('click', () => { const on = favorites.toggle(it.id); toast(on ? 'Saved' : 'Removed from saved'); });
+    favBtn.addEventListener('click', () => { const on = favorites.toggle(it.id, it); toast(on ? 'Saved' : 'Removed from saved'); });
     const collBtn = h('button', { class: 'reel-act', 'aria-label': 'Add to collection', onclick: () => openCollectionPicker(it) }, icon('bookmark'), h('span', null, 'Collect'));
     const paintColl = () => collBtn.classList.toggle('on', collections.containing(it.id).length > 0);
     paintFav(); paintColl();
@@ -93,7 +93,7 @@ export async function reels(root, { query }) {
       const now = Date.now();
       if (now - lastTap < 280) {
         clearTimeout(tapTimer); lastTap = 0;
-        if (!favorites.has(it.id)) favorites.toggle(it.id);
+        if (!favorites.has(it.id)) favorites.toggle(it.id, it);
         const b = h('div', { class: 'lb-heart-burst' }, icon('heart', 'fill')); stage.appendChild(b); setTimeout(() => b.remove(), 750);
         return;
       }
@@ -129,6 +129,7 @@ export async function reels(root, { query }) {
     mount(s);
     if (!viewed.has(s.it.id)) { viewed.add(s.it.id); post(`/api/media/${s.it.id}/view`).catch(() => {}); }
     viewHistory.add(s.it.id);
+    tastes.record(s.it, 1);
     if (!s.isVideo) return;
     const v = s.stage.querySelector('video');
     if (!v) return;
@@ -162,8 +163,9 @@ export async function reels(root, { query }) {
     if (loading || done || destroyed) return;
     loading = true;
     try {
-      const res = await get('/api/media', {
-        type: f.type === 'all' ? undefined : f.type, sort: f.sort, platform: f.platform, tag: f.tag, community: f.community, creator: f.creator, q: f.q,
+      const forYou = f.sort === 'foryou' && !f.creator && !f.tag && !f.community && !f.q && !f.following && !f.platform;
+      const res = forYou ? await get('/api/recommend', { ...tastes.query({ exclude: viewHistory.list().slice(0, 100) }), type: f.type === 'all' ? undefined : f.type, seed, page, limit: PAGE }) : await get('/api/media', {
+        type: f.type === 'all' ? undefined : f.type, sort: f.sort === 'foryou' ? 'trending' : f.sort, platform: f.platform, tag: f.tag, community: f.community, creator: f.creator, q: f.q,
         creators: followIds ? (followIds.length ? followIds.join(',') : '00000000-0000-0000-0000-000000000000') : undefined,
         seed: f.sort === 'random' ? seed : undefined, page, limit: PAGE,
       });
@@ -209,7 +211,7 @@ export async function reels(root, { query }) {
       case 'ArrowUp': case 'k': case 'PageUp': e.preventDefault(); go(-1); break;
       case ' ': { e.preventDefault(); const v = s && s.stage.querySelector('video'); if (v) { if (v.paused) v.play().catch(() => {}); else v.pause(); } break; }
       case 'm': case 'M': setMuted(!prefs.muted); break;
-      case 'f': case 'F': if (s) favorites.toggle(s.it.id); break;
+      case 'f': case 'F': if (s) favorites.toggle(s.it.id, s.it); break;
       case 'c': case 'C': if (s) openCollectionPicker(s.it); break;
       case 'i': case 'I': case 'Enter': if (s) openLightbox(slides.map((x) => x.it), active); break;
       default:
@@ -230,6 +232,15 @@ export async function reels(root, { query }) {
 
   await load();
   track.focus({ preventScroll: true });
+  // First visit: show how to move on, then get out of the way.
+  if (!prefs.reelsHint && slides.length > 1) {
+    const touch = window.matchMedia('(pointer: coarse)').matches;
+    const hint = h('div', { class: 'reel-hint', role: 'status' }, icon(touch ? 'up' : 'chev-d', 'sm'), touch ? 'Swipe up for the next one · double-tap to save' : '↓ or J for the next one · M for sound · F to save');
+    shell.appendChild(hint);
+    const done = () => { hint.remove(); prefs.reelsHint = true; track.removeEventListener('scroll', done); };
+    track.addEventListener('scroll', done, { passive: true, once: true });
+    setTimeout(done, 6000);
+  }
 
   return () => {
     destroyed = true;

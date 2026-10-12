@@ -1,6 +1,6 @@
 import { h, icon, proxied, fmt, avatar, toast, copyText, openModal } from '../dom.js';
 import { get, post } from '../api.js';
-import { favorites, follows, prefs, history as viewHistory, collections, platformLabel, platformColor, bus } from '../store.js';
+import { favorites, follows, prefs, history as viewHistory, tastes, collections, platformLabel, platformColor, bus } from '../store.js';
 import { parse, href, setParam } from '../router.js';
 import { openReport } from './report.js';
 import { attachVideo, releaseVideo, isM3u8 } from './video.js';
@@ -124,6 +124,7 @@ function show(i, { push = false } = {}) {
   if (n && n.media_type === 'image') { const pre = new Image(); pre.src = proxied(n.media_url); }
   if (!viewed.has(it.id)) { viewed.add(it.id); post(`/api/media/${it.id}/view`).catch(() => {}); }
   viewHistory.add(it.id);
+  tastes.record(it, 1);
 }
 
 /* ------------------------------------------------- download / slideshow / help */
@@ -186,7 +187,7 @@ function paintTop() {
 }
 
 function toggleFav(it, burst = false) {
-  const on = favorites.toggle(it.id);
+  const on = favorites.toggle(it.id, it);
   if (burst && on) {
     const b = h('div', { class: 'lb-heart-burst' }, icon('heart', 'fill'));
     S.stage.appendChild(b); setTimeout(() => b.remove(), 750);

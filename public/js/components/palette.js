@@ -31,6 +31,7 @@ function staticCommands() {
     { group: 'Actions', icon: 'flame', label: 'Trending this week', run: go('/explore', { sort: 'trending', since: 'week' }) },
     { group: 'Actions', icon: 'heart', label: 'Latest from people I follow', run: go('/explore', { following: '1', sort: 'recent' }) },
     { group: 'Actions', icon: document.documentElement.dataset.theme === 'light' ? 'moon' : 'sun', label: 'Toggle light / dark theme', run: () => { prefs.theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'; } },
+    { group: 'Actions', icon: 'palette', label: 'Display settings', hint: 'theme, accent colour, grid', run: () => import('./display.js').then((m) => m.openDisplaySettings()) },
     { group: 'Actions', icon: 'eye', label: prefs.hideSeen ? 'Show items I’ve already seen' : 'Hide items I’ve already seen', run: () => { prefs.hideSeen = !prefs.hideSeen; } },
     ...searches.list().map((s) => ({ group: 'Smart feeds', icon: 'bookmark', label: s.name, run: () => { searches.markSeen(s.id); navigate('/explore', s.query); } })),
     ...collections.list().map((c) => ({ group: 'Collections', icon: 'folder', label: c.name, hint: `${c.items.length} item${c.items.length === 1 ? '' : 's'}`, run: () => navigate('/saved', { tab: 'collections', c: c.id }) })),

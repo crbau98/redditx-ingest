@@ -1,5 +1,5 @@
 import { h, icon, toast, openModal } from '../dom.js';
-import { collections } from '../store.js';
+import { collections, tastes } from '../store.js';
 
 /** "Add to collection" sheet: tick any number of collections, or make a new one on the spot. */
 export function openCollectionPicker(item) {
@@ -9,7 +9,7 @@ export function openCollectionPicker(item) {
     list.replaceChildren(all.length
       ? all.map((c) => {
         const on = c.items.includes(item.id);
-        return h('button', { class: `coll-row${on ? ' on' : ''}`, 'aria-pressed': String(on), onclick: () => { const now = collections.toggle(c.id, item.id); toast(now ? `Added to ${c.name}` : `Removed from ${c.name}`); paint(); } },
+        return h('button', { class: `coll-row${on ? ' on' : ''}`, 'aria-pressed': String(on), onclick: () => { const now = collections.toggle(c.id, item.id); if (now) tastes.record(item, 3); toast(now ? `Added to ${c.name}` : `Removed from ${c.name}`); paint(); } },
           h('span', { class: 'coll-check' }, on ? icon('check', 'sm') : null),
           h('span', { class: 'grow truncate' }, c.name),
           h('span', { class: 'muted num' }, c.items.length));
@@ -22,6 +22,7 @@ export function openCollectionPicker(item) {
     if (!v) { name.focus(); return; }
     const c = collections.create(v);
     collections.toggle(c.id, item.id);
+    tastes.record(item, 3);
     toast(`Added to ${c.name}`, 'ok');
     name.value = '';
     paint();

@@ -11,6 +11,7 @@ const settingsStore = require('../settings');
 const targets = require('../services/targets');
 const portability = require('../services/portability');
 const backup = require('../engine/backup');
+const discovery = require('../engine/discovery');
 const { adminAuth } = require('../middleware/auth');
 
 const router = express.Router();
@@ -211,12 +212,47 @@ router.get('/settings', (req, res) => {
     schema: settingsStore.describe(),
     credentials: {
       reddit: !!(c.redditClientId && c.redditClientSecret), x: !!c.xBearer, bluesky: !!(c.bskyIdentifier && c.bskyPassword), mastodon: !!c.mastodonToken,
+      brave: !!c.braveKey, telegram: !!c.telegramBot, telegramValid: require('../lib/telegram-bot').configured(),
     },
     instances: { mastodon: config.mastodonInstances, lemmy: config.lemmyInstances },
     security: { adminKeySet: !!config.adminKey, ageGateEnforced: config.ageGateEnforce },
   });
 });
 router.put('/settings', (req, res) => res.json({ values: settingsStore.update(req.body || {}) }));
+
+/* --------------------------------------------------------------- discovery */
+router.get('/discovery', (req, res) => {
+  const status = ['pending', 'followed', 'linked', 'rejected', 'all'].includes(req.query.status) ? req.query.status : 'pending';
+  res.json({
+    ...discovery.status(),
+    candidates: repo.candidates.list({ status, ...page(req, 200), q: typeof req.query.q === 'string' ? req.query.q.slice(0, 60) : undefined, platform: /^[a-z]{2,20}$/.test(req.query.platform || '') ? req.query.platform : undefined, sort: ['score', 'recent', 'new'].includes(req.query.sort) ? req.query.sort : 'score' }),
+  });
+});
+router.post('/discovery/run', (req, res) => {
+  const st = discovery.status();
+  if (st.running) return res.status(409).json({ error: 'Discovery is already running' });
+  discovery.run({ trigger: 'manual' }).catch(() => {});
+  res.status(202).json({ ok: true, started: true });
+});
+router.post('/discovery/candidates/:id', (req, res) => {
+  const action = req.body && req.body.action;
+  const c = repo.candidates.get(req.params.id);
+  if (!c) return bad(res, 'Not found', 404);
+  if (action === 'follow') { const r = discovery.follow(c, { actor: 'admin' }); return r.ok ? res.json(r) : bad(res, r.reason || 'Could not follow'); }
+  if (action === 'reject' || action === 'block') return res.json(discovery.reject(c.id, { block: action === 'block', reason: action === 'block' ? 'blocked from discovery' : 'rejected by admin' }));
+  if (action === 'reset') return res.json(repo.candidates.update(c.id, { status: 'pending', reason: null, decided_at: null }));
+  return bad(res, 'action must be follow, reject, block or reset');
+});
+router.post('/discovery/candidates', (req, res) => {
+  const { ids, action } = req.body || {};
+  if (!Array.isArray(ids) || !ids.length || !['follow', 'reject'].includes(action)) return bad(res, 'ids[] and action (follow|reject) required');
+  const out = { ok: 0, failed: 0 };
+  for (const id of ids.slice(0, 200)) {
+    const r = action === 'follow' ? discovery.follow(String(id), { actor: 'admin' }) : discovery.reject(String(id));
+    if (r && (r.ok || r.status === 'rejected')) out.ok++; else out.failed++;
+  }
+  res.json(out);
+});
 
 /* ------------------------------------------------------------- maintenance */
 router.post('/maintenance/sweep', async (req, res) => {

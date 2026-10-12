@@ -30,7 +30,13 @@ export function h(tag, props, ...children) {
   for (const [k, v] of Object.entries(props || {})) {
     if (v === null || v === undefined || v === false) continue;
     if (k === 'class') el.className = v;
-    else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
+    else if (k === 'style' && typeof v === 'object') {
+      // Custom properties ("--c") need setProperty; plain assignment silently does nothing.
+      for (const [prop, val] of Object.entries(v)) {
+        if (val === null || val === undefined) continue;
+        if (prop.startsWith('--')) el.style.setProperty(prop, String(val)); else el.style[prop] = val;
+      }
+    }
     else if (k === 'dataset') Object.assign(el.dataset, v);
     else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v);
     else if (k === 'value') el.value = v;
