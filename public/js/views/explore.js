@@ -113,9 +113,12 @@ export async function explore(root, { query }) {
   const bar = h('div', { class: 'filterbar' }, typeSeg, followChip, seenChip, sortSel, sinceSel, platSel, h('span', { class: 'spacer' }), density, active.length ? h('div', { class: 'active-filters' }, active) : null);
 
   // Tag rail: with tags in play, show tags that go with them (click narrows); otherwise the most used tags.
-  const focusTags = [...tagList, ...(f.tag ? [f.tag] : []), ...anyList].slice(0, 4);
-  const addTag = (name) => set({ tag: '', tags: [...new Set([...tagList, ...(f.tag ? [f.tag] : []), name])].slice(0, 6).join(',') });
-  const tagRail = focusTags.length ? relatedRail(focusTags, { onPick: addTag, title: 'Narrow with' }) : h('div', { class: 'row', style: { gap: '8px', overflowX: 'auto', padding: '14px 0 2px', scrollbarWidth: 'none' } });
+  // Required tags (tags= / tag=) are what a refinement narrows, so suggestions are measured against
+  // media carrying all of them; with only a topic (anytags=) they are measured against the topic.
+  const required = [...tagList, ...(f.tag ? [f.tag] : [])];
+  const focusTags = (required.length ? required : anyList).slice(0, 4);
+  const addTag = (name) => set({ tag: '', tags: [...new Set([...required, name])].slice(0, 6).join(',') });
+  const tagRail = focusTags.length ? relatedRail(focusTags, { onPick: addTag, title: 'Narrow with', mode: required.length ? 'all' : 'any' }) : h('div', { class: 'row', style: { gap: '8px', overflowX: 'auto', padding: '14px 0 2px', scrollbarWidth: 'none' } });
 
   const emptyHost = h('div', { class: 'stack', style: { justifyItems: 'center' } },
     f.following && !followIds.length ? emptyState({ icon: 'heart', title: 'You’re not following anyone yet', text: 'Follow creators from their profile and their newest posts will collect here.', actions: [h('a', { class: 'btn primary', href: href('/creators') }, 'Browse creators')] })

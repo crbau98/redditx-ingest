@@ -106,6 +106,15 @@ export function countUp(el, to, format = (n) => String(Math.round(n)), ms = 900)
  * Any .rail added anywhere gets edge fades and (on desktop) prev/next buttons
  * that appear only when there is more to scroll that way. */
 export function initRails(root = document.body) {
+  // One shared observer for every rail. A rail removed from the page reports a final 0×0 resize,
+  // which is where it is unobserved, so views that come and go never leave observers behind.
+  const updaters = new WeakMap();
+  const sizes = new ResizeObserver((entries) => {
+    for (const e of entries) {
+      if (!e.target.isConnected) { sizes.unobserve(e.target); updaters.delete(e.target); continue; }
+      const fn = updaters.get(e.target); if (fn) fn();
+    }
+  });
   const enhance = (rail) => {
     if (rail.dataset.fx) return;
     rail.dataset.fx = '1';
@@ -130,7 +139,7 @@ export function initRails(root = document.body) {
       prev.hidden = rail.scrollLeft <= 4; next.hidden = rail.scrollLeft >= max;
     };
     rail.addEventListener('scroll', update, { passive: true });
-    new ResizeObserver(update).observe(rail);
+    updaters.set(rail, update); sizes.observe(rail);
     update();
   };
   root.querySelectorAll('.rail').forEach(enhance);

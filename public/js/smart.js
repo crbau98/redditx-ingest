@@ -74,10 +74,14 @@ export async function findRelaxation(f, toApi, opts) {
   return null;
 }
 
-/** Rail of tags that often appear alongside the given ones; click refines (adds an AND tag). */
-export function relatedRail(tagNames, { onPick, title = 'Related' } = {}) {
+/**
+ * Rail of tags that often appear alongside the given ones; click refines (adds an AND tag).
+ * `mode: 'all'` measures against media with every given tag (what an AND refinement narrows);
+ * 'any' against media with any of them (a topic).
+ */
+export function relatedRail(tagNames, { onPick, title = 'Related', mode = 'all' } = {}) {
   const el = h('div', { class: 'related-rail', hidden: true });
-  get('/api/tags/related', { tags: tagNames.join(','), limit: 14 }).then((list) => {
+  get('/api/tags/related', { tags: tagNames.join(','), mode, limit: 14 }).then((list) => {
     if (!list.length) return;
     el.replaceChildren(h('span', { class: 'rr-label' }, icon('sparkle', 'sm'), title),
       ...list.map((t) => h('a', { class: 'chip sm', href: onPick ? '#' : href('/explore', { tag: t.name }), onclick: onPick ? (e) => { e.preventDefault(); onPick(t.name); } : null, title: `${fmt.num(t.count)} items together · ${t.lift.toFixed(1)}× more likely` }, icon('plus', 'sm'), `#${t.name}`)));

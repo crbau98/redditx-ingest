@@ -113,6 +113,13 @@ describe('tag intelligence', () => {
     assert.ok(!repo.tagIntel.related(['gym']).some((t) => t.name === 'hiddenonly'));
     assert.ok(!repo.tagIntel.vocabulary().tags.some((t) => t.name === 'hiddenonly'));
   });
+  test('with several tags, suggestions narrow the set that has all of them', () => {
+    // no post is both #gym and #beach, so there is nothing to narrow — even though each alone has partners
+    assert.deepEqual(repo.tagIntel.related(['gym', 'beach']), []);
+    const gm = repo.tagIntel.related(['gym', 'muscle']).map((t) => t.name);
+    assert.ok(gm.includes('mirror') || gm.includes('flex'), gm.join());
+    assert.ok(!gm.includes('surf'));
+  });
   test('topics group co-occurring tags with previews', () => {
     const topics = repo.tagIntel.topics({ minCount: 2 });
     assert.ok(topics.length >= 2, JSON.stringify(topics));
@@ -134,6 +141,8 @@ describe('tag intelligence', () => {
     assert.equal(media.json.total, 2);
     assert.equal((await call('/api/media?anytags=surf,mirror')).json.total, 9);
     assert.ok((await call('/api/tags/related?tags=beach')).json.some((t) => t.name === 'surf'));
+    assert.deepEqual((await call('/api/tags/related?tags=gym,surf')).json, [], 'default: narrowing needs posts with all the tags');
+    assert.ok(Array.isArray((await call('/api/tags/related?tags=gym,surf&mode=any')).json));
     assert.ok(Array.isArray((await call('/api/topics')).json));
     for (const p of ['/api/understand?q=x', '/api/topics', '/api/tags/related?tags=gym']) assert.equal((await call(p, {})).status, 403, p);
   });
