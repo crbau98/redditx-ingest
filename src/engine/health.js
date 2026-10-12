@@ -29,11 +29,12 @@ const q = {
       verdict = @verdict, http_status = @http_status, gone_streak = @gone_streak`),
   media: repo.db.prepare('SELECT id, media_url, preview_url, media_type, hls_url, publish_state FROM media WHERE id = ?'),
   // Pending confirmations first (one "gone" verdict, the hour has passed), then never-checked
-  // items, then the least recently checked.
+  // items, then the least recently checked. Never-checked rows have no media_health row, so
+  // `h.verdict = 'gone'` is NULL for them; COALESCE keeps them from sorting after stale ones.
   due: repo.db.prepare(`SELECT m.id FROM media m LEFT JOIN media_health h ON h.media_id = m.id
     WHERE m.publish_state = 'published'
       AND (h.checked_at IS NULL OR h.checked_at < @stale OR (h.verdict = 'gone' AND h.checked_at < @confirm))
-    ORDER BY (h.verdict = 'gone') DESC, h.checked_at IS NOT NULL, h.checked_at ASC, m.hot DESC LIMIT @n`),
+    ORDER BY COALESCE(h.verdict = 'gone', 0) DESC, h.checked_at IS NOT NULL, h.checked_at ASC, m.hot DESC LIMIT @n`),
   stats: repo.db.prepare(`SELECT COUNT(*) AS checked, SUM(verdict = 'gone') AS gone, SUM(reports) AS reports,
     SUM(CASE WHEN verdict = 'gone' AND checked_at >= ? THEN 1 ELSE 0 END) AS gone7d FROM media_health`),
 };
@@ -48,10 +49,20 @@ function classify(p) {
   return { verdict: 'unknown', status };
 }
 
-/** The URL that best represents the item: the media itself unless it is resolved at play time. */
-function urlFor(m) {
-  if (m.media_url && /^https?:/i.test(m.media_url) && !/\.m3u8(\?|$)/.test(m.media_url)) return m.media_url;
-  return m.preview_url && /^https?:/i.test(m.preview_url) ? m.preview_url : null;
+const isHls = (u) => /\.m3u8(\?|$)/i.test(u || '');
+const isHttp = (u) => /^https?:/i.test(u || '');
+
+/**
+ * What to probe for an item: the media itself, or for an HLS-only video its playlist. A playlist is
+ * a small text file, so the placeholder size rule is off for it (a 404/410 still means gone). The
+ * poster is a last resort for images only: a live poster says nothing about a dead stream.
+ */
+function targetFor(m) {
+  if (isHttp(m.media_url) && !isHls(m.media_url)) return { url: m.media_url };
+  const playlist = [m.hls_url, m.media_url].find((u) => isHttp(u) && isHls(u));
+  if (playlist) return { url: playlist, opts: { minBytes: 1 } };
+  if (m.media_type !== 'video' && isHttp(m.preview_url)) return { url: m.preview_url };
+  return null;
 }
 
 /** Verify one item at its source and act on the verdict. */
@@ -59,9 +70,14 @@ async function check(id, { probe = probeMedia } = {}) {
   const m = q.media.get(id);
   if (!m) return null;
   const prev = q.get.get(id) || { media_id: id, reports: 0, last_report: null, checked_at: null, verdict: null, http_status: null, gone_streak: 0 };
-  const url = urlFor(m);
-  if (!url) return { verdict: 'unknown', skipped: true };
-  const { verdict, status } = classify(await probe(url, m.media_type));
+  const target = targetFor(m);
+  if (!target) {
+    // Nothing we can probe: record the attempt so the item rotates to the back of the sweep and
+    // reports are throttled like any other, instead of staying "never checked" forever.
+    q.upsert.run({ ...prev, checked_at: now(), verdict: 'unknown', http_status: null });
+    return { verdict: 'unknown', skipped: true };
+  }
+  const { verdict, status } = classify(await probe(target.url, m.media_type, target.opts));
   let streak = prev.gone_streak;
   if (verdict === 'gone') {
     // only a verdict at least an hour after the previous "gone" confirms it

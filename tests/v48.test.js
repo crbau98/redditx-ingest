@@ -17,6 +17,8 @@ before(async () => {
     '/gone2.jpg': () => { count('gone2'); return { status: 410, body: 'gone' }; },
     '/removed.png': () => { count('removed'); return { headers: { 'content-type': 'image/png' }, body: PNG_TINY }; },
     '/hotlink.jpg': () => { count('hotlink'); return { status: 403, body: 'forbidden' }; },
+    '/live.m3u8': () => { count('live'); return { headers: { 'content-type': 'application/vnd.apple.mpegurl' }, body: '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000\nlow.m3u8\n' }; },
+    '/dead.m3u8': () => { count('dead'); return { status: 404, body: 'not found' }; },
   });
   prepareEnv({ AGE_GATE_ENFORCE: 'true' });
   repo = require('../src/db/repo'); engine = require('../src/engine/engine'); backup = require('../src/engine/backup');
@@ -28,11 +30,12 @@ before(async () => {
 after(async () => { engine.shutdown(); backup.stop(); health.stop(); await mock.close(); await new Promise((r) => server.close(r)); });
 
 let n = 0;
-const item = (path) => {
+const item = (path, extra = {}) => {
   n++;
-  const id = repo.media.insert({ platform: 'reddit', source_id: `lh${n}`, source_key: `reddit:lh${n}:0`, post_key: `reddit:lh${n}`, title: `item ${n}`, media_type: 'image', media_url: `${mock.url}${path}?n=${n}`, hash: `v48h${n}` }, []);
+  const id = repo.media.insert({ platform: 'reddit', source_id: `lh${n}`, source_key: `reddit:lh${n}:0`, post_key: `reddit:lh${n}`, title: `item ${n}`, media_type: 'image', media_url: `${mock.url}${path}?n=${n}`, hash: `v48h${n}`, ...extra }, []);
   return id;
 };
+const healthRow = (id) => repo.db.prepare('SELECT * FROM media_health WHERE media_id = ?').get(id);
 // Pretend the last check happened `ms` ago, so the one-hour confirmation window has passed.
 const age = (id, ms) => repo.db.prepare('UPDATE media_health SET checked_at = ? WHERE media_id = ?').run(new Date(Date.now() - ms).toISOString(), id);
 const state = (id) => repo.db.prepare('SELECT publish_state, review_reason FROM media WHERE id = ?').get(id);
@@ -111,6 +114,45 @@ describe('link health: a self-healing library', () => {
     const r2 = await health.sweep({ limit: 50 });
     assert.ok(r2.checked >= 2);
     for (const id of fresh) assert.equal(repo.db.prepare('SELECT verdict FROM media_health WHERE media_id = ?').get(id).verdict, 'ok');
+  });
+
+  test('the sweep checks never-checked items before stale ones', async () => {
+    await health.sweep({ limit: 500 }); // settle everything earlier tests left due
+    const stale = item('/ok.jpg');
+    await health.check(stale); age(stale, 15 * 86400000);
+    const staleAt = healthRow(stale).checked_at;
+    const fresh = item('/ok.jpg');
+    const r = await health.sweep({ limit: 1 });
+    assert.equal(r.checked, 1);
+    assert.equal(healthRow(fresh).verdict, 'ok', 'the never-checked item went first');
+    assert.equal(healthRow(stale).checked_at, staleAt, 'the stale one waits for the next pass');
+    await health.sweep({ limit: 5 });
+    assert.notEqual(healthRow(stale).checked_at, staleAt);
+  });
+
+  test('items with nothing to probe are recorded, so they leave the queue and reports are throttled', async () => {
+    const id = item('/ok.jpg', { media_type: 'video', media_url: 'reddit-video:abc', preview_url: null });
+    const r = await health.check(id);
+    assert.equal(r.skipped, true);
+    const row = healthRow(id);
+    assert.ok(row.checked_at, 'the attempt is recorded');
+    assert.equal(row.verdict, 'unknown');
+    const again = await health.sweep({ limit: 500 });
+    assert.equal(healthRow(id).checked_at, row.checked_at, 'not picked again by the next sweep');
+    assert.equal(again.checked, 0);
+    assert.equal(health.report(id).checking, false, 'a report right after does not re-check');
+    assert.equal(state(id).publish_state, 'published');
+  });
+
+  test('HLS-only videos are probed at their playlist, not at the poster', async () => {
+    const live = item('/live.m3u8', { media_type: 'video', preview_url: `${mock.url}/ok.jpg?p=1` });
+    const dead = item('/dead.m3u8', { media_type: 'video', preview_url: `${mock.url}/ok.jpg?p=2` });
+    const before = hits.dead || 0;
+    assert.equal((await health.check(live)).verdict, 'ok', 'a short playlist is not a placeholder');
+    assert.equal((await health.check(dead)).verdict, 'gone', 'a live poster does not hide a dead stream');
+    assert.equal(hits.dead, before + 1);
+    age(dead, health.CONFIRM_AFTER_MS + 1000);
+    assert.equal((await health.check(dead)).hidden, true);
   });
 
   test('the switch turns verification off; admin overview reports the numbers', async () => {

@@ -20,7 +20,7 @@ export async function reels(root, { query }) {
   const f = {
     type: query.get('type') ?? 'video', sort: query.get('sort') || (tastes.ready() ? 'foryou' : 'trending'), platform: query.get('platform') || '', tag: query.get('tag') || '',
     community: query.get('community') || '', creator: query.get('creator') || '', q: query.get('q') || '', following: query.get('following') || '',
-    tags: query.get('tags') || '', anytags: query.get('anytags') || '', since: query.get('since') || '', label: query.get('label') || '',
+    tags: query.get('tags') || '', anytags: query.get('anytags') || '', since: query.get('since') || '', after: query.get('after') || '', label: query.get('label') || '',
   };
   const set = (patch) => navigate('/reels', { ...f, ...patch }, { replace: true });
   const followIds = f.following ? follows.list().map((c) => c.id).slice(0, 100) : null;
@@ -36,7 +36,7 @@ export async function reels(root, { query }) {
   const paintMute = () => muteBtn.replaceChildren(icon(prefs.muted ? 'mute' : 'volume'));
   paintMute();
 
-  const context = f.sort === 'foryou' && !f.creator && !f.tag && !f.tags && !f.anytags && !f.community && !f.q && !f.following && !f.platform ? 'For you' : f.creator ? 'Creator' : f.following ? 'Following'
+  const context = f.sort === 'foryou' && !f.creator && !f.tag && !f.tags && !f.anytags && !f.community && !f.q && !f.following && !f.platform && !f.after ? 'For you' : f.creator ? 'Creator' : f.following ? 'Following'
     : f.tags ? f.tags.split(',').map((t) => `#${t}`).join(' + ') : f.anytags ? (f.label || f.anytags.split(',').slice(0, 3).map((t) => `#${t}`).join(' · ')) : f.tag ? `#${f.tag}` : f.community || (f.q ? `“${f.q}”` : (f.platform ? platformLabel(f.platform) : ((SORTS.find((x) => x[0] === f.sort) || [])[1] || 'Reels')));
   const top = h('div', { class: 'reels-top' },
     h('button', { class: 'btn icon ghost', 'aria-label': 'Back', title: 'Back', onclick: () => (window.history.length > 1 ? window.history.back() : navigate('/')) }, icon('chev-l')),
@@ -183,9 +183,9 @@ export async function reels(root, { query }) {
     if (loading || done || destroyed) return;
     loading = true;
     try {
-      const forYou = f.sort === 'foryou' && !f.creator && !f.tag && !f.tags && !f.anytags && !f.community && !f.q && !f.following && !f.platform;
+      const forYou = f.sort === 'foryou' && !f.creator && !f.tag && !f.tags && !f.anytags && !f.community && !f.q && !f.following && !f.platform && !f.after;
       const res = forYou ? await get('/api/recommend', { ...tastes.query({ exclude: viewHistory.list().slice(0, 100) }), type: f.type === 'all' ? undefined : f.type, seed, page, limit: PAGE }) : await get('/api/media', {
-        type: f.type === 'all' ? undefined : f.type, sort: f.sort === 'foryou' ? 'trending' : f.sort, platform: f.platform, tag: f.tag, tags: f.tags || undefined, anytags: f.anytags || undefined, since: f.since || undefined, community: f.community, creator: f.creator, q: f.q,
+        type: f.type === 'all' ? undefined : f.type, sort: f.sort === 'foryou' ? 'trending' : f.sort, platform: f.platform, tag: f.tag, tags: f.tags || undefined, anytags: f.anytags || undefined, since: f.since || undefined, after: f.after || undefined, community: f.community, creator: f.creator, q: f.q,
         creators: followIds ? (followIds.length ? followIds.join(',') : '00000000-0000-0000-0000-000000000000') : undefined,
         seed: f.sort === 'random' ? seed : undefined, page, limit: PAGE,
       });
