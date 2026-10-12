@@ -288,7 +288,7 @@ async function fetchPage(feed, sort, params, dead = new Set()) {
   const usable = attempts.filter(([name]) => !dead.has(name));
   const notes = [];
   const failed = [];
-  let firstErr; let empty = null; let gone = 0;
+  let firstErr; let empty = null; let gone = 0; const errs = [];
   for (const [name, attempt] of usable.length ? usable : attempts) {
     try {
       const page = await attempt();
@@ -304,6 +304,7 @@ async function fetchPage(feed, sort, params, dead = new Set()) {
     } catch (e) {
       dead.add(name);
       if (!firstErr) firstErr = e; // the primary failure is the one worth reporting, not the last mirror's
+      errs.push(e);
       failed.push(`${name} ${e.status || e.code || 'err'}`);
       notes.push(`${e.status || e.code || 'err'} ${String(e.message).slice(0, 80)}`);
       const tr = targetReason(e);
@@ -319,7 +320,10 @@ async function fetchPage(feed, sort, params, dead = new Set()) {
   }
   if (!firstErr) firstErr = new Error('no Reddit transport available');
   // One actionable line: what failed where. Keep the first failure's status so the engine/breaker can reason about it.
-  throw Object.assign(new Error(`Reddit unavailable for ${label} on every transport: ${failed.join(', ')}`), { status: firstErr.status || 0, retryAfter: firstErr.retryAfter || 0, code: firstErr.code || '' });
+  // Not unanimous, so never report "gone": a lone 404 (an edge block) must not leave status 404/410 on the aggregate error,
+  // or the engine would disable a healthy feed after three runs. Report the first failure that is not a 404/410.
+  const real = errs.find((e) => e.status !== 404 && e.status !== 410) || {};
+  throw Object.assign(new Error(`Reddit unavailable for ${label} on every transport: ${failed.join(', ')}`), { status: real.status || 502, retryAfter: real.retryAfter || firstErr.retryAfter || 0, code: real.code || firstErr.code || '' });
 }
 
 async function fetchProfile(name) {

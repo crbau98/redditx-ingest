@@ -54,6 +54,9 @@ module.exports = {
   allowPrivateHosts: bool(env.ALLOW_PRIVATE_HOSTS, false),
   // Egress through an HTTP CONNECT proxy for https (see lib/net). Explicit opt-in: HTTPS_PROXY is NOT picked up implicitly.
   outboundProxy: String(env.OUTBOUND_PROXY || '').trim(),
+  // With a proxy, destinations are still resolved locally and private answers refused. Set this only if your proxy does the DNS
+  // (names that local DNS cannot resolve are then tunnelled unvalidated).
+  outboundProxyTrustDns: bool(env.OUTBOUND_PROXY_TRUST_DNS, false),
   // Exact hostnames that may resolve to private addresses (a SearXNG container on the compose network). Everything else stays SSRF-guarded.
   internalHosts: list(env.INTERNAL_HOSTS, []).map((h) => h.toLowerCase()),
 

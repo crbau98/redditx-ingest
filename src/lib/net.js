@@ -100,6 +100,29 @@ class ProxyTunnelAgent extends https.Agent {
   constructor(proxyUrl, opts) { super(opts); this.proxy = new URL(proxyUrl); }
   createConnection(options, cb) {
     const host = options.host || options.hostname; const port = options.port || 443;
+    // Keep the SSRF guarantee: the proxy would resolve the name itself, so resolve it HERE first and refuse private
+    // answers. If local DNS cannot answer, the destination cannot be validated: refuse too, unless the operator has
+    // declared that their proxy does the resolving (OUTBOUND_PROXY_TRUST_DNS=true, e.g. split-horizon DNS).
+    // Residual risk, stated plainly: the proxy re-resolves, so a rebinding DNS server could still answer differently
+    // the second time; the proxy should also deny private ranges.
+    if (!config.allowPrivateHosts && !isInternalHost(host) && !net.isIP(host)) {
+      dns.lookup(host, { all: true }, (err, addrs) => { // (not returned: Node would mistake the lookup request for a socket)
+        if (err) {
+          if (config.outboundProxyTrustDns) return this.tunnel(host, port, options, cb);
+          const e = new Error(`Blocked host: cannot validate ${host} (local DNS failed: ${err.code || err.message}); set OUTBOUND_PROXY_TRUST_DNS=true if the proxy resolves names for you`);
+          e.code = 'EBLOCKED'; return cb(e);
+        }
+        if ((addrs || []).some((a) => isPrivateIp(a.address))) {
+          const e = new Error(`Blocked host: ${host} resolves to a private address`); e.code = 'EBLOCKED'; return cb(e);
+        }
+        return this.tunnel(host, port, options, cb);
+      });
+      return undefined;
+    }
+    this.tunnel(host, port, options, cb);
+    return undefined;
+  }
+  tunnel(host, port, options, cb) {
     const headers = { host: `${host}:${port}` };
     if (this.proxy.username) headers['proxy-authorization'] = `Basic ${Buffer.from(`${decodeURIComponent(this.proxy.username)}:${decodeURIComponent(this.proxy.password)}`).toString('base64')}`;
     const req = http.request({ host: this.proxy.hostname, port: this.proxy.port || 80, method: 'CONNECT', path: `${host}:${port}`, headers, agent: false, timeout: 15000 });
