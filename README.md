@@ -59,7 +59,7 @@ DEMO_ART=1 DB_PATH=./data/demo.db ADMIN_KEY=dev node server.js
 ### Tests
 
 ```bash
-npm test      # 417 tests: safety, SSRF, migration from a real v3 DB, adapters, engine resilience, HTTP API, proxy
+npm test      # 412 tests: safety, SSRF, migration from a real v3 DB, adapters, engine resilience, HTTP API, proxy
 ```
 
 ---
