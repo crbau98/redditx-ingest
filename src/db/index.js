@@ -35,4 +35,11 @@ db.function('epoch_ms', { deterministic: true }, (iso) => {
 
 const migration = migrate(db);
 
+// Planner statistics. Without them SQLite assumes "publish_state = 'published'" is selective and
+// sorts the whole library instead of walking the right index (ids / community / creator lookups
+// measured 20-50x slower on a 60k-item library). optimize=0x10002 analyses whatever needs it at open
+// (bounded by analysis_limit, so it stays cheap); a light re-run every 6 hours keeps it current.
+try { db.exec('PRAGMA analysis_limit = 400; PRAGMA optimize = 0x10002;'); } catch { /* older SQLite: harmless */ }
+setInterval(() => { try { db.exec('PRAGMA optimize;'); } catch { /* ignore */ } }, 6 * 3600 * 1000).unref();
+
 module.exports = { db, migration };

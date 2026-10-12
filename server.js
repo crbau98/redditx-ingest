@@ -24,6 +24,7 @@ const server = app.listen(config.port, () => {
 
 engine.start();
 maintenance.startupSweepIfNeeded();
+setTimeout(() => require('./src/routes/public').warm(), 1500).unref(); // pre-build the big caches (topics, graph, home)
 backup.start();
 discovery.start();
 

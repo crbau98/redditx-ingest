@@ -63,7 +63,29 @@ function mediaFilters(q) {
   };
 }
 
-const ttl = (ms, fn) => { let at = 0; let val; return () => { if (Date.now() - at > ms) { val = fn(); at = Date.now(); } return val; }; };
+// Stale-while-revalidate: the first call computes; after that an expired value is still served
+// while a refresh runs on the next tick, so no visitor ever waits for a rebuild (topics, graph…).
+// Tests get exact values (synchronous refresh).
+const SWR = !config.isTest;
+const warmers = [];
+const ttl = (ms, fn) => {
+  let at = 0; let val; let pending = false;
+  const refresh = () => { try { val = fn(); at = Date.now(); } finally { pending = false; } };
+  const get = () => {
+    if (at && Date.now() - at <= ms) return val;
+    if (!at || !SWR) { refresh(); return val; }
+    if (!pending) { pending = true; setImmediate(refresh); }
+    return val;
+  };
+  warmers.push(get);
+  return get;
+};
+/** Fill every cache once, one per tick, so the first visitors after a deploy never pay for it. */
+function warm() {
+  const queue = [() => repo.library(), ...warmers];
+  const next = () => { const g = queue.shift(); if (!g) return; try { g(); } catch (e) { console.error('[warm]', e.message); } setImmediate(next); };
+  setImmediate(next);
+}
 const discoverCached = ttl(30000, () => {
   const d = repo.discover();
   return {
@@ -244,4 +266,5 @@ router.get('/stream', (req, res) => events.subscribe('public', req, res));
 
 module.exports = router;
 module.exports.publicMedia = publicMedia;
+module.exports.warm = warm;
 module.exports.publicCreator = publicCreator;
