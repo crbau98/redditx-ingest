@@ -12,5 +12,7 @@ npm-debug.log*
 README.md
 .cursor
 tests
-scripts
+# scripts/ stays in the image: deploy/README.md runs telegram-login.js and diagnose-sources.js inside the container
+scripts/perf-audit.js
+scripts/seed-demo.js
 docs
