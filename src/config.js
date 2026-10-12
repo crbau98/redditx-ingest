@@ -61,6 +61,7 @@ module.exports = {
     bskyIdentifier: env.BSKY_IDENTIFIER || '',
     bskyPassword: env.BSKY_APP_PASSWORD || '',
     mastodonToken: env.MASTODON_ACCESS_TOKEN || '',
+    misskeyToken: env.MISSKEY_ACCESS_TOKEN || '',
     // Brave Search API (web search) — powers creator discovery and cross-platform identity matching.
     braveKey: env.BRAVE_API_KEY || env.BRAVE_SEARCH_API_KEY || '',
     // Telegram Bot API token (from @BotFather, "123456:ABC…"): channel metadata and existence checks.

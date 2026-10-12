@@ -136,14 +136,22 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     if (feed.kind !== 'user') autoTrack(touched, cfg);
 
     const status = stats.fetched === 0 ? 'empty' : 'ok';
+    // "Why zero?": a run that adds nothing says why (nothing came back / all dupes / everything filtered).
+    // It goes to the live log and the run result; last_error stays reserved for real problems.
+    const reasonList = Object.entries(reasons).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k}×${v}`).join(', ');
+    const zeroWhy = stats.added > 0 ? null
+      : stats.fetched === 0 ? `No new items: the source returned nothing${result.via ? ` (via ${result.via})` : ''}`
+        : `No new items: fetched ${stats.fetched} · ${stats.dupes} already stored${stats.blocked ? ` · ${stats.blocked} blocked` : ''}${stats.skipped ? ` · ${stats.skipped} filtered${reasonList ? ` (${reasonList})` : ''}` : ''}`;
     repo.feeds.finishRun(feed.id, {
       status, cursor: result.cursor, addedItems: stats.added, failures: 0,
-      nextRunAt: computeNextRun(feed, 0, 0, tempo(feed, stats.added)), error: (result.notes && result.notes.length) ? `via ${result.via}: ${result.notes[0]}` : null,
+      nextRunAt: computeNextRun(feed, 0, 0, tempo(feed, stats.added)),
+      error: (result.notes && result.notes.length) ? `via ${result.via}: ${result.notes[0]}` : null,
     });
     breaker.success(feed.platform);
     const skipSummary = Object.entries(reasons).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k}×${v}`).join(', ');
     events.log(stats.added ? 'OK' : 'INFO', `${tag} [${result.via || 'n/a'}] fetched ${stats.fetched} · +${stats.added} · dupes ${stats.dupes} · skipped ${stats.skipped}${stats.blocked ? ` · blocked ${stats.blocked}` : ''}${skipSummary ? ` (${skipSummary})` : ''}`);
-    return finish(status, { via: result.via, notes: result.notes });
+    if (zeroWhy) events.log('INFO', `${tag}: ${zeroWhy}`);
+    return finish(status, { via: result.via, notes: result.notes, why: zeroWhy });
   } catch (e) {
     if (e.skip) {
       breaker.release(feed.platform);

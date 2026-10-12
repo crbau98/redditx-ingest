@@ -31,7 +31,9 @@ const SCHEMA = {
   braveDailyBudget: { type: 'int', default: 40, min: 0, max: 2000, label: 'Brave searches per day (budget)', group: 'discovery' },
   discoveryQueries: {
     type: 'text', group: 'discovery', label: 'Web-search topics (one per line; rotated, one per run)',
-    default: ['gay male model bluesky', 'male fitness model onlyfans x.com', 'gay creator linktree 18+', 'muscle model telegram channel', 'gay twink creator redgifs', 'bear daddy creator onlyfans bluesky', 'gay amateur couple onlyfans twitter', 'male model throne wishlist'].join('\n'),
+    default: ['gay male model bluesky', 'male fitness model onlyfans x.com', 'gay creator linktree 18+', 'muscle model telegram channel', 'gay twink creator redgifs', 'bear daddy creator onlyfans bluesky', 'gay amateur couple onlyfans twitter', 'male model throne wishlist',
+      'gay bodybuilder creator linktree', 'hairy gay creator onlyfans', 'gay jock creator link in bio', 'gay otter creator bluesky 18+', 'gay daddy creator mastodon nsfw', 'gay content creator tumblr nsfw', 'gay muscle videos peertube',
+      'gay porn star official links', 'gay amateur creator allmylinks', 'gay bear creator beacons.ai', 'ゲイ 筋肉 クリエイター', 'ガチムチ 投稿者 リンク', 'gay cam model linktree', 'male nude model portfolio'].join('\n'),
   },
   // --- discovery reach (v4.6) ---
   discoveryCommunities: { type: 'bool', default: true, label: 'Search Reddit, Lemmy and Bluesky for communities and custom feeds', group: 'discovery' },
@@ -42,7 +44,8 @@ const SCHEMA = {
   discoveryAutoCommunities: { type: 'bool', default: true, label: 'Auto-follow strong communities and feeds (their posts are still checked one by one)', group: 'discovery' },
   discoveryKeywords: {
     type: 'text', group: 'discovery', label: 'Community keywords (one per line; two are searched per run, in rotation)',
-    default: ['gay', 'gaybros', 'gay muscle', 'bears', 'twinks', 'gay daddy', 'jocks', 'bulge', 'gay amateur', 'hairy men', 'male nude', 'gay nsfw'].join('\n'),
+    default: ['gay', 'gaybros', 'gay muscle', 'bears', 'twinks', 'gay daddy', 'jocks', 'bulge', 'gay amateur', 'hairy men', 'male nude', 'gay nsfw',
+      'gay otters', 'gay jock', 'gay bears', 'gay couples', 'gay gifs', 'gay videos', 'gay outdoors', 'gay selfies', 'gay big cock', 'jockstrap', 'gay hunks', 'bearded men', 'gay bodybuilder', 'ゲイ', 'ガチムチ'].join('\n'),
   },
 };
 
