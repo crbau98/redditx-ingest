@@ -9,6 +9,7 @@ const ENV_HELP = {
   x: ['X_BEARER_TOKEN'],
   mastodon: ['MASTODON_ACCESS_TOKEN (optional)', 'MASTODON_INSTANCES'],
   lemmy: ['LEMMY_INSTANCES'],
+  telegram: ['TELEGRAM_API_ID', 'TELEGRAM_API_HASH', 'MEDIA_STORE_* (bucket)'],
 };
 const BLURB = {
   reddit: 'Communities and individual redditors. Falls back through OAuth → public JSON → old.reddit → RSS → archive, so it keeps working when Reddit blocks servers.',
@@ -19,7 +20,7 @@ const BLURB = {
   peertube: 'PeerTube accounts, channels, tags and keyword search across the federation (Sepia Search). Videos play as MP4 or HLS.',
   lemmy: 'Communities and users on Lemmy instances (API v3 with v4 fallback).',
   x: 'Creator timelines and searches. The official API (bearer token) is reliable; without it only a best-effort keyless route is available.',
-  telegram: 'Public Telegram channels through the web preview (t.me/s/…). No login or key; channels that disable the preview report an error.',
+  telegram: 'Two ways in. Public channels through the web preview (t.me/s/…, no login). And, once you log in (node scripts/telegram-login.js), every channel and group your account has joined, public or private, with full history; files are copied into your bucket (R2/B2) so nothing sits on the server.',
   rss: 'Any RSS / Atom / JSON Feed — creators’ own sites, Tumblr blogs (/rss), Mastodon and Bluesky profile feeds. The most stable way to follow anything.',
   web: 'A single page’s photos and videos (OpenGraph, <video>, linked images). Respects robots.txt.',
   linkinbio: 'Linktree-style hubs. Not content: PRISM reads them to discover a creator’s other public accounts.',
@@ -51,6 +52,7 @@ export async function render(root) {
           `7d: ${fmt.int(s.score.added)} added · ${s.score.yieldPerRun}/run · ${s.score.creators} creators · ${s.score.errorRate}% errors · ${s.score.emptyRate}% empty runs · ${fmt.int(s.score.filtered)} filtered`) : h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'No runs in the last 7 days'),
         h('div', { class: 'row wrap' },
           h('button', { class: 'btn sm', onclick: (e) => act(e.currentTarget, () => adminPost('/engine/run', { platforms: [s.platform] }), 'Sync queued') }, icon('refresh', 'sm'), 'Sync all'),
+          s.platform === 'telegram' ? h('button', { class: 'btn sm', title: 'Re-read the channels your account has joined and follow new ones', onclick: (e) => act(e.currentTarget, async () => { const r = await adminPost('/telegram/sync'); toast(`${r.channels} joined channel(s) · ${r.created} new feed(s)${r.skippedFemale.length ? ` · ${r.skippedFemale.length} skipped (male-only)` : ''}`); await load(); }) }, icon('refresh', 'sm'), 'Sync joined channels') : null,
           h('a', { class: 'btn sm ghost', href: href('/admin/feeds', { platform: s.platform }) }, 'View feeds', icon('chev-r', 'sm'))));
     }));
   }

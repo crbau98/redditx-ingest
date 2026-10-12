@@ -121,6 +121,34 @@ module.exports = {
     tumblr: String(env.TUMBLR_BASE_URL || 'https://www.tumblr.com').replace(/\/+$/, ''),
   },
 
+  // Reserved host name under which stored media is addressed inside PRISM (.invalid never resolves).
+  storeHost: 'media.prism.invalid',
+
+  // --- Telegram as a logged-in user (MTProto): reads every channel the account has joined, including private ones.
+  // api_id / api_hash come from https://my.telegram.org -> API development tools. The login session is created once with
+  // `node scripts/telegram-login.js` and kept in the data volume (or TELEGRAM_SESSION).
+  telegram: {
+    apiId: int(env.TELEGRAM_API_ID, 0),
+    apiHash: String(env.TELEGRAM_API_HASH || '').trim(),
+    session: String(env.TELEGRAM_SESSION || '').trim(),
+    maxMb: int(env.TELEGRAM_MAX_MB, 200),            // larger videos are skipped
+    syncHours: int(env.TELEGRAM_SYNC_HOURS, 12),     // how often the joined-channel list is re-read
+    autoFollow: bool(env.TELEGRAM_AUTO_FOLLOW, true), // new joined channels become feeds automatically
+    trustJoined: bool(env.TELEGRAM_TRUST_JOINED, true), // joined channels are curated by you: unlabeled posts are accepted (the picture filter still applies)
+    backfillMax: int(env.TELEGRAM_BACKFILL_MAX, 1000), // older media read per channel beyond the newest posts (0 = only new posts)
+  },
+  // --- object store for media PRISM must keep itself (Telegram files cannot be hotlinked). S3-compatible: Cloudflare R2,
+  // Backblaze B2, MinIO, AWS. Without these it falls back to a folder in the data volume (MEDIA_STORE=disk).
+  store: {
+    kind: String(env.MEDIA_STORE || '').toLowerCase(),   // '' = auto (s3 when endpoint+bucket+keys are set, else disk), 's3' or 'disk'
+    endpoint: String(env.MEDIA_STORE_ENDPOINT || '').trim().replace(/\/+$/, ''),
+    bucket: String(env.MEDIA_STORE_BUCKET || '').trim(),
+    region: String(env.MEDIA_STORE_REGION || 'auto').trim(),
+    accessKeyId: String(env.MEDIA_STORE_ACCESS_KEY_ID || '').trim(),
+    secretAccessKey: String(env.MEDIA_STORE_SECRET_ACCESS_KEY || '').trim(),
+    prefix: String(env.MEDIA_STORE_PREFIX || 'media/').replace(/^\/+/, '').replace(/([^/])$/, '$1/'),
+  },
+
   // --- media cache for proxied images --------------------------------
   mediaCacheMb: int(env.MEDIA_CACHE_MB, 512),
 };

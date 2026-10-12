@@ -299,6 +299,15 @@ router.post('/maintenance/image-sweep', async (req, res) => {
     res.json({ ok: true, ...(await maintenance.imageSweep({ limit: n })), ...maintenance.imageSweepProgress() });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+/* ---------------------------------------------------------------- telegram (joined channels) */
+router.get('/telegram', (req, res) => {
+  const sync = require('../services/telegram-sync');
+  res.json({ ...sync.status(), store: require('../lib/objectstore').describe() });
+});
+router.post('/telegram/sync', async (req, res) => {
+  try { res.json({ ok: true, ...(await require('../services/telegram-sync').sync()) }); }
+  catch (e) { res.status(e.status || (e.skip ? 400 : 500)).json({ error: e.message }); }
+});
 router.post('/maintenance/recompute', (req, res) => res.json({ ok: true, updated: repo.media.recomputeHot() }));
 
 /* ------------------------------------------------- audit / duplicates / backups / portability */

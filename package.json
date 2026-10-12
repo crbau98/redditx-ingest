@@ -1,6 +1,6 @@
 {
   "name": "prism",
-  "version": "4.11.0",
+  "version": "4.12.0",
   "description": "PRISM — creator-centric adult media discovery. Multi-source ingestion (Reddit, RedGIFs, Bluesky, Mastodon, Lemmy, X, RSS, link-in-bio) with a safety gate, takedown flow and admin console.",
   "main": "server.js",
   "scripts": {
@@ -31,6 +31,7 @@
     "@tensorflow/tfjs-backend-wasm": "^4.22.0",
     "@tensorflow/tfjs-converter": "^4.22.0",
     "@vladmandic/human": "^3.3.6",
-    "sharp": "^0.35.5"
+    "sharp": "^0.35.5",
+    "telegram": "^2.26.22"
   }
 }

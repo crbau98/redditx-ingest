@@ -24,11 +24,25 @@ Approximate monthly cost (check current prices): VPS €8–15, R2 storage free 
 1. Cloudflare dashboard → R2 → create bucket `prism-db`, then an **API token** with Object Read & Write on that bucket. Note the account endpoint (`https://<ACCOUNT_ID>.r2.cloudflarestorage.com`).
 2. (Backblaze B2 works the same: use its S3 endpoint and an application key.)
 
+For Telegram files add a **second, private** bucket (`prism-media`) and its own API token (Object Read & Write on that bucket only). R2 has no egress fees and 10 GB free; storage beyond that is about US$0.015 per GB-month. PRISM streams files from Telegram to the bucket and from the bucket to your browser through its own proxy, so nothing is kept on the server and the bucket never needs to be public.
+
 ## 3. Source credentials
 - **Reddit**: <https://www.reddit.com/prefs/apps> → *create another app* → type **script**. Put the id/secret in `REDDIT_CLIENT_ID/SECRET` and a descriptive `REDDIT_USER_AGENT`. Confirm Reddit's current API terms for personal use.
 - **Brave Search**: create a key at <https://api.search.brave.com> (check the current plan and quota). SearXNG covers you if you skip it.
 - **Bluesky**: Settings → Privacy and security → App passwords → `BSKY_IDENTIFIER` (your handle) + `BSKY_APP_PASSWORD` (enables hashtag/keyword search).
 - Optional: `TELEGRAM_API_KEY` (a bot token from @BotFather), `MASTODON_ACCESS_TOKEN`, `MISSKEY_ACCESS_TOKEN`, `X_BEARER_TOKEN`.
+
+## 3c. Telegram: every channel your account has joined
+1. <https://my.telegram.org> → *API development tools* → create an app. Put `TELEGRAM_API_ID` (a number) and `TELEGRAM_API_HASH` in `deploy/.env`, plus the `MEDIA_STORE_*` bucket from section 2.
+2. Log in once, on the server (it asks for your phone number, the code Telegram sends to your Telegram app, and your two-step password if you set one):
+   ```bash
+   docker compose -f deploy/docker-compose.yml run --rm prism node scripts/telegram-login.js
+   ```
+   The session is written to the data volume (`/data/telegram.session`, mode 600). It is as powerful as your account, so it is **not** in the database or the Litestream backup: after rebuilding the server from scratch, run this step again.
+3. Restart (`docker compose -f deploy/docker-compose.yml up -d`) or press **Admin → Sources → Telegram → Sync joined channels**. Every channel and group you have joined becomes a feed (private ones by id); join a new one in the Telegram app and the next sync (every 12 h) follows it, leave one and its feed is switched off. Channels whose name reads female are never followed.
+4. History is read newest-first and back-filled gradually (up to `TELEGRAM_BACKFILL_MAX` older media per channel). A post's file is downloaded **only after** the text gates and duplicate check accept it, and deleted from the bucket again if the picture filter or duplicate detection rejects it afterwards. Videos over `TELEGRAM_MAX_MB` are skipped.
+
+A user account that reads many channels can hit Telegram's flood limits: PRISM reads one channel at a time and waits out `FLOOD_WAIT` errors. Use an account you can afford to have rate-limited, not one you depend on.
 
 ## 3b. Your own SearXNG, including an onion one
 Leave `SEARXNG_URL` empty to use the bundled container. To use your own, set it in `deploy/.env`; an onion instance must be written `http://<56 characters>.onion` (the `.onion` ending is required and the scheme is `http://`: Tor encrypts end to end). The compose stack includes a client-only Tor sidecar for this. PRISM will contact **only** that one onion address; every other `.onion` name is refused. Onion lookups are slow (several seconds to build a circuit): searches get a 70-second timeout and are cached for ten minutes.

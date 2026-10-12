@@ -15,6 +15,7 @@
  *   - Host allow-list = known CDN suffixes + hosts ingestion already accepted.
  */
 const express = require('express');
+const config = require('../config');
 const net = require('../lib/net');
 const cache = require('../lib/media-cache');
 const repo = require('../db/repo');
@@ -35,7 +36,7 @@ function parseTarget(req) {
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return { error: [400, 'Invalid protocol'] };
   if (net.isPrivateHost(u.hostname)) return { error: [403, 'Blocked host'] };
   const host = u.hostname.toLowerCase();
-  const known = KNOWN_SUFFIXES.some((d) => host === d || host.endsWith(`.${d}`)) || repo.hosts.has(host);
+  const known = host === config.storeHost || KNOWN_SUFFIXES.some((d) => host === d || host.endsWith(`.${d}`)) || repo.hosts.has(host);
   if (!known) return { error: [403, 'Host not allowed'] };
   return { url: u.toString(), host, origin: u.origin };
 }
