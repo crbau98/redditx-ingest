@@ -17,7 +17,6 @@ const config = require('../config');
 const SESSION_FILE = () => path.join(config.dataDir, 'telegram.session');
 let factory = null;          // test hook: async () => fake client
 let clientPromise = null;
-let warmed = false;
 const entities = new Map();  // target -> entity
 
 function sessionString() {
@@ -84,7 +83,8 @@ async function dialogs() {
   try {
     const c = await client();
     const out = [];
-    for (const d of await c.getDialogs({ limit: 800 })) {
+    // No limit: private chats and small groups count towards it too, and a quiet channel sits far down the list.
+    for (const d of await c.getDialogs({})) {
       const e = d.entity;
       if (!e || clsOf(e) !== 'Channel') continue;
       const id = str(e.id);
@@ -92,7 +92,6 @@ async function dialogs() {
       if (e.username) entities.set(String(e.username).toLowerCase(), e);
       out.push({ id, username: e.username || null, title: d.title || e.title || e.username || id, members: num(e.participantsCount), kind: e.broadcast ? 'channel' : 'group' });
     }
-    warmed = true;
     return out;
   } catch (e) { throw wrap(e); }
 }
@@ -101,7 +100,7 @@ async function entityOf(target) {
   const key = String(target).replace(/^@/, '').toLowerCase();
   if (entities.has(key)) return entities.get(key);
   const c = await client();
-  if (!warmed && /^id:/.test(key)) await dialogs(); // private channels are only resolvable once the dialog list has been read
+  if (/^id:/.test(key)) await dialogs(); // private channels are only resolvable from the dialog list; re-read it, the channel may be newly joined
   if (entities.has(key)) return entities.get(key);
   try {
     const e = await c.getEntity(/^id:/.test(key) ? key.slice(3) : String(target).replace(/^@/, ''));
@@ -221,12 +220,12 @@ async function profile(target, { avatar = true } = {}) {
 }
 
 async function shutdown() {
-  const p = clientPromise; clientPromise = null; warmed = false; entities.clear();
+  const p = clientPromise; clientPromise = null; entities.clear();
   if (p) { try { const c = await p; if (c && c.disconnect) await c.disconnect(); if (c && c.destroy) await c.destroy(); } catch { /* ignore */ } }
 }
 
 module.exports = {
   configured, dialogs, messages, describeMedia, download, profile, entityOf, shutdown, wrap,
   sessionString, saveSession, SESSION_FILE, MIME_FOR_EXT,
-  _setFactory(fn) { factory = fn; clientPromise = null; warmed = false; entities.clear(); },
+  _setFactory(fn) { factory = fn; clientPromise = null; entities.clear(); },
 };

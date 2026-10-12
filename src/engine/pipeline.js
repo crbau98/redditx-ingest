@@ -23,6 +23,11 @@ const md5 = (s) => crypto.createHash('md5').update(s).digest('hex');
 
 const cleanHandle = (a) => String(a || '').replace(/^[@/]+/, '').replace(/^u\//i, '').trim().slice(0, 80);
 
+/** A Telegram channel posts as itself: the feed IS the author, there is no separate account to follow. */
+const feedIsAuthor = (feed) => feed.platform === 'telegram' && feed.kind === 'channel';
+/** Feeds whose every item belongs to the creator they are linked to (a profile, an RSS feed, a page, a channel run by one creator). */
+const ownedByCreator = (feed) => ['user', 'feed', 'page'].includes(feed.kind) || feedIsAuthor(feed);
+
 const HOST_WINDOW_MS = 20 * 60 * 1000;
 const HOST_STRIKES = 2;
 const hostState = new Map(); // host -> { ok, reason, at, strikes: Set(url) }
@@ -65,7 +70,7 @@ function noteImageStrike(item, feed) {
   const strikes = repo.db.prepare("SELECT COUNT(*) AS n FROM moderation_actions WHERE target_type = 'account' AND target_id = ? AND action = 'image-female'").get(key).n;
   if (strikes < IMAGE_STRIKES_TO_BLOCK) return;
   const reason = `image filter: ${strikes} pictures with women`;
-  const creator = (feed.creator_id && ['user', 'feed', 'page'].includes(feed.kind) ? repo.creators.get(feed.creator_id) : null) || repo.creators.byAccount(feed.platform, handle);
+  const creator = (feed.creator_id && ownedByCreator(feed) ? repo.creators.get(feed.creator_id) : null) || repo.creators.byAccount(feed.platform, handle);
   if (creator && creator.status === 'active') { repo.creators.block(creator.id, reason, 'system'); events.log('WARN', `Creator ${creator.handle} blocked: ${reason}`); }
   else repo.blocklist.add('creator', key, reason);
 }
@@ -76,7 +81,7 @@ function blockFemaleCreator(item, feed, rule) {
   const key = handle && `${feed.platform}:${handle.toLowerCase()}`;
   const reason = `scope: ${rule || 'female'} (profile)`;
   let creator = null;
-  if (feed.creator_id && ['user', 'feed', 'page'].includes(feed.kind)) creator = repo.creators.get(feed.creator_id);
+  if (feed.creator_id && ownedByCreator(feed)) creator = repo.creators.get(feed.creator_id);
   else if (handle) creator = repo.creators.byAccount(feed.platform, handle);
   if (creator && creator.status === 'active') {
     repo.creators.block(creator.id, reason, 'system');
@@ -88,8 +93,8 @@ function blockFemaleCreator(item, feed, rule) {
 
 /** Which creator does this item belong to? May create one. */
 function resolveCreator(item, feed, adapter) {
-  // Feeds that belong to a specific creator (their profile, their RSS, their page).
-  if (feed.creator_id && ['user', 'feed', 'page'].includes(feed.kind)) {
+  // Feeds that belong to a specific creator (their profile, their RSS, their page, their channel).
+  if (feed.creator_id && ownedByCreator(feed)) {
     const c = repo.creators.get(feed.creator_id);
     if (c) return c.status === 'active' ? c : { blocked: true };
   }
@@ -112,7 +117,12 @@ function resolveCreator(item, feed, adapter) {
 
   const c = repo.creators.create({ handle, displayName: item.authorName || handle, avatarUrl: item.authorAvatar, origin: 'ingest' });
   const a = adapter || registry.get(platform);
-  if (a && a.kinds.includes('user')) {
+  if (feedIsAuthor(feed)) {
+    // This feed already reads the author: it becomes the creator's own feed (a user feed would read the same channel again, or
+    // a private one that has no web preview at all).
+    repo.feeds.update(feed.id, { creatorId: c.id });
+    feed.creator_id = c.id;
+  } else if (a && a.kinds.includes('user')) {
     repo.feeds.upsert({
       platform, kind: 'user', target: handle, creatorId: c.id, enabled: 0, trusted: 1, origin: 'ingest',
       intervalMin: (a.intervalMin && a.intervalMin.user) || 240, runNow: false,
@@ -196,7 +206,12 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   // Sources whose files cannot be hotlinked (Telegram) hand over a `materialize()` instead of a finished URL. It runs only now,
   // after the cheap text gates and the duplicate check, so rejected posts never cost a download or any storage.
   if (typeof item.materialize === 'function') {
-    try { await item.materialize(item); } catch (e) { return { outcome: 'skipped', reason: `download: ${String(e.message || e).slice(0, 160)}` }; }
+    try { await item.materialize(item); } catch (e) {
+      // The source itself is in trouble (rate limit, dead login, membership lost): the run must fail rather than skip the post,
+      // or the cursor moves past it and it is never read again. Anything else is this post's own problem.
+      if (e.skip || e.status || e.retryAfter) throw e;
+      return { outcome: 'skipped', reason: `download: ${String(e.message || e).slice(0, 160)}` };
+    }
   }
 
   // ---- 6b. image filter: is there a woman in the picture? ---------------------------

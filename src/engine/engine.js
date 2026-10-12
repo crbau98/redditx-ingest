@@ -123,13 +123,17 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     // links, downloading a picture for the image filter), and the database steps between awaits are synchronous
     // and idempotent (a duplicate hash simply loses the insert), so overlapping them is safe and much faster.
     let next = 0;
+    let fatal = null; // the source itself failed (rate limit, dead login ...): the run fails so the cursor is not advanced
     const worker = async () => {
       for (;;) {
-        if (ctx.aborted()) return;
+        if (fatal || ctx.aborted()) return;
         const raw = items[next++];
         if (!raw) return;
         let r;
-        try { r = await processItem(raw, feed, adapter, cfg); } catch (e) { r = { outcome: 'skipped', reason: `error: ${e.message}` }; }
+        try { r = await processItem(raw, feed, adapter, cfg); } catch (e) {
+          if (e.skip || e.status || e.retryAfter) { fatal = fatal || e; return; }
+          r = { outcome: 'skipped', reason: `error: ${e.message}` };
+        }
         if (r.creatorId) touched.add(r.creatorId);
         switch (r.outcome) {
           case 'added': stats.added++; break;
@@ -147,6 +151,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     for (const id of touched) repo.creators.refreshStats(id);
     if (feed.creator_id) repo.creators.refreshStats(feed.creator_id);
     if (feed.kind !== 'user') autoTrack(touched, cfg);
+    if (fatal) throw fatal;
 
     const status = stats.fetched === 0 ? 'empty' : 'ok';
     // "Why zero?": a run that adds nothing says why (nothing came back / all dupes / everything filtered).

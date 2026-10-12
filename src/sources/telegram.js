@@ -162,7 +162,9 @@ function messageToItem(msg, d, ch) {
 async function fetchChannel(feed, ctx) {
   const target = chanKey(feed.target);
   const cur = ctx.cursor || {};
-  const perRun = Math.min(Math.max(ctx.limit || 40, 40), 200);
+  // Never more than the engine keeps (itemsPerRun x 4): new posts + back-fill, each at most twice `perRun` (two media filters).
+  // Listing more would move the cursor past messages that are then dropped unseen.
+  const perRun = Math.min(ctx.limit || 40, 200);
   const maxBackfill = config.telegram.backfillMax;
   const entity = await mt.entityOf(target);
   const ch = {
