@@ -51,6 +51,20 @@ describe('creator constellation graph', () => {
     assert.notEqual(g.nodes.find((x) => x.id === c.id).group, 'gymsub', 'community names are not used as the style group');
     assert.ok(g.nodes.find((x) => x.id === a.id).preview, 'each star carries a preview image');
   });
+  test('excluded (off-topic) posts never surface in the graph', () => {
+    // a creator whose only published posts are scope-excluded is not a star
+    const off = repo.creators.create({ handle: 'off_scope' });
+    for (let i = 0; i < 3; i++) { n++; repo.media.insert({ creator_id: off.id, platform: 'reddit', source_id: `x${n}`, source_key: `reddit:x${n}:0`, post_key: `reddit:x${n}`, title: 't', media_type: 'image', media_url: `https://i.redd.it/x${n}.jpg`, preview_url: `https://i.redd.it/x${n}p.jpg`, hash: `v45x${n}`, scope: 'excluded', score: 999 }, ['gym']); }
+    repo.creators.refreshStats(off.id);
+    // a public creator's top-scoring excluded post is not used as their preview
+    const mix = creatorWith('mixed_scope', [['gym', 'muscle'], ['gym', 'muscle']]);
+    n++; repo.media.insert({ creator_id: mix.id, platform: 'reddit', source_id: `x${n}`, source_key: `reddit:x${n}:0`, post_key: `reddit:x${n}`, title: 't', media_type: 'image', media_url: `https://i.redd.it/hidden${n}.jpg`, preview_url: `https://i.redd.it/hidden${n}p.jpg`, hash: `v45x${n}`, scope: 'excluded', score: 999 }, ['gym']);
+    repo.creators.refreshStats(mix.id);
+    const g = repo.creators.graph({ limit: 200 });
+    assert.ok(!g.nodes.some((x) => x.id === off.id));
+    const node = g.nodes.find((x) => x.id === mix.id);
+    assert.ok(node && !/hidden/.test(node.preview), node && node.preview);
+  });
   test('each node keeps only its strongest few links', () => {
     for (let i = 0; i < 8; i++) creatorWith(`hub_${i}`, [['hubtag', `t${i}`], ['hubtag']]);
     const g = repo.creators.graph({ limit: 100, perNode: 3 });

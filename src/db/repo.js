@@ -323,14 +323,15 @@ creators.activity = function activity(id, days = 371) {
 creators.graph = function graph({ limit = 150, perNode = 4, minSim = 0.12 } = {}) {
   const nodes = db.prepare(`SELECT c.id, c.handle, c.display_name, c.avatar_url, c.media_count, c.last_media_at,
       (SELECT COALESCE(m.preview_url, m.thumbnail_url, CASE WHEN m.media_type = 'image' THEN m.media_url END) FROM media m
-        WHERE m.creator_id = c.id AND m.publish_state = 'published' ORDER BY m.score DESC LIMIT 1) AS preview
+        WHERE m.creator_id = c.id AND m.publish_state = 'published' AND m.scope != 'excluded' ORDER BY m.score DESC LIMIT 1) AS preview
     FROM creators c WHERE c.status = 'active' AND c.scope != 'excluded' AND c.media_count >= 2
+      AND (SELECT COUNT(*) FROM media m WHERE m.creator_id = c.id AND m.publish_state = 'published' AND m.scope != 'excluded') >= 2
     ORDER BY c.media_count DESC, c.total_score DESC LIMIT ?`).all(limit);
   if (nodes.length < 2) return { nodes, links: [] };
   const ids = nodes.map((n) => n.id);
   const rows = db.prepare(`SELECT m.creator_id AS cid, t.name AS tag, COUNT(*) AS n FROM media m
       JOIN media_tags mt ON mt.media_id = m.id JOIN tags t ON t.id = mt.tag_id
-      WHERE m.creator_id IN (${ids.map(() => '?').join(',')}) AND m.publish_state = 'published'
+      WHERE m.creator_id IN (${ids.map(() => '?').join(',')}) AND m.publish_state = 'published' AND m.scope != 'excluded'
       GROUP BY m.creator_id, t.id`).all(...ids).filter((r) => !GENERIC_TAGS.has(r.tag));
   const df = new Map();
   for (const r of rows) df.set(r.tag, (df.get(r.tag) || 0) + 1);
@@ -856,15 +857,15 @@ const tagIntel = {
   related(names, limit = 12) {
     const list = [...new Set((names || []).map(cleanTag).filter(Boolean))].slice(0, 4);
     if (!list.length) return [];
-    const total = db.prepare("SELECT COUNT(*) AS n FROM media WHERE publish_state = 'published'").get().n || 1;
+    const total = db.prepare("SELECT COUNT(*) AS n FROM media WHERE publish_state = 'published' AND scope != 'excluded'").get().n || 1;
     const base = db.prepare(`SELECT COUNT(DISTINCT mt.media_id) AS n FROM media_tags mt JOIN tags t ON t.id = mt.tag_id JOIN media m ON m.id = mt.media_id
-      WHERE t.name IN (${list.map(() => '?').join(',')}) AND m.publish_state = 'published'`).get(...list).n;
+      WHERE t.name IN (${list.map(() => '?').join(',')}) AND m.publish_state = 'published' AND m.scope != 'excluded'`).get(...list).n;
     if (!base) return [];
     const rows = db.prepare(`SELECT t.name, COUNT(DISTINCT mt.media_id) AS co,
-        (SELECT COUNT(*) FROM media_tags x JOIN media xm ON xm.id = x.media_id WHERE x.tag_id = t.id AND xm.publish_state = 'published') AS freq
+        (SELECT COUNT(*) FROM media_tags x JOIN media xm ON xm.id = x.media_id WHERE x.tag_id = t.id AND xm.publish_state = 'published' AND xm.scope != 'excluded') AS freq
       FROM media_tags mt JOIN tags t ON t.id = mt.tag_id
       WHERE mt.media_id IN (SELECT mt2.media_id FROM media_tags mt2 JOIN tags t2 ON t2.id = mt2.tag_id JOIN media m ON m.id = mt2.media_id
-                            WHERE t2.name IN (${list.map(() => '?').join(',')}) AND m.publish_state = 'published')
+                            WHERE t2.name IN (${list.map(() => '?').join(',')}) AND m.publish_state = 'published' AND m.scope != 'excluded')
         AND t.name NOT IN (${list.map(() => '?').join(',')}) AND t.name NOT IN (${PLATFORM_TAGS_SQL})
       GROUP BY t.id HAVING co >= 2`).all(...list, ...list);
     const communities = new Set(db.prepare("SELECT DISTINCT community FROM media WHERE community IS NOT NULL").all().map((r) => cleanTag(r.community)));
@@ -890,7 +891,7 @@ const tagIntel = {
     const ids = tags.map((t) => t.id);
     const co = new Map();
     for (const r of db.prepare(`SELECT a.tag_id AS a, b.tag_id AS b, COUNT(*) AS n FROM media_tags a JOIN media_tags b ON a.media_id = b.media_id AND a.tag_id < b.tag_id
-        JOIN media m ON m.id = a.media_id WHERE m.publish_state = 'published' AND a.tag_id IN (${ids.map(() => '?').join(',')}) AND b.tag_id IN (${ids.map(() => '?').join(',')})
+        JOIN media m ON m.id = a.media_id WHERE m.publish_state = 'published' AND m.scope != 'excluded' AND a.tag_id IN (${ids.map(() => '?').join(',')}) AND b.tag_id IN (${ids.map(() => '?').join(',')})
         GROUP BY a.tag_id, b.tag_id`).all(...ids, ...ids)) co.set(`${r.a}|${r.b}`, r.n);
     const count = new Map(tags.map((t) => [t.id, t.n]));
     const assoc = (x, y) => { const n = co.get(x < y ? `${x}|${y}` : `${y}|${x}`) || 0; return n / Math.sqrt(count.get(x) * count.get(y)); };
@@ -914,9 +915,9 @@ const tagIntel = {
   vocabulary() {
     return {
       tags: db.prepare(`SELECT t.name, COUNT(*) AS count FROM media_tags mt JOIN tags t ON t.id = mt.tag_id JOIN media m ON m.id = mt.media_id
-        WHERE m.publish_state = 'published' AND t.name NOT IN (${PLATFORM_TAGS_SQL}) GROUP BY t.id ORDER BY count DESC LIMIT 3000`).all(),
+        WHERE m.publish_state = 'published' AND m.scope != 'excluded' AND t.name NOT IN (${PLATFORM_TAGS_SQL}) GROUP BY t.id ORDER BY count DESC LIMIT 3000`).all(),
       creators: db.prepare("SELECT id, handle, display_name, media_count FROM creators WHERE status = 'active' AND scope != 'excluded' AND media_count > 0 ORDER BY media_count DESC LIMIT 5000").all(),
-      communities: db.prepare("SELECT community AS name, COUNT(*) AS count FROM media WHERE publish_state = 'published' AND community IS NOT NULL AND community != '' GROUP BY community ORDER BY count DESC LIMIT 2000").all(),
+      communities: db.prepare("SELECT community AS name, COUNT(*) AS count FROM media WHERE publish_state = 'published' AND scope != 'excluded' AND community IS NOT NULL AND community != '' GROUP BY community ORDER BY count DESC LIMIT 2000").all(),
     };
   },
 };

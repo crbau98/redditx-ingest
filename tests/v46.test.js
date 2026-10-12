@@ -108,6 +108,11 @@ describe('tag intelligence', () => {
     assert.ok(!rel.includes('beach') && !rel.includes('gym'), 'unrelated and query tags are excluded');
     assert.ok(!rel.includes('gymsub'), 'community names are not offered as tags');
   });
+  test('excluded (off-topic) posts do not feed related tags or the search vocabulary', () => {
+    for (let i = 0; i < 3; i++) { n++; repo.media.insert({ creator_id: gymA.id, platform: 'reddit', source_id: `e${n}`, source_key: `reddit:e${n}:0`, post_key: `reddit:e${n}`, title: 'x', media_type: 'image', media_url: `https://i.redd.it/e${n}.jpg`, hash: `v46e${n}`, scope: 'excluded' }, ['gym', 'hiddenonly']); }
+    assert.ok(!repo.tagIntel.related(['gym']).some((t) => t.name === 'hiddenonly'));
+    assert.ok(!repo.tagIntel.vocabulary().tags.some((t) => t.name === 'hiddenonly'));
+  });
   test('topics group co-occurring tags with previews', () => {
     const topics = repo.tagIntel.topics({ minCount: 2 });
     assert.ok(topics.length >= 2, JSON.stringify(topics));
