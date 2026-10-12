@@ -7,6 +7,7 @@
 const repo = require('../db/repo');
 const registry = require('../sources');
 const { checkText } = require('../lib/safety');
+const { femaleCheck } = require('../lib/scope');
 const { profileUrl } = require('../lib/links');
 
 const defaultInterval = (spec) => {
@@ -25,6 +26,10 @@ function addSpec(spec, { creatorId = null, origin = 'admin', trusted, hint } = {
   if (repo.blocklist.has('creator', `${spec.platform}:${String(spec.target).toLowerCase()}`)) {
     return { status: 'invalid', reason: 'This account is on the blocklist' };
   }
+
+  // Male-only: refuse accounts, communities and searches whose own name reads female / feminine.
+  const gender = femaleCheck(spec.target, spec.label);
+  if (gender.level === 'hard') return { status: 'invalid', reason: `Not male-focused (${gender.rule})` };
 
   let creator = creatorId ? repo.creators.get(creatorId) : null;
   if (spec.kind === 'user') {
@@ -71,6 +76,8 @@ function addCreator({ name, inputs, bio }) {
     const first = ingestable.find((s) => s.kind === 'user') || ingestable[0];
     const handle = name || (first && String(first.label || first.target).replace(/^[@/]?(?:u\/)?/, '')) || 'creator';
     if (checkText(handle, name, bio).level === 'block') return { error: 'Rejected by the safety gate' };
+    const g = femaleCheck(handle, name, bio);
+    if (g.level === 'hard') return { error: `Not male-focused (${g.rule}) — PRISM only follows male creators` };
     creator = repo.creators.create({ handle, displayName: name || handle, bio, origin: 'admin' });
   } else if (name || bio) {
     repo.creators.update(creator.id, { displayName: name || undefined, bio: bio || undefined });

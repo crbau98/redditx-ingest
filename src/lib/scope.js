@@ -2,29 +2,121 @@
 /**
  * Scope classifier: is this a post about / by a man?
  *
+ * PRISM is for male creators only. Female and feminine / trans-feminine
+ * content must never be published, so the policy is deliberately strict and
+ * errs on the side of dropping a borderline male post:
+ *
+ *   HARD  female / feminine / trans vocabulary, f4m-style tags, [F] tags, she/her ...
+ *         -> 'excluded' ALWAYS: whatever else the text says and however much the feed is trusted.
+ *   SOFT  words that also occur in gay-male posts ("pussy", "tits", "wife", "babe") or that are
+ *         merely feminine-adjacent (lingerie, heels, makeup, non-binary ...)
+ *         -> 'uncertain' + femaleSoft: always held for a human (review queue), even on trusted
+ *            feeds and even when the "unclear scope" setting is open.
+ *   no hit: a trusted feed accepts the item; an untrusted feed needs a positive male signal.
+ *
  * Feeds come in two trust levels:
- *   - trusted   (curated communities, creators an admin or the discovery
- *                pipeline already vouched for): only a clear *female* signal
- *                without any male signal excludes an item.
- *   - untrusted (open searches / hashtags): a positive male signal is required,
- *                otherwise the item goes to the review queue.
+ *   - trusted   (curated communities, creators an admin or the discovery pipeline vouched for)
+ *   - untrusted (open searches / hashtags): a positive male signal is required, otherwise 'uncertain'.
  */
 const { normalize } = require('./safety');
 
-const MALE = /\b(?:gay|male|males|men|man|guy|guys|dude|dudes|twinks?|bears?|otters?|jocks?|cocks?|dicks?|studs?|daddy|daddies|muscles?|muscular|hunks?|bros?|boys?|lads?|hung|bulges?|jockstraps?|m4m|m4a|m4f|m4t|bi|dilf|hubby|husband|boyfriend|bf|abs|pecs|beard|bearded)\b|[\[(]\s*m\s*[\])]/;
-const FEMALE = /\b(?:pussy|pussies|boobs?|busty|lesbians?|milfs?|female|females|women|woman|girls?|tits|titties|breasts?|vagina|cunt|ladies|wife|girlfriend|f4m|f4f|f4a|f4t|mommy|shemale)\b|[\[(]\s*f\s*[\])]/;
+// Whole-word male signals. Strong ones are unmistakable; weak ones ("bi", "abs") only count as a hint
+// because female posts use them too, but no HARD female hit can be outvoted by any of them.
+const MALE = new RegExp(
+  '\\b(?:gay|gays|gaybro|gaybros|male|males|men|man|manly|guy|guys|dude|dudes|twinks?|bears?|otters?|jocks?|cocks?|dicks?|studs?|daddy|daddies|dads?|' +
+  'muscles?|muscular|hunks?|bros?|boys?|lads?|hung|bulges?|jockstraps?|m4m|m4a|dilf|dilfs|hubby|husband|boyfriend|bf|abs|pecs|beard|bearded|' +
+  'hombres?|homme|hommes|homem|homens|maenner|schwul|gai|gei|bofe|' +
+  'hairy men|gaymuscle|menofmastodon|malenude)\\b' +
+  '|[\\[(]\\s*m\\s*[\\])]',
+);
+// CJK / Cyrillic male words are matched as substrings (no word boundaries exist). Female terms are checked
+// first, so 男女 / 男の娘 never reach this list. Patterns go through normalize() exactly like the text does
+// (NFKD splits kana dakuten and Hangul syllables).
+const MALE_SUBSTR = ['ゲイ', 'ガチムチ', '筋肉', 'メンズ', '게이', '남자', 'гей', 'мужчин', 'парн', '男'].map(normalize);
 
-/**
- * @returns {{scope: 'in'|'uncertain'|'excluded', male: boolean, female: boolean}}
- */
-function classify(texts, { trusted = false } = {}) {
-  const text = normalize([].concat(texts || []).flat(Infinity).filter(Boolean).join(' \n '));
-  const male = MALE.test(text);
-  const female = FEMALE.test(text);
-  if (female && !male) return { scope: 'excluded', male, female };
-  if (female && male) return { scope: trusted ? 'in' : 'uncertain', male, female };
-  if (male || trusted) return { scope: 'in', male, female };
-  return { scope: 'uncertain', male, female };
+/* --------------------------------------------------------------------------------- HARD */
+// Matched anywhere in the text (no word boundaries): long, distinctive words that are safe inside
+// glued handles such as "femboy_uwu", "SexyGirl92" or "tgirlsofx".
+const HARD_SUBSTR = [
+  'shemale', 'tranny', 'trannie', 'trannies', 'ladyboy', 'lady boy', 'kathoey', 'newhalf', 'new half',
+  'tgirl', 't girl', 'transgirl', 'transwoman', 'transwomen', 'transgender', 'transsexual', 'transfem', 'transfeminine',
+  'femboy', 'femboi', 'femboys', 'sissy', 'sissies', 'sissification', 'feminiz', 'feminis', 'feminin', 'crossdress', 'cross dress', 'crossdresser',
+  'drag queen', 'dragqueen', 'drag race', 'futanari', 'bimbo', 'girly', 'girlish', 'ladylike', 'effeminate',
+  'girl', 'woman', 'women', 'female', 'lesbian', 'hotwife', 'dominatrix', 'actress', 'stepmom', 'stepsister', 'stepdaughter', 'daughter',
+  'vagina', 'vulva', 'labia', 'clitoris', 'bride',
+  // other languages (NFKD-normalised, accents removed)
+  'mujer', 'chica', 'senora', 'novia', 'esposa', 'mulher', 'garota', 'menina', 'novinha', 'madchen', 'frauen',
+  'девушк', 'женщин', 'девочк', 'школьниц',
+  // CJK / Thai / Korean
+  '女', '娘', '妻', '母', '姉', '妹', 'ニューハーフ', '男の娘', 'おっぱい', '巨乳', '熟女', '美女', '彼女', '少女', '人妻', '女装', 'ふたなり',
+  '여자', '여성', '소녀', '트랜스', 'ผู้หญิง', 'สาว', 'กะเทย',
+].map(normalize);
+// Whole-word hard terms: short or common-substring words.
+const HARD_WORDS = new RegExp(
+  '\\b(?:' + [
+    'ts', 'trans', 'ftm', 'lady', 'ladies', 'gal', 'gals', 'milf', 'milfs', 'gilf', 'wife', 'wives', 'wifey', 'girlfriend', 'girlfriends', 'gf',
+    'mommy', 'mom', 'moms', 'mother', 'mama', 'sister', 'aunt', 'niece', 'bbw', 'pawg', 'boobs', 'boob', 'busty', 'breasts?',
+    'she', 'her', 'hers', 'herself', 'femme', 'fille', 'filles', 'frau', 'chicas', 'fem', 'femmes', 'mistress',
+    'straight couple', 'girl on girl', 'cuckquean', 'preggo', 'pregnant', 'transmen', 'transman', 'nonbinary',
+  ].join('|') + ')\\b',
+);
+// Orientation tags: anything that involves an f or t partner (m4f, f4m, mf, mmf, m/f ...).
+const HARD_TAGS = /\b(?:[fta]4[a-z]|[mfa]4[ft]|m\s?\/\s?f|f\s?\/\s?[mf]|mf|fm|mmf|mff|ffm|fmm|mfm|fmf|ffmm|mmff|mtf)\b/;
+// [F] [f25] (25f) [t] ...
+const HARD_BRACKET = /[\[(]\s*(?:[ft]\s?[\/ ]?\s?\d{1,2}|\d{1,2}\s?[\/ ]?\s?[ft]|[ft])\b[^\])]{0,24}[\])]/;
+
+/* --------------------------------------------------------------------------------- SOFT */
+// Words that gay-male posts also use, or that are feminine-adjacent: never published without a human.
+const SOFT = new RegExp(
+  '\\b(?:pussy|pussies|cunts?|tits|titties|babe|babes|princess|goddess|cuck|cuckold|trap|bikini|lingerie|panties|panty|stockings|heels|makeup|wig|skirt|' +
+  'enby|genderfluid|genderqueer|non binary|they them|boipussy|manpussy|thot)\\b' +
+  '|non-binary',
+);
+
+/** Words (not rules) -> readable reason. */
+function firstHit(text) {
+  for (const w of HARD_SUBSTR) if (text.includes(w)) return `female:${w.trim()}`;
+  let m = text.match(HARD_WORDS); if (m) return `female:${m[0]}`;
+  m = text.match(HARD_TAGS); if (m) return `female:${m[0]}`;
+  m = text.match(HARD_BRACKET); if (m) return `female:${m[0]}`;
+  return null;
 }
 
-module.exports = { classify, MALE, FEMALE };
+const toText = (texts) => normalize([].concat(texts || []).flat(Infinity).filter(Boolean).join(' \n '));
+// "TeenBoysNSFW" / "SexyGirl92": also read camelCase words, which normalize() would lower-case into one blob.
+const splitCamel = (s) => String(s || '').replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ');
+
+/**
+ * Female / feminine check only (no male-signal logic). Use it for creators, handles, bios, feed names.
+ * @returns {{level: 'hard'|'soft'|null, rule: string|null}}
+ */
+function femaleCheck(...texts) {
+  const flat = [].concat(texts).flat(Infinity).filter(Boolean);
+  for (const t of [toText(flat), toText(flat.map(splitCamel))]) {
+    if (!t) continue;
+    const hard = firstHit(t);
+    if (hard) return { level: 'hard', rule: hard };
+  }
+  for (const t of [toText(flat), toText(flat.map(splitCamel))]) {
+    const m = t && t.match(SOFT);
+    if (m) return { level: 'soft', rule: `soft:${m[0]}` };
+  }
+  return { level: null, rule: null };
+}
+
+/**
+ * @returns {{scope: 'in'|'uncertain'|'excluded', male: boolean, female: boolean, femaleSoft: boolean, rule: string|null}}
+ */
+function classify(texts, { trusted = false } = {}) {
+  const flat = [].concat(texts || []).flat(Infinity).filter(Boolean);
+  const text = toText(flat);
+  const split = toText(flat.map(splitCamel));
+  const male = MALE.test(text) || MALE.test(split) || MALE_SUBSTR.some((w) => text.includes(w));
+  const f = femaleCheck(flat);
+  if (f.level === 'hard') return { scope: 'excluded', male, female: true, femaleSoft: false, rule: f.rule };
+  if (f.level === 'soft') return { scope: 'uncertain', male, female: true, femaleSoft: true, rule: f.rule };
+  if (male || trusted) return { scope: 'in', male, female: false, femaleSoft: false, rule: null };
+  return { scope: 'uncertain', male, female: false, femaleSoft: false, rule: null };
+}
+
+module.exports = { classify, femaleCheck, splitCamel, MALE, MALE_SUBSTR };

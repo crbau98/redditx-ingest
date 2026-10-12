@@ -8,6 +8,7 @@ const repo = require('../db/repo');
 const registry = require('../sources');
 const events = require('./events');
 const { checkText } = require('../lib/safety');
+const { femaleCheck } = require('../lib/scope');
 
 const LINKABLE_KINDS = new Set(['user', 'feed', 'page']);
 const MAX_LINKED_FEEDS_PER_CREATOR = 10;
@@ -23,6 +24,14 @@ function applyProfile(feed, profile, settings) {
   if (safety.level === 'block') {
     repo.creators.block(creator.id, `safety:${safety.rule} (profile)`, 'system');
     events.log('WARN', `Creator ${creator.handle} blocked by safety gate (profile)`);
+    return { ...out, blocked: true };
+  }
+
+  // PRISM follows men only: a female / feminine / trans-feminine profile ends the relationship too.
+  const gender = femaleCheck(creator.handle, profile.displayName, profile.bio);
+  if (gender.level === 'hard') {
+    repo.creators.block(creator.id, `scope:${gender.rule} (profile)`, 'system');
+    events.log('WARN', `Creator ${creator.handle} blocked by the male-only scope (profile: ${gender.rule})`);
     return { ...out, blocked: true };
   }
 

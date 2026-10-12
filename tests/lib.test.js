@@ -52,12 +52,13 @@ describe('scope classifier', () => {
     assert.equal(classify('sunset beach', { trusted: true }).scope, 'in');
     assert.equal(classify('[F] new here', { trusted: true }).scope, 'excluded');
     assert.equal(classify('busty milf', { trusted: true }).scope, 'excluded');
-    assert.equal(classify('f4m but also gay', { trusted: true }).scope, 'in');
+    // male-only policy: an f4m-style tag is a hard exclusion even on a trusted feed, whatever else the text says
+    assert.equal(classify('f4m but also gay', { trusted: true }).scope, 'excluded');
   });
   test('untrusted feeds need a positive male signal', () => {
     assert.equal(classify('hung gay stud').scope, 'in');
     assert.equal(classify('sunset beach').scope, 'uncertain');
-    assert.equal(classify('f4m but also gay').scope, 'uncertain');
+    assert.equal(classify('f4m but also gay').scope, 'excluded');
     assert.equal(classify(['lesbian couple']).scope, 'excluded');
   });
 });
