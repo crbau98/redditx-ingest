@@ -1,6 +1,6 @@
 import { h, icon, proxied, fmt, emptyState, debounce } from '../dom.js';
 import { get } from '../api.js';
-import { navigate, href } from '../router.js';
+import { navigate, href, parse } from '../router.js';
 import { gpuTier } from '../components/fx.js';
 
 /**
@@ -83,8 +83,12 @@ export async function galaxy(root) {
   root.replaceChildren(h('div', { class: 'galaxy loading' }, h('div', { class: 'galaxy-loading' }, h('div', { class: 'spinner' }), 'Mapping the creator galaxy…')));
   document.body.classList.add('galaxy-mode');
   let data;
-  try { data = await get('/api/graph'); } catch (e) {
-    root.replaceChildren(emptyState({ icon: 'alert', title: 'Couldn’t load the galaxy', text: e.message }));
+  let failed = null;
+  try { data = await get('/api/graph'); } catch (e) { failed = e; }
+  // Left the page while the graph was loading: the next view owns `root` now, so touch nothing.
+  if (parse().path !== '/galaxy') { document.body.classList.remove('galaxy-mode'); return () => {}; }
+  if (failed) {
+    root.replaceChildren(emptyState({ icon: 'alert', title: 'Couldn’t load the galaxy', text: failed.message }));
     document.body.classList.remove('galaxy-mode');
     return () => {};
   }

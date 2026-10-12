@@ -178,6 +178,27 @@ describe('far-reaching discovery', () => {
       assert.notEqual(state.subSearches[1], state.subSearches[0]);
     } finally { lemmy.listCommunities = orig; }
   });
+  test('the stricter community gate applies on every path, not just community search', () => {
+    const { parseProfile } = require('../src/lib/links');
+    // a creator mentions a borderline subreddit: rejected outright, CamelCase and all
+    const viaMention = discovery.consider(parseProfile('r/TeenBoysNSFW'), 'mention', 'c1');
+    assert.equal(viaMention.status, 'rejected'); assert.match(viaMention.reason, /safety/);
+    // ... while a person with the same wording still waits for a human
+    const person = discovery.consider(parseProfile('https://bsky.app/profile/teenfan.bsky.social'), 'mention', 'c1', { bio: 'teen boys' });
+    assert.equal(person.status, 'pending'); assert.match(person.reason, /needs review/);
+  });
+  test('a failed Lemmy read is retried on the next run instead of waiting a day', async () => {
+    const lemmy = registry.get('lemmy');
+    const orig = lemmy.listCommunities;
+    let calls = 0;
+    lemmy.listCommunities = async () => { calls++; throw new Error('timeout'); };
+    try {
+      repo.discoveryState.set('lemmy.list.lemmy.test', '');
+      await discovery.communityDiscovery({ keywords: 0 });
+      await discovery.communityDiscovery({ keywords: 0 });
+      assert.equal(calls, 2);
+    } finally { lemmy.listCommunities = orig; }
+  });
   test('auto-follow: strong male-focused communities follow untrusted (posts still checked); the switch turns it off', () => {
     const sub = repo.candidates.find('reddit', 'community', 'gaybrosgonewild');
     // a second keyword hit pushes it over the threshold

@@ -34,6 +34,19 @@ const bskyHttp = require('../sources/http').forPlatform('bluesky', 400);
 const WEIGHTS = { identity: 6, mention: 3, cofollow: 1.5, search: 2 };
 const CAPS = { identity: 1, mention: 5, cofollow: 8, search: 3 };
 const FOLLOWABLE_KINDS = new Set(['user', 'page']);
+// Communities and custom feeds mix many posters, so they are held to a stricter bar than people.
+const SHARED_KINDS = new Set(['community', 'feedgen', 'list']);
+// CamelCase / snake_case names ("TeenBoysNSFW") are split so the safety gate can read their words.
+const splitCamel = (s) => String(s || '').replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ');
+/** Safety verdict over the raw texts and their split forms; the stricter of the two wins. */
+function gate(...texts) {
+  const raw = checkText(...texts);
+  const split = checkText(...texts.map(splitCamel));
+  if (raw.level === 'block') return raw;
+  if (split.level === 'block') return split;
+  return raw.level ? raw : split;
+}
+const borderline = (...texts) => gate(...texts).level === 'review';
 // Words that suggest an account publishes adult/creator content (used to keep follow-graph noise out).
 const CREATOR_HINT = /onlyfans|fansly|justfor\.?fans|18\s*\+|🔞|nsfw|\bnude|\bxxx\b|\bporn|\bcontent creator|\bcreator\b|\bmodel\b|linktr\.ee|allmylinks|beacons\.ai|throne|\bfeet\b|\bgay\b|\bbi\b|\bmuscle|\btwink|\bbear\b|\bjock|\bdaddy|\bhung\b|\bbulge|\bm4m\b/i;
 
@@ -85,9 +98,11 @@ function consider(spec, type, value, meta = {}) {
 
   const displayName = meta.displayName || (c && c.display_name) || null;
   const bio = meta.bio || (c && c.bio) || null;
-  const verdict = checkText(target, spec.label, displayName, bio);
-  if (verdict.level === 'block') {
-    const row = { status: 'rejected', reason: `safety: ${verdict.rule || 'blocked'}`, decided_at: new Date().toISOString() };
+  const verdict = gate(target, spec.label, displayName, bio);
+  // Borderline wording waits for a human on a person, but a shared space with it is rejected outright,
+  // whichever strategy found it (mentions, web search or community search).
+  if (verdict.level === 'block' || (verdict.level === 'review' && SHARED_KINDS.has(spec.kind))) {
+    const row = { status: 'rejected', reason: `safety: ${verdict.rule || 'blocked'}${verdict.level === 'review' ? ' (community)' : ''}`, decided_at: new Date().toISOString() };
     if (c) return repo.candidates.update(c.id, row);
     return repo.candidates.insert({ platform: spec.platform, kind: spec.kind, target, label: spec.label, url: spec.url || profileUrl(spec.platform, spec.kind, target), signals: {}, ...row });
   }
@@ -231,10 +246,6 @@ async function braveTopics({ queries = 1, budget, aborted = () => false } = {}) 
 
 // Custom feeds and communities have to read adult/creator-ish to be worth a lead (keeps out news and art-only feeds).
 const ADULT_HINT = /nsfw|18\s*\+|🔞|\bnude|\bnaked|\bporn|\bxxx\b|\bhot\b|sexy|thirst|bulge|muscle|hunk|daddy|daddies|twink|\bbears?\b|\bjocks?\b|\bcock|\bdick|horny|kink|leather|underwear|speedo|jockstrap|\bhung\b|\bgay\b|gaybros|\bm4m\b|\bhairy/i;
-// Shared spaces are held to a stricter bar than people: borderline wording ("teen", "young") is not
-// queued for review, it is dropped. CamelCase names ("TeenBoysNSFW") are split so the gate can read them.
-const splitCamel = (s) => String(s || '').replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ');
-const borderline = (...texts) => checkText(...texts.map(splitCamel)).level === 'review';
 const keywordList = () => String(settingsStore.get().discoveryKeywords || '').split('\n').map((k) => k.trim()).filter(Boolean);
 
 /**
@@ -289,8 +300,8 @@ async function communityDiscovery({ keywords = 2, aborted = () => false } = {}) 
           const c = consider(parseProfile(`https://${lc.host}/c/${lc.name}`), 'search', `lemmy:${host}`, { displayName: lc.title, bio: lc.description, popularity: lc.subscribers });
           if (c && c.status === 'pending' && c.scope !== 'excluded') { out.found++; out.lemmy++; }
         }
+        repo.discoveryState.set(key, new Date().toISOString()); // only a successful read counts as today's
       } catch (e) { events.log('WARN', `Discovery: Lemmy communities on ${host} — ${e.message}`); }
-      repo.discoveryState.set(key, new Date().toISOString());
     }
   }
   return out;

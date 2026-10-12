@@ -20,7 +20,7 @@ export async function reels(root, { query }) {
   const f = {
     type: query.get('type') ?? 'video', sort: query.get('sort') || (tastes.ready() ? 'foryou' : 'trending'), platform: query.get('platform') || '', tag: query.get('tag') || '',
     community: query.get('community') || '', creator: query.get('creator') || '', q: query.get('q') || '', following: query.get('following') || '',
-    tags: query.get('tags') || '', anytags: query.get('anytags') || '', since: query.get('since') || '',
+    tags: query.get('tags') || '', anytags: query.get('anytags') || '', since: query.get('since') || '', label: query.get('label') || '',
   };
   const set = (patch) => navigate('/reels', { ...f, ...patch }, { replace: true });
   const followIds = f.following ? follows.list().map((c) => c.id).slice(0, 100) : null;
@@ -36,7 +36,8 @@ export async function reels(root, { query }) {
   const paintMute = () => muteBtn.replaceChildren(icon(prefs.muted ? 'mute' : 'volume'));
   paintMute();
 
-  const context = f.sort === 'foryou' && !f.creator && !f.tag && !f.community && !f.q && !f.following && !f.platform ? 'For you' : f.creator ? 'Creator' : f.following ? 'Following' : f.tag ? `#${f.tag}` : f.community || (f.q ? `“${f.q}”` : (f.platform ? platformLabel(f.platform) : ((SORTS.find((x) => x[0] === f.sort) || [])[1] || 'Reels')));
+  const context = f.sort === 'foryou' && !f.creator && !f.tag && !f.tags && !f.anytags && !f.community && !f.q && !f.following && !f.platform ? 'For you' : f.creator ? 'Creator' : f.following ? 'Following'
+    : f.tags ? f.tags.split(',').map((t) => `#${t}`).join(' + ') : f.anytags ? (f.label || f.anytags.split(',').slice(0, 3).map((t) => `#${t}`).join(' · ')) : f.tag ? `#${f.tag}` : f.community || (f.q ? `“${f.q}”` : (f.platform ? platformLabel(f.platform) : ((SORTS.find((x) => x[0] === f.sort) || [])[1] || 'Reels')));
   const top = h('div', { class: 'reels-top' },
     h('button', { class: 'btn icon ghost', 'aria-label': 'Back', title: 'Back', onclick: () => (window.history.length > 1 ? window.history.back() : navigate('/')) }, icon('chev-l')),
     h('div', { class: 'reels-title truncate' }, icon('film', 'sm'), context),
