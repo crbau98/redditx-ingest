@@ -56,7 +56,8 @@ router.get('/runs', (req, res) => res.json(repo.runs.recent({ feedId: req.query.
 router.get('/sources', (req, res) => {
   const counts = Object.fromEntries(repo.feeds.counts().map((c) => [c.platform, c]));
   const breakers = breaker.snapshot();
-  res.json(registry.describe().map((s) => ({ ...s, feeds: counts[s.platform] || { total: 0, enabled: 0, failing: 0 }, breaker: breakers[s.platform] || { state: 'closed', failures: 0 } })));
+  const score = Object.fromEntries(repo.runs.scoreboard(7).map((r) => [r.platform, r]));
+  res.json(registry.describe().map((s) => ({ ...s, feeds: counts[s.platform] || { total: 0, enabled: 0, failing: 0 }, breaker: breakers[s.platform] || { state: 'closed', failures: 0 }, score: score[s.platform] || null })));
 });
 
 /* ------------------------------------------------------------------- feeds */

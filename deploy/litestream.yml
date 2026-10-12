@@ -1,0 +1,14 @@
+# Replicates the SQLite database to S3-compatible object storage. Credentials come from deploy/.env.
+dbs:
+  - path: /data/prism.db
+    replicas:
+      - type: s3
+        bucket: ${LITESTREAM_BUCKET}
+        path: prism
+        endpoint: ${LITESTREAM_ENDPOINT}
+        region: auto
+        access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+        secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
+        retention: 336h            # two weeks of point-in-time history
+        snapshot-interval: 6h
+        sync-interval: 10s

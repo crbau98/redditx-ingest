@@ -306,3 +306,17 @@ describe('media proxy', () => {
     assert.equal((await pub(`/api/hls?url=${encodeURIComponent(`${upstream.url}/hls/notaplaylist.m3u8`)}`)).status, 415);
   });
 });
+
+describe('source scorecard', () => {
+  test('/api/admin/sources carries a 7-day scorecard per platform', async () => {
+    const f = repo.feeds.upsert({ platform: 'reddit', kind: 'community', target: 'scorecardsub', trusted: 1, origin: 'admin', runNow: false }).feed;
+    const rid = repo.runs.start(f.id, 'manual');
+    repo.runs.finish(rid, { status: 'ok', fetched: 10, added: 4, dupes: 3, skipped: 2, blocked: 1, durationMs: 800 });
+    const rid2 = repo.runs.start(f.id, 'manual');
+    repo.runs.finish(rid2, { status: 'error', error: 'boom', durationMs: 100 });
+    const r = await adm('/sources');
+    const reddit = r.json.find((s) => s.platform === 'reddit');
+    assert.ok(reddit.score, 'scorecard present');
+    assert.ok(reddit.score.runs >= 2 && reddit.score.added >= 4 && reddit.score.errorRate > 0 && reddit.score.filtered >= 3, JSON.stringify(reddit.score));
+  });
+});

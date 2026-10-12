@@ -1,0 +1,25 @@
+# SearXNG tuned as PRISM's web-search backend: JSON output on, safe search off, a handful of fast general engines.
+use_default_settings: true
+general:
+  instance_name: prism-search
+server:
+  limiter: false          # internal network only
+  public_instance: false
+  image_proxy: false
+search:
+  safe_search: 0
+  autocomplete: ""
+  formats:
+    - html
+    - json
+engines:
+  - name: google
+    disabled: false
+  - name: bing
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: brave
+    disabled: false
+  - name: startpage
+    disabled: false

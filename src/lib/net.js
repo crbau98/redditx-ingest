@@ -58,6 +58,7 @@ function isPrivateHost(hostname) {
   if (config.allowPrivateHosts) return false;
   let h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
   if (!h) return true;
+  if (isInternalHost(h)) return false;
   if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal')) return true;
   if (net.isIP(h)) return isPrivateIp(h);
   // Numeric forms like 2130706433 or 0x7f.1 are normalised by WHATWG URL to
@@ -65,12 +66,15 @@ function isPrivateHost(hostname) {
   return false;
 }
 
+/** Exact hostnames an operator vouched for (INTERNAL_HOSTS, e.g. a SearXNG container on the compose network). */
+function isInternalHost(h) { return (config.internalHosts || []).includes(String(h || '').toLowerCase()); }
+
 function safeLookup(hostname, options, callback) {
   if (typeof options === 'function') { callback = options; options = {}; }
   const wantAll = options && options.all;
   dns.lookup(hostname, { all: true, family: options && options.family }, (err, addrs) => {
     if (err) return callback(err);
-    const list = (addrs || []).filter((a) => config.allowPrivateHosts || !isPrivateIp(a.address));
+    const list = (addrs || []).filter((a) => config.allowPrivateHosts || isInternalHost(hostname) || !isPrivateIp(a.address));
     if (!list.length) {
       const e = new Error(`Blocked host: ${hostname} resolves to a private address`);
       e.code = 'EBLOCKED';
