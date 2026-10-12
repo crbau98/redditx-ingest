@@ -314,9 +314,13 @@ describe('source scorecard', () => {
     repo.runs.finish(rid, { status: 'ok', fetched: 10, added: 4, dupes: 3, skipped: 2, blocked: 1, durationMs: 800 });
     const rid2 = repo.runs.start(f.id, 'manual');
     repo.runs.finish(rid2, { status: 'error', error: 'boom', durationMs: 100 });
+    // an old post that was only just ingested counts (the window is when PRISM ingested it, not when it was posted)
+    const c = repo.creators.create({ handle: 'score_creator', displayName: 'Score Creator' });
+    repo.media.insert({ creator_id: c.id, feed_id: f.id, platform: 'reddit', source_id: 'sc1', source_key: 'reddit:sc1:0', post_key: 'reddit:sc1', title: 'old post', media_type: 'image', media_url: 'https://i.redd.it/sc1.jpg', hash: 'schash1', posted_at: '2020-01-01T00:00:00.000Z' });
     const r = await adm('/sources');
     const reddit = r.json.find((s) => s.platform === 'reddit');
     assert.ok(reddit.score, 'scorecard present');
+    assert.ok(reddit.score.creators >= 1, 'creators are counted by ingestion time');
     assert.ok(reddit.score.runs >= 2 && reddit.score.added >= 4 && reddit.score.errorRate > 0 && reddit.score.filtered >= 3, JSON.stringify(reddit.score));
   });
 });

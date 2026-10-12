@@ -47,7 +47,7 @@ Fix what it flags (it prints the exact variable to set), then watch **Admin → 
 
 ## 6. Backups and recovery
 - Replication is automatic. Check it: `docker compose -f deploy/docker-compose.yml logs litestream`.
-- **Restore drill** (do it once): on a fresh machine, `docker compose up -d` with the same `deploy/.env`; the `restore` service rebuilds `/data/prism.db` from R2 before the app starts.
+- **Restore drill** (do it once): on a fresh machine, `docker compose -f deploy/docker-compose.yml up -d --build` with the same `deploy/.env`; the `restore` service rebuilds `/data/prism.db` from R2 before the app starts. If the restore fails (bad credentials, network, corrupt replica) the stack stops there on purpose, so a recovery failure is visible instead of PRISM silently starting empty: read `docker compose -f deploy/docker-compose.yml logs restore`.
 - Admin → Settings also keeps nightly local copies (`VACUUM INTO`).
 
 ## 7. Updating

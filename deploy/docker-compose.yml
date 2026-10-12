@@ -8,7 +8,9 @@ services:
   restore:
     image: litestream/litestream:0.3.13
     entrypoint: ["/bin/sh", "-c"]
-    command: ["litestream restore -if-db-not-exists -if-replica-exists -config /etc/litestream.yml /data/prism.db || true"]
+    # -if-db-not-exists / -if-replica-exists already make "database present" and "no replica yet" succeed; any OTHER
+    # error (bad credentials, network, corrupt replica) must fail loudly instead of letting PRISM start on an empty database.
+    command: ["litestream restore -if-db-not-exists -if-replica-exists -config /etc/litestream.yml /data/prism.db"]
     env_file: .env
     volumes:
       - data:/data

@@ -594,7 +594,7 @@ const runs = {
         SUM(r.fetched) AS fetched, SUM(r.added) AS added, SUM(r.dupes) AS dupes, SUM(r.skipped) AS skipped, SUM(r.blocked) AS blocked,
         AVG(r.duration_ms) AS avg_ms, MAX(CASE WHEN r.status IN ('ok','empty') THEN r.finished_at END) AS last_ok
       FROM feed_runs r JOIN feeds f ON f.id = r.feed_id WHERE r.started_at >= ? AND r.status != 'running' GROUP BY f.platform`).all(since);
-    const creators = Object.fromEntries(db.prepare(`SELECT platform, COUNT(DISTINCT creator_id) AS n FROM media WHERE posted_at >= ? AND creator_id IS NOT NULL AND publish_state = 'published' GROUP BY platform`).all(since).map((r) => [r.platform, r.n]));
+    const creators = Object.fromEntries(db.prepare(`SELECT platform, COUNT(DISTINCT creator_id) AS n FROM media WHERE ingested_at >= ? AND creator_id IS NOT NULL AND publish_state = 'published' GROUP BY platform`).all(since).map((r) => [r.platform, r.n]));
     return rows.map((r) => ({
       platform: r.platform, runs: r.runs, errorRate: r.runs ? Math.round((r.errors / r.runs) * 100) : 0, emptyRate: r.runs ? Math.round((r.empty / r.runs) * 100) : 0,
       fetched: r.fetched || 0, added: r.added || 0, dupes: r.dupes || 0, filtered: (r.skipped || 0) + (r.blocked || 0), avgMs: Math.round(r.avg_ms || 0),
