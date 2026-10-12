@@ -371,7 +371,23 @@ function v3(db) {
   `);
 }
 
-const MIGRATIONS = [v1, v2, v3];
+/**
+ * v4 (PRISM 4.7): read paths measured on a 60k-item library.
+ * - community filters compare case-insensitively, which the BINARY community index cannot serve;
+ * - "not from a hidden/blocked creator" runs on every public query and scanned all creators;
+ * - creator cards re-read every post of a creator for 3 previews and the platform list.
+ */
+function v4(db) {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS ix_media_pub_community ON media(community COLLATE NOCASE, posted_at DESC) WHERE publish_state = 'published';
+    CREATE INDEX IF NOT EXISTS ix_creators_status ON creators(status);
+    -- creator cards: top previews and the set of platforms, without sorting/scanning all of a creator's posts
+    CREATE INDEX IF NOT EXISTS ix_media_creator_top ON media(creator_id, score DESC, seq DESC) WHERE publish_state = 'published';
+    CREATE INDEX IF NOT EXISTS ix_media_creator_platform ON media(creator_id, platform) WHERE publish_state = 'published';
+  `);
+}
+
+const MIGRATIONS = [v1, v2, v3, v4];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

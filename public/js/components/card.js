@@ -43,7 +43,12 @@ const io = !canHover && 'IntersectionObserver' in window
   : null;
 
 /** One media card. `open(item)` is called when the media is activated. */
-export function mediaCard(item, { open, compact = false } = {}) {
+// The first few cards a page renders are above the fold: load them eagerly at high priority so the
+// largest paint is not held back by lazy-loading heuristics. The router re-arms this per page.
+let eagerLeft = 0;
+export function primeEager(n = 6) { eagerLeft = n; }
+
+export function mediaCard(item, { open, compact = false, why = null } = {}) {
   const ratio = item.width && item.height ? Math.min(Math.max(item.width / item.height, 0.55), 1.9) : 0.8;
   const isVideo = item.media_type === 'video';
   const src = item.preview_url || item.thumbnail_url || (!isVideo ? item.media_url : null);
@@ -55,11 +60,13 @@ export function mediaCard(item, { open, compact = false } = {}) {
   let hue = 0; for (let i = 0; i < 8 && i < item.id.length; i++) hue = (hue * 31 + item.id.charCodeAt(i)) % 360;
   media.appendChild(h('div', { class: 'ph', style: { '--h': String(hue) } }));
   if (src) {
-    const img = h('img', { class: 'loading', alt: item.title || '', loading: 'lazy', decoding: 'async', src: proxied(src) });
+    const eager = eagerLeft > 0 && eagerLeft--;
+    const img = h('img', { class: 'loading', alt: item.title || '', loading: eager ? 'eager' : 'lazy', fetchpriority: eager ? 'high' : 'auto', decoding: 'async', src: proxied(src) });
     img.addEventListener('load', () => { img.classList.remove('loading'); });
     img.addEventListener('error', () => { img.remove(); });
     media.appendChild(img);
   }
+  if (why) media.appendChild(h('span', { class: 'card-why', title: 'Why you are seeing this' }, icon('sparkle', 'sm'), why));
   media.appendChild(h('div', { class: 'card-badges' },
     isVideo ? h('span', { class: 'pill' }, icon('play', 'fill'), item.duration ? fmt.duration(item.duration) : 'Video') : null,
     item.nsfw_level === 'suggestive' ? h('span', { class: 'pill' }, 'Suggestive') : null,

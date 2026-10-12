@@ -68,7 +68,29 @@ function idFromUrl(url) {
   return m ? m[1].toLowerCase() : null;
 }
 
+/**
+ * Creators behind the top results for a keyword (discovery). The gif search response carries a
+ * `users` block with profile details; we tally how many top results each creator owns.
+ */
+async function searchCreators(q, { order = 'trending', count = 80 } = {}) {
+  const json = await api(`/v2/gifs/search?search_text=${encodeURIComponent(q)}&order=${order}&count=${count}&page=1`);
+  const byName = new Map();
+  for (const g of json.gifs || []) {
+    if (!g || !g.userName) continue;
+    const k = String(g.userName).toLowerCase();
+    const e = byName.get(k) || { username: g.userName, gifs: 0, tags: new Set() };
+    e.gifs++; for (const t of g.tags || []) e.tags.add(String(t));
+    byName.set(k, e);
+  }
+  for (const u of json.users || []) {
+    const e = byName.get(String(u.username || '').toLowerCase());
+    if (e) Object.assign(e, { name: u.name || null, description: u.description || null, followers: u.followers || 0, verified: !!u.verified, avatar: u.profileImageUrl || null });
+  }
+  return [...byName.values()].map((e) => ({ ...e, tags: [...e.tags].slice(0, 12) })).sort((a, b) => b.gifs - a.gifs);
+}
+
 module.exports = {
+  searchCreators,
   platform: 'redgifs',
   label: 'RedGIFs',
   color: '#e11d48',

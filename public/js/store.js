@@ -211,6 +211,15 @@ export const tastes = {
   /** Enough signal to personalise? */
   ready: () => (taste.events || 0) >= 3 && (Object.keys(taste.t).length > 0 || Object.keys(taste.c).length > 0),
   topTags: (n = 8) => Object.entries(taste.t).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k]) => k),
+  /** A short human reason an item was picked for you ("A creator you like", "#beach"), or null. */
+  why(item) {
+    if (!item) return null;
+    const creators = Object.entries(taste.c).sort((a, b) => b[1] - a[1]).slice(0, 25).map(([k]) => k);
+    if (item.creator_id && creators.includes(item.creator_id)) return 'A creator you like';
+    const top = Object.entries(taste.t).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([k]) => k);
+    const hit = (item.tags || []).find((t) => top.includes(t));
+    return hit ? `#${hit}` : null;
+  },
   /** Query parameters for /api/recommend. */
   query({ exclude = [] } = {}) {
     decayTaste();

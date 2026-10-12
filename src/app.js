@@ -67,6 +67,19 @@ function createApp() {
   app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 
   const pub = path.join(config.root, 'public');
+  // App shell with versioned, immutable asset URLs + modulepreload (see lib/assets.js).
+  // Production builds it once; development rebuilds per request so edits show up without a restart.
+  const assets = require('./lib/assets');
+  let built = null;
+  const shell = () => (config.isProd && built ? built : (built = assets.build(pub)));
+  const sendShell = (req, res) => res.set({ 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' }).send(shell().html);
+  app.get(['/', '/index.html'], sendShell);
+  app.use('/v/:ver', (req, res, next) => {
+    // Current version: cache forever. An older version (a tab open across a deploy) still loads,
+    // but must revalidate, since the files on disk are now the new ones.
+    const current = req.params.ver === shell().version;
+    express.static(pub, { etag: true, index: false, setHeaders: (r) => r.setHeader('Cache-Control', current ? 'public, max-age=31536000, immutable' : 'no-cache') })(req, res, next);
+  });
   app.use(express.static(pub, {
     etag: true,
     setHeaders(res, file) {
@@ -74,7 +87,7 @@ function createApp() {
       else res.setHeader('Cache-Control', 'no-cache'); // html/js/css: always revalidate (ETag makes it cheap)
     },
   }));
-  app.get('*', (req, res) => res.sendFile(path.join(pub, 'index.html')));
+  app.get('*', sendShell);
 
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => {

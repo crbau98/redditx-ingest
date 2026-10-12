@@ -1,5 +1,27 @@
 # UI changelog
 
+## 2026-10-12 — v4.7 "Velocity"
+
+**Audit findings** (measured, not guessed): on a generated 60,000-item / 900-creator library, a two-word search took **56 s**; related tags, similar creators and For you took 0.25–0.6 s; plain listings 50–70 ms; topics 2.7 s on a cold cache. In the browser on an emulated 4G link (150 ms RTT) the first visit spent ~3 s discovering 31 ES modules level by level, and every visit revalidated each module.
+
+| Change | Files | Measured |
+|---|---|---|
+| FTS: count with an IN-subquery, list with FTS-first `CROSS JOIN` (the planner was re-running MATCH per row) | `src/db/repo.js` | search 56 s → 11 ms |
+| Broad listings walk the matching sort index (forced only when filters are broad; narrow ones use the planner, rare tags estimated from cached counts) | `repo.js` | recent/top/trending 50–70 → 4–6 ms; tag filters 110–210 → 9–13 ms |
+| Library snapshot (tag counts + per-creator tag profiles), rebuilt in the background after writes; serves autocomplete, related tags, similar creators | `repo.js` | similar 500 → 13 ms; related 600 → 2 ms; suggest 185 → 26 ms |
+| For you scores a capped pool of the hottest matches | `repo.js` | 280 → 37 ms |
+| Totals and small aggregates cached until the next write (`total_changes()`) | `repo.js` | stats/platforms 30–40 → 2–3 ms |
+| Planner statistics (`PRAGMA optimize`) + migration v4 indexes (NOCASE community, creator status, creator-card previews/platforms) | `src/db/index.js`, `schema.js` | ids/community/creator lists 25–50 → 2–4 ms |
+| Route caches are stale-while-revalidate and warmed at boot | `routes/public.js`, `server.js` | no visitor waits for topics (2.7 s) or graph rebuilds |
+| Versioned immutable assets (`/v/<hash>/`), `modulepreload` for the whole static graph, cache-first in the service worker | `src/lib/assets.js`, `app.js`, `sw.js` | Home cold first content 2.87 → 2.20 s (HTTP/1.1 locally; HTTP/2 in production fetches the graph at once); repeat visit 0.93 → 0.23 s |
+| Fonts no longer block first paint | `theme-init.js`, `index.html` | |
+| In-memory API cache (30 s, de-duplicated, cleared by writes and live "new content"), hover/touch prefetch of creator profiles, first six images eager + high priority | `api.js`, `main.js`, `card.js` | back-navigation and prefetched profiles open with no request |
+| **Live search preview**: the first results and a count, while typing, for what was understood; thumbnails open in the viewer with the search behind them | `components/suggest.js` | |
+| **"Why" chips** on For you cards ("#beach", "A creator you like") from the on-device taste model | `store.js`, `card.js`, `feed.js` | |
+| Discovery: Bluesky lookalikes, Bluesky + RedGIFs people search, "where your creators post" communities, per-signal yield report | `engine/discovery.js`, `sources/{bluesky,redgifs}.js`, admin | |
+
+**Verification**: 202 unit tests (12 new, incl. a search performance guard that fails on the old plan: 1.4 s → 5 ms at 6k rows); 12 new browser checks; v4.2–v4.6 suites re-run (145/145).
+
 ## 2026-10-12 — v4.6 "Insight"
 
 **Audit findings**: search only did full-text matching, so “bearded guys at the beach, videos” found nothing even though the library had #beard and #beach videos; a search with no results was a dead end; filters had no notion of “things that go together”; Home had no way in by theme; discovery only found individual accounts, never the subreddits, Lemmy communities and Bluesky feeds where many creators post.

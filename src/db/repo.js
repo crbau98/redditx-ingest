@@ -100,9 +100,9 @@ const SELECT_CREATOR_CARD = `
   SELECT c.*,
     (SELECT json_group_array(t) FROM (
         SELECT COALESCE(m.preview_url, m.thumbnail_url, CASE WHEN m.media_type = 'image' THEN m.media_url END) AS t
-        FROM media m WHERE m.creator_id = c.id AND m.publish_state = 'published'
+        FROM media m WHERE m.creator_id = c.id AND m.publish_state = 'published' AND m.scope != 'excluded'
         ORDER BY m.score DESC, m.seq DESC LIMIT 6) WHERE t IS NOT NULL LIMIT 3) AS previews,
-    (SELECT group_concat(DISTINCT m.platform) FROM media m WHERE m.creator_id = c.id AND m.publish_state = 'published') AS platforms
+    (SELECT group_concat(p) FROM (SELECT DISTINCT m.platform AS p FROM media m WHERE m.creator_id = c.id AND m.publish_state = 'published')) AS platforms
   FROM creators c`;
 
 function serializeCreator(row) {
@@ -262,19 +262,58 @@ const creators = {
 const GENERIC_TAGS = new Set([...PLATFORM_TAGS, 'gay', 'nsfw', 'video', 'photo', 'image']);
 
 /** Creators who post in a similar style: shared tags, weighting rare tags higher than common ones. */
+/*
+ * Library snapshot: tag counts and each creator's tag profile over public media, built in one
+ * aggregate pass and shared by autocomplete, related tags and similar creators (which otherwise
+ * each re-aggregate the whole library per request — hundreds of ms on a large one).
+ * Rebuilt after writes, at most once a minute, in the background (stale-while-revalidate); the
+ * first build is synchronous. In tests it is rebuilt synchronously on any write so results are exact.
+ */
+const changesV = db.prepare('SELECT total_changes() AS v');
+const snap = { data: null, at: 0, v: -1, pending: false };
+const SNAP_MAX_AGE = process.env.NODE_ENV === 'test' ? 0 : 60000;
+function buildLibrary() {
+  const names = new Map(db.prepare('SELECT id, name FROM tags').all().map((t) => [t.id, t.name]));
+  const tagCount = new Map(); const creatorTags = new Map(); const tagCreators = new Map();
+  for (const r of db.prepare(`SELECT m.creator_id AS cid, mt.tag_id AS tid, COUNT(*) AS n FROM media m JOIN media_tags mt ON mt.media_id = m.id
+      WHERE m.publish_state = 'published' AND m.scope != 'excluded' GROUP BY m.creator_id, mt.tag_id`).iterate()) {
+    const name = names.get(r.tid);
+    if (!name) continue;
+    tagCount.set(name, (tagCount.get(name) || 0) + r.n);
+    if (r.cid) {
+      if (!creatorTags.has(r.cid)) creatorTags.set(r.cid, new Map());
+      creatorTags.get(r.cid).set(name, r.n);
+      tagCreators.set(name, (tagCreators.get(name) || 0) + 1);
+    }
+  }
+  const tagList = [...tagCount.entries()].filter(([n]) => !PLATFORM_TAGS.includes(n)).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
+  const total = db.prepare("SELECT COUNT(*) AS n FROM media WHERE publish_state = 'published' AND scope != 'excluded'").get().n;
+  return { tagCount, creatorTags, tagCreators, tagList, total };
+}
+function library() {
+  const v = changesV.get().v;
+  if (!snap.data || (SNAP_MAX_AGE === 0 && v !== snap.v)) { snap.data = buildLibrary(); snap.at = Date.now(); snap.v = changesV.get().v; return snap.data; }
+  if (v !== snap.v && Date.now() - snap.at > SNAP_MAX_AGE && !snap.pending) {
+    snap.pending = true;
+    setImmediate(() => { try { snap.data = buildLibrary(); snap.at = Date.now(); snap.v = changesV.get().v; } finally { snap.pending = false; } });
+  }
+  return snap.data;
+}
+
 creators.similar = function similar(id, limit = 12) {
-  const mine = db.prepare(`SELECT t.id, t.name, t.usage_count FROM media m
-      JOIN media_tags mt ON mt.media_id = m.id JOIN tags t ON t.id = mt.tag_id
-      WHERE m.creator_id = ? AND m.publish_state = 'published' GROUP BY t.id ORDER BY COUNT(*) DESC LIMIT 25`).all(id)
-    .filter((t) => !GENERIC_TAGS.has(t.name));
+  const lib = library();
+  const own = lib.creatorTags.get(id);
+  if (!own) return [];
+  const mine = [...own.entries()].filter(([t]) => !GENERIC_TAGS.has(t)).sort((a, b) => b[1] - a[1]).slice(0, 25).map(([t]) => t);
   if (!mine.length) return [];
-  const weight = new Map(mine.map((t) => [t.id, 1 / (t.usage_count + 5)]));
-  const rows = db.prepare(`SELECT m.creator_id AS cid, mt.tag_id AS tid FROM media_tags mt
-      JOIN media m ON m.id = mt.media_id
-      WHERE mt.tag_id IN (${mine.map(() => '?').join(',')}) AND m.creator_id IS NOT NULL AND m.creator_id != ? AND m.publish_state = 'published'
-      GROUP BY m.creator_id, mt.tag_id`).all(...mine.map((t) => t.id), id);
+  const weight = new Map(mine.map((t) => [t, 1 / ((lib.tagCount.get(t) || 0) + 5)]));
   const score = new Map();
-  for (const r of rows) score.set(r.cid, (score.get(r.cid) || 0) + weight.get(r.tid));
+  for (const [cid, tags] of lib.creatorTags) {
+    if (cid === id) continue;
+    let sc = 0;
+    for (const t of mine) if (tags.has(t)) sc += weight.get(t);
+    if (sc) score.set(cid, sc);
+  }
   const top = [...score.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit * 2).map(([cid]) => cid);
   if (!top.length) return [];
   const found = db.prepare(`${SELECT_CREATOR_CARD} WHERE c.id IN (${top.map(() => '?').join(',')}) AND c.status = 'active' AND c.scope != 'excluded' AND c.media_count > 0`)
@@ -405,8 +444,7 @@ function suggest(query, limit = 6) {
     creators: db.prepare(`SELECT id, handle, display_name, avatar_url, media_count FROM creators
       WHERE status = 'active' AND scope != 'excluded' AND media_count > 0 AND (handle LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\' OR handle LIKE ? ESCAPE '\\')
       ORDER BY (handle LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\') DESC, media_count DESC LIMIT ?`).all(pre, pre, any, pre, pre, limit),
-    tags: db.prepare(`SELECT t.name, COUNT(*) AS count FROM tags t JOIN media_tags mt ON mt.tag_id = t.id JOIN media m ON m.id = mt.media_id
-      WHERE t.name LIKE ? ESCAPE '\\' AND t.name NOT IN (${PLATFORM_TAGS_SQL}) AND m.publish_state = 'published' AND m.scope != 'excluded' GROUP BY t.id ORDER BY count DESC LIMIT ?`).all(pre, limit),
+    tags: (() => { const p = q.toLowerCase().replace(/^#/, ''); const out = []; for (const t of library().tagList) { if (t.name.startsWith(p)) { out.push(t); if (out.length >= limit) break; } } return out; })(),
     communities: db.prepare(`SELECT community AS name, platform, COUNT(*) AS count FROM media
       WHERE publish_state = 'published' AND scope != 'excluded' AND community LIKE ? ESCAPE '\\' GROUP BY community, platform ORDER BY count DESC LIMIT ?`).all(pre, limit),
   };
@@ -641,6 +679,59 @@ function buildMediaWhere(f) {
   return { where, params };
 }
 
+/*
+ * Listing speed on large libraries. Without help SQLite filters on publish_state and then sorts
+ * every published row; walking the matching sort index instead stops after one page. That wins
+ * whenever the filters are broad, so it is forced for broad filters and left to the planner for
+ * narrow ones (one creator, a community, explicit ids, rare tags) where an index lookup is cheaper.
+ */
+const SORT_INDEX = { recent: 'ix_media_pub_posted', oldest: 'ix_media_pub_posted', top: 'ix_media_pub_score', trending: 'ix_media_pub_hot', ingested: 'ix_media_ingested' };
+const BROAD_TAG_MIN = 1500; // rows carrying a tag before scanning in sort order beats a lookup
+const tagCountCache = new Map(); // tag -> { n, at }
+function tagRows(name) {
+  const hit = tagCountCache.get(name);
+  if (hit && Date.now() - hit.at < 60000) return hit.n;
+  const n = db.prepare('SELECT COUNT(*) AS n FROM media_tags mt JOIN tags t ON t.id = mt.tag_id WHERE t.name = ?').get(name).n;
+  if (tagCountCache.size > 2000) tagCountCache.clear();
+  tagCountCache.set(name, { n, at: Date.now() });
+  return n;
+}
+function sortIndexFor(f, sort, where) {
+  const idx = SORT_INDEX[sort || 'recent'];
+  if (!idx || !where.includes("m.publish_state = 'published'")) return null; // partial indexes cover published rows only
+  if (f.creator || (Array.isArray(f.ids) && f.ids.length) || f.community || f.minScore) return null;
+  const all = [...(f.tag ? [f.tag] : []), ...(Array.isArray(f.tagsAll) ? f.tagsAll : [])].map(cleanTag);
+  if (all.length && Math.min(...all.map(tagRows)) < BROAD_TAG_MIN) return null;
+  if (Array.isArray(f.tagsAny) && f.tagsAny.length && f.tagsAny.map(cleanTag).reduce((a, t) => a + tagRows(t), 0) < BROAD_TAG_MIN) return null;
+  return idx;
+}
+// Totals ("1,234 results") are recounted only after a write: the cache is keyed by SQLite's
+// total_changes(), which moves on every insert/update/delete made through this connection.
+const countCache = new Map(); // sql+params -> { n, at, v }
+const changesQ = db.prepare('SELECT total_changes() AS v');
+function cachedCount(sql, args) {
+  const key = `${sql}|${JSON.stringify(args)}`;
+  const v = changesQ.get().v;
+  const hit = countCache.get(key);
+  if (hit && hit.v === v && Date.now() - hit.at < 60000) return hit.n;
+  const n = db.prepare(sql).get(...args).n;
+  if (countCache.size > 500) countCache.clear();
+  countCache.set(key, { n, at: Date.now(), v });
+  return n;
+}
+/** Same write-invalidated caching for small aggregate row sets (platform counts, stats). */
+cachedCount.rows = function cachedRows(sql, args = []) {
+  const key = `rows|${sql}|${JSON.stringify(args)}`;
+  const v = changesQ.get().v;
+  const hit = countCache.get(key);
+  if (hit && hit.v === v && Date.now() - hit.at < 60000) return hit.n;
+  const n = db.prepare(sql).all(...args);
+  if (countCache.size > 500) countCache.clear();
+  countCache.set(key, { n, at: Date.now(), v });
+  return n;
+};
+const relatedCache = new Map(); // tags|mode|limit -> { lib, value } (valid while the library snapshot is the same object)
+
 const media = {
   serialize: serializeMedia,
   get(id) { return serializeMedia(mediaQ.get.get(id)); },
@@ -744,8 +835,16 @@ const media = {
     }
     const orderParams = f.sort === 'random' && !match ? [clampInt(f.seed, 0, 2147483647, 1)] : [];
     const whereSql = where.join(' AND ');
-    const base = `FROM media m LEFT JOIN creators c ON c.id = m.creator_id ${join} WHERE ${whereSql}`;
-    const total = f.noCount ? null : db.prepare(`SELECT COUNT(*) AS n FROM media m ${join} WHERE ${whereSql}`).get(...joinParams, ...params).n;
+    const forced = !join && f.sort !== 'random' ? sortIndexFor(f, SORTS[f.sort] ? f.sort : 'recent', where) : null;
+    // With a text match, CROSS JOIN pins the loop order: run the MATCH once, then look rows up by key.
+    const base = join
+      ? `FROM (SELECT rowid AS rid, rank FROM media_fts WHERE media_fts MATCH ?) fts CROSS JOIN media m ON m.seq = fts.rid LEFT JOIN creators c ON c.id = m.creator_id WHERE ${whereSql}`
+      : `FROM media m${forced ? ` INDEXED BY ${forced}` : ''} LEFT JOIN creators c ON c.id = m.creator_id WHERE ${whereSql}`;
+    // Count with an IN-subquery, never the FTS join: with the join SQLite may drive the loop from
+    // media and re-run the MATCH once per row (minutes on a large library instead of milliseconds).
+    const total = f.noCount ? null : (join
+      ? cachedCount(`SELECT COUNT(*) AS n FROM media m WHERE m.seq IN (SELECT rowid FROM media_fts WHERE media_fts MATCH ?) AND ${whereSql}`, [...joinParams, ...params])
+      : cachedCount(`SELECT COUNT(*) AS n FROM media m WHERE ${whereSql}`, params));
     const rows = db.prepare(`SELECT m.*, c.handle AS creator_handle, c.display_name AS creator_name, c.avatar_url AS creator_avatar ${base}
       ORDER BY ${order} LIMIT ? OFFSET ?`).all(...joinParams, ...params, ...orderParams, limit, page * limit);
     return { items: rows.map(serializeMedia), total, page, limit };
@@ -796,9 +895,14 @@ const media = {
       + MIN(m.hot, 10) / 5.0
       + (hash_seed(m.id, ?) % 1000) / 1400.0`;
     const scoreParams = [...cids, ...tagIds, ...plats, video, video, video, seed | 0];
-    const total = db.prepare(`SELECT COUNT(*) AS n FROM media m WHERE ${where.join(' AND ')}`).get(...whereParams).n;
+    const total = cachedCount(`SELECT COUNT(*) AS n FROM media m WHERE ${where.join(' AND ')}`, whereParams);
+    // Score only the hottest matches (walked in hot order, so it stops early) instead of every match:
+    // on a large library a broad taste matches tens of thousands of rows, and the per-row tag count
+    // dominates. The cap still leaves ~50 pages before the pool runs dry.
+    const POOL = Math.max(3000, (page + 2) * limit * 2);
     const pool = db.prepare(`SELECT m.*, c.handle AS creator_handle, c.display_name AS creator_name, c.avatar_url AS creator_avatar, ${scoreSql} AS rec
-      FROM media m LEFT JOIN creators c ON c.id = m.creator_id WHERE ${where.join(' AND ')}
+      FROM (SELECT * FROM media m INDEXED BY ix_media_pub_hot WHERE ${where.join(' AND ')} ORDER BY m.hot DESC LIMIT ${POOL}) m
+      LEFT JOIN creators c ON c.id = m.creator_id
       ORDER BY rec DESC, m.seq DESC LIMIT ? OFFSET ?`).all(...scoreParams, ...whereParams, limit * 2, page * limit * 2);
     // Diversity: walk the pool in score order, letting each creator take at most two slots per page.
     const perCreator = new Map(); const out = []; const spill = [];
@@ -831,8 +935,8 @@ const media = {
   },
 
   platforms() {
-    return db.prepare(`SELECT platform, COUNT(*) AS count FROM media WHERE publish_state = 'published' AND scope != 'excluded'
-      GROUP BY platform ORDER BY count DESC`).all();
+    return cachedCount.rows(`SELECT platform, COUNT(*) AS count FROM media WHERE publish_state = 'published' AND scope != 'excluded'
+      GROUP BY platform ORDER BY count DESC`);
   },
 
   /** Cheap listing used by the admin junk sweeper. */
@@ -859,7 +963,18 @@ const tagIntel = {
   related(names, limit = 12, { all = true } = {}) {
     const list = [...new Set((names || []).map(cleanTag).filter(Boolean))].slice(0, 4);
     if (!list.length) return [];
-    const total = db.prepare("SELECT COUNT(*) AS n FROM media WHERE publish_state = 'published' AND scope != 'excluded'").get().n || 1;
+    const lib = library();
+    // Co-occurrence over a big base set costs a few hundred ms; it only changes when the snapshot does.
+    const key = `${list.join(',')}|${all ? 1 : 0}|${limit}`;
+    const hit = relatedCache.get(key);
+    if (hit && hit.lib === lib) return hit.value;
+    const value = tagIntel.relatedUncached(list, limit, all, lib);
+    if (relatedCache.size > 400) relatedCache.clear();
+    relatedCache.set(key, { lib, value });
+    return value;
+  },
+  relatedUncached(list, limit, all, lib) {
+    const total = lib.total || 1;
     const marks = list.map(() => '?').join(',');
     const baseSet = `SELECT mt2.media_id FROM media_tags mt2 JOIN tags t2 ON t2.id = mt2.tag_id JOIN media m ON m.id = mt2.media_id
       WHERE t2.name IN (${marks}) AND m.publish_state = 'published' AND m.scope != 'excluded'
@@ -867,15 +982,14 @@ const tagIntel = {
     const baseArgs = all ? [...list, list.length] : list;
     const base = db.prepare(`SELECT COUNT(*) AS n FROM (${baseSet})`).get(...baseArgs).n;
     if (!base) return [];
-    const rows = db.prepare(`SELECT t.name, COUNT(DISTINCT mt.media_id) AS co,
-        (SELECT COUNT(*) FROM media_tags x JOIN media xm ON xm.id = x.media_id WHERE x.tag_id = t.id AND xm.publish_state = 'published' AND xm.scope != 'excluded') AS freq
+    const rows = db.prepare(`SELECT t.name, COUNT(DISTINCT mt.media_id) AS co
       FROM media_tags mt JOIN tags t ON t.id = mt.tag_id
       WHERE mt.media_id IN (${baseSet})
         AND t.name NOT IN (${marks}) AND t.name NOT IN (${PLATFORM_TAGS_SQL})
       GROUP BY t.id HAVING co >= 2`).all(...baseArgs, ...list);
     const communities = new Set(db.prepare("SELECT DISTINCT community FROM media WHERE community IS NOT NULL").all().map((r) => cleanTag(r.community)));
     return rows.filter((r) => !communities.has(r.name)).map((r) => {
-      const lift = (r.co / base) / (r.freq / total);
+      const lift = (r.co / base) / ((lib.tagCount.get(r.name) || r.co) / total);
       return { name: r.name, count: r.co, lift: Math.round(lift * 100) / 100, score: Math.log(1 + r.co) * Math.log(1 + lift) };
     }).filter((r) => r.lift > 1).sort((a, b) => b.score - a.score).slice(0, limit);
   },
@@ -959,11 +1073,11 @@ const reports = {
 
 /* -------------------------------------------------------------- stats / home */
 function publicStats() {
-  const s = db.prepare(`SELECT COUNT(*) AS total,
+  const [s] = cachedCount.rows(`SELECT COUNT(*) AS total,
       SUM(CASE WHEN media_type = 'image' THEN 1 ELSE 0 END) AS images,
       SUM(CASE WHEN media_type = 'video' THEN 1 ELSE 0 END) AS videos
-    FROM media WHERE publish_state = 'published' AND scope != 'excluded'`).get();
-  const c = db.prepare("SELECT COUNT(*) AS n FROM creators WHERE status = 'active' AND media_count > 0").get().n;
+    FROM media WHERE publish_state = 'published' AND scope != 'excluded'`);
+  const c = cachedCount("SELECT COUNT(*) AS n FROM creators WHERE status = 'active' AND media_count > 0", []);
   return { total: s.total || 0, images: s.images || 0, videos: s.videos || 0, creators: c };
 }
 
@@ -1084,6 +1198,20 @@ function mentionSource(afterIso, limit = 2000) {
 }
 
 /** Creators worth investigating, least recently checked first (by a discovery_state key prefix). */
+/**
+ * Communities where several followed creators post but that are not followed themselves
+ * ("where your creators hang out"). Pure SQL over what is already ingested.
+ */
+function communityHangouts({ minCreators = 2, limit = 60 } = {}) {
+  return db.prepare(`SELECT m.platform, m.community, COUNT(DISTINCT m.creator_id) AS creators, group_concat(DISTINCT m.creator_id) AS ids
+    FROM media m JOIN creators c ON c.id = m.creator_id
+    WHERE m.community IS NOT NULL AND m.community != '' AND m.platform IN ('reddit', 'lemmy')
+      AND m.publish_state = 'published' AND m.scope != 'excluded' AND c.status = 'active' AND c.scope != 'excluded'
+      AND NOT EXISTS (SELECT 1 FROM feeds f WHERE f.platform = m.platform AND f.kind = 'community' AND f.target = m.community COLLATE NOCASE)
+    GROUP BY m.platform, m.community COLLATE NOCASE HAVING creators >= ? ORDER BY creators DESC LIMIT ?`).all(minCreators, limit)
+    .map((r) => ({ ...r, ids: String(r.ids || '').split(',').filter(Boolean) }));
+}
+
 function discoveryTargets({ platform, prefix, staleDays, limit, minMedia = 1, maxAccounts = 99 }) {
   const since = new Date(Date.now() - staleDays * 86400000).toISOString();
   const platformJoin = platform ? 'JOIN feeds f ON f.creator_id = c.id AND f.platform = @platform AND f.kind = \'user\' AND f.enabled = 1' : '';
@@ -1100,5 +1228,5 @@ function discoveryTargets({ platform, prefix, staleDays, limit, minMedia = 1, ma
 module.exports = {
   db, nowIso, clampInt, cleanTag, ftsQuery, settings, hosts, blocklist, logAction, suggest, audit,
   creators, feeds, runs, media, reports, addTags, publicStats, adminOverview, discover,
-  candidates, discoveryState, mentionSource, discoveryTargets, PLATFORM_TAGS, tagIntel,
+  candidates, discoveryState, mentionSource, discoveryTargets, communityHangouts, PLATFORM_TAGS, tagIntel, library,
 };

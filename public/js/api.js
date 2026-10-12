@@ -38,8 +38,31 @@ export async function api(path, { method = 'GET', body, admin = false, signal } 
   return data;
 }
 
-export const get = (path, query, opts) => api(`${path}${qs(query)}`, opts);
-export const post = (path, body, opts) => api(path, { method: 'POST', body: body ?? {}, ...opts });
+/*
+ * Public GETs share a short-lived in-memory cache with in-flight de-duplication: going back to a
+ * page, re-opening a profile or a hover prefetch followed by the click all reuse one response
+ * instead of waiting on the network again. Each caller gets its own copy (callers may mutate).
+ * Any write (POST) clears it, so likes/saves are never shown stale.
+ */
+const CACHE_MS = 30000;
+const cache = new Map(); // url -> { at, promise }
+const noCache = /^\/api\/(stream|admin|age|health)/;
+export function get(path, query, opts) {
+  const url = `${path}${qs(query)}`;
+  if ((opts && (opts.signal || opts.fresh)) || noCache.test(path)) return api(url, opts);
+  const hit = cache.get(url);
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.promise.then((d) => structuredClone(d));
+  const promise = api(url, opts);
+  cache.set(url, { at: Date.now(), promise });
+  if (cache.size > 250) cache.delete(cache.keys().next().value);
+  promise.catch(() => { if (cache.get(url) && cache.get(url).promise === promise) cache.delete(url); });
+  return promise.then((d) => structuredClone(d));
+}
+/** Warm the cache for a likely next request (hover, idle time). Errors are ignored. */
+export function prefetch(path, query) { get(path, query).catch(() => {}); }
+export function clearApiCache() { cache.clear(); }
+// A view ping changes nothing anyone sees; every other write may (likes, saves, reports…).
+export const post = (path, body, opts) => { if (!/\/view$/.test(path)) cache.clear(); return api(path, { method: 'POST', body: body ?? {}, ...opts }); };
 export const adminGet = (path, query) => api(`/api/admin${path}${qs(query)}`, { admin: true });
 export const adminPost = (path, body) => api(`/api/admin${path}`, { method: 'POST', body: body ?? {}, admin: true });
 export const adminPatch = (path, body) => api(`/api/admin${path}`, { method: 'PATCH', body: body ?? {}, admin: true });

@@ -31,8 +31,10 @@ const { checkText } = require('../lib/safety');
 const { classify } = require('../lib/scope');
 const bskyHttp = require('../sources/http').forPlatform('bluesky', 400);
 
-const WEIGHTS = { identity: 6, mention: 3, cofollow: 1.5, search: 2 };
-const CAPS = { identity: 1, mention: 5, cofollow: 8, search: 3 };
+// similar: Bluesky lists the account among those most like a followed creator (per creator, max 4)
+// hangout: a community where several followed creators post (per creator, max 6)
+const WEIGHTS = { identity: 6, mention: 3, cofollow: 1.5, search: 2, similar: 2, hangout: 1.5 };
+const CAPS = { identity: 1, mention: 5, cofollow: 8, search: 3, similar: 4, hangout: 6 };
 const FOLLOWABLE_KINDS = new Set(['user', 'page']);
 // Communities and custom feeds mix many posters, so they are held to a stricter bar than people.
 const SHARED_KINDS = new Set(['community', 'feedgen', 'list']);
@@ -47,6 +49,9 @@ function gate(...texts) {
   return raw.level ? raw : split;
 }
 const borderline = (...texts) => gate(...texts).level === 'review';
+// Unmistakable "I publish adult content" wording. Keyword people search needs this (or an adult
+// label): a bio that merely says "gay" matches every keyword and is not a creator.
+const CREATOR_STRONG = /onlyfans|fansly|justfor\.?fans|18\s*\+|🔞|nsfw|\bnude|\bxxx\b|\bporn|\bcontent creator|\bcreator\b|\bmodel\b|linktr\.ee|allmylinks|beacons\.ai|throne|\bm4m\b|\bhung\b|\bbulge/i;
 // Words that suggest an account publishes adult/creator content (used to keep follow-graph noise out).
 const CREATOR_HINT = /onlyfans|fansly|justfor\.?fans|18\s*\+|🔞|nsfw|\bnude|\bxxx\b|\bporn|\bcontent creator|\bcreator\b|\bmodel\b|linktr\.ee|allmylinks|beacons\.ai|throne|\bfeet\b|\bgay\b|\bbi\b|\bmuscle|\btwink|\bbear\b|\bjock|\bdaddy|\bhung\b|\bbulge|\bm4m\b/i;
 
@@ -112,7 +117,7 @@ function consider(spec, type, value, meta = {}) {
   if (value) list.add(String(value).slice(0, 120));
   signals[type] = [...list].slice(0, 25);
   if (meta.popularity) signals.popularity = Math.max(Number(signals.popularity) || 0, Math.round(Number(meta.popularity)) || 0);
-  const scope = classify([displayName, bio, target], { trusted: false }).scope;
+  const scope = classify([displayName, bio, target].map(splitCamel), { trusted: false }).scope;
   const score = scoreOf(signals, scope);
   const fields = {
     label: spec.label || (c && c.label) || target, url: spec.url || (c && c.url) || profileUrl(spec.platform, spec.kind, target),
@@ -321,6 +326,88 @@ function judgeLookup(c, ...texts) {
 /** Nothing to read (missing profile, lookup error): stop asking, keeping any review flag. */
 const nothingFound = (c) => (underReview(c) ? { bio: c.bio == null ? '' : c.bio } : { reason: 'checked' });
 
+/* ------------------------------------------------------- v4.7: wider reach */
+
+/** Communities where several of the creators we follow already post. Pure SQL. */
+function creatorHangouts({ minCreators = 2 } = {}) {
+  let found = 0;
+  for (const h of repo.communityHangouts({ minCreators })) {
+    let spec = null;
+    if (h.platform === 'reddit') spec = parseProfile(`r/${h.community}`);
+    else if (h.platform === 'lemmy' && h.community.includes('@')) { const [name, host] = h.community.split('@'); spec = parseProfile(`https://${host}/c/${name}`); }
+    if (!spec) continue;
+    let c = null;
+    for (const cid of h.ids.slice(0, CAPS.hangout)) c = consider(spec, 'hangout', cid, { displayName: h.platform === 'reddit' ? `r/${h.community}` : h.community }) || c;
+    if (c && c.status === 'pending' && c.scope !== 'excluded') found++;
+  }
+  return { found };
+}
+
+/** Bluesky's own "accounts like this one" for followed creators (refreshed weekly per creator). */
+async function blueskyLookalikes({ creators = 4, aborted = () => false } = {}) {
+  const bsky = registry.get('bluesky');
+  if (!bsky || !bsky.suggestedFor) return { checked: 0, found: 0 };
+  const targets = repo.discoveryTargets({ platform: 'bluesky', prefix: 'bsky.similar.', staleDays: 7, limit: creators });
+  let found = 0; let checked = 0;
+  for (const t of targets) {
+    if (aborted()) break;
+    try {
+      for (const p of await bsky.suggestedFor(t.target)) {
+        if (p.labels.includes('!no-unauthenticated')) continue;
+        const spec = parseProfile(`https://bsky.app/profile/${p.handle}`);
+        if (!spec) continue;
+        const adult = p.labels.some((l) => ['porn', 'sexual', 'nudity'].includes(l));
+        const existing = repo.candidates.find(spec.platform, spec.kind, spec.target);
+        if (!existing && !adult && !CREATOR_HINT.test(`${p.displayName || ''} ${p.description || ''}`)) continue;
+        const c = consider(spec, 'similar', t.id, { displayName: p.displayName, bio: p.description, avatarUrl: p.avatar, popularity: p.followers });
+        if (c && c.status === 'pending') found++;
+      }
+      checked++;
+    } catch (e) { events.log('WARN', `Discovery: Bluesky lookalikes of ${t.target} — ${e.message}`); }
+    repo.discoveryState.set(`bsky.similar.${t.id}`, new Date().toISOString());
+  }
+  return { checked, found };
+}
+
+/**
+ * Keyword people search: Bluesky accounts whose name/bio match, and the RedGIFs creators behind the
+ * top results for the keyword. Uses the same rotating community keywords (one per run).
+ */
+async function peopleSearch({ aborted = () => false } = {}) {
+  const list = keywordList();
+  const out = { searched: 0, found: 0, bluesky: 0, redgifs: 0 };
+  if (!list.length) return out;
+  let idx = parseInt(repo.discoveryState.get('people.index', '0'), 10) || 0;
+  const kw = list[idx % list.length];
+  repo.discoveryState.set('people.index', String((idx + 1) % list.length));
+  const bsky = registry.get('bluesky');
+  if (bsky && bsky.searchActors && !aborted()) {
+    try {
+      out.searched++;
+      for (const p of await bsky.searchActors(kw, 25)) {
+        if (p.labels.includes('!no-unauthenticated')) continue;
+        const adult = p.labels.some((l) => ['porn', 'sexual', 'nudity'].includes(l));
+        if (!adult && !CREATOR_STRONG.test(`${p.displayName || ''} ${p.description || ''}`)) continue;
+        const c = consider(parseProfile(`https://bsky.app/profile/${p.handle}`), 'search', `bluesky-people:${kw}`, { displayName: p.displayName, bio: p.description, avatarUrl: p.avatar, popularity: p.followers });
+        if (c && c.status === 'pending' && c.scope !== 'excluded') { out.found++; out.bluesky++; }
+      }
+    } catch (e) { events.log('WARN', `Discovery: Bluesky people search "${kw}" — ${e.message}`); }
+  }
+  const rg = registry.get('redgifs');
+  if (rg && rg.searchCreators && !aborted()) {
+    try {
+      out.searched++;
+      for (const u of (await rg.searchCreators(kw)).slice(0, 25)) {
+        if (u.gifs < 2) continue; // one stray result is not a creator of this kind of content
+        const spec = parseProfile(`https://www.redgifs.com/users/${u.username}`);
+        const c = consider(spec, 'search', `redgifs:${kw}`, { displayName: u.name || u.username, bio: [u.description, u.tags.join(' ')].filter(Boolean).join(' · ') || null, avatarUrl: u.avatar, popularity: u.followers });
+        if (c && c.status === 'pending' && c.scope !== 'excluded') { out.found++; out.redgifs++; }
+      }
+    } catch (e) { events.log('WARN', `Discovery: RedGIFs creator search "${kw}" — ${e.message}`); }
+  }
+  return out;
+}
+
 /** Fill in names/bios for Telegram, Bluesky and X leads so scope and safety can judge them. */
 async function enrich({ limit = 12 } = {}) {
   let done = 0;
@@ -462,10 +549,15 @@ async function run({ trigger = 'schedule' } = {}) {
       report.topics = await braveTopics({ budget: s.braveDailyBudget, aborted });
     }
     if (s.discoveryCommunities) report.communities = await communityDiscovery({ aborted });
+    if (s.discoveryCommunities) report.hangouts = creatorHangouts();
+    if (s.discoveryExpand) {
+      report.lookalikes = await blueskyLookalikes({ aborted });
+      report.people = await peopleSearch({ aborted });
+    }
     report.enrich = await enrich();
     report.promote = s.autoDiscover || trigger === 'manual' ? promote(s) : { followed: 0, linked: 0 };
     report.pruned = repo.candidates.prune();
-    events.log('INFO', `Discovery ${trigger === 'manual' ? '(manual) ' : ''}finished: ${report.mentions.found} mention leads, ${report.graph ? report.graph.found : 0} graph leads, ${report.topics ? report.topics.found : 0} search leads, ${report.communities ? report.communities.found : 0} community/feed leads, ${report.identity ? report.identity.linked : 0} identity matches; followed ${report.promote.followed}, linked ${report.promote.linked}`);
+    events.log('INFO', `Discovery ${trigger === 'manual' ? '(manual) ' : ''}finished: ${report.mentions.found} mention leads, ${report.graph ? report.graph.found : 0} graph leads, ${report.topics ? report.topics.found : 0} search leads, ${report.communities ? report.communities.found : 0} community/feed leads, ${report.hangouts ? report.hangouts.found : 0} hangouts, ${report.lookalikes ? report.lookalikes.found : 0} lookalikes, ${report.people ? report.people.found : 0} people-search leads, ${report.identity ? report.identity.linked : 0} identity matches; followed ${report.promote.followed}, linked ${report.promote.linked}`);
   } catch (e) {
     report.error = e.message;
     events.log('ERR', `Discovery failed: ${e.message}`);
@@ -477,14 +569,34 @@ async function run({ trigger = 'schedule' } = {}) {
   return report;
 }
 
+/**
+ * Which kinds of signal bring creators who actually post: for every followed/linked lead, credit
+ * the signal that contributed most to its score, and count how many of those creators have
+ * published media since. Lets the admin see which rules earn their keep.
+ */
+function signalYield() {
+  const out = new Map();
+  for (const c of repo.db.prepare(`SELECT ca.signals, cr.media_count FROM candidates ca LEFT JOIN creators cr ON cr.id = ca.creator_id
+      WHERE ca.status IN ('followed', 'linked')`).iterate()) {
+    let sig = {}; try { sig = JSON.parse(c.signals || '{}'); } catch { sig = {}; }
+    let best = null; let bw = 0;
+    for (const [k, w] of Object.entries(WEIGHTS)) { const v = w * Math.min((sig[k] || []).length, CAPS[k]); if (v > bw) { bw = v; best = k; } }
+    if (!best) continue;
+    const e = out.get(best) || { signal: best, followed: 0, posting: 0 };
+    e.followed++; if ((c.media_count || 0) > 0) e.posting++;
+    out.set(best, e);
+  }
+  return [...out.values()].sort((a, b) => b.followed - a.followed);
+}
+
 function status() {
   let last = null;
   try { last = JSON.parse(repo.discoveryState.get('lastRun') || 'null'); } catch { last = null; }
   const s = settingsStore.get();
   return {
-    running, last, counts: repo.candidates.counts(),
+    running, last, counts: repo.candidates.counts(), yield: signalYield(),
     brave: { configured: brave.configured(), usage: brave.usage(), budget: s.braveDailyBudget },
-    telegramBot: tgBot.configured(), xApi: !!config.creds.xBearer, communities: s.discoveryCommunities, autoCommunities: s.discoveryAutoCommunities,
+    telegramBot: tgBot.configured(), xApi: !!config.creds.xBearer, communities: s.discoveryCommunities, autoCommunities: s.discoveryAutoCommunities, expand: s.discoveryExpand,
     auto: s.autoDiscover, intervalMin: s.discoveryIntervalMin, threshold: s.discoveryAutoFollowScore,
   };
 }
@@ -503,4 +615,4 @@ function start() {
 }
 function stop() { stopFlag = true; clearInterval(timer); timer = null; }
 
-module.exports = { run, status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, enrich, scoreOf, coreHandle, usable };
+module.exports = { run, status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskyLookalikes, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };
