@@ -35,7 +35,7 @@ const PROVIDERS = {
   searxng: {
     configured: () => !!searxngUrl(),
     async search(q, { count = 20 } = {}) {
-      const json = await http.json(`${searxngUrl()}/search?q=${encodeURIComponent(q)}&format=json&safesearch=0&language=all`, { allowInternal: true }); // the only caller allowed to reach INTERNAL_HOSTS
+      const json = await http.json(`${searxngUrl()}/search?q=${encodeURIComponent(q)}&format=json&safesearch=0&language=all`, { allowInternal: true, timeout: /\.onion(?::|\/|$)/i.test(searxngUrl()) ? 70000 : 20000 }); // the only caller allowed to reach INTERNAL_HOSTS
       return (json.results || []).slice(0, count).map((r) => ({ url: r.url, title: strip(r.title), description: strip(r.content) })).filter((r) => r.url);
     },
   },

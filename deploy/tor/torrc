@@ -1,0 +1,11 @@
+# Client-only Tor: no relaying, no exit. SOCKS5 on all container interfaces, but only compose-network (private) clients may use it.
+DataDirectory /var/lib/tor
+SocksPort 0.0.0.0:9050
+SocksPolicy accept 10.0.0.0/8
+SocksPolicy accept 172.16.0.0/12
+SocksPolicy accept 192.168.0.0/16
+SocksPolicy reject *
+ClientOnly 1
+ExitRelay 0
+AvoidDiskWrites 1
+Log notice stdout
