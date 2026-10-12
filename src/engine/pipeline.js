@@ -23,18 +23,31 @@ const md5 = (s) => crypto.createHash('md5').update(s).digest('hex');
 const cleanHandle = (a) => String(a || '').replace(/^[@/]+/, '').replace(/^u\//i, '').trim().slice(0, 80);
 
 const HOST_WINDOW_MS = 20 * 60 * 1000;
-const hostState = new Map(); // host -> { ok, reason, at }
-/** Is this media host serving us? 401/403/HTML (walls, challenges) = no, for a window; anything else (404 ...) is about one item. */
+const HOST_STRIKES = 2;
+const hostState = new Map(); // host -> { ok, reason, at, strikes: Set(url) }
+/**
+ * Is this media host serving us? Only host-wide evidence closes a host for a window:
+ *   - an explicit challenge (Cloudflare `cf-mitigated: challenge`) closes it at once;
+ *   - 401/403 or an HTML page where media should be (a deleted, expired or gated single item looks the same) must be
+ *     seen on TWO DIFFERENT urls before the host is considered walled.
+ * A single suspicious answer skips only that item. Anything else (404 ...) is about one item and never counts.
+ */
 async function hostReachable(host, url, type) {
   const now = Date.now();
   const known = hostState.get(host);
-  if (known && now - known.at < HOST_WINDOW_MS) return known;
+  const fresh = known && now - known.at < HOST_WINDOW_MS;
+  if (fresh && known.closed) return { ok: false, reason: known.reason };
+  if (fresh && known.good) return { ok: true }; // one healthy probe vouches for the host for the window
   const p = await probeMedia(url, type);
-  const walled = !p.ok && (p.challenge || /^http (401|403)\b|not media \(text\/html\)/.test(p.reason || ''));
-  const state = { ok: !walled, reason: walled ? p.reason : '', at: now };
-  hostState.set(host, state);
-  if (walled) events.log('WARN', `Media host ${host} refuses this server (${p.reason}); skipping its items for ${HOST_WINDOW_MS / 60000} min`);
-  return state;
+  const suspicious = !p.ok && (p.challenge || /^http (401|403)\b|not media \(text\/html\)/.test(p.reason || ''));
+  if (!suspicious) { hostState.set(host, { closed: false, good: true, at: now, strikes: new Set() }); return { ok: true }; }
+  const st = fresh && !known.good ? known : { closed: false, good: false, at: now, strikes: new Set() };
+  st.strikes.add(url);
+  if (p.challenge || st.strikes.size >= HOST_STRIKES) {
+    hostState.set(host, { closed: true, reason: p.reason, at: now, strikes: st.strikes });
+    events.log('WARN', `Media host ${host} refuses this server (${p.reason}); skipping its items for ${HOST_WINDOW_MS / 60000} min`);
+  } else hostState.set(host, st);
+  return { ok: false, reason: p.reason };
 }
 
 const IMAGE_STRIKES_TO_BLOCK = 3;

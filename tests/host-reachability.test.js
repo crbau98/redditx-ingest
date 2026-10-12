@@ -11,6 +11,9 @@ before(async () => {
     '/walled/a.jpg': () => (walled ? { status: 403, headers: { 'content-type': 'text/html', 'cf-mitigated': 'challenge' }, body: '<html>challenge</html>' } : { headers: { 'content-type': 'image/jpeg' }, body: JPEG }),
     '/ok/a.jpg': () => ({ headers: { 'content-type': 'image/jpeg' }, body: JPEG }),
     '/ok/gone.jpg': () => ({ status: 404, body: 'gone' }),
+    '/html/one.jpg': () => ({ headers: { 'content-type': 'text/html' }, body: '<html>this item was deleted</html>' }),
+    '/html/two.jpg': () => ({ headers: { 'content-type': 'text/html' }, body: '<html>this one too</html>' }),
+    '/html/good.jpg': () => ({ headers: { 'content-type': 'image/jpeg' }, body: JPEG }),
   });
   prepareEnv();
   pipeline = require('../src/engine/pipeline'); repo = require('../src/db/repo');
@@ -34,4 +37,18 @@ test('a 404 is about one item, not the host; and the gate is off unless enabled'
   assert.equal((await pipeline.processItem(item('/ok/gone.jpg'), feed, null, settings)).outcome, 'added');
   walled = true; pipeline._hostState.clear();
   assert.equal((await pipeline.processItem(item('/walled/a.jpg?off'), feed, null, { ...settings, hostReachability: false })).outcome, 'added');
+});
+
+test('one HTML answer (a deleted / gated single item) skips only that item; two different urls confirm a wall; a healthy probe clears the strikes', async () => {
+  pipeline._hostState.clear();
+  const one = await pipeline.processItem(item('/html/one.jpg'), feed, null, settings);
+  assert.equal(one.outcome, 'skipped');
+  // the host is NOT condemned: a valid item from it still gets through
+  const good = await pipeline.processItem(item('/html/good.jpg'), feed, null, settings);
+  assert.equal(good.outcome, 'added', 'one bad item must not close the whole host');
+  pipeline._hostState.clear();
+  await pipeline.processItem(item('/html/one.jpg?a'), feed, null, settings);
+  await pipeline.processItem(item('/html/two.jpg'), feed, null, settings); // second DIFFERENT url -> confirmed
+  const after = await pipeline.processItem(item('/html/good.jpg?b'), feed, null, settings);
+  assert.equal(after.outcome, 'skipped'); assert.match(after.reason, /unreachable host/);
 });
