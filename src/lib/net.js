@@ -59,13 +59,71 @@ function isPrivateHost(hostname, { allowInternal = false } = {}) {
   if (config.allowPrivateHosts) return false;
   let h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
   if (!h) return true;
-  if (allowInternal && isInternalHost(h)) return false; // only for explicit, first-hop callers (see open())
+  if (allowInternal && (isInternalHost(h) || isVouchedOnion(h))) return false; // only for explicit, first-hop callers (see open())
+  if (h.endsWith('.onion')) return true; // Tor hidden services are reachable only through the one vouched route below
   if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal')) return true;
   if (net.isIP(h)) return isPrivateIp(h);
   // Numeric forms like 2130706433 or 0x7f.1 are normalised by WHATWG URL to
   // dotted quads before we get here, so a plain name is all that is left.
   return false;
 }
+
+/**
+ * The ONE onion service PRISM may talk to: the operator's own SearXNG (SEARXNG_URL), and only when a Tor SOCKS proxy is
+ * configured (TOR_PROXY=socks5h://host:9050). Any other .onion name stays blocked, so remote content cannot make the
+ * server visit hidden services.
+ */
+function isVouchedOnion(h) {
+  if (!config.torProxy || !config.searxngUrl) return false;
+  try { const host = new URL(config.searxngUrl).hostname.toLowerCase(); return host.endsWith('.onion') && host === String(h || '').toLowerCase(); } catch { return false; }
+}
+
+const SOCKS_REPLY = { 1: 'general failure', 2: 'not allowed by the proxy ruleset', 3: 'network unreachable', 4: 'host unreachable (the onion service did not answer)', 5: 'connection refused', 6: 'TTL expired (could not build a circuit to the onion service)', 7: 'command not supported', 8: 'address type not supported' };
+
+/** Minimal SOCKS5 client (RFC 1928, no auth, domain-name addressing so Tor resolves the name: "socks5h"). */
+function socks5Connect(proxyUrl, host, port, timeoutMs = 45000) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(proxyUrl);
+    const sock = net.connect({ host: u.hostname, port: parseInt(u.port, 10) || 1080 });
+    let buf = Buffer.alloc(0); let stage = 'greeting'; let done = false;
+    const fail = (e) => { if (done) return; done = true; clearTimeout(timer); sock.destroy(); reject(e); };
+    const timer = setTimeout(() => fail(Object.assign(new Error(`Tor connect to ${host} timed out after ${timeoutMs / 1000}s`), { code: 'ETIMEDOUT' })), timeoutMs);
+    sock.once('error', (e) => fail(Object.assign(new Error(`Tor proxy ${u.host}: ${e.message}`), { code: e.code || 'EPROXY' })));
+    sock.once('connect', () => sock.write(Buffer.from([0x05, 0x01, 0x00])));
+    sock.on('data', (chunk) => {
+      if (done) return;
+      buf = Buffer.concat([buf, chunk]);
+      if (stage === 'greeting') {
+        if (buf.length < 2) return;
+        if (buf[0] !== 0x05 || buf[1] !== 0x00) return fail(Object.assign(new Error('Tor proxy refused the SOCKS5 greeting'), { code: 'EPROXY' }));
+        buf = buf.subarray(2); stage = 'reply';
+        const name = Buffer.from(host, 'utf8');
+        const req = Buffer.concat([Buffer.from([0x05, 0x01, 0x00, 0x03, name.length]), name, Buffer.from([(port >> 8) & 0xff, port & 0xff])]);
+        sock.write(req);
+      }
+      if (stage === 'reply') {
+        if (buf.length < 5) return;
+        const atyp = buf[3];
+        const len = atyp === 0x01 ? 10 : atyp === 0x04 ? 22 : atyp === 0x03 ? 7 + buf[4] : 0;
+        if (!len) return fail(Object.assign(new Error('Tor proxy sent an unknown SOCKS5 reply'), { code: 'EPROXY' }));
+        if (buf.length < len) return;
+        if (buf[1] !== 0x00) return fail(Object.assign(new Error(`Tor: ${SOCKS_REPLY[buf[1]] || `SOCKS error ${buf[1]}`} (${host})`), { code: 'EPROXY', status: 502 }));
+        done = true; clearTimeout(timer); sock.removeAllListeners('data'); sock.removeAllListeners('error');
+        const rest = buf.subarray(len);
+        if (rest.length) sock.unshift(rest);
+        resolve(sock);
+      }
+    });
+  });
+}
+
+/** http:// agent whose sockets are SOCKS5 tunnels through Tor. */
+class TorHttpAgent extends http.Agent {
+  createConnection(options, cb) {
+    socks5Connect(config.torProxy, options.host || options.hostname, parseInt(options.port, 10) || 80).then((s) => cb(null, s), cb);
+  }
+}
+const torHttpAgent = new TorHttpAgent({ keepAlive: false });
 
 /** Exact hostnames an operator vouched for (INTERNAL_HOSTS, e.g. a SearXNG container on the compose network). */
 function isInternalHost(h) { return (config.internalHosts || []).includes(String(h || '').toLowerCase()); }
@@ -217,15 +275,17 @@ function open(url, { method: method0 = 'GET', headers = {}, timeout = 20000, max
       }
       // `allowInternal` is an explicit grant from the caller (the SearXNG client) and holds for the FIRST hop only: a redirect,
       // however it was triggered by remote content, can never land on an internal host.
-      const internal = allowInternal && hops === 0 && isInternalHost(parsed.hostname);
+      const onion = allowInternal && hops === 0 && isVouchedOnion(parsed.hostname);
+      const internal = (allowInternal && hops === 0 && isInternalHost(parsed.hostname)) || onion;
       if (isPrivateHost(parsed.hostname, { allowInternal: internal })) {
         return reject(new HttpError('Blocked host', { url: target, code: 'EBLOCKED' }));
       }
+      if (onion && parsed.protocol !== 'http:') return reject(new HttpError('Onion services are reached over http:// (Tor already encrypts end to end)', { url: target, code: 'EBLOCKED' }));
       const lib = parsed.protocol === 'https:' ? https : http;
       const req = lib.request(parsed, {
         method,
         headers: hdrs,
-        agent: internal ? (parsed.protocol === 'https:' ? internalHttpsAgent : internalHttpAgent) : (parsed.protocol === 'https:' ? (proxiedHttpsAgent || httpsAgent) : httpAgent),
+        agent: onion ? torHttpAgent : internal ? (parsed.protocol === 'https:' ? internalHttpsAgent : internalHttpAgent) : (parsed.protocol === 'https:' ? (proxiedHttpsAgent || httpsAgent) : httpAgent),
       }, (res) => {
         const loc = res.headers.location;
         if ([301, 302, 303, 307, 308].includes(res.statusCode) && loc) {
@@ -362,5 +422,5 @@ function hostnameOf(url) {
 
 module.exports = {
   HttpError, open, request, requestOnce, fetchText, fetchJSON, fetchBuffer,
-  sleep, isPrivateHost, isPrivateIp, hostnameOf, parseRetryAfter, safeLookup,
+  sleep, isPrivateHost, isPrivateIp, hostnameOf, parseRetryAfter, safeLookup, socks5Connect,
 };
