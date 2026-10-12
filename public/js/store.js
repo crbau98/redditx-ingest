@@ -101,6 +101,23 @@ export const follows = {
   },
 };
 
+/* -------------------------------------------------------------- visits */
+// When this device was last here, for "Since your last visit". A gap of 30+ minutes since the
+// last activity starts a new visit; the previous visit's time is what "since" means.
+const VISIT_KEY = 'prism.visit';
+let visit = read(VISIT_KEY, { last: null, prev: null });
+export const visits = {
+  touch() {
+    if (prefs.historyOff) return;
+    const now = Date.now();
+    const last = visit.last ? Date.parse(visit.last) : 0;
+    if (!last || now - last > 30 * 60000) visit.prev = visit.last;
+    visit.last = new Date(now).toISOString();
+    write(VISIT_KEY, visit);
+  },
+  get since() { return prefs.historyOff ? null : visit.prev; },
+};
+
 /* -------------------------------------------------------------- history */
 // What this device has opened in the viewer, newest first. Powers "History" and "Hide seen".
 const MAX_HISTORY = 800;

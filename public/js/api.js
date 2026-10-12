@@ -61,8 +61,19 @@ export function get(path, query, opts) {
 /** Warm the cache for a likely next request (hover, idle time). Errors are ignored. */
 export function prefetch(path, query) { get(path, query).catch(() => {}); }
 export function clearApiCache() { cache.clear(); }
-// A view ping changes nothing anyone sees; every other write may (likes, saves, reports…).
-export const post = (path, body, opts) => { if (!/\/view$/.test(path)) cache.clear(); return api(path, { method: 'POST', body: body ?? {}, ...opts }); };
+// View pings and broken-media reports change nothing anyone sees; every other write may.
+export const post = (path, body, opts) => { if (!/\/(view|broken)$/.test(path)) cache.clear(); return api(path, { method: 'POST', body: body ?? {}, ...opts }); };
+
+/**
+ * Tell the server an item failed to load here (once per item per page session). The server only
+ * re-checks it at the source; nothing is hidden on a viewer's word.
+ */
+const reported = new Set();
+export function reportBroken(id) {
+  if (!id || reported.has(id)) return;
+  reported.add(id);
+  post(`/api/media/${id}/broken`).catch(() => {});
+}
 export const adminGet = (path, query) => api(`/api/admin${path}${qs(query)}`, { admin: true });
 export const adminPost = (path, body) => api(`/api/admin${path}`, { method: 'POST', body: body ?? {}, admin: true });
 export const adminPatch = (path, body) => api(`/api/admin${path}`, { method: 'PATCH', body: body ?? {}, admin: true });

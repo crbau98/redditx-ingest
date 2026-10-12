@@ -1,5 +1,5 @@
 import { h, icon, proxied, fmt, avatar, toast, copyText, openModal } from '../dom.js';
-import { get, post } from '../api.js';
+import { get, post, reportBroken } from '../api.js';
 import { favorites, follows, prefs, history as viewHistory, tastes, collections, platformLabel, platformColor, bus } from '../store.js';
 import { parse, href, setParam } from '../router.js';
 import { openReport } from './report.js';
@@ -268,7 +268,7 @@ function paintStage(it) {
     }
     S.zoom = makeZoomable(img, S.stage);
     img.addEventListener('dblclick', () => { if (img.classList.contains('zoomed')) return; toggleFav(it, true); });
-    img.addEventListener('error', () => S.stage.replaceChildren(...keep, h('div', { class: 'lb-loading' }, 'This image is no longer available at its source.')));
+    img.addEventListener('error', () => { reportBroken(it.id); S.stage.replaceChildren(...keep, h('div', { class: 'lb-loading' }, 'This image is no longer available at its source.')); });
   }
 }
 
@@ -280,7 +280,8 @@ function paintInfo() {
   const rel = h('div', { class: 'lb-related' });
   box.replaceChildren(
     it.creator_id ? h('div', { class: 'lb-creator' },
-      h('a', { href: href(`/creator/${it.creator_id}`), onclick: () => closeSilently() }, avatar(it, 44)),
+      // the name link beside it carries the label; this one is a larger pointer target only
+      h('a', { href: href(`/creator/${it.creator_id}`), tabindex: '-1', 'aria-hidden': 'true', onclick: () => closeSilently() }, avatar(it, 44)),
       h('div', { class: 'grow' }, h('a', { href: href(`/creator/${it.creator_id}`), class: 'creator-name', onclick: () => closeSilently() }, it.creator_name || it.creator_handle), h('div', { class: 'creator-handle' }, `@${it.creator_handle || it.author}`)),
       h('button', { class: `btn sm${follows.has(it.creator_id) ? '' : ' primary'}`, onclick: () => { const on = follows.toggle({ id: it.creator_id, handle: it.creator_handle, display_name: it.creator_name }); toast(on ? 'Following' : 'Unfollowed'); } }, follows.has(it.creator_id) ? 'Following' : 'Follow')) : null,
     it.title ? h('h3', null, it.title) : null,

@@ -1,4 +1,5 @@
 import { proxied, loadScript } from '../dom.js';
+import { reportBroken } from '../api.js';
 
 export const isM3u8 = (u) => /\.m3u8(\?|$)/i.test(u || '');
 
@@ -9,12 +10,21 @@ export const isM3u8 = (u) => /\.m3u8(\?|$)/i.test(u || '');
  * the stream (hls.js keeps buffers and workers alive until told otherwise).
  */
 export function attachVideo(v, it) {
-  const handle = { hls: null, dead: false, destroy() { this.dead = true; if (this.hls) { try { this.hls.destroy(); } catch { /* ignore */ } this.hls = null; } } };
+  // autoplay: false while a video only buffers off-screen (Reels warms the next one), so a
+  // fallback to the MP4 does not start it playing in the background.
+  const handle = { hls: null, dead: false, autoplay: true, destroy() { this.dead = true; if (this.hls) { try { this.hls.destroy(); } catch { /* ignore */ } this.hls = null; } } };
   const hls = it.hls_url || (isM3u8(it.media_url) ? it.media_url : null);
   const mp4 = isM3u8(it.media_url) ? null : it.media_url;
   const useHls = hls && (it.has_audio || !mp4);
-  const fallback = () => { if (mp4 && !handle.dead) { v.src = proxied(mp4); v.play().catch(() => {}); } };
-  if (!useHls) { v.src = proxied(mp4); return handle; }
+  // Every source failed: let the server verify the item at its origin.
+  const dead = () => { if (!handle.dead) reportBroken(it.id); };
+  const fallback = () => {
+    if (handle.dead) return;
+    if (!mp4) { dead(); return; }
+    v.addEventListener('error', dead, { once: true });
+    v.src = proxied(mp4); if (handle.autoplay) v.play().catch(() => {});
+  };
+  if (!useHls) { v.addEventListener('error', dead, { once: true }); v.src = proxied(mp4); return handle; }
   const src = `/api/hls?url=${encodeURIComponent(hls)}`;
   if (v.canPlayType('application/vnd.apple.mpegurl')) {
     v.src = src;

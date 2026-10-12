@@ -1,3 +1,4 @@
+import { reportBroken } from '../api.js';
 import { h, icon, proxied, fmt, avatar } from '../dom.js';
 import { favorites, history as viewHistory, prefs, platformLabel, platformColor, bus } from '../store.js';
 import { parse, href } from '../router.js';
@@ -63,7 +64,7 @@ export function mediaCard(item, { open, compact = false, why = null } = {}) {
     const eager = eagerLeft > 0 && eagerLeft--;
     const img = h('img', { class: 'loading', alt: item.title || '', loading: eager ? 'eager' : 'lazy', fetchpriority: eager ? 'high' : 'auto', decoding: 'async', src: proxied(src) });
     img.addEventListener('load', () => { img.classList.remove('loading'); });
-    img.addEventListener('error', () => { img.remove(); });
+    img.addEventListener('error', () => { img.remove(); reportBroken(item.id); });
     media.appendChild(img);
   }
   if (why) media.appendChild(h('span', { class: 'card-why', title: 'Why you are seeing this' }, icon('sparkle', 'sm'), why));

@@ -387,7 +387,26 @@ function v4(db) {
   `);
 }
 
-const MIGRATIONS = [v1, v2, v3, v4];
+/**
+ * v5 (PRISM 4.8): link health. Viewers' browsers report media that fails to load; the server
+ * verifies at the source and hides what is really gone. One row per media item ever checked.
+ */
+function v5(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS media_health (
+      media_id TEXT PRIMARY KEY REFERENCES media(id) ON DELETE CASCADE,
+      reports INTEGER NOT NULL DEFAULT 0,
+      last_report TEXT,
+      checked_at TEXT,
+      verdict TEXT,
+      http_status INTEGER,
+      gone_streak INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS ix_media_health_checked ON media_health(checked_at);
+  `);
+}
+
+const MIGRATIONS = [v1, v2, v3, v4, v5];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });
