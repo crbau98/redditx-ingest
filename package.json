@@ -1,6 +1,6 @@
 {
   "name": "prism",
-  "version": "4.7.0",
+  "version": "4.8.0",
   "description": "PRISM \u2014 creator-centric adult media discovery. Multi-source ingestion (Reddit, RedGIFs, Bluesky, Mastodon, Lemmy, X, RSS, link-in-bio) with a safety gate, takedown flow and admin console.",
   "main": "server.js",
   "scripts": {

@@ -1,5 +1,24 @@
 # UI changelog
 
+## 2026-10-12 — v4.8 "Self-healing"
+
+**Audit findings**: when a post was deleted at its source, its card stayed in every feed forever, showing a broken image or a dead video. Nothing told the server, and nothing ever re-checked old items. Returning visitors had no quick way to see what had arrived while they were away; the "N new" counts existed only per smart feed. In Reels, each swipe started a fresh download, so every new video opened on a spinner. An automated accessibility pass (6 pages plus the viewer, dark and light) found one unnamed link: the viewer's creator avatar.
+
+| Change | Files | Notes |
+|---|---|---|
+| **Link health**: viewers' browsers report media that fails to load; the server verifies at the source and hides only real removals (404/410 or a placeholder image, twice, at least an hour apart). 403/5xx/timeouts are "unknown" and never hide anything | `src/engine/health.js`, `routes/public.js`, migration v5 (`media_health`), `api.js`, `card.js`, `lightbox.js`, `reels.js`, `video.js` | each item is reported at most once per page session; the server probes a reported item at most every 30 min |
+| Background sweep every 10 minutes. Order: pending confirmations, then never-checked items, then the least recently checked. Budget is configurable | `health.js`, `settings.js`, `server.js` | Admin → Settings → Maintenance |
+| "Gone at source (7d)" KPI; hidden items keep their reason and can be restored | `routes/admin.js`, `views/admin/overview.js` | |
+| **Since your last visit**: Home tiles for new posts from creators you follow, new posts in the library, and newly discovered creators; each opens a filtered Explore | `store.js` (`visits`), `views/home.js`, `views/explore.js` (`after` filter + *New since* chip), `app.css` | shown after a gap of an hour or more; on-device only; off when history is paused |
+| **Reels buffer ahead**: the next video loads while the current one plays and the previous one keeps its buffer. Never on data-saver or 2G/3G. A buffered video never starts playing off-screen, even when its stream falls back to MP4 | `views/reels.js`, `components/video.js` | still only one playing video |
+| Viewer: the creator avatar link duplicated the name link beside it. It is now removed from the tab order and the accessibility tree | `components/lightbox.js` | the audit now reports 0 issues |
+
+**Verification**:
+- Unit tests: 210 (8 new, run against a mock origin).
+- Browser checks: 23 new.
+- Regression: the v4.2–v4.7 suites were re-run. The v4.2 Reels check "at most one video with a source" became "at most one playing, at most three buffered" to match the new behaviour.
+- Accessibility audit: clean.
+
 ## 2026-10-12 — v4.7 "Velocity"
 
 **Audit findings** (measured, not guessed): on a generated 60,000-item / 900-creator library, a two-word search took **56 s**; related tags, similar creators and For you took 0.25–0.6 s; plain listings 50–70 ms; topics 2.7 s on a cold cache. In the browser on an emulated 4G link (150 ms RTT) the first visit spent ~3 s discovering 31 ES modules level by level, and every visit revalidated each module.
