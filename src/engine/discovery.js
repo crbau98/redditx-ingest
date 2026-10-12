@@ -307,6 +307,20 @@ async function communityDiscovery({ keywords = 2, aborted = () => false } = {}) 
   return out;
 }
 
+const underReview = (c) => typeof c.reason === 'string' && c.reason.startsWith('needs review');
+/**
+ * Judge looked-up profile fields with the same gate as consider() (raw + CamelCase-split, so
+ * "ChildModel" is read as "Child Model"), together with what we already knew about the lead.
+ * A lookup can add a review flag or reject, but never clears an earlier review flag.
+ */
+function judgeLookup(c, ...texts) {
+  const v = gate(c.target, c.label, c.display_name, c.bio, ...texts);
+  if (v.level === 'block') return { reject: { status: 'rejected', reason: `safety: ${v.rule || 'blocked'}`, decided_at: new Date().toISOString() } };
+  return { reason: v.level === 'review' ? `needs review: ${v.rule}` : underReview(c) ? c.reason : 'checked' };
+}
+/** Nothing to read (missing profile, lookup error): stop asking, keeping any review flag. */
+const nothingFound = (c) => (underReview(c) ? { bio: c.bio == null ? '' : c.bio } : { reason: 'checked' });
+
 /** Fill in names/bios for Telegram, Bluesky and X leads so scope and safety can judge them. */
 async function enrich({ limit = 12 } = {}) {
   let done = 0;
@@ -316,11 +330,11 @@ async function enrich({ limit = 12 } = {}) {
         const info = await tgBot.channelInfo(c.target);
         if (!info) { repo.candidates.update(c.id, { status: 'rejected', reason: 'Telegram: channel not found or private', decided_at: new Date().toISOString() }); continue; }
         const scope = classify([info.title, info.description, c.target], { trusted: false }).scope;
-        const verdict = checkText(c.target, info.title, info.description);
-        if (verdict.level === 'block') { repo.candidates.update(c.id, { status: 'rejected', reason: 'safety', decided_at: new Date().toISOString() }); continue; }
-        repo.candidates.update(c.id, { display_name: info.title, bio: info.description || '', scope, score: scoreOf(c.signals, scope), reason: verdict.level === 'review' ? `needs review: ${verdict.rule}` : 'checked' });
+        const j = judgeLookup(c, info.title, info.description);
+        if (j.reject) { repo.candidates.update(c.id, j.reject); continue; }
+        repo.candidates.update(c.id, { display_name: info.title, bio: info.description || '', scope, score: scoreOf(c.signals, scope), reason: j.reason });
         done++;
-      } catch (e) { repo.candidates.update(c.id, { reason: 'checked' }); events.log('WARN', `Discovery: ${e.message}`); }
+      } catch (e) { repo.candidates.update(c.id, nothingFound(c)); events.log('WARN', `Discovery: ${e.message}`); }
     }
   }
   const bsky = repo.candidates.needingDetails('bluesky', 25);
@@ -331,11 +345,11 @@ async function enrich({ limit = 12 } = {}) {
       const byHandle = new Map((json.profiles || []).map((p) => [String(p.handle).toLowerCase(), p]));
       for (const c of bsky) {
         const p = byHandle.get(String(c.target).toLowerCase());
-        if (!p) { repo.candidates.update(c.id, { reason: 'checked' }); continue; }
-        const verdict = checkText(c.target, p.displayName, p.description);
-        if (verdict.level === 'block') { repo.candidates.update(c.id, { status: 'rejected', reason: 'safety', decided_at: new Date().toISOString() }); continue; }
+        if (!p) { repo.candidates.update(c.id, nothingFound(c)); continue; }
+        const j = judgeLookup(c, p.displayName, p.description);
+        if (j.reject) { repo.candidates.update(c.id, j.reject); continue; }
         const scope = classify([p.displayName, p.description, c.target], { trusted: false }).scope;
-        repo.candidates.update(c.id, { display_name: p.displayName || null, bio: p.description || '', avatar_url: p.avatar || null, scope, score: scoreOf(c.signals, scope), reason: verdict.level === 'review' ? `needs review: ${verdict.rule}` : 'checked' });
+        repo.candidates.update(c.id, { display_name: p.displayName || null, bio: p.description || '', avatar_url: p.avatar || null, scope, score: scoreOf(c.signals, scope), reason: j.reason });
         done++;
       }
     } catch (e) { events.log('WARN', `Discovery: Bluesky profile lookup — ${e.message}`); }
@@ -350,12 +364,12 @@ async function enrich({ limit = 12 } = {}) {
         const byName = new Map(users.map((u) => [String(u.username).toLowerCase(), u]));
         for (const c of xs) {
           const u = byName.get(String(c.target).toLowerCase());
-          if (!u) { repo.candidates.update(c.id, { reason: 'checked' }); continue; } // suspended, renamed or protected
-          const verdict = checkText(c.target, u.name, u.description);
-          if (verdict.level === 'block') { repo.candidates.update(c.id, { status: 'rejected', reason: 'safety', decided_at: new Date().toISOString() }); continue; }
+          if (!u) { repo.candidates.update(c.id, nothingFound(c)); continue; } // suspended, renamed or protected
+          const j = judgeLookup(c, u.name, u.description);
+          if (j.reject) { repo.candidates.update(c.id, j.reject); continue; }
           const scope = classify([u.name, u.description, c.target], { trusted: false }).scope;
           const signals = { ...c.signals, popularity: Math.max(Number(c.signals.popularity) || 0, u.followers || 0) };
-          repo.candidates.update(c.id, { display_name: u.name || null, bio: u.description || '', avatar_url: u.avatar || null, signals, scope, score: scoreOf(signals, scope), reason: verdict.level === 'review' ? `needs review: ${verdict.rule}` : 'checked' });
+          repo.candidates.update(c.id, { display_name: u.name || null, bio: u.description || '', avatar_url: u.avatar || null, signals, scope, score: scoreOf(signals, scope), reason: j.reason });
           done++;
         }
       } catch (e) { events.log('WARN', `Discovery: X profile lookup — ${e.message}`); }
