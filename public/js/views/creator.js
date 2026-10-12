@@ -75,8 +75,10 @@ export async function creator(root, { params, query }) {
   const accounts = (c.accounts || []).map((a) => h('a', { class: 'linkchip', href: a.url, target: '_blank', rel: 'noopener noreferrer nofollow', style: { '--c': platformColor(a.platform) } }, h('span', { class: 'dot' }), `${platformLabel(a.platform)} · ${String(a.label).replace(/^[@/]?(?:u\/)?/, '')}`, icon('external', 'sm')));
   const ext = (c.links || []).filter((l) => l.url).map((l) => h('a', { class: 'linkchip ext', href: l.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, icon('link', 'sm'), l.label || l.service));
 
+  // A glowing ring (like a "story") when they posted in the last two days.
+  const fresh = c.last_media_at && Date.now() - new Date(c.last_media_at).getTime() < 2 * 86400000;
   const head = h('div', { class: 'profile-head' },
-    avatar(c, 112),
+    h('div', { class: `avatar-ring${fresh ? ' live' : ''}`, title: fresh ? `Posted ${fmt.ago(c.last_media_at)}` : null }, avatar(c, 112)),
     h('div', { class: 'profile-info' }, h('h1', null, c.display_name || c.handle, c.verified ? icon('verified', 'fill') : null), h('div', { class: 'creator-handle' }, `@${c.handle}`)),
     h('div', { class: 'profile-actions' }, followBtn,
       c.media_count ? h('a', { class: 'btn', href: href('/reels', { creator: c.id, sort: 'recent', type: 'all' }), title: 'Watch everything full screen' }, icon('film', 'sm'), 'Reels') : null,

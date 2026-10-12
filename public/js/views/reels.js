@@ -5,6 +5,7 @@ import { prefs, favorites, follows, history as viewHistory, tastes, collections,
 import { attachVideo, releaseVideo } from '../components/video.js';
 import { openCollectionPicker } from '../components/collections.js';
 import { openLightbox, isOpen as lightboxOpen } from '../components/lightbox.js';
+import { heartBurst } from '../components/fx.js';
 
 const SORTS = [['foryou', 'For you'], ['trending', 'Trending'], ['random', 'Shuffle'], ['recent', 'Newest'], ['top', 'Top']];
 const PAGE = 12;
@@ -34,7 +35,7 @@ export async function reels(root, { query }) {
   const paintMute = () => muteBtn.replaceChildren(icon(prefs.muted ? 'mute' : 'volume'));
   paintMute();
 
-  const context = f.sort === 'foryou' && !f.creator && !f.tag && !f.community && !f.q && !f.following && !f.platform ? 'For you' : f.creator ? 'Creator' : f.following ? 'Following' : f.tag ? `#${f.tag}` : f.community || (f.q ? `“${f.q}”` : (f.platform ? platformLabel(f.platform) : 'For you'));
+  const context = f.sort === 'foryou' && !f.creator && !f.tag && !f.community && !f.q && !f.following && !f.platform ? 'For you' : f.creator ? 'Creator' : f.following ? 'Following' : f.tag ? `#${f.tag}` : f.community || (f.q ? `“${f.q}”` : (f.platform ? platformLabel(f.platform) : ((SORTS.find((x) => x[0] === f.sort) || [])[1] || 'Reels')));
   const top = h('div', { class: 'reels-top' },
     h('button', { class: 'btn icon ghost', 'aria-label': 'Back', title: 'Back', onclick: () => (window.history.length > 1 ? window.history.back() : navigate('/')) }, icon('chev-l')),
     h('div', { class: 'reels-title truncate' }, icon('film', 'sm'), context),
@@ -59,7 +60,7 @@ export async function reels(root, { query }) {
     const bar = h('div', { class: 'reel-progress' }, h('i'));
     const favBtn = h('button', { class: 'reel-act', 'aria-label': 'Save' }, icon('heart'), h('span', null, 'Save'));
     const paintFav = () => { const on = favorites.has(it.id); favBtn.classList.toggle('on', on); favBtn.setAttribute('aria-pressed', String(on)); favBtn.querySelector('svg').classList.toggle('fill', on); };
-    favBtn.addEventListener('click', () => { const on = favorites.toggle(it.id, it); toast(on ? 'Saved' : 'Removed from saved'); });
+    favBtn.addEventListener('click', () => { const on = favorites.toggle(it.id, it); toast(on ? 'Saved' : 'Removed from saved'); if (on) { const r = favBtn.getBoundingClientRect(); heartBurst(r.left + r.width / 2, r.top + 20); } });
     const collBtn = h('button', { class: 'reel-act', 'aria-label': 'Add to collection', onclick: () => openCollectionPicker(it) }, icon('bookmark'), h('span', null, 'Collect'));
     const paintColl = () => collBtn.classList.toggle('on', collections.containing(it.id).length > 0);
     paintFav(); paintColl();
@@ -94,6 +95,7 @@ export async function reels(root, { query }) {
       if (now - lastTap < 280) {
         clearTimeout(tapTimer); lastTap = 0;
         if (!favorites.has(it.id)) favorites.toggle(it.id, it);
+        const sr = stage.getBoundingClientRect(); heartBurst(sr.left + sr.width / 2, sr.top + sr.height / 2, { count: 14 });
         const b = h('div', { class: 'lb-heart-burst' }, icon('heart', 'fill')); stage.appendChild(b); setTimeout(() => b.remove(), 750);
         return;
       }

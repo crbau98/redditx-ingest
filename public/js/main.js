@@ -5,6 +5,7 @@ import { prefs, favorites, follows, platforms, bus } from './store.js';
 import { syncFromUrl, isOpen } from './components/lightbox.js';
 import { openPalette, paletteOpen, surpriseMe } from './components/palette.js';
 import { openDisplaySettings } from './components/display.js';
+import { initTilt, initRails, gpuTier } from './components/fx.js';
 import { openTakedownForm } from './components/report.js';
 import { attachSuggest } from './components/suggest.js';
 import { home } from './views/home.js';
@@ -108,7 +109,7 @@ function buildShell() {
   const paintBadge = () => { const n = favorites.count(); savedBadge.textContent = n > 99 ? '99+' : n; savedBadge.style.display = n ? '' : 'none'; };
   bus.on('fav', paintBadge); paintBadge();
 
-  const header = h('header', { class: 'appbar' },
+  const header = h('header', { class: 'appbar' }, h('div', { class: 'scroll-progress', 'aria-hidden': 'true' }),
     h('a', { class: 'brand', href: href('/'), 'aria-label': 'PRISM home' }, icon('logo'), h('span', null, 'PRISM')),
     h('nav', { class: 'nav', 'aria-label': 'Primary' }, NAV.map(([key, path, label, ic]) => h('a', { href: href(path), dataset: { nav: key } }, icon(ic, 'sm'), label, key === 'saved' ? savedBadge : null))),
     h('div', { class: 'search' }, icon('search'), searchInput, h('span', { class: 'kbd hide-mobile' }, '/')),
@@ -122,7 +123,8 @@ function buildShell() {
     h('button', { onclick: openDisplaySettings }, 'Display settings'),
     h('button', { onclick: openTakedownForm }, 'Report content / takedown'),
     h('a', { href: href('/admin') }, 'Admin'));
-  const bottom = h('nav', { class: 'bottomnav five', 'aria-label': 'Primary' }, NAV.filter((n) => !n[4]).map(([key, path, label, ic]) => h('a', { href: href(path), dataset: { nav: key } }, icon(ic, 'lg'), label)));
+  const bottom = h('nav', { class: 'bottomnav five', 'aria-label': 'Primary' }, h('span', { class: 'bn-ind', 'aria-hidden': 'true' }), NAV.filter((n) => !n[4]).map(([key, path, label, ic]) => h('a', { href: href(path), dataset: { nav: key } }, icon(ic, 'lg'), label)));
+  window.addEventListener('resize', () => setNav(currentNav), { passive: true });
   const fab = h('button', { class: 'fab', hidden: true, 'aria-label': 'Back to top', onclick: () => window.scrollTo({ top: 0, behavior: 'smooth' }) }, icon('up'));
   window.addEventListener('scroll', () => { fab.hidden = window.scrollY < 900; }, { passive: true });
 
@@ -130,8 +132,16 @@ function buildShell() {
   return { main, searchInput };
 }
 
+let currentNav = null;
 function setNav(key) {
+  currentNav = key;
   document.querySelectorAll('[data-nav]').forEach((a) => { if (a.dataset.nav === key) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+  // slide the phone tab bar's highlight under the current tab
+  const ind = document.querySelector('.bn-ind');
+  const on = document.querySelector(`.bottomnav [data-nav="${key}"]`);
+  if (ind) {
+    if (on) { ind.style.width = `${on.offsetWidth - 12}px`; ind.style.transform = `translateX(${on.offsetLeft + 6}px)`; ind.style.opacity = '1'; } else ind.style.opacity = '0';
+  }
 }
 
 /* ----------------------------------------------------------------- router */
@@ -196,6 +206,9 @@ async function boot() {
 
   const shell = buildShell();
   wireShortcuts();
+  document.documentElement.dataset.gpu = gpuTier(); // CSS trims costly effects on software rendering
+  initTilt();
+  initRails($('#app'));
   window.addEventListener('hashchange', () => render(shell));
   await render(shell);
   wireLiveUpdates(shell);

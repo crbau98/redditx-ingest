@@ -5,6 +5,7 @@ import { parse, href, setParam } from '../router.js';
 import { openReport } from './report.js';
 import { attachVideo, releaseVideo, isM3u8 } from './video.js';
 import { openCollectionPicker } from './collections.js';
+import { playFlip, heartBurst } from './fx.js';
 
 let S = null; // the single active lightbox session
 const viewed = new Set();
@@ -53,11 +54,14 @@ function start(items, loadMore) {
   S.el = h('div', { class: 'lb', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Media viewer' });
   S.top = h('div', { class: 'lb-top' });
   S.stage = h('div', { class: 'lb-stage' });
+  // Ambient mode: a blurred, saturated copy of the current media glows behind it (two layers crossfade).
+  S.amb = [h('div', { class: 'lb-ambient' }), h('div', { class: 'lb-ambient' })];
+  S.ambIdx = 0;
   S.info$ = h('aside', { class: 'lb-info', 'aria-label': 'Details' });
   S.prev = h('button', { class: 'lb-nav prev', 'aria-label': 'Previous', onclick: () => nav(-1) }, icon('chev-l', 'lg'));
   S.next = h('button', { class: 'lb-nav next', 'aria-label': 'Next', onclick: () => nav(1) }, icon('chev-r', 'lg'));
   S.stage.append(S.prev, S.next);
-  S.el.append(S.top, S.stage, S.info$);
+  S.el.append(S.amb[0], S.amb[1], S.top, S.stage, S.info$);
   root.replaceChildren(S.el);
   document.body.classList.add('no-scroll');
   document.addEventListener('keydown', onKey);
@@ -191,6 +195,7 @@ function toggleFav(it, burst = false) {
   if (burst && on) {
     const b = h('div', { class: 'lb-heart-burst' }, icon('heart', 'fill'));
     S.stage.appendChild(b); setTimeout(() => b.remove(), 750);
+    const r = S.stage.getBoundingClientRect(); heartBurst(r.left + r.width / 2, r.top + r.height / 2, { count: 14 });
   }
   toast(on ? 'Saved' : 'Removed from saved');
 }
@@ -208,8 +213,18 @@ function teardownVideo() {
   releaseVideo(S.stage.querySelector('video'));
 }
 
+function paintAmbient(it) {
+  const src = it.preview_url || it.thumbnail_url || (it.media_type === 'image' ? it.media_url : null);
+  const next = S.amb[S.ambIdx ^ 1]; const cur = S.amb[S.ambIdx];
+  if (!src) { cur.classList.remove('on'); next.classList.remove('on'); return; }
+  next.style.backgroundImage = `url("${proxied(src)}")`;
+  next.classList.add('on'); cur.classList.remove('on');
+  S.ambIdx ^= 1;
+}
+
 function paintStage(it) {
   teardownVideo();
+  paintAmbient(it);
   S.stage.classList.remove('zoomed-wrap');
   const keep = [S.prev, S.next];
   if (it.media_type === 'video') {
@@ -218,11 +233,13 @@ function paintStage(it) {
     v.addEventListener('volumechange', () => { prefs.muted = v.muted; });
     S.stage.replaceChildren(...keep, v);
     S.video = attachVideo(v, it);
+    playFlip(v);
     v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
   } else {
     const preview = it.preview_url || it.thumbnail_url;
     const img = h('img', { alt: it.title || '', draggable: 'false', src: proxied(preview || it.media_url) });
     S.stage.replaceChildren(...keep, img);
+    playFlip(img);
     if (preview) {
       const full = new Image();
       full.onload = () => { if (img.isConnected) img.src = full.src; };
