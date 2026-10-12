@@ -2,6 +2,7 @@ import { h, icon, avatar, fmt, debounce, $ } from '../dom.js';
 import { get } from '../api.js';
 import { navigate, setParam } from '../router.js';
 import { prefs, searches, collections, platformLabel } from '../store.js';
+import { smartSearch } from '../smart.js';
 
 let open = null;
 
@@ -76,7 +77,7 @@ export function openPalette() {
       ...remote.communities.map((c) => ({ group: 'Communities', icon: 'compass', label: c.name, hint: `${platformLabel(c.platform)} · ${fmt.num(c.count)}`, run: () => navigate('/explore', { community: c.name }) })),
     ];
     // Commands you typed the name of come first, then live matches, then a plain search as the fallback.
-    const all = [...local, ...dyn, ...(q ? [{ group: 'Search', icon: 'search', label: `Search for “${input.value.trim()}”`, run: () => navigate('/explore', { q: input.value.trim() }) }] : [])];
+    const all = [...local, ...dyn, ...(q ? [{ group: 'Search', icon: 'search', label: `Search for “${input.value.trim()}”`, run: () => smartSearch(input.value) }] : [])];
     rows = [];
     const parts = [];
     let group = null;

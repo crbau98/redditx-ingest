@@ -8,6 +8,7 @@ import { openDisplaySettings } from './components/display.js';
 import { initTilt, initRails, gpuTier } from './components/fx.js';
 import { openTakedownForm } from './components/report.js';
 import { attachSuggest } from './components/suggest.js';
+import { smartSearch } from './smart.js';
 import { home } from './views/home.js';
 import { explore } from './views/explore.js';
 import { creators } from './views/creators.js';
@@ -91,10 +92,10 @@ function wireShortcuts() {
 
 function buildShell() {
   const app = $('#app');
-  const searchInput = h('input', { class: 'input', type: 'search', id: 'global-search', placeholder: 'Search creators, tags, communities…', 'aria-label': 'Search', enterkeyhint: 'search', autocomplete: 'off' });
+  const searchInput = h('input', { class: 'input', type: 'search', id: 'global-search', placeholder: 'Search anything — “bearded guys at the beach, videos”', 'aria-label': 'Search', enterkeyhint: 'search', autocomplete: 'off' });
   attachSuggest(searchInput); // registered first so it can claim Enter for a highlighted suggestion
   searchInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { navigate('/explore', { q: searchInput.value.trim() }); searchInput.blur(); }
+    if (e.key === 'Enter') { smartSearch(searchInput.value); searchInput.blur(); }
     if (e.key === 'Escape') searchInput.blur();
   });
   document.addEventListener('keydown', (e) => {

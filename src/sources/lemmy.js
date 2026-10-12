@@ -53,7 +53,18 @@ async function call(host, path) {
   }
 }
 
+/** The busiest NSFW communities on an instance (discovery). */
+async function listCommunities(host, limit = 50) {
+  const json = await call(host, `/community/list?type_=All&sort=TopMonth&show_nsfw=true&limit=${limit}`);
+  return (json.communities || []).map((x) => {
+    const c = x.community || {}; let h = host;
+    try { h = new URL(c.actor_id).hostname; } catch { /* keep the instance */ }
+    return { name: c.name, host: h, title: c.title || null, description: c.description ? String(c.description).slice(0, 400) : null, nsfw: !!c.nsfw, subscribers: (x.counts && x.counts.subscribers) || 0 };
+  }).filter((c) => c.name);
+}
+
 module.exports = {
+  listCommunities,
   platform: 'lemmy',
   label: 'Lemmy',
   color: '#00bc8c',

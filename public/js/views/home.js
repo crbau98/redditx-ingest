@@ -1,6 +1,6 @@
 import { h, icon, fmt, emptyState } from '../dom.js';
 import { get } from '../api.js';
-import { href, navigate } from '../router.js';
+import { href } from '../router.js';
 import { platformLabel, platformColor, follows, searches, tastes, history as viewHistory, prefs } from '../store.js';
 import { mediaCard } from '../components/card.js';
 import { creatorCard } from '../components/creator-card.js';
@@ -10,6 +10,9 @@ import { surpriseMe } from '../components/palette.js';
 import { mountPrismBackground } from '../components/prism-bg.js';
 import { createOrbit } from '../components/orbit.js';
 import { countUp } from '../components/fx.js';
+import { smartSearch } from '../smart.js';
+import { attachSuggest } from '../components/suggest.js';
+import { topicCards, becauseRails } from '../components/topics.js';
 
 /** "For you": a rail ranked from this device's taste, with the taste shown (and editable) right there. */
 async function forYouSection(open) {
@@ -106,8 +109,9 @@ export async function home(root) {
   }
 
   const s = data.stats;
-  const input = h('input', { class: 'input', type: 'search', placeholder: 'Search creators, tags, communities…', 'aria-label': 'Search', enterkeyhint: 'search' });
-  const go = () => navigate('/explore', { q: input.value.trim() });
+  const input = h('input', { class: 'input', type: 'search', placeholder: 'Try “muscle guys at the gym, videos this week”', 'aria-label': 'Search', enterkeyhint: 'search', autocomplete: 'off' });
+  const go = () => smartSearch(input.value);
+  attachSuggest(input, { id: 'hero-suggest' });
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
 
   // Stats count up once on arrival; the hero's backdrop is a live WebGL prism shader and
@@ -150,6 +154,9 @@ export async function home(root) {
 
   const parts = [hero];
   const open = (list) => (item) => openLightbox(list, Math.max(0, list.findIndex((x) => x.id === item.id)));
+  // Fetched in parallel with the rest of the page; slotted in when ready.
+  const topicsP = topicCards({ limit: 8 });
+  const becauseP = becauseRails(open);
   const picker = interestPicker(data.tags, async () => { const sec = await forYouSection(open); if (picker.isConnected) { if (sec) picker.replaceWith(sec); else picker.remove(); } });
   if (picker) parts.push(picker);
   const forYou = await forYouSection(open);
@@ -160,9 +167,12 @@ export async function home(root) {
   if (fromFollowed.length) {
     parts.push(h('section', { class: 'section' }, sectionHead('heart', 'From creators you follow', 'Latest from the people you follow on this device', { href: href('/explore', { following: '1' }), label: 'See all' }), rail(fromFollowed, { open: open(fromFollowed) })));
   }
+  parts.push(...await becauseP);
   if (data.trending.length) {
     parts.push(h('section', { class: 'section' }, sectionHead('flame', 'Trending now', 'What people are watching and saving', { href: href('/explore', { sort: 'trending' }), label: 'See all' }), rail(data.trending, { open: open(data.trending) })));
   }
+  const topics = await topicsP;
+  if (topics) parts.push(h('section', { class: 'section' }, sectionHead('layers', 'Topics', 'Themes the library keeps coming back to — found from tags that travel together', { href: href('/browse'), label: 'Browse all' }), topics));
   if (data.rising && data.rising.length) {
     parts.push(h('section', { class: 'section' }, sectionHead('trend', 'Rising this week', 'Creators posting more — and getting more love — than usual', { href: href('/creators', { sort: 'recent' }), label: 'All creators' }),
       h('div', { class: 'rail' }, data.rising.map((c) => creatorCard(c, { mini: true, badge: `+${c.week_count} this week` })))));

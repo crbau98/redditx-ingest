@@ -33,6 +33,13 @@ const SCHEMA = {
     type: 'text', group: 'discovery', label: 'Web-search topics (one per line; rotated, one per run)',
     default: ['gay male model bluesky', 'male fitness model onlyfans x.com', 'gay creator linktree 18+', 'muscle model telegram channel', 'gay twink creator redgifs', 'bear daddy creator onlyfans bluesky', 'gay amateur couple onlyfans twitter', 'male model throne wishlist'].join('\n'),
   },
+  // --- discovery reach (v4.6) ---
+  discoveryCommunities: { type: 'bool', default: true, label: 'Search Reddit, Lemmy and Bluesky for communities and custom feeds', group: 'discovery' },
+  discoveryAutoCommunities: { type: 'bool', default: true, label: 'Auto-follow strong communities and feeds (their posts are still checked one by one)', group: 'discovery' },
+  discoveryKeywords: {
+    type: 'text', group: 'discovery', label: 'Community keywords (one per line; two are searched per run, in rotation)',
+    default: ['gay', 'gaybros', 'gay muscle', 'bears', 'twinks', 'gay daddy', 'jocks', 'bulge', 'gay amateur', 'hairy men', 'male nude', 'gay nsfw'].join('\n'),
+  },
 };
 
 function coerce(def, raw) {

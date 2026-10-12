@@ -9,8 +9,10 @@
  *   mention   a followed creator @-mentioned / linked the account in a post
  *             (collabs, shout-outs) — the strongest organic signal
  *   cofollow  followed Bluesky creators follow this account
- *   search    a web search on one of the admin's topics surfaced the profile
- * plus a bonus when the name/bio reads male-focused, and a heavy penalty when
+ *   search    a web search on one of the admin's topics surfaced the profile, or
+ *             a keyword search found the community / custom feed (v4.6)
+ * plus a bonus for reach (subscribers / followers / likes, log-scaled, up to +3),
+ * a bonus when the name/bio reads male-focused, and a heavy penalty when
  * it reads female-focused. Everything passes the same safety gate as ingest:
  * a blocked bio rejects the candidate permanently.
  *
@@ -46,6 +48,8 @@ function coreHandle(h) {
 function scoreOf(signals, scope) {
   let s = 0;
   for (const [k, w] of Object.entries(WEIGHTS)) s += w * Math.min((signals[k] || []).length, CAPS[k]);
+  const pop = Number(signals.popularity) || 0;
+  if (pop >= 100) s += Math.min(3, Math.log10(pop) - 1);
   if (scope === 'in') s += 2;
   if (scope === 'excluded') s -= 20;
   return Math.round(s * 10) / 10;
@@ -59,7 +63,8 @@ function describeSignals(sig) {
 function usable(spec) {
   if (!spec || spec.external || !spec.ingestable) return false;
   if (spec.platform === 'web' || spec.platform === 'rss') return false; // arbitrary sites are too noisy to auto-follow
-  if (spec.platform === 'reddit' && spec.kind === 'community') return true; // queued for review, never auto-followed
+  if (spec.kind === 'community' && (spec.platform === 'reddit' || spec.platform === 'lemmy')) return true;
+  if (spec.platform === 'bluesky' && (spec.kind === 'feedgen' || spec.kind === 'list')) return true;
   if (!FOLLOWABLE_KINDS.has(spec.kind)) return false;
   if (spec.kind === 'page' && spec.platform !== 'linkinbio') return false;
   const a = registry.get(spec.platform);
@@ -91,6 +96,7 @@ function consider(spec, type, value, meta = {}) {
   const list = new Set(signals[type] || []);
   if (value) list.add(String(value).slice(0, 120));
   signals[type] = [...list].slice(0, 25);
+  if (meta.popularity) signals.popularity = Math.max(Number(signals.popularity) || 0, Math.round(Number(meta.popularity)) || 0);
   const scope = classify([displayName, bio, target], { trusted: false }).scope;
   const score = scoreOf(signals, scope);
   const fields = {
@@ -223,7 +229,74 @@ async function braveTopics({ queries = 1, budget, aborted = () => false } = {}) 
   return { searched, found };
 }
 
-/** Fill in names/bios for Telegram and Bluesky leads so scope and safety can judge them. */
+// Custom feeds and communities have to read adult/creator-ish to be worth a lead (keeps out news and art-only feeds).
+const ADULT_HINT = /nsfw|18\s*\+|🔞|\bnude|\bnaked|\bporn|\bxxx\b|\bhot\b|sexy|thirst|bulge|muscle|hunk|daddy|daddies|twink|\bbears?\b|\bjocks?\b|\bcock|\bdick|horny|kink|leather|underwear|speedo|jockstrap|\bhung\b|\bgay\b|gaybros|\bm4m\b|\bhairy/i;
+// Shared spaces are held to a stricter bar than people: borderline wording ("teen", "young") is not
+// queued for review, it is dropped. CamelCase names ("TeenBoysNSFW") are split so the gate can read them.
+const splitCamel = (s) => String(s || '').replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ');
+const borderline = (...texts) => checkText(...texts.map(splitCamel)).level === 'review';
+const keywordList = () => String(settingsStore.get().discoveryKeywords || '').split('\n').map((k) => k.trim()).filter(Boolean);
+
+/**
+ * Reach beyond who we already follow: search Reddit for NSFW subreddits, Bluesky for popular
+ * custom feeds, and list the busiest NSFW communities on known Lemmy instances (once a day).
+ * Keywords rotate (two per run). Every hit is a 'search' signal plus its audience size.
+ */
+async function communityDiscovery({ keywords = 2, aborted = () => false } = {}) {
+  const list = keywordList();
+  const out = { searched: 0, found: 0, reddit: 0, bluesky: 0, lemmy: 0 };
+  const reddit = registry.get('reddit'); const bluesky = registry.get('bluesky'); const lemmy = registry.get('lemmy');
+  let idx = parseInt(repo.discoveryState.get('community.index', '0'), 10) || 0;
+  for (let i = 0; i < Math.min(keywords, list.length); i++) {
+    if (aborted()) break;
+    const kw = list[idx % list.length];
+    idx++;
+    if (reddit && reddit.searchSubreddits) {
+      try {
+        out.searched++;
+        for (const sr of await reddit.searchSubreddits(kw, 25)) {
+          if (!sr.over18 || borderline(sr.name, sr.title, sr.description)) continue; // SFW subs rarely carry the media this app is for
+          const c = consider(parseProfile(`r/${sr.name}`), 'search', `reddit:${kw}`, { displayName: sr.title || splitCamel(sr.name), bio: sr.description, popularity: sr.subscribers, avatarUrl: sr.icon });
+          if (c && c.status === 'pending' && c.scope !== 'excluded') { out.found++; out.reddit++; }
+        }
+      } catch (e) { events.log('WARN', `Discovery: Reddit community search "${kw}" — ${e.message}`); }
+    }
+    if (aborted()) break;
+    if (bluesky && bluesky.searchFeeds) {
+      try {
+        out.searched++;
+        for (const f of await bluesky.searchFeeds(kw, 25)) {
+          if (!ADULT_HINT.test(`${f.displayName || ''} ${f.description || ''}`) || borderline(f.displayName, f.description)) continue;
+          const spec = parseProfile(f.uri);
+          if (spec && f.displayName) spec.label = `Feed: ${f.displayName}`;
+          const c = consider(spec, 'search', `bluesky:${kw}`, { displayName: f.displayName, bio: f.description, popularity: f.likeCount, avatarUrl: f.avatar });
+          if (c && c.status === 'pending' && c.scope !== 'excluded') { out.found++; out.bluesky++; }
+        }
+      } catch (e) { events.log('WARN', `Discovery: Bluesky feed search "${kw}" — ${e.message}`); }
+    }
+  }
+  if (list.length) repo.discoveryState.set('community.index', String(idx % list.length));
+  if (lemmy && lemmy.listCommunities) {
+    for (const host of config.lemmyInstances || []) {
+      if (aborted()) break;
+      const key = `lemmy.list.${host}`;
+      const last = new Date(repo.discoveryState.get(key, '') || 0).getTime();
+      if (Date.now() - last < 24 * 3600 * 1000) continue;
+      try {
+        out.searched++;
+        for (const lc of await lemmy.listCommunities(host, 50)) {
+          if (!lc.nsfw || borderline(lc.name, lc.title, lc.description)) continue;
+          const c = consider(parseProfile(`https://${lc.host}/c/${lc.name}`), 'search', `lemmy:${host}`, { displayName: lc.title, bio: lc.description, popularity: lc.subscribers });
+          if (c && c.status === 'pending' && c.scope !== 'excluded') { out.found++; out.lemmy++; }
+        }
+      } catch (e) { events.log('WARN', `Discovery: Lemmy communities on ${host} — ${e.message}`); }
+      repo.discoveryState.set(key, new Date().toISOString());
+    }
+  }
+  return out;
+}
+
+/** Fill in names/bios for Telegram, Bluesky and X leads so scope and safety can judge them. */
 async function enrich({ limit = 12 } = {}) {
   let done = 0;
   if (tgBot.configured()) {
@@ -256,6 +329,27 @@ async function enrich({ limit = 12 } = {}) {
       }
     } catch (e) { events.log('WARN', `Discovery: Bluesky profile lookup — ${e.message}`); }
   }
+  // X: one batched users lookup (counts against the monthly read budget; skipped when it is spent).
+  const xa = registry.get('x');
+  if (xa && xa.lookupUsers && xa.apiAvailable && xa.apiAvailable()) {
+    const xs = repo.candidates.needingDetails('x', 50);
+    if (xs.length) {
+      try {
+        const users = await xa.lookupUsers(xs.map((c) => c.target));
+        const byName = new Map(users.map((u) => [String(u.username).toLowerCase(), u]));
+        for (const c of xs) {
+          const u = byName.get(String(c.target).toLowerCase());
+          if (!u) { repo.candidates.update(c.id, { reason: 'checked' }); continue; } // suspended, renamed or protected
+          const verdict = checkText(c.target, u.name, u.description);
+          if (verdict.level === 'block') { repo.candidates.update(c.id, { status: 'rejected', reason: 'safety', decided_at: new Date().toISOString() }); continue; }
+          const scope = classify([u.name, u.description, c.target], { trusted: false }).scope;
+          const signals = { ...c.signals, popularity: Math.max(Number(c.signals.popularity) || 0, u.followers || 0) };
+          repo.candidates.update(c.id, { display_name: u.name || null, bio: u.description || '', avatar_url: u.avatar || null, signals, scope, score: scoreOf(signals, scope), reason: verdict.level === 'review' ? `needs review: ${verdict.rule}` : 'checked' });
+          done++;
+        }
+      } catch (e) { events.log('WARN', `Discovery: X profile lookup — ${e.message}`); }
+    }
+  }
   return { enriched: done };
 }
 
@@ -269,7 +363,11 @@ function follow(candidate, { actor = 'discovery' } = {}) {
   const targets = require('../services/targets');
   const spec = { platform: c.platform, kind: c.kind, target: c.target, label: c.label || c.target, ingestable: true };
   const identity = (c.signals.identity || [])[0];
-  const r = targets.addSpec(spec, { creatorId: identity || null, origin: 'discovered', trusted: c.kind === 'community' ? true : c.scope === 'in' || !!identity || actor !== 'discovery' });
+  // Communities and custom feeds mix many posters: when discovery follows one on its own, every
+  // post is still scope-checked (untrusted). A human follow trusts it like an admin-added source.
+  const shared = c.kind === 'community' || c.kind === 'feedgen' || c.kind === 'list';
+  const trusted = actor !== 'discovery' ? true : shared ? false : c.scope === 'in' || !!identity;
+  const r = targets.addSpec(spec, { creatorId: identity || null, origin: 'discovered', trusted });
   if (r.status !== 'created' && r.status !== 'exists') {
     repo.candidates.update(c.id, { status: 'rejected', reason: r.reason || r.status, decided_at: new Date().toISOString() });
     return { ok: false, reason: r.reason || r.status };
@@ -298,7 +396,8 @@ function promote(s = settingsStore.get()) {
   let followed = 0; let linked = 0;
   for (const c of repo.candidates.promotable(s.discoveryAutoFollowScore, limit * 2)) {
     if (followed + linked >= limit) break;
-    if (c.kind === 'community') continue;            // communities always wait for a human
+    const shared = c.kind === 'community' || c.kind === 'feedgen' || c.kind === 'list';
+    if (shared && (!s.discoveryAutoCommunities || c.scope !== 'in')) continue; // shared spaces need the switch and a male-focused description
     if (c.scope !== 'in' && !(c.signals.identity || []).length) continue; // need a male signal unless it is a known creator
     const r = follow(c);
     if (r.ok && !r.already) {
@@ -328,10 +427,11 @@ async function run({ trigger = 'schedule' } = {}) {
       report.identity = await braveIdentity({ budget: s.braveDailyBudget, aborted });
       report.topics = await braveTopics({ budget: s.braveDailyBudget, aborted });
     }
+    if (s.discoveryCommunities) report.communities = await communityDiscovery({ aborted });
     report.enrich = await enrich();
     report.promote = s.autoDiscover || trigger === 'manual' ? promote(s) : { followed: 0, linked: 0 };
     report.pruned = repo.candidates.prune();
-    events.log('INFO', `Discovery ${trigger === 'manual' ? '(manual) ' : ''}finished: ${report.mentions.found} mention leads, ${report.graph ? report.graph.found : 0} graph leads, ${report.topics ? report.topics.found : 0} search leads, ${report.identity ? report.identity.linked : 0} identity matches; followed ${report.promote.followed}, linked ${report.promote.linked}`);
+    events.log('INFO', `Discovery ${trigger === 'manual' ? '(manual) ' : ''}finished: ${report.mentions.found} mention leads, ${report.graph ? report.graph.found : 0} graph leads, ${report.topics ? report.topics.found : 0} search leads, ${report.communities ? report.communities.found : 0} community/feed leads, ${report.identity ? report.identity.linked : 0} identity matches; followed ${report.promote.followed}, linked ${report.promote.linked}`);
   } catch (e) {
     report.error = e.message;
     events.log('ERR', `Discovery failed: ${e.message}`);
@@ -350,7 +450,7 @@ function status() {
   return {
     running, last, counts: repo.candidates.counts(),
     brave: { configured: brave.configured(), usage: brave.usage(), budget: s.braveDailyBudget },
-    telegramBot: tgBot.configured(), xApi: !!config.creds.xBearer,
+    telegramBot: tgBot.configured(), xApi: !!config.creds.xBearer, communities: s.discoveryCommunities, autoCommunities: s.discoveryAutoCommunities,
     auto: s.autoDiscover, intervalMin: s.discoveryIntervalMin, threshold: s.discoveryAutoFollowScore,
   };
 }
@@ -369,4 +469,4 @@ function start() {
 }
 function stop() { stopFlag = true; clearInterval(timer); timer = null; }
 
-module.exports = { run, status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, enrich, scoreOf, coreHandle, usable };
+module.exports = { run, status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, enrich, scoreOf, coreHandle, usable };

@@ -244,7 +244,30 @@ async function fetchProfile(name) {
   } catch { return null; }
 }
 
+/** Search NSFW-inclusive subreddits by keyword (discovery). OAuth when configured, else www, else old.reddit. */
+async function searchSubreddits(q, limit = 25) {
+  const qs = `q=${encodeURIComponent(q)}&include_over_18=on&limit=${limit}&raw_json=1`;
+  const t = await oauthToken().catch(() => null);
+  const tries = t
+    ? [() => http.json(`${config.baseUrls.redditOauth}/subreddits/search?${qs}`, { headers: { authorization: `Bearer ${t}`, 'user-agent': config.redditUserAgent } })]
+    : [];
+  tries.push(() => http.json(`${base}/subreddits/search.json?${qs}`, { headers: { 'user-agent': config.redditUserAgent } }));
+  if (oldBase !== base) tries.push(() => http.json(`${oldBase}/subreddits/search.json?${qs}`, { headers: { 'user-agent': config.redditUserAgent } }));
+  let lastErr;
+  for (const attempt of tries) {
+    try {
+      const json = await attempt();
+      return ((json.data && json.data.children) || []).map((c) => c.data).filter((d) => d && d.display_name).map((d) => ({
+        name: d.display_name, title: d.title || null, description: d.public_description || null, subscribers: d.subscribers || 0,
+        over18: !!d.over18, icon: decodeHtml(d.community_icon || d.icon_img || '').split('?')[0] || null,
+      }));
+    } catch (e) { lastErr = e; if (e.status === 404) break; }
+  }
+  throw lastErr || new Error('Reddit search unavailable');
+}
+
 module.exports = {
+  searchSubreddits,
   platform: 'reddit',
   label: 'Reddit',
   color: '#ff4500',

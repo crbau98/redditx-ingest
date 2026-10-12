@@ -2,12 +2,14 @@ import { h, icon, fmt, emptyState } from '../dom.js';
 import { get } from '../api.js';
 import { href } from '../router.js';
 import { platformLabel, platformColor } from '../store.js';
+import { topicCards } from '../components/topics.js';
 
 export async function browse(root) {
   document.title = 'Browse — PRISM';
   root.replaceChildren(h('div', { class: 'skeleton', style: { height: '320px' } }));
   let tags; let communities; let platforms;
-  try { [tags, communities, platforms] = await Promise.all([get('/api/tags', { limit: 200 }), get('/api/communities'), get('/api/platforms')]); }
+  let topics;
+  try { [tags, communities, platforms, topics] = await Promise.all([get('/api/tags', { limit: 200 }), get('/api/communities'), get('/api/platforms'), topicCards({ limit: 12 })]); }
   catch (e) { root.replaceChildren(emptyState({ icon: 'alert', title: 'Couldn’t load', text: e.message })); return () => {}; }
 
   if (!platforms.length) { root.replaceChildren(emptyState({ icon: 'compass', title: 'Nothing to browse yet', text: 'Once content is ingested, its sources, tags and communities show up here.' })); return () => {}; }
@@ -21,6 +23,7 @@ export async function browse(root) {
 
   root.replaceChildren(
     h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Browse'), h('div', { class: 'sub' }, 'Every source, community and tag in the library'))),
+    topics ? h('section', { class: 'section', style: { marginTop: '8px' } }, h('div', { class: 'section-head' }, h('div', null, h('h2', null, icon('sparkle'), 'Topics'), h('div', { class: 'sub' }, 'Tags that travel together, grouped automatically'))), topics) : null,
     h('section', { class: 'section', style: { marginTop: '8px' } }, h('div', { class: 'section-head' }, h('h2', null, icon('layers'), 'Sources')),
       h('div', { class: 'browse-grid' }, platforms.map((p) => h('a', { class: 'browse-tile', href: href('/explore', { platform: p.platform }), style: { '--c': platformColor(p.platform) } },
         h('div', { class: 'name' }, platformLabel(p.platform)), h('div', { class: 'count num' }, fmt.int(p.count)), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'items'))))),
