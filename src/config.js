@@ -1,0 +1,85 @@
+'use strict';
+/**
+ * Central runtime configuration. Everything is read from the environment once,
+ * so the rest of the code never touches process.env directly (and tests can
+ * override values by setting env vars before the first require).
+ */
+const path = require('path');
+
+const env = process.env;
+const bool = (v, d) => (v === undefined || v === '' ? d : /^(1|true|yes|on)$/i.test(String(v)));
+const int = (v, d) => {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? n : d;
+};
+const list = (v, d = []) =>
+  v === undefined || v === ''
+    ? d
+    : String(v).split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+
+const root = path.resolve(__dirname, '..');
+const isProd = env.NODE_ENV === 'production';
+const isTest = env.NODE_ENV === 'test';
+const dbPath = env.DB_PATH || path.join(root, 'data', 'prism.db');
+
+module.exports = {
+  root,
+  isProd,
+  isTest,
+  version: require('../package.json').version,
+  port: int(env.PORT, 3141),
+
+  dbPath,
+  dataDir: path.dirname(dbPath),
+
+  // --- access control -------------------------------------------------
+  adminKey: env.ADMIN_KEY || '',
+  // With no ADMIN_KEY the admin API is open only outside production, unless
+  // the operator explicitly opts in.
+  adminOpen: bool(env.ADMIN_OPEN, !isProd),
+  // Server-enforced age gate (cookie). Turn off only for private deployments.
+  ageGateEnforce: bool(env.AGE_GATE_ENFORCE, !isTest),
+  trustProxy: int(env.TRUST_PROXY, 1),
+
+  // --- scheduler ------------------------------------------------------
+  schedulerEnabled: bool(env.SCHEDULER_ENABLED ?? env.CRON_ENABLED, isProd),
+
+  // --- networking -----------------------------------------------------
+  userAgent:
+    env.INGEST_UA ||
+    'Mozilla/5.0 (compatible; PRISM/4.0; +https://github.com/crbau98/redditx-ingest)',
+  // Reddit asks API clients for a descriptive UA when using OAuth.
+  redditUserAgent: env.REDDIT_USER_AGENT || 'web:prism-ingest:v4 (by /u/prism-ingest)',
+  // Tests talk to localhost mock servers; production must never set this.
+  allowPrivateHosts: bool(env.ALLOW_PRIVATE_HOSTS, false),
+
+  // --- optional credentials (all sources work in "best effort" mode without)
+  creds: {
+    xBearer: env.X_BEARER_TOKEN || '',
+    redditClientId: env.REDDIT_CLIENT_ID || '',
+    redditClientSecret: env.REDDIT_CLIENT_SECRET || '',
+    bskyIdentifier: env.BSKY_IDENTIFIER || '',
+    bskyPassword: env.BSKY_APP_PASSWORD || '',
+    mastodonToken: env.MASTODON_ACCESS_TOKEN || '',
+  },
+
+  // Federated sources: instances that adapters may talk to by default.
+  mastodonInstances: list(env.MASTODON_INSTANCES, ['mastodon.social']),
+  lemmyInstances: list(env.LEMMY_INSTANCES, ['lemmynsfw.com']),
+
+  // Base-URL overrides so adapters can be pointed at a mock in tests.
+  baseUrls: {
+    reddit: env.REDDIT_BASE_URL || 'https://www.reddit.com',
+    redditOauth: env.REDDIT_OAUTH_URL || 'https://oauth.reddit.com',
+    redditArchive: env.REDDIT_ARCHIVE_URL || 'https://arctic-shift.photon-reddit.com',
+    redgifs: env.REDGIFS_BASE_URL || 'https://api.redgifs.com',
+    bsky: env.BSKY_BASE_URL || 'https://public.api.bsky.app',
+    bskyPds: env.BSKY_PDS_URL || 'https://bsky.social',
+    x: env.X_BASE_URL || 'https://api.x.com',
+    fxtwitter: env.FXTWITTER_BASE_URL || 'https://api.fxtwitter.com',
+    xSyndication: env.X_SYNDICATION_URL || 'https://syndication.twitter.com',
+  },
+
+  // --- media cache for proxied images --------------------------------
+  mediaCacheMb: int(env.MEDIA_CACHE_MB, 512),
+};

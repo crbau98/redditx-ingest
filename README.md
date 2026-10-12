@@ -1,102 +1,165 @@
-# PRISM - NSFW Media Discovery Platform
+# PRISM
 
-A gay-focused NSFW media discovery platform with Reddit ingestion, SQLite persistence, admin panel, and Railway deployment.
+**Creator-centric adult media discovery.** PRISM follows male creators across the open web — Reddit, RedGIFs, Bluesky, Mastodon, Lemmy, X, RSS/Atom feeds, personal sites and link-in-bio pages — and presents their photos and videos in one fast, searchable, mobile-first app, with a safety gate, a takedown flow and an admin console.
 
-## Features
+> Adults only (18+). The server enforces an age gate on every content endpoint.
 
-- **Media Gallery** — Responsive masonry/grid with lazy loading, infinite scroll, filters, and search
-- **Mobile-first shell** — Bottom navigation, filter drawer, mobile search, swipeable lightbox
-- **Saved collection** — Device-local favorites with heart actions and share links
-- **Creators** — Browse and open creator profiles with media grids
-- **Reddit / X / RedGIFs ingestion** — Pulls creator photos and videos from gay Reddit communities, public X posts, and RedGIFs. Generic Bing/DuckDuckGo image search is off by default because it filled the gallery with stock photos and dead Imgur links.
-- **Quality gate** — Rejects stock/CDN junk, deleted Imgur placeholders, and HTML pages before anything is published. Admin can sweep existing junk.
-- **Admin Panel** — Dashboard, ingestion controls, live logs, moderation queue, media/creator management
-- **Age Gate** — Session-based age verification interstitial
-- **Real-time Updates** — SSE streaming during ingestion
-- **Media Proxy** — Remote media proxied through the server for privacy
-- **SQLite Persistence** — All data stored in SQLite via better-sqlite3
-- **Railway Ready** — Dockerfile, health checks, persistent volume support
+---
 
-## Quick Start
+## What's new in v4
+
+| | v3 | v4 |
+|---|---|---|
+| **Model** | Source-centric (hard-coded subreddits & queries) | **Creator-centric**: follow a *person* once, PRISM follows all of their public accounts |
+| **Sources** | Reddit, X, RedGIFs (+ brittle DDG scraping) | Reddit, RedGIFs, Bluesky, Mastodon, Lemmy, X, **RSS/Atom/JSON Feed**, web pages, link-in-bio crawler |
+| **Reliability** | One-shot scans | Scheduler, per-feed intervals, exponential backoff, per-platform **circuit breakers**, politeness limiter, Reddit transport ladder (OAuth → JSON → old → RSS → archive) |
+| **Discovery** | Manual | Communities → creators auto-followed after N posts → bios & link-in-bio pages reveal their other accounts |
+| **Safety** | None | Minor-safety gate on every item, creator profile check, report/takedown flow, permanent blocklist, retroactive library sweep |
+| **Security** | Open admin by default, string-matched SSRF filter, client-side age gate | Admin fails closed, DNS-validated SSRF guard, server-side age gate, strict CSP, no `innerHTML` |
+| **Media** | Silent video, no seeking | HTTP **Range** (seeking), **HLS** with audio, on-disk image cache, hover/in-view previews |
+| **Data** | Ingest time only, `LIKE` search, galleries truncated | Original post time, **FTS5** search, every gallery image, creators with cross-platform links, versioned migrations |
+| **UI** | Basic grid | New design system (dark/light), discover home, filters, creator profiles, immersive viewer, saved & following, full admin console |
+| **Discovery** (v4.1) | Search box | Autocomplete (creators · tags · communities), Browse page, *Similar creators*, a *From creators you follow* rail and Following filter |
+| **Operations** (v4.1) | – | Nightly SQLite backups with retention, config export/import, audit log, duplicate-creator review, installable offline shell (PWA) |
+
+---
+
+## Quick start
 
 ```bash
-# Install dependencies
 npm install
-
-# Start the server
-npm start
-
-# Server runs on http://localhost:3141
+cp .env.example .env        # optional
+npm start                   # http://localhost:3141
 ```
+
+First run seeds ~28 curated default feeds and migrates any v3 database in place. Open **Admin** (gear icon, or `#/admin`) → **Sync everything now**.
+
+### Preview the UI offline (no network, no real content)
+
+```bash
+DEMO_ART=1 DB_PATH=./data/demo.db node scripts/seed-demo.js     # procedurally generated placeholder art
+DEMO_ART=1 DB_PATH=./data/demo.db ADMIN_KEY=dev node server.js
+```
+
+### Tests
+
+```bash
+npm test      # 132 tests: safety, SSRF, migration from a real v3 DB, adapters, engine resilience, HTTP API, proxy
+```
+
+---
+
+## Concepts
+
+- **Feed** – anything PRISM keeps in sync: a subreddit, a hashtag, a search, an RSS URL, or one creator's account. Each has its own interval, health, cursor and backoff.
+- **Creator** – a person. Owns many feeds (accounts) and many media. External links (OnlyFans, Throne…) are kept for display.
+- **Trusted feed** – an admin-vouched male-focused source. Trusted feeds only drop clearly female-tagged posts; untrusted ones (open searches/hashtags) need a positive male signal or go to the review queue.
+
+### Adding people (the recommended way)
+
+Admin → **Creators → Add creator**, paste any of their public links, one per line:
+
+```
+https://x.com/name
+https://bsky.app/profile/name.bsky.social
+u/name
+https://www.redgifs.com/users/name
+https://linktr.ee/name          ← crawled for more accounts
+https://onlyfans.com/name       ← shown on their profile, never scraped
+```
+
+PRISM follows every public account, keeps their media on one profile, and reads their bios/link pages to find more accounts.
+
+### How "all creators across the web" actually works
+
+No system can enumerate "the whole web". PRISM grows its coverage three ways: **(1)** communities, hashtags and searches surface creators; **(2)** a creator who posts ≥ N times (default 2) is auto-followed on that platform; **(3)** their bio / link-in-bio exposes accounts elsewhere, which are followed too. Anything with an RSS/Atom feed can be followed directly, which is the most stable path.
+
+---
+
+## Sources
+
+| Source | Kinds | Needs | Notes |
+|---|---|---|---|
+| Reddit | community, user | – (optional `REDDIT_CLIENT_ID/SECRET`) | Falls back OAuth → www JSON → old.reddit → RSS → Arctic Shift archive. Galleries, video (+HLS), GIF→MP4, crossposts, RedGIFs links resolved. |
+| RedGIFs | user, search, niche | – | Public guest-token API. |
+| Bluesky | user, search | search: `BSKY_IDENTIFIER` + `BSKY_APP_PASSWORD` | Media-only author feeds; video via HLS. |
+| Mastodon | user, tag | – (optional token) | Any Mastodon-compatible server; some require sign-in for public timelines. |
+| Lemmy | community, user | – | API v3 with v4 fallback. |
+| X | user, search | `X_BEARER_TOKEN` (search); users work keyless best-effort | Official API when a token is present. |
+| Telegram | user (public channel) | – | Public web preview (`t.me/s/<channel>`); channels that disable it report an error. |
+| RSS / Atom / JSON Feed | feed | – | Creator sites, Tumblr `/rss`, Mastodon `.rss`, Bluesky `/rss`, … |
+| Web page | page | – | OpenGraph, `<video>`, linked images; honours `robots.txt`. |
+| Link-in-bio | page | – | Discovers a creator's other accounts; never yields media itself. |
+
+**Deliberately not supported:** paywalled/subscription platforms (OnlyFans, Fansly, Patreon…). Reading them means circumventing access control and republishing paid content. PRISM keeps those links on a creator's profile so fans can support them directly.
+
+---
+
+## Safety & takedowns
+
+- **Safety gate** (`src/lib/safety.js`) runs on every item (title, tags, community, handle, bio, alt text): explicit minor terms and any stated age under 18 (`16yo`, `I'm 15`, `[M17]`, "sixteen"…) are **dropped, never stored**; borderline wording (`teen`, `high school`…) goes to the **review queue**. It errs on the side of dropping. A creator whose bio indicates a minor is blocked immediately, and their other accounts are never followed.
+- **Report button** on every item and creator, plus a footer takedown form (works without the age gate). Reports about minors or consent **hide the item instantly**; admins then remove-and-blocklist, block the creator, restore, or dismiss.
+- **Blocklist**: removed media, blocked creators and takedowns are remembered by content hash, source key and account — they are never re-imported.
+- **Sweep**: Admin → Settings re-applies today's rules to everything already stored; it also runs automatically once after upgrades (so content ingested by v3, which had no gate, is checked retroactively).
+- Saved lists re-validate against the server, so a takedown also disappears from people's saved items.
+
+---
+
+## Admin console (`#/admin`)
+
+Overview (health, activity, queues) · Feeds (schedule, status, run-now, bulk import) · Creators (add, merge, block, **possible-duplicate review**) · Review queue · Reports · Media (bulk moderation) · Sources (config & breaker state) · Live log (SSE) · Blocklist · **Audit log** · Settings (**backups, config export/import**, maintenance).
+
+Set `ADMIN_KEY`. **Without it the admin is disabled in production** (open only in development, or with `ADMIN_OPEN=true`).
+
+---
+
+## Operations
+
+- **Backups**: a consistent copy of the database (`VACUUM INTO`, safe while serving) is written nightly to `<db dir>/backups/` and the newest *N* are kept (Admin → Settings; on by default in production). *Back up now* is one click. Put the volume under your host's own snapshots too.
+- **Config export / import**: creators, feeds and the blocklist as JSON — no media, no secrets. Import is additive and idempotent (people are matched by their accounts, then by handle) and re-applies the safety gate.
+- **Audit log**: every moderation decision — manual or automatic — with actor, target and reason.
+- **Offline shell**: the app installs as a PWA and opens offline. The service worker caches only its own static files; API responses and media are never cached.
+- **Retroactive safety**: raising the safety rules bumps a sweep version, so existing libraries are re-checked once on the next boot.
 
 ## Configuration
 
-Copy `.env.example` to `.env` and customize:
+See [`.env.example`](.env.example) for every variable. Runtime behaviour (concurrency, scope strictness, auto-follow, retention…) lives in **Admin → Settings**.
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PORT` | Server port | `3141` |
-| `DB_PATH` | SQLite database path | `./data/prism.db` |
-| `ADMIN_KEY` | Admin API key | _(none - open access)_ |
-| `NODE_ENV` | Environment | `development` |
+## Deploy (Railway / Docker)
 
-## Admin Access
+1. Push to GitHub, create a Railway service from the repo (uses the `Dockerfile`).
+2. Add a persistent volume at `/data`.
+3. Set `ADMIN_KEY` (required) and optionally the source credentials. `DB_PATH=/data/prism.db` is the image default.
+4. Deploy. Health check: `/api/health`. The scheduler starts automatically in production.
 
-1. Click the gear icon in the header
-2. Enter your `ADMIN_KEY` when prompted
-3. Use the admin panel to manage ingestion, moderation, media, and creators
+Upgrading from v3 is automatic: the database is migrated in place on first boot (media, creators, accounts, tags and moderation history preserved; media re-hashed so new imports dedupe against old ones).
 
-Set `X_BEARER_TOKEN` for official X recent-search ingest. Without it, X still harvests public tweet media found via DuckDuckGo.
+## Architecture
 
-Default sources: Reddit (archive fallback when Reddit returns 403), X, and RedGIFs. Optional DDG/web ingest only keeps Imgur, RedGIFs, Reddit, and similar creator hosts — not Bing stock photos.
+```
+server.js                 bootstrap (listen, engine, graceful shutdown)
+src/app.js                Express app: CSP, rate limits, age gate, routes
+src/config.js             all environment parsing
+src/db/                   schema.js (versioned migrations, FTS5) · repo.js (all SQL)
+src/lib/                  net (SSRF-safe client) · safety · scope · links · mediaurl · limiter · media-cache
+src/sources/              adapters: reddit redgifs bluesky mastodon lemmy x rss web(+linkinbio)
+src/engine/               engine (scheduler/runs) · pipeline (per-item gates) · breaker · probe · creators · maintenance · events (SSE)
+src/routes/               public · admin · proxy (media + HLS)
+src/services/targets.js   add creators / feeds from pasted links
+public/                   vanilla ES modules, no build step (css/, js/, js/views/admin/, vendor/hls)
+tests/                    node:test suites + fixtures
+```
 
-## Deploy to Railway
+Adding a source = one file in `src/sources/` implementing `{ platform, kinds, isConfigured, fetch(feed, ctx) }` and one line in `src/sources/index.js`.
 
-1. Push to GitHub
-2. Connect repo to Railway
-3. Add a persistent volume mounted at `/data`
-4. Set environment variables (`ADMIN_KEY`, `DB_PATH=/data/prism.db`)
-5. Deploy
+## API (public)
 
-## Tech Stack
+`GET /api/media` (`q, type, platform, community, creator, creators, tag, sort=recent|trending|top|random|oldest|relevance, since, page, limit, ids`) · `GET /api/media/:id` · `/related` · `POST /api/media/:id/like|view` · `GET /api/discover` · `GET /api/creators` · `/creators/:id` · `/creators/:id/media` · `GET /api/suggest?q=` · `GET /api/creators/:id/similar` · `GET /api/tags|communities|platforms|stats` · `POST /api/report` · `GET /api/proxy?url=` (Range supported) · `GET /api/hls?url=` · `GET /api/stream` (SSE) · `GET /api/health` · `GET /api/meta`.
+Content endpoints require the age cookie from `POST /api/age/confirm`. Admin endpoints live under `/api/admin/*` and require `x-admin-key` (or `Authorization: Bearer`).
 
-- **Backend**: Node.js + Express
-- **Database**: SQLite via better-sqlite3
-- **Frontend**: Vanilla HTML/CSS/JS (single-page app, no build step)
-- **Deployment**: Docker + Railway
+---
 
-## API Reference
+## Verification status (please read)
 
-### Public Endpoints
-
-- `GET /api/health` - Health check
-- `GET /api/media` - List media (params: page, limit, type, subreddit, creator, tag, sort, q)
-- `GET /api/media/:id` - Media detail
-- `GET /api/media/:id/related` - Related media
-- `GET /api/creators` - List creators
-- `GET /api/creators/:id` - Creator profile
-- `GET /api/tags` - List tags
-- `GET /api/subreddits` - List subreddits
-- `GET /api/stats` - Public stats
-- `GET /api/proxy?url=` - Media proxy
-- `GET /api/stream` - SSE event stream
-
-### Admin Endpoints (require `x-admin-key` header)
-
-- `POST /api/admin/ingest/start` — Start a multi-source scan (`sources`, `subs`, `queries`, `xQueries`, `redgifsQueries`, `limit`, `minScore`)
-- `POST /api/admin/ingest/stop` — Stop ingestion
-- `POST /api/admin/ingest/pause` — Pause ingestion
-- `POST /api/admin/ingest/resume` — Resume ingestion
-- `POST /api/admin/ingest/sweep` — Hide stock photos, dead Imgur, and other junk already in the gallery
-- `GET /api/admin/ingest/status` — Live job stats + recent logs
-- `GET /api/admin/ingest/logs` — Full in-memory ingest log
-- `GET /api/admin/jobs` - Job history
-- `PATCH /api/admin/media/:id` - Update media
-- `DELETE /api/admin/media/:id` - Remove media
-- `POST /api/admin/media/:id/moderate` - Moderate media
-- `POST /api/admin/media/bulk` - Bulk media actions
-- `PATCH /api/admin/creators/:id` - Update creator
-- `POST /api/admin/creators/merge` - Merge creators
-- `GET /api/admin/moderation/queue` - Moderation queue
-- `GET /api/admin/settings` - Get settings
-- `PUT /api/admin/settings` - Update settings
+- **Tested:** 132 automated tests, including a migration from a real v3 schema, SSRF defences, safety rules, the engine's retry/backoff/breaker behaviour, the HTTP API and the media/HLS proxy. The UI was exercised in a real browser (desktop and phone-sized viewports, dark and light themes), including the viewer with keyboard navigation and deep links, WebM video playback, the age gate, creator add flow, and every admin tab. Touch-swipe gestures and HLS playback (hls.js) were not exercised in a browser.
+- **Not verified live:** the adapters' *network* behaviour. The development sandbox blocked outbound access to Reddit, RedGIFs, Bluesky, Mastodon, Lemmy and X, so each adapter was built against the platforms' documented response shapes and tested with fixtures and local mock servers — not against the live services. Expect to tune small details (field names, rate limits, headers) on first real run. The **Admin → Live log** and per-feed error text show exactly what each source returned. The keyless X route and unauthenticated Mastodon/Bluesky access depend on those services' current policies, which change.

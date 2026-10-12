@@ -11,3 +11,6 @@ data
 npm-debug.log*
 README.md
 .cursor
+tests
+scripts
+docs

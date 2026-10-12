@@ -1,0 +1,170 @@
+import { h, icon, $, toast, fmt } from './dom.js';
+import { get, post, onAgeRequired, streamPublic, ApiError } from './api.js';
+import { parse, href, navigate, matchRoute, routeKey } from './router.js';
+import { prefs, favorites, follows, platforms, bus } from './store.js';
+import { syncFromUrl, isOpen } from './components/lightbox.js';
+import { openTakedownForm } from './components/report.js';
+import { attachSuggest } from './components/suggest.js';
+import { home } from './views/home.js';
+import { explore } from './views/explore.js';
+import { creators } from './views/creators.js';
+import { creator } from './views/creator.js';
+import { saved } from './views/saved.js';
+import { browse } from './views/browse.js';
+
+const routes = [
+  { pattern: '/', view: home, nav: 'home' },
+  { pattern: '/explore', view: explore, nav: 'explore' },
+  { pattern: '/browse', view: browse, nav: 'browse' },
+  { pattern: '/creators', view: creators, nav: 'creators' },
+  { pattern: '/creator/:id', view: creator, nav: 'creators' },
+  { pattern: '/saved', view: saved, nav: 'saved' },
+  { pattern: '/admin/:tab?', view: (...a) => import('./views/admin/index.js').then((m) => m.admin(...a)), nav: 'admin' },
+];
+
+let cleanup = null;
+let currentKey = null;
+let renderToken = 0;
+const scrollMemory = new Map();
+
+/* --------------------------------------------------------------- age gate */
+let agePromise = null;
+function ensureAgeGate() {
+  if (agePromise) return agePromise;
+  agePromise = new Promise((resolve) => {
+    const root = $('#age-root');
+    const confirmBtn = h('button', { class: 'btn primary lg', onclick: async () => {
+      try { await post('/api/age/confirm'); } catch { /* proceed anyway; API will re-prompt if needed */ }
+      root.replaceChildren(); agePromise = null; resolve();
+    } }, 'I’m 18 or older — Enter');
+    root.replaceChildren(h('div', { class: 'age', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Age verification' },
+      h('div', { class: 'age-card' },
+        h('div', { class: 'brand' }, icon('logo'), h('span', null, 'PRISM')),
+        h('h2', null, 'Adults only'),
+        h('p', null, 'This site contains explicit adult content. You must be at least 18 years old (or the age of majority where you live) to continue.'),
+        confirmBtn,
+        h('a', { class: 'leave', href: 'https://www.google.com', rel: 'noopener noreferrer' }, 'I’m under 18 — leave'),
+        h('p', { class: 'legal' }, 'By entering you confirm that you are of legal age and that viewing adult content is legal where you are.'))));
+    setTimeout(() => confirmBtn.focus(), 50);
+  });
+  return agePromise;
+}
+onAgeRequired(ensureAgeGate);
+
+/* ------------------------------------------------------------------ shell */
+// 5th field: desktop-only (the phone tab bar keeps four entries)
+const NAV = [['home', '/', 'Home', 'home'], ['explore', '/explore', 'Explore', 'compass'], ['browse', '/browse', 'Browse', 'layers', true], ['creators', '/creators', 'Creators', 'users'], ['saved', '/saved', 'Saved', 'heart']];
+
+function buildShell() {
+  const app = $('#app');
+  const searchInput = h('input', { class: 'input', type: 'search', id: 'global-search', placeholder: 'Search creators, tags, communities…', 'aria-label': 'Search', enterkeyhint: 'search', autocomplete: 'off' });
+  attachSuggest(searchInput); // registered first so it can claim Enter for a highlighted suggestion
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { navigate('/explore', { q: searchInput.value.trim() }); searchInput.blur(); }
+    if (e.key === 'Escape') searchInput.blur();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '/' && !e.target.closest('input, textarea, select') && !isOpen()) { e.preventDefault(); searchInput.focus(); searchInput.select(); }
+  });
+
+  const themeBtn = h('button', { class: 'btn icon ghost', 'aria-label': 'Toggle theme', title: 'Toggle theme' });
+  const paintTheme = () => themeBtn.replaceChildren(icon(document.documentElement.dataset.theme === 'light' ? 'moon' : 'sun'));
+  themeBtn.addEventListener('click', () => { prefs.theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'; paintTheme(); });
+  paintTheme();
+
+  const savedBadge = h('span', { class: 'badge', style: { display: 'none', padding: '0 7px' } });
+  const paintBadge = () => { const n = favorites.count(); savedBadge.textContent = n > 99 ? '99+' : n; savedBadge.style.display = n ? '' : 'none'; };
+  bus.on('fav', paintBadge); paintBadge();
+
+  const header = h('header', { class: 'appbar' },
+    h('a', { class: 'brand', href: href('/'), 'aria-label': 'PRISM home' }, icon('logo'), h('span', null, 'PRISM')),
+    h('nav', { class: 'nav', 'aria-label': 'Primary' }, NAV.map(([key, path, label, ic]) => h('a', { href: href(path), dataset: { nav: key } }, icon(ic, 'sm'), label, key === 'saved' ? savedBadge : null))),
+    h('div', { class: 'search' }, icon('search'), searchInput, h('span', { class: 'kbd hide-mobile' }, '/')),
+    h('div', { class: 'appbar-actions' }, themeBtn, h('a', { class: 'btn icon ghost hide-mobile', href: href('/admin'), 'aria-label': 'Admin', title: 'Admin' }, icon('sliders'))));
+
+  const main = h('main', { id: 'main', tabindex: '-1' });
+  const footer = h('footer', { class: 'footer' },
+    h('span', null, 'PRISM — adults only (18+)'),
+    h('a', { href: href('/browse') }, 'Browse'),
+    h('button', { onclick: openTakedownForm }, 'Report content / takedown'),
+    h('a', { href: href('/admin') }, 'Admin'));
+  const bottom = h('nav', { class: 'bottomnav', 'aria-label': 'Primary' }, NAV.filter((n) => !n[4]).map(([key, path, label, ic]) => h('a', { href: href(path), dataset: { nav: key } }, icon(ic, 'lg'), label)));
+  const fab = h('button', { class: 'fab', hidden: true, 'aria-label': 'Back to top', onclick: () => window.scrollTo({ top: 0, behavior: 'smooth' }) }, icon('up'));
+  window.addEventListener('scroll', () => { fab.hidden = window.scrollY < 900; }, { passive: true });
+
+  app.replaceChildren(header, main, footer, bottom, fab);
+  return { main, searchInput };
+}
+
+function setNav(key) {
+  document.querySelectorAll('[data-nav]').forEach((a) => { if (a.dataset.nav === key) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+}
+
+/* ----------------------------------------------------------------- router */
+async function render(shell) {
+  const p = parse();
+  const key = routeKey(p);
+  syncFromUrl();                       // lightbox follows ?m=
+  if (key === currentKey) return;      // only the overlay changed
+  const token = ++renderToken;
+  if (currentKey) scrollMemory.set(currentKey, window.scrollY);
+  currentKey = key;
+  if (cleanup) { try { cleanup(); } catch (e) { console.error(e); } cleanup = null; }
+
+  const match = matchRoute(routes, p);
+  if (!match) { navigate('/', {}, { replace: true }); return; }
+  setNav(match.route.nav);
+  if (p.path === '/explore') shell.searchInput.value = p.query.get('q') || '';
+  else if (p.path !== '/') shell.searchInput.value = '';
+  shell.main.classList.remove('view-enter'); void shell.main.offsetWidth; shell.main.classList.add('view-enter');
+  document.title = 'PRISM — Discover male creators';
+  try {
+    const result = await match.route.view(shell.main, { params: match.params, query: p.query });
+    if (token !== renderToken) { if (typeof result === 'function') result(); return; }
+    cleanup = typeof result === 'function' ? result : null;
+    const y = scrollMemory.get(key);
+    window.scrollTo({ top: y && p.path !== '/explore' ? y : 0 });
+  } catch (e) {
+    if (token !== renderToken) return;
+    console.error(e);
+    shell.main.replaceChildren(h('div', { class: 'empty' }, h('h3', null, 'Something went wrong'), h('p', null, e instanceof ApiError ? e.message : 'The page failed to load.'), h('button', { class: 'btn primary', onclick: () => { currentKey = null; render(shell); } }, 'Reload page')));
+  }
+}
+
+/* -------------------------------------------------------------- live pill */
+function wireLiveUpdates(shell) {
+  let pending = 0; let pill = null;
+  streamPublic((evt) => {
+    if (evt.type !== 'new') return;
+    const p = parse().path;
+    if (p !== '/' && p !== '/explore') return;
+    pending += evt.count || 1;
+    if (!pill) { pill = h('button', { class: 'btn primary newpill', onclick: () => { pending = 0; pill.remove(); pill = null; currentKey = null; render(shell); window.scrollTo({ top: 0 }); } }); document.body.appendChild(pill); }
+    pill.replaceChildren(icon('refresh', 'sm'), `${fmt.int(pending)} new — refresh`);
+  });
+  window.addEventListener('hashchange', () => { if (pill) { pill.remove(); pill = null; pending = 0; } });
+}
+
+/* ---------------------------------------------------------- offline shell (PWA) */
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') return;
+  navigator.serviceWorker.register('/sw.js').catch(() => { /* optional enhancement */ });
+}
+
+/* ------------------------------------------------------------------- boot */
+async function boot() {
+  prefs.theme = prefs.theme; // re-apply (handles "auto")
+  let meta;
+  try { meta = await get('/api/meta'); } catch { meta = { ageGate: { enforce: false, verified: true }, platforms: [] }; }
+  for (const pl of meta.platforms || []) platforms.map[pl.platform] = pl;
+  if (meta.ageGate && meta.ageGate.enforce && !meta.ageGate.verified) await ensureAgeGate();
+
+  const shell = buildShell();
+  window.addEventListener('hashchange', () => render(shell));
+  await render(shell);
+  wireLiveUpdates(shell);
+  registerServiceWorker();
+}
+
+boot();
