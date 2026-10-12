@@ -23,7 +23,7 @@ const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
 
 /* ---------------------------------------------------------------- overview */
 router.get('/overview', (req, res) => {
-  res.json({ ...repo.adminOverview(), engine: engine.status(), version: config.version, adminOpen: !config.adminKey });
+  res.json({ ...repo.adminOverview(), engine: engine.status(), health: require('../engine/health').stats(), version: config.version, adminOpen: !config.adminKey });
 });
 
 router.get('/stream', (req, res) => {

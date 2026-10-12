@@ -7,6 +7,7 @@ const engine = require('./src/engine/engine');
 const maintenance = require('./src/engine/maintenance');
 const backup = require('./src/engine/backup');
 const discovery = require('./src/engine/discovery');
+const health = require('./src/engine/health');
 const { migration } = require('./src/db');
 
 const app = createApp();
@@ -27,12 +28,14 @@ maintenance.startupSweepIfNeeded();
 setTimeout(() => require('./src/routes/public').warm(), 1500).unref(); // pre-build the big caches (topics, graph, home)
 backup.start();
 discovery.start();
+health.start();
 
 function shutdown(signal) {
   console.log(`\n[${signal}] shutting down…`);
   engine.shutdown();
   backup.stop();
   discovery.stop();
+  health.stop();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 8000).unref();
 }

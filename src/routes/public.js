@@ -172,6 +172,12 @@ router.get('/media/:id/related', (req, res) => {
 
 const engagementLimiter = rateLimit({ windowMs: 60 * 1000, max: 90, standardHeaders: true, legacyHeaders: false, message: { error: 'Slow down' } });
 router.post('/media/:id/view', engagementLimiter, (req, res) => { repo.media.bumpView(req.params.id); res.json({ ok: true }); });
+// A viewer's browser could not load this item: verify it at the source (never hides on its own).
+router.post('/media/:id/broken', engagementLimiter, (req, res) => {
+  if (!/^[0-9a-f-]{36}$/i.test(req.params.id)) return res.status(400).json({ error: 'Bad id' });
+  const r = require('../engine/health').report(req.params.id);
+  res.status(r.ok ? 202 : 404).json(r);
+});
 router.post('/media/:id/like', engagementLimiter, (req, res) => {
   const delta = req.body && req.body.delta === -1 ? -1 : 1;
   repo.media.bumpLike(req.params.id, delta);

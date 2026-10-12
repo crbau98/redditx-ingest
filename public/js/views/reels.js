@@ -1,5 +1,5 @@
 import { h, icon, proxied, fmt, avatar, toast, copyText, emptyState } from '../dom.js';
-import { get, post } from '../api.js';
+import { get, post, reportBroken } from '../api.js';
 import { navigate, href } from '../router.js';
 import { prefs, favorites, follows, history as viewHistory, tastes, collections, platformLabel, bus } from '../store.js';
 import { attachVideo, releaseVideo } from '../components/video.js';
@@ -119,7 +119,7 @@ export async function reels(root, { query }) {
       const preview = s.it.preview_url || s.it.thumbnail_url;
       const img = h('img', { alt: s.it.title || '', src: proxied(preview || s.it.media_url), decoding: 'async', draggable: 'false' });
       if (preview) { const full = new Image(); full.onload = () => { if (img.isConnected) img.src = full.src; }; full.src = proxied(s.it.media_url); }
-      img.addEventListener('error', () => s.stage.replaceChildren(h('div', { class: 'reel-gone' }, 'This item is no longer available at its source.')));
+      img.addEventListener('error', () => { reportBroken(s.it.id); s.stage.replaceChildren(h('div', { class: 'reel-gone' }, 'This item is no longer available at its source.')); });
       s.stage.replaceChildren(img);
     }
   }

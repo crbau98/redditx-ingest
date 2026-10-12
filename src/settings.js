@@ -35,6 +35,9 @@ const SCHEMA = {
   },
   // --- discovery reach (v4.6) ---
   discoveryCommunities: { type: 'bool', default: true, label: 'Search Reddit, Lemmy and Bluesky for communities and custom feeds', group: 'discovery' },
+  // --- link health (v4.8) ---
+  linkHealth: { type: 'bool', default: true, label: 'Check media at the source and hide what has been removed there', group: 'maintenance' },
+  linkHealthPerSweep: { type: 'int', default: 40, min: 0, max: 500, label: 'Items re-checked every 10 minutes', group: 'maintenance' },
   discoveryExpand: { type: 'bool', default: true, label: 'Find lookalike creators (Bluesky) and search Bluesky and RedGIFs for new people', group: 'discovery' },
   discoveryAutoCommunities: { type: 'bool', default: true, label: 'Auto-follow strong communities and feeds (their posts are still checked one by one)', group: 'discovery' },
   discoveryKeywords: {

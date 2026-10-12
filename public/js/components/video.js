@@ -1,4 +1,5 @@
 import { proxied, loadScript } from '../dom.js';
+import { reportBroken } from '../api.js';
 
 export const isM3u8 = (u) => /\.m3u8(\?|$)/i.test(u || '');
 
@@ -13,8 +14,15 @@ export function attachVideo(v, it) {
   const hls = it.hls_url || (isM3u8(it.media_url) ? it.media_url : null);
   const mp4 = isM3u8(it.media_url) ? null : it.media_url;
   const useHls = hls && (it.has_audio || !mp4);
-  const fallback = () => { if (mp4 && !handle.dead) { v.src = proxied(mp4); v.play().catch(() => {}); } };
-  if (!useHls) { v.src = proxied(mp4); return handle; }
+  // Every source failed: let the server verify the item at its origin.
+  const dead = () => { if (!handle.dead) reportBroken(it.id); };
+  const fallback = () => {
+    if (handle.dead) return;
+    if (!mp4) { dead(); return; }
+    v.addEventListener('error', dead, { once: true });
+    v.src = proxied(mp4); v.play().catch(() => {});
+  };
+  if (!useHls) { v.addEventListener('error', dead, { once: true }); v.src = proxied(mp4); return handle; }
   const src = `/api/hls?url=${encodeURIComponent(hls)}`;
   if (v.canPlayType('application/vnd.apple.mpegurl')) {
     v.src = src;

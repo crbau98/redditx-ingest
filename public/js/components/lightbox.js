@@ -1,5 +1,5 @@
 import { h, icon, proxied, fmt, avatar, toast, copyText, openModal } from '../dom.js';
-import { get, post } from '../api.js';
+import { get, post, reportBroken } from '../api.js';
 import { favorites, follows, prefs, history as viewHistory, tastes, collections, platformLabel, platformColor, bus } from '../store.js';
 import { parse, href, setParam } from '../router.js';
 import { openReport } from './report.js';
@@ -268,7 +268,7 @@ function paintStage(it) {
     }
     S.zoom = makeZoomable(img, S.stage);
     img.addEventListener('dblclick', () => { if (img.classList.contains('zoomed')) return; toggleFav(it, true); });
-    img.addEventListener('error', () => S.stage.replaceChildren(...keep, h('div', { class: 'lb-loading' }, 'This image is no longer available at its source.')));
+    img.addEventListener('error', () => { reportBroken(it.id); S.stage.replaceChildren(...keep, h('div', { class: 'lb-loading' }, 'This image is no longer available at its source.')); });
   }
 }
 
