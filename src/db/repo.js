@@ -315,6 +315,67 @@ creators.activity = function activity(id, days = 371) {
  * Creators gaining momentum: lots of well-received posts this week compared with their usual pace
  * over the previous three weeks. New arrivals (no history) count as rising too.
  */
+/**
+ * The creator constellation: the most active public creators as nodes, linked to the creators
+ * whose posts they most resemble (tf-idf weighted tag vectors, cosine similarity, each node
+ * keeping its strongest few links). Each node carries its dominant tag as a "group" for colour.
+ */
+creators.graph = function graph({ limit = 150, perNode = 4, minSim = 0.12 } = {}) {
+  const nodes = db.prepare(`SELECT c.id, c.handle, c.display_name, c.avatar_url, c.media_count, c.last_media_at,
+      (SELECT COALESCE(m.preview_url, m.thumbnail_url, CASE WHEN m.media_type = 'image' THEN m.media_url END) FROM media m
+        WHERE m.creator_id = c.id AND m.publish_state = 'published' AND m.scope != 'excluded' ORDER BY m.score DESC LIMIT 1) AS preview
+    FROM creators c WHERE c.status = 'active' AND c.scope != 'excluded' AND c.media_count >= 2
+      AND (SELECT COUNT(*) FROM media m WHERE m.creator_id = c.id AND m.publish_state = 'published' AND m.scope != 'excluded') >= 2
+    ORDER BY c.media_count DESC, c.total_score DESC LIMIT ?`).all(limit);
+  if (nodes.length < 2) return { nodes, links: [] };
+  const ids = nodes.map((n) => n.id);
+  const rows = db.prepare(`SELECT m.creator_id AS cid, t.name AS tag, COUNT(*) AS n FROM media m
+      JOIN media_tags mt ON mt.media_id = m.id JOIN tags t ON t.id = mt.tag_id
+      WHERE m.creator_id IN (${ids.map(() => '?').join(',')}) AND m.publish_state = 'published' AND m.scope != 'excluded'
+      GROUP BY m.creator_id, t.id`).all(...ids).filter((r) => !GENERIC_TAGS.has(r.tag));
+  const df = new Map();
+  for (const r of rows) df.set(r.tag, (df.get(r.tag) || 0) + 1);
+  const vec = new Map(ids.map((id) => [id, new Map()]));
+  for (const r of rows) vec.get(r.cid).set(r.tag, (1 + Math.log(r.n)) * Math.log(1 + nodes.length / df.get(r.tag)));
+  const norm = new Map(ids.map((id) => [id, Math.sqrt([...vec.get(id).values()].reduce((a, w) => a + w * w, 0)) || 1]));
+  // Community names are tagged too ("mastodon-social"); they say where, not what — prefer real style tags for the group.
+  const communities = new Set(db.prepare(`SELECT DISTINCT community FROM media WHERE community IS NOT NULL AND creator_id IN (${ids.map(() => '?').join(',')})`).all(...ids).map((r) => cleanTag(r.community)));
+  for (const n of nodes) {
+    let best = null; let bw = 0; let anyBest = null; let aw = 0;
+    for (const [tag, w] of vec.get(n.id)) {
+      if (w > aw) { aw = w; anyBest = tag; }
+      if (!communities.has(tag) && w > bw) { bw = w; best = tag; }
+    }
+    n.group = best || anyBest;
+  }
+  // cosine similarity for every pair (n ≤ a few hundred, so O(n²) is fine), keep each node's strongest links
+  const cand = new Map(ids.map((id) => [id, []]));
+  for (let i = 0; i < ids.length; i++) {
+    const a = vec.get(ids[i]);
+    for (let j = i + 1; j < ids.length; j++) {
+      const b = vec.get(ids[j]);
+      const [small, big] = a.size < b.size ? [a, b] : [b, a];
+      let dot = 0;
+      for (const [tag, w] of small) { const o = big.get(tag); if (o) dot += w * o; }
+      if (!dot) continue;
+      const sim = dot / (norm.get(ids[i]) * norm.get(ids[j]));
+      if (sim < minSim) continue;
+      cand.get(ids[i]).push([ids[j], sim]); cand.get(ids[j]).push([ids[i], sim]);
+    }
+  }
+  const seen = new Set(); const links = [];
+  for (const [id, list] of cand) {
+    list.sort((x, y) => y[1] - x[1]);
+    for (const [other, sim] of list.slice(0, perNode)) {
+      const key = id < other ? `${id}|${other}` : `${other}|${id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      links.push({ source: id, target: other, weight: Math.round(sim * 1000) / 1000 });
+    }
+  }
+  return { nodes, links };
+};
+
 creators.rising = function rising(limit = 12) {
   const now = Date.now();
   const d7 = new Date(now - 7 * 86400000).toISOString();
@@ -566,6 +627,17 @@ function buildMediaWhere(f) {
     where.push('m.id IN (SELECT mt.media_id FROM media_tags mt JOIN tags t ON t.id = mt.tag_id WHERE t.name = ?)');
     params.push(cleanTag(f.tag));
   }
+  // every one of these tags (narrowing search: "beard beach")
+  for (const t of (Array.isArray(f.tagsAll) ? f.tagsAll : []).slice(0, 6)) {
+    where.push('m.id IN (SELECT mt.media_id FROM media_tags mt JOIN tags t ON t.id = mt.tag_id WHERE t.name = ?)');
+    params.push(cleanTag(t));
+  }
+  // any of these tags (a topic)
+  if (Array.isArray(f.tagsAny) && f.tagsAny.length) {
+    const list = f.tagsAny.slice(0, 12).map(cleanTag);
+    where.push(`m.id IN (SELECT mt.media_id FROM media_tags mt JOIN tags t ON t.id = mt.tag_id WHERE t.name IN (${list.map(() => '?').join(',')}))`);
+    params.push(...list);
+  }
   return { where, params };
 }
 
@@ -776,6 +848,80 @@ const media = {
   },
 };
 
+/* ----------------------------------------------------------- tag intelligence */
+const tagIntel = {
+  /**
+   * Tags that travel with the given ones: co-occurrence on published media, ranked by
+   * how much more often they appear together than their overall frequency predicts.
+   */
+  related(names, limit = 12) {
+    const list = [...new Set((names || []).map(cleanTag).filter(Boolean))].slice(0, 4);
+    if (!list.length) return [];
+    const total = db.prepare("SELECT COUNT(*) AS n FROM media WHERE publish_state = 'published' AND scope != 'excluded'").get().n || 1;
+    const base = db.prepare(`SELECT COUNT(DISTINCT mt.media_id) AS n FROM media_tags mt JOIN tags t ON t.id = mt.tag_id JOIN media m ON m.id = mt.media_id
+      WHERE t.name IN (${list.map(() => '?').join(',')}) AND m.publish_state = 'published' AND m.scope != 'excluded'`).get(...list).n;
+    if (!base) return [];
+    const rows = db.prepare(`SELECT t.name, COUNT(DISTINCT mt.media_id) AS co,
+        (SELECT COUNT(*) FROM media_tags x JOIN media xm ON xm.id = x.media_id WHERE x.tag_id = t.id AND xm.publish_state = 'published' AND xm.scope != 'excluded') AS freq
+      FROM media_tags mt JOIN tags t ON t.id = mt.tag_id
+      WHERE mt.media_id IN (SELECT mt2.media_id FROM media_tags mt2 JOIN tags t2 ON t2.id = mt2.tag_id JOIN media m ON m.id = mt2.media_id
+                            WHERE t2.name IN (${list.map(() => '?').join(',')}) AND m.publish_state = 'published' AND m.scope != 'excluded')
+        AND t.name NOT IN (${list.map(() => '?').join(',')}) AND t.name NOT IN (${PLATFORM_TAGS_SQL})
+      GROUP BY t.id HAVING co >= 2`).all(...list, ...list);
+    const communities = new Set(db.prepare("SELECT DISTINCT community FROM media WHERE community IS NOT NULL").all().map((r) => cleanTag(r.community)));
+    return rows.filter((r) => !communities.has(r.name)).map((r) => {
+      const lift = (r.co / base) / (r.freq / total);
+      return { name: r.name, count: r.co, lift: Math.round(lift * 100) / 100, score: Math.log(1 + r.co) * Math.log(1 + lift) };
+    }).filter((r) => r.lift > 1).sort((a, b) => b.score - a.score).slice(0, limit);
+  },
+
+  /**
+   * Topics: the library's frequent tags grouped by how often they co-occur (cosine of
+   * co-occurrence counts, greedy grouping around the most common tags). Each topic gets a
+   * readable name from its two leading tags, a size and a few preview images.
+   */
+  topics({ maxTopics = 10, pool = 60, minCount = 3 } = {}) {
+    const top = db.prepare(`SELECT t.id, t.name, COUNT(*) AS n FROM media_tags mt JOIN tags t ON t.id = mt.tag_id JOIN media m ON m.id = mt.media_id
+      WHERE m.publish_state = 'published' AND m.scope != 'excluded' AND t.name NOT IN (${PLATFORM_TAGS_SQL}) AND t.name NOT IN ('gay','nsfw','video','photo','image')
+      GROUP BY t.id HAVING n >= ? ORDER BY n DESC LIMIT ?`).all(minCount, pool);
+    if (top.length < 3) return [];
+    // community names are tagged too — they say where, not what
+    const communities = new Set(db.prepare("SELECT DISTINCT community FROM media WHERE community IS NOT NULL").all().map((r) => cleanTag(r.community)));
+    const tags = top.filter((t) => !communities.has(t.name));
+    const ids = tags.map((t) => t.id);
+    const co = new Map();
+    for (const r of db.prepare(`SELECT a.tag_id AS a, b.tag_id AS b, COUNT(*) AS n FROM media_tags a JOIN media_tags b ON a.media_id = b.media_id AND a.tag_id < b.tag_id
+        JOIN media m ON m.id = a.media_id WHERE m.publish_state = 'published' AND m.scope != 'excluded' AND a.tag_id IN (${ids.map(() => '?').join(',')}) AND b.tag_id IN (${ids.map(() => '?').join(',')})
+        GROUP BY a.tag_id, b.tag_id`).all(...ids, ...ids)) co.set(`${r.a}|${r.b}`, r.n);
+    const count = new Map(tags.map((t) => [t.id, t.n]));
+    const assoc = (x, y) => { const n = co.get(x < y ? `${x}|${y}` : `${y}|${x}`) || 0; return n / Math.sqrt(count.get(x) * count.get(y)); };
+    const used = new Set(); const topics = [];
+    for (const seed of tags) {
+      if (used.has(seed.id) || topics.length >= maxTopics) continue;
+      const members = tags.filter((t) => t.id !== seed.id && !used.has(t.id)).map((t) => ({ t, a: assoc(seed.id, t.id) }))
+        .filter((x) => x.a >= 0.22).sort((p, q) => q.a - p.a).slice(0, 5).map((x) => x.t);
+      if (!members.length) continue;
+      used.add(seed.id); members.forEach((m) => used.add(m.id));
+      const names = [seed.name, ...members.map((m) => m.name)];
+      const title = `${seed.name[0].toUpperCase()}${seed.name.slice(1).replace(/-/g, ' ')} & ${members[0].name.replace(/-/g, ' ')}`;
+      const list = media.list({ tagsAny: names, sort: 'top', limit: 4, noCount: true }).items;
+      const total = media.list({ tagsAny: names, limit: 1 }).total;
+      topics.push({ id: names.slice(0, 3).join('+'), title, tags: names, count: total, previews: list.map((m) => m.preview_url || m.thumbnail_url || (m.media_type === 'image' ? m.media_url : null)).filter(Boolean) });
+    }
+    return topics.sort((a, b) => b.count - a.count);
+  },
+
+  /** Vocabulary for query understanding. */
+  vocabulary() {
+    return {
+      tags: db.prepare(`SELECT t.name, COUNT(*) AS count FROM media_tags mt JOIN tags t ON t.id = mt.tag_id JOIN media m ON m.id = mt.media_id
+        WHERE m.publish_state = 'published' AND m.scope != 'excluded' AND t.name NOT IN (${PLATFORM_TAGS_SQL}) GROUP BY t.id ORDER BY count DESC LIMIT 3000`).all(),
+      creators: db.prepare("SELECT id, handle, display_name, media_count FROM creators WHERE status = 'active' AND scope != 'excluded' AND media_count > 0 ORDER BY media_count DESC LIMIT 5000").all(),
+      communities: db.prepare("SELECT community AS name, COUNT(*) AS count FROM media WHERE publish_state = 'published' AND scope != 'excluded' AND community IS NOT NULL AND community != '' GROUP BY community ORDER BY count DESC LIMIT 2000").all(),
+    };
+  },
+};
+
 /* ------------------------------------------------------------------- reports */
 const reports = {
   create({ mediaId, creatorId, kind, reason, contact, reporterHash }) {
@@ -896,12 +1042,12 @@ const candidates = {
     return { items, total, page, limit };
   },
   /** Highest-scoring undecided candidates (for auto-follow). */
-  promotable(minScore, limit) {
-    return db.prepare("SELECT * FROM candidates WHERE status = 'pending' AND score >= ? AND scope != 'excluded' AND (reason IS NULL OR reason NOT LIKE 'needs review%') ORDER BY score DESC LIMIT ?").all(minScore, limit).map(parseSignals);
+  promotable(minScore, limit, offset = 0) {
+    return db.prepare("SELECT * FROM candidates WHERE status = 'pending' AND score >= ? AND scope != 'excluded' AND (reason IS NULL OR reason NOT LIKE 'needs review%') ORDER BY score DESC, id LIMIT ? OFFSET ?").all(minScore, limit, offset).map(parseSignals);
   },
-  /** Pending candidates that still need details (bio/name) looked up. */
-  needingDetails(platform, limit) {
-    return db.prepare("SELECT * FROM candidates WHERE status = 'pending' AND platform = ? AND bio IS NULL AND (reason IS NULL OR reason != 'checked') ORDER BY score DESC LIMIT ?").all(platform, limit).map(parseSignals);
+  /** Pending accounts (kind 'user' unless given) that still need details (bio/name) looked up. */
+  needingDetails(platform, limit, kind = 'user') {
+    return db.prepare("SELECT * FROM candidates WHERE status = 'pending' AND platform = ? AND kind = ? AND bio IS NULL AND (reason IS NULL OR reason != 'checked') ORDER BY score DESC LIMIT ?").all(platform, kind, limit).map(parseSignals);
   },
   counts() {
     const o = { pending: 0, followed: 0, linked: 0, rejected: 0 };
@@ -949,5 +1095,5 @@ function discoveryTargets({ platform, prefix, staleDays, limit, minMedia = 1, ma
 module.exports = {
   db, nowIso, clampInt, cleanTag, ftsQuery, settings, hosts, blocklist, logAction, suggest, audit,
   creators, feeds, runs, media, reports, addTags, publicStats, adminOverview, discover,
-  candidates, discoveryState, mentionSource, discoveryTargets, PLATFORM_TAGS,
+  candidates, discoveryState, mentionSource, discoveryTargets, PLATFORM_TAGS, tagIntel,
 };

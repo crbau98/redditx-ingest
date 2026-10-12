@@ -116,7 +116,15 @@ async function fetchProfile(actor) {
   } catch { return null; }
 }
 
+/** Popular custom feeds matching a keyword (discovery). Public AppView endpoint. */
+async function searchFeeds(q, limit = 25) {
+  const json = await http.json(`${base}/xrpc/app.bsky.unspecced.getPopularFeedGenerators?query=${encodeURIComponent(q)}&limit=${limit}`);
+  return (json.feeds || []).map((f) => ({ uri: f.uri, displayName: f.displayName || null, description: f.description || null, likeCount: f.likeCount || 0, creator: f.creator && f.creator.handle, avatar: f.avatar || null }))
+    .filter((f) => /^at:\/\//.test(f.uri || ''));
+}
+
 module.exports = {
+  searchFeeds,
   platform: 'bluesky',
   label: 'Bluesky',
   color: '#0085ff',

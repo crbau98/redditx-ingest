@@ -5,6 +5,7 @@ import { prefs, favorites, follows, history as viewHistory, tastes, collections,
 import { attachVideo, releaseVideo } from '../components/video.js';
 import { openCollectionPicker } from '../components/collections.js';
 import { openLightbox, isOpen as lightboxOpen } from '../components/lightbox.js';
+import { heartBurst } from '../components/fx.js';
 
 const SORTS = [['foryou', 'For you'], ['trending', 'Trending'], ['random', 'Shuffle'], ['recent', 'Newest'], ['top', 'Top']];
 const PAGE = 12;
@@ -19,6 +20,7 @@ export async function reels(root, { query }) {
   const f = {
     type: query.get('type') ?? 'video', sort: query.get('sort') || (tastes.ready() ? 'foryou' : 'trending'), platform: query.get('platform') || '', tag: query.get('tag') || '',
     community: query.get('community') || '', creator: query.get('creator') || '', q: query.get('q') || '', following: query.get('following') || '',
+    tags: query.get('tags') || '', anytags: query.get('anytags') || '', since: query.get('since') || '', label: query.get('label') || '',
   };
   const set = (patch) => navigate('/reels', { ...f, ...patch }, { replace: true });
   const followIds = f.following ? follows.list().map((c) => c.id).slice(0, 100) : null;
@@ -34,7 +36,8 @@ export async function reels(root, { query }) {
   const paintMute = () => muteBtn.replaceChildren(icon(prefs.muted ? 'mute' : 'volume'));
   paintMute();
 
-  const context = f.sort === 'foryou' && !f.creator && !f.tag && !f.community && !f.q && !f.following && !f.platform ? 'For you' : f.creator ? 'Creator' : f.following ? 'Following' : f.tag ? `#${f.tag}` : f.community || (f.q ? `“${f.q}”` : (f.platform ? platformLabel(f.platform) : 'For you'));
+  const context = f.sort === 'foryou' && !f.creator && !f.tag && !f.tags && !f.anytags && !f.community && !f.q && !f.following && !f.platform ? 'For you' : f.creator ? 'Creator' : f.following ? 'Following'
+    : f.tags ? f.tags.split(',').map((t) => `#${t}`).join(' + ') : f.anytags ? (f.label || f.anytags.split(',').slice(0, 3).map((t) => `#${t}`).join(' · ')) : f.tag ? `#${f.tag}` : f.community || (f.q ? `“${f.q}”` : (f.platform ? platformLabel(f.platform) : ((SORTS.find((x) => x[0] === f.sort) || [])[1] || 'Reels')));
   const top = h('div', { class: 'reels-top' },
     h('button', { class: 'btn icon ghost', 'aria-label': 'Back', title: 'Back', onclick: () => (window.history.length > 1 ? window.history.back() : navigate('/')) }, icon('chev-l')),
     h('div', { class: 'reels-title truncate' }, icon('film', 'sm'), context),
@@ -59,7 +62,7 @@ export async function reels(root, { query }) {
     const bar = h('div', { class: 'reel-progress' }, h('i'));
     const favBtn = h('button', { class: 'reel-act', 'aria-label': 'Save' }, icon('heart'), h('span', null, 'Save'));
     const paintFav = () => { const on = favorites.has(it.id); favBtn.classList.toggle('on', on); favBtn.setAttribute('aria-pressed', String(on)); favBtn.querySelector('svg').classList.toggle('fill', on); };
-    favBtn.addEventListener('click', () => { const on = favorites.toggle(it.id, it); toast(on ? 'Saved' : 'Removed from saved'); });
+    favBtn.addEventListener('click', () => { const on = favorites.toggle(it.id, it); toast(on ? 'Saved' : 'Removed from saved'); if (on) { const r = favBtn.getBoundingClientRect(); heartBurst(r.left + r.width / 2, r.top + 20); } });
     const collBtn = h('button', { class: 'reel-act', 'aria-label': 'Add to collection', onclick: () => openCollectionPicker(it) }, icon('bookmark'), h('span', null, 'Collect'));
     const paintColl = () => collBtn.classList.toggle('on', collections.containing(it.id).length > 0);
     paintFav(); paintColl();
@@ -94,6 +97,7 @@ export async function reels(root, { query }) {
       if (now - lastTap < 280) {
         clearTimeout(tapTimer); lastTap = 0;
         if (!favorites.has(it.id)) favorites.toggle(it.id, it);
+        const sr = stage.getBoundingClientRect(); heartBurst(sr.left + sr.width / 2, sr.top + sr.height / 2, { count: 14 });
         const b = h('div', { class: 'lb-heart-burst' }, icon('heart', 'fill')); stage.appendChild(b); setTimeout(() => b.remove(), 750);
         return;
       }
@@ -163,9 +167,9 @@ export async function reels(root, { query }) {
     if (loading || done || destroyed) return;
     loading = true;
     try {
-      const forYou = f.sort === 'foryou' && !f.creator && !f.tag && !f.community && !f.q && !f.following && !f.platform;
+      const forYou = f.sort === 'foryou' && !f.creator && !f.tag && !f.tags && !f.anytags && !f.community && !f.q && !f.following && !f.platform;
       const res = forYou ? await get('/api/recommend', { ...tastes.query({ exclude: viewHistory.list().slice(0, 100) }), type: f.type === 'all' ? undefined : f.type, seed, page, limit: PAGE }) : await get('/api/media', {
-        type: f.type === 'all' ? undefined : f.type, sort: f.sort === 'foryou' ? 'trending' : f.sort, platform: f.platform, tag: f.tag, community: f.community, creator: f.creator, q: f.q,
+        type: f.type === 'all' ? undefined : f.type, sort: f.sort === 'foryou' ? 'trending' : f.sort, platform: f.platform, tag: f.tag, tags: f.tags || undefined, anytags: f.anytags || undefined, since: f.since || undefined, community: f.community, creator: f.creator, q: f.q,
         creators: followIds ? (followIds.length ? followIds.join(',') : '00000000-0000-0000-0000-000000000000') : undefined,
         seed: f.sort === 'random' ? seed : undefined, page, limit: PAGE,
       });

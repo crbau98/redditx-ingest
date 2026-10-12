@@ -2,15 +2,17 @@ import { h, icon, fmt, avatar, debounce } from '../dom.js';
 import { get } from '../api.js';
 import { navigate, href } from '../router.js';
 import { platformLabel } from '../store.js';
+import { understand, understoodChips, smartSearch } from '../smart.js';
 
 /**
- * Autocomplete for the header search: creators, tags and communities.
- * Arrow keys move, Enter opens the highlighted row (or searches the raw text),
+ * Autocomplete for search boxes: a live "Understood as" preview of what Enter will search
+ * (tags, creator, type, time, source read from plain words), then creators, tags and communities.
+ * Arrow keys move, Enter opens the highlighted row (or runs the smart search),
  * Esc closes. Stale responses are discarded so fast typing never flickers.
  */
-export function attachSuggest(input) {
-  const box = h('div', { class: 'suggest', role: 'listbox', id: 'suggest-box', hidden: true });
-  input.setAttribute('aria-controls', 'suggest-box');
+export function attachSuggest(input, { id = 'suggest-box' } = {}) {
+  const box = h('div', { class: 'suggest', role: 'listbox', id, hidden: true });
+  input.setAttribute('aria-controls', id);
   input.setAttribute('aria-autocomplete', 'list');
   let rows = []; let idx = -1; let token = 0;
 
@@ -30,9 +32,15 @@ export function attachSuggest(input) {
   }
   const label = (t) => h('div', { class: 'suggest-label' }, t);
 
-  function render(d) {
+  function render(d, u) {
     rows = [];
     const parts = [];
+    // Only worth showing when the words were read as more than a single plain match.
+    if (u && u.understood && (u.chips.length > 1 || u.text || u.corrections.length || !['tag', 'creator', 'community'].includes(u.chips[0].key))) {
+      const raw = input.value;
+      parts.push(label('Search for'), row([h('span', { class: 'u-spark' }, icon('sparkle', 'sm')), h('span', { class: 'u-preview' }, understoodChips(u)), h('kbd', { class: 'u-enter' }, '↵')], () => smartSearch(raw)));
+      rows[rows.length - 1].el.classList.add('understood-row');
+    }
     if (d.creators.length) {
       parts.push(label('Creators'), ...d.creators.map((c) => row([avatar(c, 28), h('span', { class: 'truncate' }, c.display_name || c.handle), h('span', { class: 'muted' }, `@${c.handle}`), h('span', { class: 'n' }, `${fmt.num(c.media_count)} posts`)], () => navigate(`/creator/${c.id}`))));
     }
@@ -50,7 +58,10 @@ export function attachSuggest(input) {
     const q = input.value.trim();
     if (!q) { hide(); return; }
     const mine = ++token;
-    try { const d = await get('/api/suggest', { q }); if (mine === token && document.activeElement === input) render(d); } catch { /* suggestions are a nicety */ }
+    try {
+      const [d, u] = await Promise.all([get('/api/suggest', { q }), q.includes(' ') || q.length >= 4 ? understand(q) : null]);
+      if (mine === token && document.activeElement === input) render(d, u);
+    } catch { /* suggestions are a nicety */ }
   }, 150);
 
   input.addEventListener('input', query);

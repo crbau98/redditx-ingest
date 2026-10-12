@@ -178,7 +178,17 @@ async function fetchTweet(id) {
   }).filter((it) => it.mediaUrl);
 }
 
+/** Profiles for up to 100 usernames (discovery enrichment). Needs X_BEARER_TOKEN and budget. */
+async function lookupUsers(usernames) {
+  const list = [...new Set(usernames.map((u) => String(u).replace(/^@/, '')).filter((u) => /^[A-Za-z0-9_]{1,15}$/.test(u)))].slice(0, 100);
+  if (!list.length || !apiAvailable()) return [];
+  const json = await apiGet(`${base}/2/users/by?usernames=${list.join(',')}&user.fields=description,public_metrics,profile_image_url,name`);
+  return (json.data || []).map((u) => ({ username: u.username, name: u.name, description: u.description || '', followers: (u.public_metrics && u.public_metrics.followers_count) || 0, avatar: (u.profile_image_url || '').replace('_normal', '_400x400') || null }));
+}
+
 module.exports = {
+  lookupUsers,
+  apiAvailable,
   platform: 'x',
   label: 'X',
   color: '#a1a1aa',

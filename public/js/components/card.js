@@ -1,6 +1,7 @@
 import { h, icon, proxied, fmt, avatar } from '../dom.js';
 import { favorites, history as viewHistory, prefs, platformLabel, platformColor, bus } from '../store.js';
 import { parse, href } from '../router.js';
+import { rememberFlip, heartBurst } from './fx.js';
 
 /* ---- hover / in-view video previews ------------------------------------
  * Only a couple of <video> elements are ever alive at once, so a grid of
@@ -66,6 +67,7 @@ export function mediaCard(item, { open, compact = false } = {}) {
   media.addEventListener('click', (e) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
     e.preventDefault();
+    rememberFlip(media);
     open && open(item);
   });
   if (isVideo) {
@@ -76,7 +78,10 @@ export function mediaCard(item, { open, compact = false } = {}) {
   }
 
   const fav = h('button', { class: `card-fav${favorites.has(item.id) ? ' on' : ''}`, 'aria-label': 'Save', 'aria-pressed': String(favorites.has(item.id)),
-    onclick: (e) => { e.preventDefault(); e.stopPropagation(); favorites.toggle(item.id, item); } }, icon('heart'));
+    onclick: (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (favorites.toggle(item.id, item)) { const r = e.currentTarget.getBoundingClientRect(); heartBurst(r.left + r.width / 2, r.top + r.height / 2); }
+    } }, icon('heart'));
   const off = bus.on('fav', (d) => {
     if (!media.isConnected) { off(); return; }
     if (!d.id || d.id === item.id) { const on = favorites.has(item.id); fav.classList.toggle('on', on); fav.setAttribute('aria-pressed', String(on)); }

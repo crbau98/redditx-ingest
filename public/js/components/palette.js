@@ -2,6 +2,7 @@ import { h, icon, avatar, fmt, debounce, $ } from '../dom.js';
 import { get } from '../api.js';
 import { navigate, setParam } from '../router.js';
 import { prefs, searches, collections, platformLabel } from '../store.js';
+import { smartSearch } from '../smart.js';
 
 let open = null;
 
@@ -21,6 +22,7 @@ function staticCommands() {
     { group: 'Go to', icon: 'film', label: 'Reels', hint: 'full-screen, swipe through', run: go('/reels') },
     { group: 'Go to', icon: 'layers', label: 'Browse tags & sources', run: go('/browse') },
     { group: 'Go to', icon: 'users', label: 'Creators', run: go('/creators') },
+    { group: 'Go to', icon: 'sparkle', label: 'Creator galaxy', hint: '3D map of who posts alike', run: go('/galaxy') },
     { group: 'Go to', icon: 'heart', label: 'Saved', run: go('/saved') },
     { group: 'Go to', icon: 'folder', label: 'Collections', run: go('/saved', { tab: 'collections' }) },
     { group: 'Go to', icon: 'history', label: 'History', run: go('/saved', { tab: 'history' }) },
@@ -75,7 +77,7 @@ export function openPalette() {
       ...remote.communities.map((c) => ({ group: 'Communities', icon: 'compass', label: c.name, hint: `${platformLabel(c.platform)} · ${fmt.num(c.count)}`, run: () => navigate('/explore', { community: c.name }) })),
     ];
     // Commands you typed the name of come first, then live matches, then a plain search as the fallback.
-    const all = [...local, ...dyn, ...(q ? [{ group: 'Search', icon: 'search', label: `Search for “${input.value.trim()}”`, run: () => navigate('/explore', { q: input.value.trim() }) }] : [])];
+    const all = [...local, ...dyn, ...(q ? [{ group: 'Search', icon: 'search', label: `Search for “${input.value.trim()}”`, run: () => smartSearch(input.value) }] : [])];
     rows = [];
     const parts = [];
     let group = null;

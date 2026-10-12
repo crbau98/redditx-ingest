@@ -73,7 +73,7 @@ export const favorites = {
       if (mine) { mine.items = [...new Set([...mine.items, ...ids])].slice(0, MAX_COLL_ITEMS); } else colls.push({ id: c.id || uid(), name: c.name.slice(0, 60), items: ids.slice(0, MAX_COLL_ITEMS), createdAt: c.createdAt || new Date().toISOString() });
     }
     saveColls();
-    for (const q of data.searches || []) if (q && q.query && !searchList.some((x) => x.key === searchKey(q.query))) searchList.push({ ...q, key: searchKey(q.query) });
+    for (const q of data.searches || []) if (q && q.query && !searchList.some((x) => searchKey(x.query) === searchKey(q.query))) searchList.push({ ...q, key: searchKey(q.query) });
     saveSearches();
     bus.emit('fav', {}); bus.emit('follow', {});
     return added;
@@ -153,14 +153,14 @@ export const collections = {
 
 /* -------------------------------------------------------- smart feeds */
 // A saved Explore search. `seen` marks the last visit, so the app can say "12 new".
-const SEARCH_KEYS = ['q', 'type', 'platform', 'community', 'tag', 'sort', 'since', 'following'];
+const SEARCH_KEYS = ['q', 'type', 'platform', 'community', 'tag', 'tags', 'anytags', 'creator', 'sort', 'since', 'following'];
 export const searchKey = (query) => SEARCH_KEYS.map((k) => `${k}=${(query && query[k]) || ''}`).join('&');
 let searchList = read('prism.searches', []); // [{id, name, query, key, seen, createdAt}]
 const saveSearches = () => { write('prism.searches', searchList); bus.emit('searches', null); };
 export const searches = {
   list: () => searchList.map((x) => ({ ...x, query: { ...x.query } })),
   count: () => searchList.length,
-  find: (query) => searchList.find((x) => x.key === searchKey(query)) || null,
+  find: (query) => { const k = searchKey(query); return searchList.find((x) => searchKey(x.query) === k) || null; },
   add(name, query) {
     const clean = Object.fromEntries(SEARCH_KEYS.filter((k) => query[k]).map((k) => [k, String(query[k])]));
     const existing = searches.find(clean);

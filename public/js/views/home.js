@@ -1,12 +1,18 @@
 import { h, icon, fmt, emptyState } from '../dom.js';
 import { get } from '../api.js';
-import { href, navigate } from '../router.js';
+import { href } from '../router.js';
 import { platformLabel, platformColor, follows, searches, tastes, history as viewHistory, prefs } from '../store.js';
 import { mediaCard } from '../components/card.js';
 import { creatorCard } from '../components/creator-card.js';
 import { createFeed } from '../components/feed.js';
 import { openLightbox } from '../components/lightbox.js';
 import { surpriseMe } from '../components/palette.js';
+import { mountPrismBackground } from '../components/prism-bg.js';
+import { createOrbit } from '../components/orbit.js';
+import { countUp } from '../components/fx.js';
+import { smartSearch } from '../smart.js';
+import { attachSuggest } from '../components/suggest.js';
+import { topicCards, becauseRails } from '../components/topics.js';
 
 /** "For you": a rail ranked from this device's taste, with the taste shown (and editable) right there. */
 async function forYouSection(open) {
@@ -103,24 +109,32 @@ export async function home(root) {
   }
 
   const s = data.stats;
-  const input = h('input', { class: 'input', type: 'search', placeholder: 'Search creators, tags, communities…', 'aria-label': 'Search', enterkeyhint: 'search' });
-  const go = () => navigate('/explore', { q: input.value.trim() });
+  const input = h('input', { class: 'input', type: 'search', placeholder: 'Try “muscle guys at the gym, videos this week”', 'aria-label': 'Search', enterkeyhint: 'search', autocomplete: 'off' });
+  const go = () => smartSearch(input.value);
+  attachSuggest(input, { id: 'hero-suggest' });
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
 
-  const hero = h('section', { class: 'hero' },
+  // Stats count up once on arrival; the hero's backdrop is a live WebGL prism shader and
+  // trending media turn on a 3D orbit beside the copy.
+  const stat = (n, label, format = fmt.num) => { const b = h('b', { class: 'num' }, format(n)); requestAnimationFrame(() => countUp(b, n, (v) => format(Math.round(v)))); return h('div', null, b, h('span', null, label)); };
+  const openFromOrbit = (it, list) => openLightbox(list, Math.max(0, list.findIndex((x) => x.id === it.id)));
+  const orbit = data.trending.length >= 5 ? createOrbit(data.trending, { onOpen: openFromOrbit, compact: window.matchMedia('(max-width: 899px)').matches }) : null;
+  const copy = h('div', { class: 'hero-copy' },
+    h('div', { class: 'hero-kicker' }, h('span', { class: 'live-dot' }), `${fmt.num(s.total)} photos & videos · ${fmt.num(s.creators)} creators · updated continuously`),
     h('h1', null, 'Discover male creators ', h('em', null, 'across the web')),
     h('p', { class: 'lead' }, 'One feed for photos and videos from creators on Reddit, RedGIFs, Bluesky, Mastodon, X and more — fresh, searchable, and organised around the people who make it.'),
     h('div', { class: 'hero-search' }, icon('search', 'lg'), input, h('button', { class: 'btn primary', onclick: go }, 'Search')),
     h('div', { class: 'hero-actions' },
-      h('a', { class: 'btn', href: href('/reels') }, icon('film', 'sm'), 'Watch Reels'),
-      h('button', { class: 'btn', onclick: surpriseMe }, icon('shuffle', 'sm'), 'Surprise me'),
+      h('a', { class: 'btn glass', href: href('/reels') }, icon('film', 'sm'), 'Watch Reels'),
+      h('button', { class: 'btn glass', onclick: surpriseMe }, icon('shuffle', 'sm'), 'Surprise me'),
       h('a', { class: 'btn ghost hide-mobile', href: href('/browse') }, icon('layers', 'sm'), 'Browse everything')),
-    h('div', { class: 'hero-stats' },
-      h('div', null, h('b', { class: 'num' }, fmt.num(s.total)), h('span', null, 'items')),
-      h('div', null, h('b', { class: 'num' }, fmt.num(s.creators)), h('span', null, 'creators')),
-      h('div', null, h('b', { class: 'num' }, fmt.num(s.videos)), h('span', null, 'videos')),
-      h('div', null, h('b', { class: 'num' }, data.platforms.length), h('span', null, 'sources'))),
+    h('div', { class: 'hero-stats' }, stat(s.total, 'items'), stat(s.creators, 'creators'), stat(s.videos, 'videos'), stat(data.platforms.length, 'sources', (v) => String(v))));
+  const hero = h('section', { class: `hero${orbit ? ' hero-split' : ''}` },
+    copy,
+    orbit ? h('div', { class: 'hero-visual' }, orbit.el, h('div', { class: 'orbit-hint' }, icon('chev-l', 'sm'), 'Drag to spin · tap to open', icon('chev-r', 'sm'))) : null,
     data.tags.length && !(!tastes.ready() && !prefs.introDone) ? h('div', { class: 'hero-chips' }, data.tags.slice(0, 10).map((t) => h('a', { class: 'chip', href: href('/explore', { tag: t.name }) }, `#${t.name}`, h('span', { class: 'n' }, fmt.num(t.count))))) : null);
+  const stopPrism = mountPrismBackground(hero);
+  const teardownHero = () => { stopPrism(); if (orbit) orbit.destroy(); };
 
   if (!s.total) {
     root.replaceChildren(hero, emptyState({
@@ -128,7 +142,7 @@ export async function home(root) {
       text: 'Open the admin console to add creators and communities, then run a first sync. Content appears here as soon as it’s ingested.',
       actions: [h('a', { class: 'btn primary', href: href('/admin/sources') }, 'Open admin'), h('a', { class: 'btn', href: href('/creators') }, 'Browse creators')],
     }));
-    return () => {};
+    return teardownHero;
   }
 
   // Newest posts from creators this device follows (the server never learns who you follow beyond this request).
@@ -140,6 +154,9 @@ export async function home(root) {
 
   const parts = [hero];
   const open = (list) => (item) => openLightbox(list, Math.max(0, list.findIndex((x) => x.id === item.id)));
+  // Fetched in parallel with the rest of the page; slotted in when ready.
+  const topicsP = topicCards({ limit: 8 });
+  const becauseP = becauseRails(open);
   const picker = interestPicker(data.tags, async () => { const sec = await forYouSection(open); if (picker.isConnected) { if (sec) picker.replaceWith(sec); else picker.remove(); } });
   if (picker) parts.push(picker);
   const forYou = await forYouSection(open);
@@ -150,9 +167,12 @@ export async function home(root) {
   if (fromFollowed.length) {
     parts.push(h('section', { class: 'section' }, sectionHead('heart', 'From creators you follow', 'Latest from the people you follow on this device', { href: href('/explore', { following: '1' }), label: 'See all' }), rail(fromFollowed, { open: open(fromFollowed) })));
   }
+  parts.push(...await becauseP);
   if (data.trending.length) {
     parts.push(h('section', { class: 'section' }, sectionHead('flame', 'Trending now', 'What people are watching and saving', { href: href('/explore', { sort: 'trending' }), label: 'See all' }), rail(data.trending, { open: open(data.trending) })));
   }
+  const topics = await topicsP;
+  if (topics) parts.push(h('section', { class: 'section' }, sectionHead('layers', 'Topics', 'Themes the library keeps coming back to — found from tags that travel together', { href: href('/browse'), label: 'Browse all' }), topics));
   if (data.rising && data.rising.length) {
     parts.push(h('section', { class: 'section' }, sectionHead('trend', 'Rising this week', 'Creators posting more — and getting more love — than usual', { href: href('/creators', { sort: 'recent' }), label: 'All creators' }),
       h('div', { class: 'rail' }, data.rising.map((c) => creatorCard(c, { mini: true, badge: `+${c.week_count} this week` })))));
@@ -179,5 +199,5 @@ export async function home(root) {
   parts.push(h('section', { class: 'section' }, sectionHead('layers', 'Latest uploads', null, { href: href('/explore'), label: 'Explore everything' }), feed.el));
 
   root.replaceChildren(...parts);
-  return () => feed && feed.destroy();
+  return () => { teardownHero(); if (feed) feed.destroy(); };
 }

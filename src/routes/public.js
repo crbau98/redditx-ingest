@@ -8,6 +8,7 @@ const registry = require('../sources');
 const events = require('../engine/events');
 const age = require('../middleware/age');
 const { publicAccounts } = require('../services/targets');
+const { understand, buildVocabulary } = require('../lib/query');
 
 const router = express.Router();
 
@@ -47,6 +48,8 @@ function mediaFilters(q) {
     community: str(q.community || q.subreddit),
     creator: /^[0-9a-f-]{36}$/i.test(q.creator || '') ? q.creator : undefined,
     tag: str(q.tag, 60),
+    tagsAll: typeof q.tags === 'string' ? q.tags.split(',').map((t) => t.trim()).filter((t) => /^[\p{L}\p{N}-]{2,40}$/u.test(t)).slice(0, 6) : undefined,
+    tagsAny: typeof q.anytags === 'string' ? q.anytags.split(',').map((t) => t.trim()).filter((t) => /^[\p{L}\p{N}-]{2,40}$/u.test(t)).slice(0, 12) : undefined,
     creators: typeof q.creators === 'string' ? q.creators.split(',').filter((x) => /^[0-9a-f-]{36}$/i.test(x)).slice(0, 100) : undefined,
     ids: typeof q.ids === 'string' ? q.ids.split(',').filter((x) => /^[0-9a-f-]{36}$/i.test(x)).slice(0, 100) : undefined,
     q: str(q.q, 100),
@@ -70,6 +73,12 @@ const discoverCached = ttl(30000, () => {
     rising: d.rising.map((c) => ({ ...publicCreator(c), week_count: c.week_count })),
   };
 });
+const graphCached = ttl(5 * 60000, () => {
+  const g = repo.creators.graph({ limit: 160 });
+  return { nodes: g.nodes.map((n) => ({ id: n.id, handle: n.handle, display_name: n.display_name, avatar_url: n.avatar_url, media_count: n.media_count, last_media_at: n.last_media_at, preview: n.preview, group: n.group })), links: g.links };
+});
+const vocabCached = ttl(60000, () => buildVocabulary(repo.tagIntel.vocabulary()));
+const topicsCached = ttl(10 * 60000, () => repo.tagIntel.topics());
 const tagsCached = ttl(60000, () => repo.media.tags(120, 1));
 const communitiesCached = ttl(60000, () => repo.media.communities(100));
 
@@ -117,7 +126,7 @@ router.post('/report', reportLimiter, (req, res) => {
 });
 
 /* -------------------------------------------------------- age-gated content */
-router.use(['/discover', '/stats', '/suggest', '/recommend', '/media', '/creators', '/tags', '/communities', '/subreddits', '/platforms', '/stream'], age.requireAge);
+router.use(['/discover', '/stats', '/suggest', '/recommend', '/graph', '/understand', '/topics', '/media', '/creators', '/tags', '/communities', '/subreddits', '/platforms', '/stream'], age.requireAge);
 
 router.get('/discover', (req, res) => res.json(discoverCached()));
 router.get('/stats', (req, res) => res.json(repo.publicStats()));
@@ -195,6 +204,30 @@ router.get('/recommend', (req, res) => {
   }
   res.json({ ...r, items: r.items.map(publicMedia) });
 });
+
+router.get('/graph', (req, res) => res.json(graphCached()));
+
+/** Plain-language search → structured filters (see src/lib/query.js). */
+router.get('/understand', (req, res) => {
+  const q = typeof req.query.q === 'string' ? req.query.q : '';
+  const u = understand(q, vocabCached());
+  const query = {
+    type: u.type, sort: u.sort, since: u.since, platform: u.platform, community: u.community,
+    tags: u.tags.length ? u.tags.join(',') : undefined, creator: u.creator ? u.creator.id : undefined, q: u.text || undefined,
+  };
+  res.json({
+    understood: u.understood, query, chips: u.chips.map((c) => ({ key: c.key, value: c.key === 'creator' ? c.value.id : c.value, label: c.label })),
+    creator: u.creator ? { id: u.creator.id, handle: u.creator.handle, display_name: u.creator.display_name } : null,
+    text: u.text, corrections: u.corrections,
+  });
+});
+
+router.get('/tags/related', (req, res) => {
+  const names = typeof req.query.tags === 'string' ? req.query.tags.split(',').slice(0, 4) : [];
+  res.json(repo.tagIntel.related(names, repo.clampInt(req.query.limit, 1, 30, 12)));
+});
+
+router.get('/topics', (req, res) => res.json(topicsCached()));
 
 router.get('/creators/:id/activity', (req, res) => {
   const c = repo.creators.get(req.params.id);

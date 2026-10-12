@@ -7,9 +7,15 @@ const STATUSES = [['pending', 'Waiting'], ['followed', 'Followed'], ['linked', '
 const SIGNAL_LABEL = { identity: 'same name', mention: 'mentioned', cofollow: 'followed by', search: 'web search' };
 const SCOPE = { in: ['good', 'male-focused'], uncertain: ['', 'unclear'], excluded: ['bad', 'off-topic'] };
 
+const KIND_LABEL = { community: 'community', feedgen: 'custom feed', list: 'list', page: 'link page' };
+const reach = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 100) / 10}k` : String(n));
+
 function signalChips(sig) {
-  return h('div', { class: 'row wrap', style: { gap: '4px' } }, Object.entries(sig || {}).filter(([k, v]) => SIGNAL_LABEL[k] && v.length).map(([k, v]) =>
-    h('span', { class: `badge sig-${k}`, title: k === 'search' ? v.join('\n') : `${v.length} distinct source${v.length === 1 ? '' : 's'}` }, `${SIGNAL_LABEL[k]} ×${v.length}`)));
+  const chips = Object.entries(sig || {}).filter(([k, v]) => SIGNAL_LABEL[k] && Array.isArray(v) && v.length).map(([k, v]) =>
+    h('span', { class: `badge sig-${k}`, title: k === 'search' ? v.join('\n') : `${v.length} distinct source${v.length === 1 ? '' : 's'}` }, `${SIGNAL_LABEL[k]} ×${v.length}`));
+  const pop = Number(sig && sig.popularity) || 0;
+  if (pop) chips.push(h('span', { class: 'badge sig-reach', title: 'Audience: subscribers, followers or likes. Counts toward the score (log-scaled, up to +3).' }, icon('users', 'sm'), reach(pop)));
+  return h('div', { class: 'row wrap', style: { gap: '4px' } }, chips);
 }
 
 function scoreBar(score, threshold) {
@@ -26,7 +32,7 @@ export async function render(root) {
   let data;
 
   const runBtn = h('button', { class: 'btn primary', onclick: (e) => act(e.currentTarget, async () => { await adminPost('/discovery/run'); toast('Discovery started — watch the Live log', 'ok'); setTimeout(load, 2500); }) }, icon('sparkle', 'sm'), 'Run discovery now');
-  head.append(pageHead('Discovery', 'Finds creators you are not following yet — from who your creators mention and follow, and from web searches — scores them, and follows the strong ones automatically.', runBtn));
+  head.append(pageHead('Discovery', 'Finds creators, communities and custom feeds you are not following yet — from who your creators mention and follow, keyword searches on Reddit, Lemmy and Bluesky, and web searches — scores them, and follows the strong ones automatically.', runBtn));
 
   const search = h('input', { class: 'input sm', type: 'search', placeholder: 'Search candidates…', value: f.q, style: { maxWidth: '220px' } });
   search.addEventListener('input', debounce(() => set({ q: search.value.trim(), page: 0 }), 350));
@@ -64,6 +70,7 @@ export async function render(root) {
     const save = async (patch) => { try { await adminPut('/settings', patch); toast('Saved', 'ok'); } catch (e) { toast(e.message, 'err'); } };
     const num = (key, min, max) => { const el = h('input', { class: 'input sm', type: 'number', min, max, value: v[key], style: { width: '96px' } }); el.addEventListener('change', () => save({ [key]: el.value })); return el; };
     const queries = h('textarea', { class: 'textarea', rows: 6, spellcheck: 'false' }); queries.value = v.discoveryQueries || '';
+    const keywords = h('textarea', { class: 'textarea', rows: 5, spellcheck: 'false' }); keywords.value = v.discoveryKeywords || '';
     const keyBadge = (ok, label, hint) => h('span', { class: `badge ${ok ? 'good' : ''}`, title: hint }, ok ? icon('check', 'sm') : null, label);
     tune.replaceChildren(h('details', { class: 'panel', open: !d.counts.followed && !d.counts.pending ? true : null },
       h('summary', null, h('b', null, 'Tune discovery'), h('span', { class: 'muted', style: { marginLeft: '10px', fontSize: '13px' } }, 'signals, thresholds, search topics')),
@@ -71,15 +78,20 @@ export async function render(root) {
         keyBadge(d.brave.configured, 'Brave search', 'BRAVE_API_KEY — web search for profiles and identity matching'),
         keyBadge(d.xApi, 'X API', 'X_BEARER_TOKEN — reliable X timelines and searches'),
         keyBadge(d.telegramBot, 'Telegram bot', 'TELEGRAM_API_KEY — channel checks and full descriptions'),
-        keyBadge(true, 'Bluesky graph', 'Public, no key needed'), keyBadge(true, 'Mentions', 'Read from posts already ingested')),
+        keyBadge(true, 'Bluesky graph', 'Public, no key needed'), keyBadge(true, 'Mentions', 'Read from posts already ingested'),
+        keyBadge(v.discoveryCommunities, 'Communities & feeds', 'Reddit subreddit search, Lemmy community lists, Bluesky custom-feed search — public, no key needed')),
       h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Follow strong candidates automatically'), toggle(v.autoDiscover, (on) => save({ autoDiscover: on }))),
       h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Read who your Bluesky creators follow'), toggle(v.discoveryGraph, (on) => save({ discoveryGraph: on }))),
-      h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Auto-follow at score'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'same name = 6 · each creator who mentions them = 3 · each who follows them = 1.5 · each search hit = 2 · male-focused bio = +2')), num('discoveryAutoFollowScore', 3, 60)),
+      h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Search for communities and custom feeds'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'NSFW subreddits, Lemmy communities and popular Bluesky feeds matching your keywords')), toggle(v.discoveryCommunities, (on) => save({ discoveryCommunities: on }))),
+      h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Auto-follow strong communities'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Only male-focused ones; every post from them is still checked on its own')), toggle(v.discoveryAutoCommunities, (on) => save({ discoveryAutoCommunities: on }))),
+      h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Auto-follow at score'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'same name = 6 · each creator who mentions them = 3 · each who follows them = 1.5 · each search hit = 2 · audience up to +3 · male-focused bio = +2')), num('discoveryAutoFollowScore', 3, 60)),
       h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Max follows per run'), num('discoveryMaxFollowsPerRun', 0, 100)),
       h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Run every (minutes)'), num('discoveryIntervalMin', 15, 1440)),
       h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Brave searches per day'), num('braveDailyBudget', 0, 2000)),
       h('div', { class: 'field', style: { marginTop: '10px' } }, h('label', null, 'Web-search topics (one per line — one is searched per run, in rotation)'), queries,
-        h('button', { class: 'btn sm', style: { marginTop: '8px' }, onclick: () => save({ discoveryQueries: queries.value }) }, 'Save topics'))));
+        h('button', { class: 'btn sm', style: { marginTop: '8px' }, onclick: () => save({ discoveryQueries: queries.value }) }, 'Save topics')),
+      h('div', { class: 'field', style: { marginTop: '10px' } }, h('label', null, 'Community keywords (one per line — two are searched per run on Reddit and Bluesky)'), keywords,
+        h('button', { class: 'btn sm', style: { marginTop: '8px' }, onclick: () => save({ discoveryKeywords: keywords.value }) }, 'Save keywords'))));
   }
 
   async function load() {
@@ -95,7 +107,7 @@ export async function render(root) {
           h('div', { style: { minWidth: 0 } },
             h('a', { href: c.url || '#', target: '_blank', rel: 'noopener noreferrer nofollow', style: { fontWeight: 600 }, class: 'truncate', title: c.target }, c.display_name || c.label || c.target),
             h('div', { class: 'sub truncate', style: { maxWidth: '320px' }, title: c.bio || '' }, c.bio ? c.bio.slice(0, 120) : c.target))) },
-        { label: 'Source', render: (c) => h('div', { class: 'cell-stack' }, platBadge(c.platform), c.kind !== 'user' ? h('span', { class: 'sub' }, c.kind) : null) },
+        { label: 'Source', render: (c) => h('div', { class: 'cell-stack' }, platBadge(c.platform), c.kind !== 'user' ? h('span', { class: 'sub' }, KIND_LABEL[c.kind] || c.kind) : null) },
         { label: 'Why', render: (c) => h('div', { class: 'cell-stack' }, signalChips(c.signals), h('span', { class: `badge ${SCOPE[c.scope][0]}` }, SCOPE[c.scope][1]), c.reason && c.reason !== 'checked' ? h('span', { class: 'sub', style: { maxWidth: '220px' } }, c.reason) : null) },
         { label: 'Score', width: '130px', render: (c) => scoreBar(c.score, d.threshold) },
         { label: 'Seen', render: (c) => h('span', { class: 'sub' }, fmt.ago(c.last_seen)) },

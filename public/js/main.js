@@ -5,8 +5,10 @@ import { prefs, favorites, follows, platforms, bus } from './store.js';
 import { syncFromUrl, isOpen } from './components/lightbox.js';
 import { openPalette, paletteOpen, surpriseMe } from './components/palette.js';
 import { openDisplaySettings } from './components/display.js';
+import { initTilt, initRails, gpuTier } from './components/fx.js';
 import { openTakedownForm } from './components/report.js';
 import { attachSuggest } from './components/suggest.js';
+import { smartSearch } from './smart.js';
 import { home } from './views/home.js';
 import { explore } from './views/explore.js';
 import { creators } from './views/creators.js';
@@ -14,6 +16,7 @@ import { creator } from './views/creator.js';
 import { saved } from './views/saved.js';
 import { browse } from './views/browse.js';
 import { reels } from './views/reels.js';
+import { galaxy } from './views/galaxy.js';
 
 const routes = [
   { pattern: '/', view: home, nav: 'home' },
@@ -21,6 +24,7 @@ const routes = [
   { pattern: '/reels', view: reels, nav: 'reels' },
   { pattern: '/browse', view: browse, nav: 'browse' },
   { pattern: '/creators', view: creators, nav: 'creators' },
+  { pattern: '/galaxy', view: galaxy, nav: 'creators' },
   { pattern: '/creator/:id', view: creator, nav: 'creators' },
   { pattern: '/saved', view: saved, nav: 'saved' },
   { pattern: '/admin/:tab?', view: (...a) => import('./views/admin/index.js').then((m) => m.admin(...a)), nav: 'admin' },
@@ -61,7 +65,7 @@ const NAV = [['home', '/', 'Home', 'home'], ['explore', '/explore', 'Explore', '
 
 /* --------------------------------------------------------- global shortcuts */
 function showShortcuts() {
-  const rows = [['Ctrl / ⌘ + K', 'Command palette — jump anywhere, run actions'], ['/', 'Search'], ['?', 'This help'], ['G then H / E / R / C / S', 'Go to Home, Explore, Reels, Creators, Saved'], ['X', 'Surprise me (open something random)'],
+  const rows = [['Ctrl / ⌘ + K', 'Command palette — jump anywhere, run actions'], ['/', 'Search'], ['?', 'This help'], ['G then H / E / R / C / S / M', 'Go to Home, Explore, Reels, Creators, Saved, Galaxy map'], ['X', 'Surprise me (open something random)'],
     ['In the viewer', ''], ['← / →  (J / K)', 'Previous / next'], ['F · C', 'Save · add to collection'], ['S · I · M', 'Slideshow · details · mute'],
     ['In Reels', ''], ['↑ / ↓  (K / J)', 'Previous / next'], ['Space · M', 'Pause · sound'], ['F · C · Enter', 'Save · collect · open details'], ['Double-tap', 'Save']];
   const m = openModal({ title: 'Keyboard shortcuts', wide: true, body: h('dl', { class: 'kv', style: { gridTemplateColumns: 'auto 1fr' } }, rows.map(([k, d]) => (d
@@ -75,7 +79,7 @@ function wireShortcuts() {
     if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openPalette(); return; }
     if (e.metaKey || e.ctrlKey || e.altKey || isOpen() || paletteOpen() || $('#modal-root').children.length || e.target.closest('input, textarea, select, [contenteditable]')) return;
     if (Date.now() - g < 1200) {
-      const dest = { h: '/', e: '/explore', r: '/reels', c: '/creators', s: '/saved', b: '/browse', a: '/admin' }[e.key.toLowerCase()];
+      const dest = { h: '/', e: '/explore', r: '/reels', c: '/creators', s: '/saved', b: '/browse', a: '/admin', m: '/galaxy' }[e.key.toLowerCase()];
       g = 0;
       if (dest) { e.preventDefault(); navigate(dest); }
       return;
@@ -88,10 +92,10 @@ function wireShortcuts() {
 
 function buildShell() {
   const app = $('#app');
-  const searchInput = h('input', { class: 'input', type: 'search', id: 'global-search', placeholder: 'Search creators, tags, communities…', 'aria-label': 'Search', enterkeyhint: 'search', autocomplete: 'off' });
+  const searchInput = h('input', { class: 'input', type: 'search', id: 'global-search', placeholder: 'Search anything — “bearded guys at the beach, videos”', 'aria-label': 'Search', enterkeyhint: 'search', autocomplete: 'off' });
   attachSuggest(searchInput); // registered first so it can claim Enter for a highlighted suggestion
   searchInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { navigate('/explore', { q: searchInput.value.trim() }); searchInput.blur(); }
+    if (e.key === 'Enter') { smartSearch(searchInput.value); searchInput.blur(); }
     if (e.key === 'Escape') searchInput.blur();
   });
   document.addEventListener('keydown', (e) => {
@@ -108,7 +112,7 @@ function buildShell() {
   const paintBadge = () => { const n = favorites.count(); savedBadge.textContent = n > 99 ? '99+' : n; savedBadge.style.display = n ? '' : 'none'; };
   bus.on('fav', paintBadge); paintBadge();
 
-  const header = h('header', { class: 'appbar' },
+  const header = h('header', { class: 'appbar' }, h('div', { class: 'scroll-progress', 'aria-hidden': 'true' }),
     h('a', { class: 'brand', href: href('/'), 'aria-label': 'PRISM home' }, icon('logo'), h('span', null, 'PRISM')),
     h('nav', { class: 'nav', 'aria-label': 'Primary' }, NAV.map(([key, path, label, ic]) => h('a', { href: href(path), dataset: { nav: key } }, icon(ic, 'sm'), label, key === 'saved' ? savedBadge : null))),
     h('div', { class: 'search' }, icon('search'), searchInput, h('span', { class: 'kbd hide-mobile' }, '/')),
@@ -118,11 +122,13 @@ function buildShell() {
   const footer = h('footer', { class: 'footer' },
     h('span', null, 'PRISM — adults only (18+)'),
     h('a', { href: href('/browse') }, 'Browse'),
+    h('a', { href: href('/galaxy') }, 'Creator galaxy'),
     h('button', { onclick: showShortcuts }, 'Keyboard shortcuts'),
     h('button', { onclick: openDisplaySettings }, 'Display settings'),
     h('button', { onclick: openTakedownForm }, 'Report content / takedown'),
     h('a', { href: href('/admin') }, 'Admin'));
-  const bottom = h('nav', { class: 'bottomnav five', 'aria-label': 'Primary' }, NAV.filter((n) => !n[4]).map(([key, path, label, ic]) => h('a', { href: href(path), dataset: { nav: key } }, icon(ic, 'lg'), label)));
+  const bottom = h('nav', { class: 'bottomnav five', 'aria-label': 'Primary' }, h('span', { class: 'bn-ind', 'aria-hidden': 'true' }), NAV.filter((n) => !n[4]).map(([key, path, label, ic]) => h('a', { href: href(path), dataset: { nav: key } }, icon(ic, 'lg'), label)));
+  window.addEventListener('resize', () => setNav(currentNav), { passive: true });
   const fab = h('button', { class: 'fab', hidden: true, 'aria-label': 'Back to top', onclick: () => window.scrollTo({ top: 0, behavior: 'smooth' }) }, icon('up'));
   window.addEventListener('scroll', () => { fab.hidden = window.scrollY < 900; }, { passive: true });
 
@@ -130,8 +136,16 @@ function buildShell() {
   return { main, searchInput };
 }
 
+let currentNav = null;
 function setNav(key) {
+  currentNav = key;
   document.querySelectorAll('[data-nav]').forEach((a) => { if (a.dataset.nav === key) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+  // slide the phone tab bar's highlight under the current tab
+  const ind = document.querySelector('.bn-ind');
+  const on = document.querySelector(`.bottomnav [data-nav="${key}"]`);
+  if (ind) {
+    if (on) { ind.style.width = `${on.offsetWidth - 12}px`; ind.style.transform = `translateX(${on.offsetLeft + 6}px)`; ind.style.opacity = '1'; } else ind.style.opacity = '0';
+  }
 }
 
 /* ----------------------------------------------------------------- router */
@@ -196,6 +210,9 @@ async function boot() {
 
   const shell = buildShell();
   wireShortcuts();
+  document.documentElement.dataset.gpu = gpuTier(); // CSS trims costly effects on software rendering
+  initTilt();
+  initRails($('#app'));
   window.addEventListener('hashchange', () => render(shell));
   await render(shell);
   wireLiveUpdates(shell);
