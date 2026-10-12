@@ -582,6 +582,25 @@ const runs = {
         SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS errors
       FROM feed_runs WHERE started_at >= ? GROUP BY hour ORDER BY hour`).all(since);
   },
+  /**
+   * Per-platform scorecard over the last N days: how many runs, how often they failed, what they actually
+   * brought in, how much of it was filtered, and how many creators the platform contributes.
+   */
+  scoreboard(days = 7) {
+    const since = new Date(Date.now() - days * 86400000).toISOString();
+    const rows = db.prepare(`SELECT f.platform AS platform, COUNT(*) AS runs,
+        SUM(CASE WHEN r.status = 'error' THEN 1 ELSE 0 END) AS errors,
+        SUM(CASE WHEN r.status = 'empty' THEN 1 ELSE 0 END) AS empty,
+        SUM(r.fetched) AS fetched, SUM(r.added) AS added, SUM(r.dupes) AS dupes, SUM(r.skipped) AS skipped, SUM(r.blocked) AS blocked,
+        AVG(r.duration_ms) AS avg_ms, MAX(CASE WHEN r.status IN ('ok','empty') THEN r.finished_at END) AS last_ok
+      FROM feed_runs r JOIN feeds f ON f.id = r.feed_id WHERE r.started_at >= ? AND r.status != 'running' GROUP BY f.platform`).all(since);
+    const creators = Object.fromEntries(db.prepare(`SELECT platform, COUNT(DISTINCT creator_id) AS n FROM media WHERE ingested_at >= ? AND creator_id IS NOT NULL AND publish_state = 'published' GROUP BY platform`).all(since).map((r) => [r.platform, r.n]));
+    return rows.map((r) => ({
+      platform: r.platform, runs: r.runs, errorRate: r.runs ? Math.round((r.errors / r.runs) * 100) : 0, emptyRate: r.runs ? Math.round((r.empty / r.runs) * 100) : 0,
+      fetched: r.fetched || 0, added: r.added || 0, dupes: r.dupes || 0, filtered: (r.skipped || 0) + (r.blocked || 0), avgMs: Math.round(r.avg_ms || 0),
+      yieldPerRun: r.runs ? Math.round(((r.added || 0) / r.runs) * 10) / 10 : 0, creators: creators[r.platform] || 0, lastOk: r.last_ok || null,
+    }));
+  },
   /** Items added by a feed's last few finished runs, newest first (for adaptive scheduling). */
   recentAdded(feedId, n = 4) {
     return db.prepare("SELECT added FROM feed_runs WHERE feed_id = ? AND status IN ('ok','empty') ORDER BY started_at DESC LIMIT ?").all(feedId, n).map((r) => r.added || 0);

@@ -13,6 +13,7 @@ const http = require('http');
 const https = require('https');
 const dns = require('dns');
 const net = require('net');
+const tls = require('tls');
 const zlib = require('zlib');
 const { URL } = require('url');
 const config = require('../config');
@@ -54,16 +55,20 @@ function isPrivateIp(ip) {
 }
 
 /** Hostname pre-check (literal IPs + obviously local names). */
-function isPrivateHost(hostname) {
+function isPrivateHost(hostname, { allowInternal = false } = {}) {
   if (config.allowPrivateHosts) return false;
   let h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
   if (!h) return true;
+  if (allowInternal && isInternalHost(h)) return false; // only for explicit, first-hop callers (see open())
   if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal')) return true;
   if (net.isIP(h)) return isPrivateIp(h);
   // Numeric forms like 2130706433 or 0x7f.1 are normalised by WHATWG URL to
   // dotted quads before we get here, so a plain name is all that is left.
   return false;
 }
+
+/** Exact hostnames an operator vouched for (INTERNAL_HOSTS, e.g. a SearXNG container on the compose network). */
+function isInternalHost(h) { return (config.internalHosts || []).includes(String(h || '').toLowerCase()); }
 
 function safeLookup(hostname, options, callback) {
   if (typeof options === 'function') { callback = options; options = {}; }
@@ -81,9 +86,72 @@ function safeLookup(hostname, options, callback) {
   });
 }
 
+/**
+ * Lookup for the dedicated internal agent: it resolves ONLY names the operator vouched for in INTERNAL_HOSTS (a SearXNG
+ * container on the compose network) and refuses everything else, so even a mistake upstream cannot turn it into a
+ * general private-network door. It is used only when a caller passes `allowInternal` and only for the first hop.
+ */
+function internalLookup(hostname, options, callback) {
+  if (typeof options === 'function') { callback = options; options = {}; }
+  if (!isInternalHost(hostname)) { const e = new Error(`Blocked host: ${hostname} is not an internal host`); e.code = 'EBLOCKED'; return callback(e); }
+  return dns.lookup(hostname, options || {}, callback);
+}
+
 const agentOpts = { keepAlive: true, maxSockets: 32, timeout: 30000, lookup: safeLookup };
+const internalAgentOpts = { keepAlive: true, maxSockets: 8, timeout: 30000, lookup: internalLookup };
+const internalHttpAgent = new http.Agent(internalAgentOpts);
+const internalHttpsAgent = new https.Agent(internalAgentOpts);
 const httpAgent = new http.Agent(agentOpts);
 const httpsAgent = new https.Agent(agentOpts);
+
+/**
+ * Optional egress through an HTTP CONNECT proxy (OUTBOUND_PROXY=http://host:port), for networks that only allow
+ * outbound traffic via a proxy. Trade-off, stated plainly: the proxy resolves DNS, so the resolved-address check in
+ * safeLookup cannot run for these connections; literal-IP and local-name checks still apply, and the proxy
+ * itself is what keeps private ranges unreachable. Off by default.
+ */
+class ProxyTunnelAgent extends https.Agent {
+  constructor(proxyUrl, opts) { super(opts); this.proxy = new URL(proxyUrl); }
+  createConnection(options, cb) {
+    const host = options.host || options.hostname; const port = options.port || 443;
+    // Keep the SSRF guarantee: the proxy would resolve the name itself, so resolve it HERE first and refuse private
+    // answers. If local DNS cannot answer, the destination cannot be validated: refuse too, unless the operator has
+    // declared that their proxy does the resolving (OUTBOUND_PROXY_TRUST_DNS=true, e.g. split-horizon DNS).
+    // Residual risk, stated plainly: the proxy re-resolves, so a rebinding DNS server could still answer differently
+    // the second time; the proxy should also deny private ranges.
+    if (!config.allowPrivateHosts && !net.isIP(host)) {
+      dns.lookup(host, { all: true }, (err, addrs) => { // (not returned: Node would mistake the lookup request for a socket)
+        if (err) {
+          if (config.outboundProxyTrustDns) return this.tunnel(host, port, options, cb);
+          const e = new Error(`Blocked host: cannot validate ${host} (local DNS failed: ${err.code || err.message}); set OUTBOUND_PROXY_TRUST_DNS=true if the proxy resolves names for you`);
+          e.code = 'EBLOCKED'; return cb(e);
+        }
+        if ((addrs || []).some((a) => isPrivateIp(a.address))) {
+          const e = new Error(`Blocked host: ${host} resolves to a private address`); e.code = 'EBLOCKED'; return cb(e);
+        }
+        return this.tunnel(host, port, options, cb);
+      });
+      return undefined;
+    }
+    this.tunnel(host, port, options, cb);
+    return undefined;
+  }
+  tunnel(host, port, options, cb) {
+    const headers = { host: `${host}:${port}` };
+    if (this.proxy.username) headers['proxy-authorization'] = `Basic ${Buffer.from(`${decodeURIComponent(this.proxy.username)}:${decodeURIComponent(this.proxy.password)}`).toString('base64')}`;
+    const req = http.request({ host: this.proxy.hostname, port: this.proxy.port || 80, method: 'CONNECT', path: `${host}:${port}`, headers, agent: false, timeout: 15000 });
+    req.once('connect', (res, socket) => {
+      if (res.statusCode !== 200) { socket.destroy(); return cb(Object.assign(new Error(`proxy refused CONNECT to ${host} (HTTP ${res.statusCode})`), { code: 'EPROXY', status: res.statusCode })); }
+      const secure = tls.connect({ socket, servername: options.servername || host, ALPNProtocols: ['http/1.1'] });
+      secure.once('secureConnect', () => cb(null, secure));
+      secure.once('error', cb);
+    });
+    req.once('timeout', () => req.destroy(Object.assign(new Error('proxy CONNECT timed out'), { code: 'ETIMEDOUT' })));
+    req.once('error', cb);
+    req.end();
+  }
+}
+const proxiedHttpsAgent = config.outboundProxy ? new ProxyTunnelAgent(config.outboundProxy, { keepAlive: true, maxSockets: 32, timeout: 30000 }) : null;
 
 class HttpError extends Error {
   constructor(message, { status = 0, url = '', retryAfter = 0, body = null, code = '' } = {}) {
@@ -136,7 +204,7 @@ function decode(res, buf, url) {
  * Open a validated connection and hand back the raw response (not yet
  * consumed). Follows redirects itself so every hop is re-validated.
  */
-function open(url, { method: method0 = 'GET', headers = {}, timeout = 20000, maxRedirects = 5, body: body0 } = {}) {
+function open(url, { method: method0 = 'GET', headers = {}, timeout = 20000, maxRedirects = 5, body: body0, allowInternal = false } = {}) {
   return new Promise((resolve, reject) => {
     let hops = 0;
     let method = method0;
@@ -147,14 +215,17 @@ function open(url, { method: method0 = 'GET', headers = {}, timeout = 20000, max
       if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
         return reject(new HttpError('Unsupported protocol', { url: target }));
       }
-      if (isPrivateHost(parsed.hostname)) {
+      // `allowInternal` is an explicit grant from the caller (the SearXNG client) and holds for the FIRST hop only: a redirect,
+      // however it was triggered by remote content, can never land on an internal host.
+      const internal = allowInternal && hops === 0 && isInternalHost(parsed.hostname);
+      if (isPrivateHost(parsed.hostname, { allowInternal: internal })) {
         return reject(new HttpError('Blocked host', { url: target, code: 'EBLOCKED' }));
       }
       const lib = parsed.protocol === 'https:' ? https : http;
       const req = lib.request(parsed, {
         method,
         headers: hdrs,
-        agent: parsed.protocol === 'https:' ? httpsAgent : httpAgent,
+        agent: internal ? (parsed.protocol === 'https:' ? internalHttpsAgent : internalHttpAgent) : (parsed.protocol === 'https:' ? (proxiedHttpsAgent || httpsAgent) : httpAgent),
       }, (res) => {
         const loc = res.headers.location;
         if ([301, 302, 303, 307, 308].includes(res.statusCode) && loc) {

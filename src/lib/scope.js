@@ -20,15 +20,17 @@
  */
 const { normalize } = require('./safety');
 
-// Whole-word male signals. Strong ones are unmistakable; weak ones ("bi", "abs") only count as a hint
-// because female posts use them too, but no HARD female hit can be outvoted by any of them.
-const MALE = new RegExp(
-  '\\b(?:gay[a-z0-9]*|male|males|men|man|manly|guy|guys|dude|dudes|twinks?|bears?|otters?|jocks?|cocks?|dicks?|studs?|daddy|daddies|dads?|' +
-  'muscles?|muscular|hunks?|bros?|boys?|lads?|hung|bulges?|jockstraps?|m4m|m4a|dilf|dilfs|hubby|husband|boyfriend|bf|abs|pecs|beard|bearded|' +
-  'hombres?|homme|hommes|homem|homens|maenner|schwul|gai|gei|bofe|' +
-  'hairy men|menofmastodon|malenude)\\b' +
+// Whole-word male signals, two strengths.
+//   STRONG  words that say "this is about men" and that female-focused posts do not use for themselves.
+//   WEAK    anatomy / relationship words ("cock", "bulge", "boyfriend", "abs"): female and straight-couple posts use
+//           them constantly, so on their own they never make an item male-focused for an open (untrusted) feed.
+const MALE_STRONG = new RegExp(
+  '\\b(?:gay[a-z0-9]*|male|males|men|man|manly|guy|guys|dude|dudes|twinks?|bears?|otters?|jocks?|jockstraps?|daddy|daddies|hunks?|' +
+  'm4m|m4a|dilf|dilfs|hombres?|homme|hommes|homem|homens|maenner|schwul|gai|gei|bofe|hairy men|menofmastodon|malenude)\\b' +
   '|[\\[(]\\s*m\\s*[\\])]',
 );
+const MALE_WEAK = /\b(?:cocks?|dicks?|bulges?|abs|pecs|beard|bearded|bf|boyfriend|husband|hubby|hung|studs?|bros?|boys?|lads?|dads?|muscles?|muscular)\b/;
+const MALE = new RegExp(`${MALE_STRONG.source}|${MALE_WEAK.source}`);
 // CJK / Cyrillic male words are matched as substrings (no word boundaries exist). Female terms are checked
 // first, so 男女 / 男の娘 never reach this list. Patterns go through normalize() exactly like the text does
 // (NFKD splits kana dakuten and Hangul syllables).
@@ -56,7 +58,7 @@ const HARD_WORDS = new RegExp(
   '\\b(?:' + [
     'ts', 'trans', 'ftm', 'lady', 'ladies', 'gal', 'gals', 'milf', 'milfs', 'gilf', 'wife', 'wives', 'wifey', 'girlfriend', 'girlfriends', 'gf',
     'mommy', 'mom', 'moms', 'mother', 'mama', 'sister', 'aunt', 'niece', 'bbw', 'pawg', 'boobs', 'boob', 'busty', 'breasts?',
-    'she', 'her', 'hers', 'herself', 'femme', 'fille', 'filles', 'frau', 'chicas', 'fem', 'femmes', 'mistress',
+    'she', 'her', 'hers', 'herself', 'fems', 'femme', 'fille', 'filles', 'frau', 'chicas', 'fem', 'femmes', 'mistress',
     'straight couple', 'girl on girl', 'cuckquean', 'preggo', 'pregnant', 'transmen', 'transman', 'nonbinary',
   ].join('|') + ')\\b',
 );
@@ -105,18 +107,27 @@ function femaleCheck(...texts) {
 }
 
 /**
- * @returns {{scope: 'in'|'uncertain'|'excluded', male: boolean, female: boolean, femaleSoft: boolean, rule: string|null}}
+ * @param {string|string[]} texts everything the item says about itself (title, tags, bio, community ...)
+ * @param {{trusted?: boolean, screen?: string[]}} opts `screen`: text that is only checked for female / feminine
+ *   wording and never counts as male evidence (the search query a feed ran: a "gay" search returns plenty of women)
+ * @returns {{scope: 'in'|'uncertain'|'excluded', male: boolean, strongMale: boolean, female: boolean, femaleSoft: boolean, rule: string|null}}
  */
-function classify(texts, { trusted = false } = {}) {
+function classify(texts, { trusted = false, screen = [] } = {}) {
   const flat = [].concat(texts || []).flat(Infinity).filter(Boolean);
   const text = toText(flat);
   const split = toText(flat.map(splitCamel));
-  const male = MALE.test(text) || MALE.test(split) || MALE_SUBSTR.some((w) => text.includes(w));
-  const f = femaleCheck(flat);
-  if (f.level === 'hard') return { scope: 'excluded', male, female: true, femaleSoft: false, rule: f.rule };
-  if (f.level === 'soft') return { scope: 'uncertain', male, female: true, femaleSoft: true, rule: f.rule };
-  if (male || trusted) return { scope: 'in', male, female: false, femaleSoft: false, rule: null };
-  return { scope: 'uncertain', male, female: false, femaleSoft: false, rule: null };
+  const cjk = MALE_SUBSTR.some((w) => text.includes(w));
+  const strongMale = MALE_STRONG.test(text) || MALE_STRONG.test(split) || cjk;
+  const male = strongMale || MALE_WEAK.test(text) || MALE_WEAK.test(split);
+  const f = femaleCheck([...flat, ...[].concat(screen || []).flat(Infinity).filter(Boolean)]);
+  if (f.level === 'hard') return { scope: 'excluded', male, strongMale, female: true, femaleSoft: false, rule: f.rule };
+  if (f.level === 'soft') {
+    // "tits", "pussy", "babe" ...: only an explicit male statement in the item's OWN text keeps it alive (for a human to judge)
+    if (!strongMale) return { scope: 'excluded', male, strongMale, female: true, femaleSoft: false, rule: `${f.rule} (no male signal)` };
+    return { scope: 'uncertain', male, strongMale, female: true, femaleSoft: true, rule: f.rule };
+  }
+  if (strongMale || trusted) return { scope: 'in', male, strongMale, female: false, femaleSoft: false, rule: null };
+  return { scope: 'uncertain', male, strongMale, female: false, femaleSoft: false, rule: null };
 }
 
-module.exports = { classify, femaleCheck, splitCamel, MALE, MALE_SUBSTR };
+module.exports = { classify, femaleCheck, splitCamel, MALE, MALE_STRONG, MALE_WEAK, MALE_SUBSTR };

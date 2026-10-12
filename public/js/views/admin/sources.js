@@ -1,4 +1,4 @@
-import { h, icon, toast } from '../../dom.js';
+import { h, icon, toast, fmt } from '../../dom.js';
 import { adminGet, adminPost } from '../../api.js';
 import { href } from '../../router.js';
 import { pageHead, act } from './ui.js';
@@ -47,6 +47,8 @@ export async function render(root) {
           confs.map(([k, c]) => h('div', null, h('span', { class: `dot ${c.ok ? 'good' : 'warn'}` }), h('span', null, `${k}: `, c.note || (c.ok ? 'ok' : 'unavailable')))),
           br.lastError ? h('div', { style: { color: 'var(--warn)' } }, icon('alert', 'sm'), br.lastError) : null,
           ENV_HELP[s.platform] ? h('div', { class: 'muted', style: { fontSize: '12px' } }, `Env: ${ENV_HELP[s.platform].join(', ')}`) : null),
+        s.score ? h('div', { class: 'muted', style: { fontSize: '12.5px' }, title: 'Last 7 days' },
+          `7d: ${fmt.int(s.score.added)} added · ${s.score.yieldPerRun}/run · ${s.score.creators} creators · ${s.score.errorRate}% errors · ${s.score.emptyRate}% empty runs · ${fmt.int(s.score.filtered)} filtered`) : h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'No runs in the last 7 days'),
         h('div', { class: 'row wrap' },
           h('button', { class: 'btn sm', onclick: (e) => act(e.currentTarget, () => adminPost('/engine/run', { platforms: [s.platform] }), 'Sync queued') }, icon('refresh', 'sm'), 'Sync all'),
           h('a', { class: 'btn sm ghost', href: href('/admin/feeds', { platform: s.platform }) }, 'View feeds', icon('chev-r', 'sm'))));

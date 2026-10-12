@@ -52,6 +52,13 @@ module.exports = {
   redditUserAgent: env.REDDIT_USER_AGENT || 'web:prism-ingest:v4 (by /u/prism-ingest)',
   // Tests talk to localhost mock servers; production must never set this.
   allowPrivateHosts: bool(env.ALLOW_PRIVATE_HOSTS, false),
+  // Egress through an HTTP CONNECT proxy for https (see lib/net). Explicit opt-in: HTTPS_PROXY is NOT picked up implicitly.
+  outboundProxy: String(env.OUTBOUND_PROXY || '').trim(),
+  // With a proxy, destinations are still resolved locally and private answers refused. Set this only if your proxy does the DNS
+  // (names that local DNS cannot resolve are then tunnelled unvalidated).
+  outboundProxyTrustDns: bool(env.OUTBOUND_PROXY_TRUST_DNS, false),
+  // Exact hostnames that may resolve to private addresses (a SearXNG container on the compose network). Everything else stays SSRF-guarded.
+  internalHosts: list(env.INTERNAL_HOSTS, []).map((h) => h.toLowerCase()),
 
   // --- optional credentials (all sources work in "best effort" mode without)
   creds: {
@@ -64,13 +71,15 @@ module.exports = {
     misskeyToken: env.MISSKEY_ACCESS_TOKEN || '',
     // Brave Search API (web search) — powers creator discovery and cross-platform identity matching.
     braveKey: env.BRAVE_API_KEY || env.BRAVE_SEARCH_API_KEY || '',
+    // Keenable web search (an AI-agent search engine, MCP over HTTP). Used by creator lookup and discovery.
+    keenableKey: env.KEENABLE_API_KEY || '',
     // Telegram Bot API token (from @BotFather, "123456:ABC…"): channel metadata and existence checks.
     telegramBot: env.TELEGRAM_API_KEY || env.TELEGRAM_BOT_TOKEN || '',
   },
 
   // Web search backends (discovery + creator lookup), tried in this order. SearXNG needs no key: point it at any instance with the JSON format enabled.
   searxngUrl: String(env.SEARXNG_URL || '').trim(),
-  searchProviders: list(env.SEARCH_PROVIDERS, ['brave', 'searxng']),
+  searchProviders: list(env.SEARCH_PROVIDERS, ['keenable', 'brave', 'searxng']),
 
   // Federated sources: instances that adapters may talk to by default. Every hashtag/keyword feed is queried
   // on EACH instance below, so a longer list means more surface (and more requests): override from the
@@ -105,6 +114,7 @@ module.exports = {
     xSyndication: env.X_SYNDICATION_URL || 'https://syndication.twitter.com',
     brave: env.BRAVE_BASE_URL || 'https://api.search.brave.com',
     telegramBot: env.TELEGRAM_BOT_BASE_URL || 'https://api.telegram.org',
+    keenable: env.KEENABLE_BASE_URL || 'https://api.keenable.ai/mcp',
     // Tumblr's global tag feeds (blog feeds live on <blog>.tumblr.com or the blog's own domain).
     tumblr: String(env.TUMBLR_BASE_URL || 'https://www.tumblr.com').replace(/\/+$/, ''),
   },

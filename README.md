@@ -59,7 +59,7 @@ DEMO_ART=1 DB_PATH=./data/demo.db ADMIN_KEY=dev node server.js
 ### Tests
 
 ```bash
-npm test      # 412 tests: safety, SSRF, migration from a real v3 DB, adapters, engine resilience, HTTP API, proxy
+npm test      # 422 tests: safety, SSRF, migration from a real v3 DB, adapters, engine resilience, HTTP API, proxy
 ```
 
 ---
@@ -138,6 +138,8 @@ No system can enumerate "the whole web". PRISM grows its coverage in layers:
 
 ## Verifying the sources
 
+**Verified live (v4.10.1)** from a datacenter IP through the real engine, filters and image model: Reddit (via the archive fallback — Reddit blocks anonymous datacenter reads, set `REDDIT_CLIENT_ID/SECRET`), RedGIFs niches, Lemmy, Mastodon, Misskey, PeerTube, Telegram, Bluesky user feeds, Tumblr blogs and RSS all returned content that passed the gates and whose media loads. Needing credentials or a better IP: Reddit OAuth, Bluesky search (app password), X (token), `lemmynsfw.com` images (Cloudflare challenges some datacenter IPs — such items are skipped and logged instead of being published unloadable), Brave/SearXNG web search. Findings that changed the code: RedGIFs free-text search returns ~75% female-tagged results (replaced by curated niches), Tumblr removed site-wide tag feeds, Reddit's edge answers blocked requests with bare 404s (a community is now "gone" only when every transport agrees).
+
 Sources depend on the open web, so check them from the machine that runs PRISM (a sandbox without outbound network cannot):
 
 ```bash
@@ -166,7 +168,7 @@ It uses the real adapters and the real safety + male-only gates but writes nothi
 Admin → Creators → **Find a creator** (also *Find more accounts* inside a creator): type a **name, performer name, @handle or profile link**.
 
 1. the handle (and name-derived variants such as `jaxstone`, `jax_stone`) is probed on Reddit, RedGIFs, Bluesky, Mastodon, Misskey, X, Telegram and Tumblr through the real adapters, so “found” means *exists and has posts*;
-2. Bluesky people search, RedGIFs creator search and a web search of the name (Brave and/or a SearXNG instance — `BRAVE_API_KEY`, `SEARXNG_URL`) add accounts the handle guess missed;
+2. Bluesky people search, RedGIFs creator search and a web search of the name (Keenable, Brave and/or a SearXNG instance, tried in that order with fallback and caching — `KEENABLE_API_KEY`, `BRAVE_API_KEY`, `SEARXNG_URL`; site-restricted searches on linktr.ee, bsky.app and x.com find the profile pages themselves) add accounts the handle guess missed;
 3. bios and link-in-bio pages (Linktree, Beacons, AllMyLinks…) of what was found reveal the person's other accounts, which are verified the same way; paywalled links (OnlyFans, Throne…) are kept on the profile and never read;
 4. every candidate is scored (name similarity, exact handle, cross-links, independent sources, has content) and shown with its evidence; female / feminine candidates, minors and avatars showing a woman are hidden;
 5. **Follow selected** creates one creator with all chosen accounts and queues a deep first read (up to 300 posts per account); **Find & follow strong matches** does both steps at once. API: `POST /api/admin/lookup`, `/lookup/follow`, `/lookup/auto`.

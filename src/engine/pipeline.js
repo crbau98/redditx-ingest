@@ -22,6 +22,37 @@ const md5 = (s) => crypto.createHash('md5').update(s).digest('hex');
 
 const cleanHandle = (a) => String(a || '').replace(/^[@/]+/, '').replace(/^u\//i, '').trim().slice(0, 80);
 
+const HOST_WINDOW_MS = 20 * 60 * 1000;
+const HOST_STRIKES = 2;
+const hostState = new Map(); // host -> { ok, reason, at, strikes: Set(url) }
+/**
+ * Is this media host serving us? Only host-wide evidence closes a host for a window:
+ *   - an explicit challenge (Cloudflare `cf-mitigated: challenge`) closes it at once;
+ *   - 401/403 or an HTML page where media should be (a deleted, expired or gated single item looks the same) must be
+ *     seen on TWO DIFFERENT urls before the host is considered walled.
+ * A single suspicious answer skips only that item. Anything else (404 ...) is about one item and never counts.
+ */
+async function hostReachable(host, url, type) {
+  const now = Date.now();
+  const known = hostState.get(host);
+  const fresh = known && now - known.at < HOST_WINDOW_MS;
+  if (fresh && known.closed) return { ok: false, reason: known.reason };
+  if (fresh && known.good) return { ok: true }; // one healthy probe vouches for the host for the window
+  const p = await probeMedia(url, type);
+  const suspicious = !p.ok && (p.challenge || /^http (401|403)\b|not media \(text\/html\)/.test(p.reason || ''));
+  // Only a probe that actually fetched media vouches for the host. Timeouts, 404s and 5xx say nothing about a wall:
+  // the item is let through (its own failure is its own business) but neither a strike nor a vouch is recorded.
+  if (p.ok) { hostState.set(host, { closed: false, good: true, at: now, strikes: new Set() }); return { ok: true }; }
+  if (!suspicious) return { ok: true };
+  const st = fresh && !known.good ? known : { closed: false, good: false, at: now, strikes: new Set() };
+  st.strikes.add(url);
+  if (p.challenge || st.strikes.size >= HOST_STRIKES) {
+    hostState.set(host, { closed: true, reason: p.reason, at: now, strikes: st.strikes });
+    events.log('WARN', `Media host ${host} refuses this server (${p.reason}); skipping its items for ${HOST_WINDOW_MS / 60000} min`);
+  } else hostState.set(host, st);
+  return { ok: false, reason: p.reason };
+}
+
 const IMAGE_STRIKES_TO_BLOCK = 3;
 
 /** Each excluded picture counts against the account that posted it; repeated offenders are blocked for good. */
@@ -125,13 +156,18 @@ async function processItem(rawItem, feed, adapter, settings) {
   if (repo.blocklist.has('hash', hash) || repo.blocklist.has('source_key', sourceKey)) return { outcome: 'blocked', reason: 'blocklisted' };
 
   // ---- 4. scope: is this male-focused? ---------------------------------------------
-  const sc = classify([item.title, item.text, item.altText, item.community, item.author, item.authorName, item.authorBio, item.tags, item.labels, item.query], { trusted: !!feed.trusted });
+  const sc = classify([item.title, item.text, item.altText, item.community, item.author, item.authorName, item.authorBio, item.tags, item.labels], { trusted: !!feed.trusted, screen: [item.query] });
   if (sc.scope === 'excluded') {
     // A female / feminine person (handle, display name or bio) is removed as a creator, not just per post:
     // their other posts, their feeds and their other accounts never come back.
     if (femaleCheck(item.author, item.authorName, item.authorBio).level === 'hard') blockFemaleCreator(item, feed, sc.rule);
     return { outcome: 'excluded', reason: sc.rule || 'not male-focused' };
   }
+
+  // (femaleSoft items DO have male evidence of their own: they are kept for a human, see below.)
+  // An open search / tag feed that shows no male evidence at all is dropped instead of piling up in the review queue
+  // (a "gay" search returns mostly women on some platforms). Set "Unclear items from open feeds" to review to keep them.
+  if (sc.scope === 'uncertain' && !sc.femaleSoft && !feed.trusted && settings.scopeMode === 'strict' && settings.untrustedUnclear === 'drop') return { outcome: 'excluded', reason: 'scope:no male signal' };
 
   // ---- 5. media sanity ---------------------------------------------------------
   if (isJunkTitle(item.title)) return { outcome: 'skipped', reason: 'junk title' };
@@ -142,6 +178,14 @@ async function processItem(rawItem, feed, adapter, settings) {
   if (settings.probeUnknownHosts && !isHls && (item.probe || (!item.trusted && !hostTrusted(mediaHost)))) {
     const p = await probeMedia(item.mediaUrl, item.mediaType);
     if (!p.ok) return { outcome: 'skipped', reason: `probe: ${p.reason}` };
+  }
+
+  // Federated media hosts (Lemmy/Misskey/PeerTube instances ...) are trusted for *what* they serve but may refuse *this
+  // server* (Cloudflare challenge, hotlink block). Publishing items nobody can load is worse than skipping them, so each
+  // such host is probed once per window and its items are skipped while it is walled off.
+  if (settings.hostReachability === true && item.trusted && !hostTrusted(mediaHost) && !isHls) {
+    const reach = await hostReachable(mediaHost, item.mediaUrl, item.mediaType);
+    if (!reach.ok) return { outcome: 'skipped', reason: `unreachable host ${mediaHost}: ${reach.reason}` };
   }
 
   // ---- 6. dedupe ----------------------------------------------------------------
@@ -208,4 +252,4 @@ async function processItem(rawItem, feed, adapter, settings) {
   return { outcome: state === 'review' ? 'review' : 'added', mediaId, creatorId: creator ? creator.id : null, reason: reviewReason };
 }
 
-module.exports = { processItem, resolveCreator, cleanHandle };
+module.exports = { processItem, resolveCreator, cleanHandle, _hostState: hostState };

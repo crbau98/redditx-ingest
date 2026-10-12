@@ -3,8 +3,8 @@
  * Tumblr adapter, built on Tumblr's stable public RSS feeds (no API key).
  *
  *   user  target "blogname" (or a custom domain)   one blog
- *   tag   target "tag"          Tumblr-wide tag feed   (https://www.tumblr.com/tagged/<tag>/rss)
- *         target "tag@blog"     one blog's tag feed    (https://<blog>.tumblr.com/tagged/<tag>/rss)
+ *   tag   target "tag@blog"     one blog's tag feed    (https://<blog>.tumblr.com/tagged/<tag>/rss)
+ *         (site-wide tag feeds no longer exist: Tumblr returns 404 for https://www.tumblr.com/tagged/<tag>/rss)
  *
  * A blog is creator-owned (trusted); tag feeds are open searches (untrusted: every item has to read
  * male-focused). Reblogs carry somebody else's media, so they are skipped unless TUMBLR_REBLOGS=true.
@@ -31,7 +31,9 @@ function feedUrl(feed) {
   if (feed.kind === 'user') return `${blogOrigin(feed.target)}/rss`;
   const [tag, blog] = String(feed.target).split('@');
   if (!tag) throw new Error('Tumblr tag feed needs a tag');
-  return blog ? `${blogOrigin(blog)}${tagPath(tag)}` : `${config.baseUrls.tumblr}${tagPath(tag)}`;
+  // Verified live: https://www.tumblr.com/tagged/<tag>/rss is gone (404); per-blog feeds and per-blog tag feeds still work.
+  if (!blog) throw Object.assign(new Error('Tumblr no longer publishes site-wide tag feeds: follow blogs, or use tag@blogname (e.g. gay@someblog)'), { skip: true });
+  return `${blogOrigin(blog)}${tagPath(tag)}`;
 }
 
 /**

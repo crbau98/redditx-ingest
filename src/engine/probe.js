@@ -26,7 +26,11 @@ async function probeMedia(url, type, { timeout = 10000, minBytes = 4000 } = {}) 
   const ctype = String(res.headers['content-type'] || '').toLowerCase();
   const total = Number((String(res.headers['content-range'] || '').split('/')[1])) || Number(res.headers['content-length']) || null;
 
-  if (status >= 400) { res.resume(); req.destroy(); return { ok: false, reason: `http ${status}` }; }
+  if (status >= 400) {
+    const challenge = String(res.headers['cf-mitigated'] || '').toLowerCase() === 'challenge';
+    res.resume(); req.destroy();
+    return { ok: false, reason: challenge ? `http ${status} (Cloudflare bot challenge: this server's IP is walled off)` : `http ${status}`, challenge };
+  }
   if (ctype.includes('text/html') || ctype.includes('application/json') || ctype.includes('text/plain')) {
     res.resume(); req.destroy();
     return { ok: false, reason: `not media (${ctype.split(';')[0]})` };
