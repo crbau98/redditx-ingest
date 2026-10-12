@@ -40,7 +40,10 @@ async function hostReachable(host, url, type) {
   if (fresh && known.good) return { ok: true }; // one healthy probe vouches for the host for the window
   const p = await probeMedia(url, type);
   const suspicious = !p.ok && (p.challenge || /^http (401|403)\b|not media \(text\/html\)/.test(p.reason || ''));
-  if (!suspicious) { hostState.set(host, { closed: false, good: true, at: now, strikes: new Set() }); return { ok: true }; }
+  // Only a probe that actually fetched media vouches for the host. Timeouts, 404s and 5xx say nothing about a wall:
+  // the item is let through (its own failure is its own business) but neither a strike nor a vouch is recorded.
+  if (p.ok) { hostState.set(host, { closed: false, good: true, at: now, strikes: new Set() }); return { ok: true }; }
+  if (!suspicious) return { ok: true };
   const st = fresh && !known.good ? known : { closed: false, good: false, at: now, strikes: new Set() };
   st.strikes.add(url);
   if (p.challenge || st.strikes.size >= HOST_STRIKES) {
@@ -161,9 +164,10 @@ async function processItem(rawItem, feed, adapter, settings) {
     return { outcome: 'excluded', reason: sc.rule || 'not male-focused' };
   }
 
+  // (femaleSoft items DO have male evidence of their own: they are kept for a human, see below.)
   // An open search / tag feed that shows no male evidence at all is dropped instead of piling up in the review queue
   // (a "gay" search returns mostly women on some platforms). Set "Unclear items from open feeds" to review to keep them.
-  if (sc.scope === 'uncertain' && !feed.trusted && settings.scopeMode === 'strict' && settings.untrustedUnclear === 'drop') return { outcome: 'excluded', reason: 'scope:no male signal' };
+  if (sc.scope === 'uncertain' && !sc.femaleSoft && !feed.trusted && settings.scopeMode === 'strict' && settings.untrustedUnclear === 'drop') return { outcome: 'excluded', reason: 'scope:no male signal' };
 
   // ---- 5. media sanity ---------------------------------------------------------
   if (isJunkTitle(item.title)) return { outcome: 'skipped', reason: 'junk title' };

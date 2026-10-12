@@ -121,3 +121,13 @@ test('retroactive sweep removes pre-existing female content, blocklists it, bloc
   assert.equal(repo.feeds.get(femFeed.id).enabled, 0);
   assert.ok(repo.blocklist.has('creator', 'reddit:sexywomen'));
 });
+
+test('default settings (strict + drop): soft-female items WITH male wording still reach the review queue; evidence-free items are dropped', async () => {
+  const dflt = { probeUnknownHosts: false, scopeMode: 'strict', untrustedUnclear: 'drop' };
+  const soft = await pipeline.processItem(item({ title: 'gay guy in panties', community: null }), openFeed, null, dflt);
+  assert.equal(soft.outcome, 'review'); assert.match(soft.reason, /^scope:soft:/);
+  const none = await pipeline.processItem(item({ title: 'Amateur Cum Cumshot', community: null }), openFeed, null, dflt);
+  assert.equal(none.outcome, 'excluded'); assert.equal(none.reason, 'scope:no male signal');
+  const kept = await pipeline.processItem(item({ title: 'Amateur Cum Cumshot', community: null }), openFeed, null, { ...dflt, untrustedUnclear: 'review' });
+  assert.equal(kept.outcome, 'review', 'the setting can keep them for a human instead');
+});

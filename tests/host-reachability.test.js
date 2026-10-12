@@ -11,6 +11,7 @@ before(async () => {
     '/walled/a.jpg': () => (walled ? { status: 403, headers: { 'content-type': 'text/html', 'cf-mitigated': 'challenge' }, body: '<html>challenge</html>' } : { headers: { 'content-type': 'image/jpeg' }, body: JPEG }),
     '/ok/a.jpg': () => ({ headers: { 'content-type': 'image/jpeg' }, body: JPEG }),
     '/ok/gone.jpg': () => ({ status: 404, body: 'gone' }),
+    '/ok/gone2.jpg': () => ({ status: 404, body: 'gone' }),
     '/html/one.jpg': () => ({ headers: { 'content-type': 'text/html' }, body: '<html>this item was deleted</html>' }),
     '/html/two.jpg': () => ({ headers: { 'content-type': 'text/html' }, body: '<html>this one too</html>' }),
     '/html/good.jpg': () => ({ headers: { 'content-type': 'image/jpeg' }, body: JPEG }),
@@ -51,4 +52,13 @@ test('one HTML answer (a deleted / gated single item) skips only that item; two 
   await pipeline.processItem(item('/html/two.jpg'), feed, null, settings); // second DIFFERENT url -> confirmed
   const after = await pipeline.processItem(item('/html/good.jpg?b'), feed, null, settings);
   assert.equal(after.outcome, 'skipped'); assert.match(after.reason, /unreachable host/);
+});
+
+test('an inconclusive probe (404) neither vouches for the host nor erases a strike', async () => {
+  pipeline._hostState.clear();
+  await pipeline.processItem(item('/html/one.jpg?x'), feed, null, settings);            // strike 1
+  assert.equal((await pipeline.processItem(item('/ok/gone2.jpg'), feed, null, settings)).outcome, 'added'); // 404: item-specific, inconclusive
+  await pipeline.processItem(item('/html/two.jpg?y'), feed, null, settings);            // strike 2 (the earlier strike survived)
+  const after = await pipeline.processItem(item('/html/good.jpg?z'), feed, null, settings);
+  assert.equal(after.outcome, 'skipped', 'two distinct strikes closed the host although a 404 happened in between');
 });
