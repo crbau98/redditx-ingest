@@ -851,3 +851,15 @@ main.tinted .tag { border-color: color-mix(in srgb, var(--accent) 30%, var(--lin
 @media (max-width: 560px) { .sp-thumb { width: 46px; height: 60px; } .sp-strip .sp-thumb:nth-child(n+6) { display: none; } }
 .card-why { position: absolute; left: 8px; bottom: 8px; z-index: 2; display: inline-flex; align-items: center; gap: 4px; max-width: calc(100% - 16px); padding: 3px 8px 3px 6px; border-radius: 999px; font-size: 11.5px; font-weight: 600; color: #fff; background: rgba(10, 8, 18, .55); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
 .card-why svg { width: 12px; height: 12px; flex: none; color: #ffd27a; }
+
+/* ---------- v4.8: since your last visit --------------------------------------- */
+.since-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.since-tile { display: flex; flex-direction: column; gap: 4px; padding: 16px 18px; border-radius: var(--radius-lg); background: var(--surface); border: 1px solid var(--line); transition: transform .25s var(--ease), border-color .25s, box-shadow .25s; animation: u-pop .45s var(--ease) both; }
+.since-tile:nth-child(2) { animation-delay: .06s; } .since-tile:nth-child(3) { animation-delay: .12s; }
+.since-tile b { font: 700 30px/1 var(--font-display); letter-spacing: -.02em; }
+.since-tile span { color: var(--text-2); font-size: 13.5px; }
+.since-tile:hover { transform: translateY(-3px); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); box-shadow: var(--shadow-sm); }
+.since-tile.hot { background: var(--grad-soft); border-color: color-mix(in srgb, var(--accent) 30%, var(--line)); }
+.since-tile.hot b { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+@media (max-width: 560px) { .since-row { grid-template-columns: 1fr 1fr; } .since-tile b { font-size: 24px; } .since-tile.hot { grid-column: 1 / -1; } }
+@media (prefers-reduced-motion: reduce) { .since-tile { animation: none; } }

@@ -280,7 +280,8 @@ function paintInfo() {
   const rel = h('div', { class: 'lb-related' });
   box.replaceChildren(
     it.creator_id ? h('div', { class: 'lb-creator' },
-      h('a', { href: href(`/creator/${it.creator_id}`), onclick: () => closeSilently() }, avatar(it, 44)),
+      // the name link beside it carries the label; this one is a larger pointer target only
+      h('a', { href: href(`/creator/${it.creator_id}`), tabindex: '-1', 'aria-hidden': 'true', onclick: () => closeSilently() }, avatar(it, 44)),
       h('div', { class: 'grow' }, h('a', { href: href(`/creator/${it.creator_id}`), class: 'creator-name', onclick: () => closeSilently() }, it.creator_name || it.creator_handle), h('div', { class: 'creator-handle' }, `@${it.creator_handle || it.author}`)),
       h('button', { class: `btn sm${follows.has(it.creator_id) ? '' : ' primary'}`, onclick: () => { const on = follows.toggle({ id: it.creator_id, handle: it.creator_handle, display_name: it.creator_name }); toast(on ? 'Following' : 'Unfollowed'); } }, follows.has(it.creator_id) ? 'Following' : 'Follow')) : null,
     it.title ? h('h3', null, it.title) : null,

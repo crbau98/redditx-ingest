@@ -1,7 +1,7 @@
 import { h, icon, $, toast, fmt, openModal } from './dom.js';
 import { get, post, onAgeRequired, streamPublic, ApiError, clearApiCache, prefetch } from './api.js';
 import { parse, href, navigate, matchRoute, routeKey } from './router.js';
-import { prefs, favorites, follows, platforms, bus } from './store.js';
+import { prefs, favorites, follows, platforms, bus, visits } from './store.js';
 import { syncFromUrl, isOpen } from './components/lightbox.js';
 import { openPalette, paletteOpen, surpriseMe } from './components/palette.js';
 import { openDisplaySettings } from './components/display.js';
@@ -167,6 +167,7 @@ async function render(shell) {
   else if (p.path !== '/') shell.searchInput.value = '';
   shell.main.classList.remove('view-enter'); void shell.main.offsetWidth; shell.main.classList.add('view-enter');
   primeEager(6);
+  visits.touch();
   document.title = 'PRISM — Discover male creators';
   try {
     const result = await match.route.view(shell.main, { params: match.params, query: p.query });

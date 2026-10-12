@@ -1,7 +1,7 @@
 import { h, icon, fmt, emptyState } from '../dom.js';
 import { get } from '../api.js';
 import { href } from '../router.js';
-import { platformLabel, platformColor, follows, searches, tastes, history as viewHistory, prefs } from '../store.js';
+import { platformLabel, platformColor, follows, searches, tastes, history as viewHistory, prefs, visits } from '../store.js';
 import { mediaCard } from '../components/card.js';
 import { creatorCard } from '../components/creator-card.js';
 import { createFeed } from '../components/feed.js';
@@ -30,6 +30,31 @@ async function forYouSection(open) {
     chips,
     h('div', { class: 'rail' }, res.items.map((it) => mediaCard(it, { open: open(res.items), compact: false, why: tastes.why(it) }))),
     h('a', { class: 'btn sm', href: href('/reels', { sort: 'foryou', type: 'all' }), style: { marginTop: '6px' } }, icon('film', 'sm'), 'Play For you as Reels'));
+}
+
+/**
+ * "Since your last visit": what is new since this device was last here — from creators you follow,
+ * across the library, and newly discovered creators — each one tap away. Hidden on a first visit
+ * or when the last visit was under an hour ago (nothing meaningful to say).
+ */
+async function sinceSection() {
+  const since = visits.since;
+  if (!since || Date.now() - Date.parse(since) < 3600000) return null;
+  const ids = follows.list().map((c) => c.id).slice(0, 100);
+  const [all, mine, fresh] = await Promise.all([
+    get('/api/media', { after: since, limit: 1 }).catch(() => null),
+    ids.length ? get('/api/media', { after: since, creators: ids.join(','), limit: 1 }).catch(() => null) : null,
+    get('/api/creators', { sort: 'new', limit: 48 }).catch(() => null),
+  ]);
+  const newCreators = fresh ? fresh.items.filter((c) => c.added_at && c.added_at > since).length : 0;
+  const tiles = [];
+  if (mine && mine.total) tiles.push(h('a', { class: 'since-tile hot', href: href('/explore', { following: '1', after: since, sort: 'recent' }) }, h('b', { class: 'num' }, fmt.num(mine.total)), h('span', null, 'new from creators you follow')));
+  if (all && all.total) tiles.push(h('a', { class: 'since-tile', href: href('/explore', { after: since, sort: 'trending' }) }, h('b', { class: 'num' }, fmt.num(all.total)), h('span', null, `new post${all.total === 1 ? '' : 's'} in the library`)));
+  if (newCreators) tiles.push(h('a', { class: 'since-tile', href: href('/creators', { sort: 'new' }) }, h('b', { class: 'num' }, `${newCreators}${newCreators === 48 ? '+' : ''}`), h('span', null, `new creator${newCreators === 1 ? '' : 's'} discovered`)));
+  if (!tiles.length) return null;
+  return h('section', { class: 'section since' },
+    sectionHead('clock', 'Since your last visit', `${fmt.ago(since)} — here is what is new`),
+    h('div', { class: 'since-row' }, tiles));
 }
 
 /** First visit: let people pick a few interests so "For you" works from minute one. */
@@ -156,8 +181,11 @@ export async function home(root) {
   const open = (list) => (item) => openLightbox(list, Math.max(0, list.findIndex((x) => x.id === item.id)));
   // Fetched in parallel with the rest of the page; slotted in when ready.
   const topicsP = topicCards({ limit: 8 });
+  const sinceP = sinceSection();
   const becauseP = becauseRails(open);
   const picker = interestPicker(data.tags, async () => { const sec = await forYouSection(open); if (picker.isConnected) { if (sec) picker.replaceWith(sec); else picker.remove(); } });
+  const since = await sinceP;
+  if (since) parts.push(since);
   if (picker) parts.push(picker);
   const forYou = await forYouSection(open);
   if (forYou) parts.push(forYou);

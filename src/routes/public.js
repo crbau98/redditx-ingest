@@ -32,7 +32,7 @@ function publicCreator(c) {
   return {
     id: c.id, handle: c.handle, display_name: c.display_name, bio: c.bio, avatar_url: c.avatar_url, banner_url: c.banner_url,
     links: c.links, verified: c.verified, media_count: c.media_count, video_count: c.video_count, total_score: c.total_score,
-    last_media_at: c.last_media_at, previews: c.previews, platforms: c.platforms,
+    last_media_at: c.last_media_at, previews: c.previews, platforms: c.platforms, added_at: c.created_at,
   };
 }
 

@@ -14,7 +14,7 @@ export async function explore(root, { query }) {
   const f = {
     type: query.get('type') || '', sort: query.get('sort') || (query.get('q') ? 'relevance' : 'recent'), platform: query.get('platform') || '',
     community: query.get('community') || '', tag: query.get('tag') || '', q: query.get('q') || '', since: query.get('since') || '', following: query.get('following') || '',
-    tags: query.get('tags') || '', anytags: query.get('anytags') || '', creator: query.get('creator') || '',
+    tags: query.get('tags') || '', anytags: query.get('anytags') || '', creator: query.get('creator') || '', after: query.get('after') || '',
     smart: query.get('smart') || '', raw: query.get('raw') || '', relaxed: query.get('relaxed') || '', from: query.get('from') || '', norelax: query.get('norelax') || '', label: query.get('label') || '',
   };
   const filterOnly = (x) => Object.fromEntries(Object.entries(x).filter(([k]) => !UI_KEYS.includes(k)));
@@ -31,7 +31,7 @@ export async function explore(root, { query }) {
   const followIds = f.following ? follows.list().map((c) => c.id).slice(0, 100) : null;
   const toApi = (x) => ({
     type: x.type, sort: x.sort === 'relevance' ? undefined : x.sort, platform: x.platform, community: x.community, tag: x.tag, q: x.q, since: x.since,
-    tags: x.tags || undefined, anytags: x.anytags || undefined, creator: x.creator || undefined,
+    tags: x.tags || undefined, anytags: x.anytags || undefined, creator: x.creator || undefined, after: x.after || undefined,
     creators: followIds ? (followIds.length ? followIds.join(',') : '00000000-0000-0000-0000-000000000000') : undefined,
   });
   const anyFilter = f.q || f.tag || f.tags || f.anytags || f.creator || f.community || f.following;
@@ -63,6 +63,7 @@ export async function explore(root, { query }) {
   if (f.community) chip(f.community, { community: '' }, 'u-community');
   if (f.platform) chip(platformLabel(f.platform), { platform: '' }, 'u-platform');
   if (f.since) chip(SINCE.find((s) => s[0] === f.since)[1], { since: '' }, 'u-since');
+  if (f.after) chip(`New since ${fmt.ago(f.after)}`, { after: '' }, 'u-since');
   if (f.smart && f.type) chip(f.type === 'video' ? 'Videos' : 'Photos', { type: '' }, 'u-type');
   let creatorName = null;
   if (f.creator) {

@@ -139,6 +139,7 @@ export async function reels(root, { query }) {
     if (!v) return;
     v.muted = prefs.muted;
     if (!s.handle) s.handle = attachVideo(v, s.it);
+    s.handle.autoplay = true;
     v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
   }
   function deactivate(s) {
@@ -146,14 +147,29 @@ export async function reels(root, { query }) {
     if (s.handle) { s.handle.destroy(); s.handle = null; }
     releaseVideo(s.stage.querySelector('video'));
   }
+  // Buffer the next video while this one plays, so a swipe starts instantly. Skipped when the
+  // device asks to save data or is on a slow link.
+  const conn = navigator.connection || {};
+  const canWarm = !conn.saveData && !/(^|-)2g$|^3g$/.test(conn.effectiveType || '');
+  function warm(s) {
+    if (!canWarm || !s.isVideo) return;
+    mount(s);
+    const v = s.stage.querySelector('video');
+    if (!v || s.handle) return;
+    v.muted = true; v.preload = 'auto';
+    s.handle = attachVideo(v, s.it);
+    s.handle.autoplay = false;
+  }
 
   function setActive(i) {
     if (i === active || !slides[i]) return;
     active = i;
     slides.forEach((s, k) => {
       if (k === i) activate(s);
-      else if (Math.abs(k - i) <= 2) { deactivate(s); mount(s); }
-      else unmount(s);
+      // the next one buffers; the previous one keeps its buffer, so swiping back is instant too
+      else if (k === i + 1 || k === i - 1) {
+        if (s.handle) { s.handle.autoplay = false; const v = s.stage.querySelector('video'); if (v) v.pause(); } else if (k === i + 1) warm(s); else mount(s);
+      } else if (Math.abs(k - i) <= 2) { deactivate(s); mount(s); } else unmount(s);
     });
     if (i >= slides.length - 4) load();
   }
