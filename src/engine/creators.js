@@ -35,6 +35,13 @@ function applyProfile(feed, profile, settings) {
     return { ...out, blocked: true };
   }
 
+  // Body filter: a refreshed profile that now reads chub / gainer / dad bod hides the creator (reversible, see engine/physique).
+  const physique = require('./physique');
+  if (physique.enabled(settings)) {
+    const body = physique.textCheck(creator.handle, profile.displayName, profile.bio);
+    if (body.heavy && physique.hideCreator(repo.creators.get(creator.id), `body filter: profile says "${body.rule.slice(physique.REASON.length)}"`)) return { ...out, hidden: true };
+  }
+
   repo.creators.enrich(creator.id, { displayName: profile.displayName, bio: profile.bio, avatarUrl: profile.avatarUrl, bannerUrl: profile.bannerUrl });
   if (profile.verified && !creator.verified) repo.creators.update(creator.id, { verified: true });
 

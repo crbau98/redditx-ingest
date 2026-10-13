@@ -119,9 +119,11 @@ async function physiqueSweep({ limit = 12, settings } = {}) {
   if (!rows.length) { res.done = true; return res; }
   const creators = new Set();
   for (const row of rows) {
-    after = row.seq; res.checked++;
     const v = await imagefilter.checkItem({ mediaType: row.media_type, mediaUrl: row.media_url, previewUrl: row.preview_url, thumbnailUrl: row.thumbnail_url },
       { threshold: (s.imageFilterThreshold || 50) / 100, faces: s.imageFilter === true, body: true });
+    // switched off while the model was busy (that request already re-showed everything): stop, and resume from this row later
+    if (!settingsStore.get().physiqueFilter) { res.stopped = true; break; }
+    after = row.seq; res.checked++;
     if (v.female) { repo.media.block(row.id, 'physique sweep: picture shows a woman', 'system'); res.removed++; continue; }
     if (v.status === 'error' || v.status === 'unavailable') { res.errors++; continue; }
     if (v.physique == null) continue;

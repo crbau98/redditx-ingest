@@ -90,6 +90,9 @@ router.post('/feeds/import', (req, res) => {
 router.patch('/feeds/:id', (req, res) => {
   if (!repo.feeds.get(req.params.id)) return bad(res, 'Not found', 404);
   const b = req.body || {};
+  // logged, so automatic pauses (e.g. the body filter) never undo an admin's own switch later
+  const was = repo.feeds.get(req.params.id);
+  if (b.enabled !== undefined && !!b.enabled !== !!was.enabled) repo.logAction('feed', was.id, b.enabled ? 'enable' : 'disable', 'admin', 'admin');
   res.json(repo.feeds.update(req.params.id, { label: b.label, enabled: b.enabled, trusted: b.trusted, intervalMin: b.intervalMin, priority: b.priority, resetErrors: !!b.resetErrors, runNow: !!b.runNow }));
 });
 

@@ -18,6 +18,7 @@ const events = require('./events');
 const { textCheck } = require('../lib/physique');
 
 const MIN_MEASURED = 4;
+const TEXT_SCORE = 101; // stored on items hidden for their words: above any measured score, and never counted as a measured picture
 const REASON = 'physique:';
 
 const enabled = (s) => !!s && s.physiqueFilter === true;
@@ -61,7 +62,7 @@ function reviewCreator(creatorId, settings) {
   if (!c) return null;
   const share = settings ? settings.physiqueCreatorShare : 50;
   const r = repo.db.prepare(`SELECT COUNT(*) AS measured, SUM(CASE WHEN physique >= ? THEN 1 ELSE 0 END) AS heavy FROM media
-    WHERE creator_id = ? AND physique IS NOT NULL AND publish_state IN ('published','hidden','review')`).get(threshold(settings), c.id);
+    WHERE creator_id = ? AND physique IS NOT NULL AND physique <= 100 AND publish_state IN ('published','hidden','review')`).get(threshold(settings), c.id);
   const text = textCheck(c.handle, c.display_name, c.bio);
   let why = null;
   if (enabled(settings) && text.heavy) why = `body filter: profile says "${text.rule.slice(REASON.length)}"`;
@@ -108,7 +109,7 @@ function reapply(settings) {
 const TEXT_SWEEP_VERSION = '1'; // bump when the word list grows: stored items, creators and feeds are re-read once
 
 /**
- * Read stored items, creators and feeds against the physique word list. Items are hidden with score 100 (so `reapply` can
+ * Read stored items, creators and feeds against the physique word list. Items are hidden with TEXT_SCORE (so `reapply` can
  * show them again when the filter is switched off), creators hidden, feeds paused. Runs once per word-list version and
  * whenever the filter is switched on.
  */
@@ -133,7 +134,7 @@ async function textSweep(settings, { force = false } = {}) {
         after = r.seq;
         const t = textCheck(r.title, r.description, r.tags_text, r.community, r.author);
         if (!t.heavy) continue;
-        repo.media.setPhysique(r.id, 100);
+        repo.media.setPhysique(r.id, TEXT_SCORE);
         repo.media.setState(r.id, 'hidden', `${REASON}text:${t.rule.slice(REASON.length)}`, { exact: true });
         res.items++;
       }
@@ -159,11 +160,12 @@ async function textSweep(settings, { force = false } = {}) {
 /** Library numbers for the admin console. */
 function stats(settings) {
   const thr = threshold(settings);
-  const r = repo.db.prepare(`SELECT COUNT(*) AS measured, SUM(CASE WHEN physique >= ? THEN 1 ELSE 0 END) AS overThreshold,
+  const r = repo.db.prepare(`SELECT SUM(CASE WHEN physique <= 100 THEN 1 ELSE 0 END) AS measured,
+    SUM(CASE WHEN physique <= 100 AND physique >= ? THEN 1 ELSE 0 END) AS overThreshold,
     SUM(CASE WHEN publish_state = 'hidden' AND review_reason LIKE '${REASON}%' THEN 1 ELSE 0 END) AS hidden FROM media WHERE physique IS NOT NULL`).get(thr);
-  const buckets = repo.db.prepare(`SELECT (physique / 10) * 10 AS b, COUNT(*) AS n FROM media WHERE physique IS NOT NULL AND publish_state != 'removed' GROUP BY b ORDER BY b`).all();
+  const buckets = repo.db.prepare(`SELECT (physique / 10) * 10 AS b, COUNT(*) AS n FROM media WHERE physique IS NOT NULL AND physique <= 100 AND publish_state != 'removed' GROUP BY b ORDER BY b`).all();
   const creators = repo.db.prepare("SELECT COUNT(*) AS n FROM creators c WHERE c.status = 'hidden' AND (SELECT action FROM moderation_actions a WHERE a.target_type = 'creator' AND a.target_id = c.id ORDER BY a.id DESC LIMIT 1) = 'physique-hide'").get().n;
-  return { enabled: enabled(settings), threshold: thr, creatorShare: settings ? settings.physiqueCreatorShare : null, measured: r.measured, overThreshold: r.overThreshold || 0, hidden: r.hidden || 0, creatorsHidden: creators, histogram: buckets };
+  return { enabled: enabled(settings), threshold: thr, creatorShare: settings ? settings.physiqueCreatorShare : null, measured: r.measured || 0, overThreshold: r.overThreshold || 0, hidden: r.hidden || 0, creatorsHidden: creators, histogram: buckets };
 }
 
 module.exports = { stateFor, reviewCreator, reapply, textSweep, stats, hideCreator, textCheck, enabled, threshold, REASON, MIN_MEASURED };

@@ -226,6 +226,32 @@ describe('body filter policy (model replaced by a fake)', () => {
     assert.equal(r.status, 'created');
   });
 
+  test('posts hidden for their words never count as measured pictures for the creator ratio', async () => {
+    const c = repo.creators.create({ handle: 'wordyguy', origin: 'admin' });
+    const ids = ['w1', 'w2', 'w3', 'w4'].map((k) => repo.media.insert({ creator_id: c.id, feed_id: feed.id, platform: 'reddit', source_id: k, source_key: `reddit:${k}:0`, post_key: `reddit:${k}`, source_url: 'https://reddit.com/x', title: 'chubby day', media_type: 'image', media_url: `https://i.redd.it/${k}.jpg`, hash: `h-${k}`, publish_state: 'published' }));
+    await physique.textSweep(settings, { force: true });
+    for (const id of ids) assert.equal(repo.media.get(id).publish_state, 'hidden');
+    physique.reapply(settings);
+    assert.equal(repo.creators.get(c.id).status, 'active');
+  });
+
+  test('a refreshed profile that now reads chub hides the creator', () => {
+    const c = repo.creators.create({ handle: 'renamedguy', origin: 'admin' });
+    const f = repo.feeds.upsert({ platform: 'reddit', kind: 'user', target: 'renamedguy', creatorId: c.id, enabled: 1, trusted: 1, origin: 'admin' }).feed;
+    const r = require('../src/engine/creators').applyProfile(repo.feeds.get(f.id), { displayName: 'Renamed', bio: 'proud superchub' }, settings);
+    assert.equal(r.hidden, true); assert.equal(repo.creators.get(c.id).status, 'hidden');
+  });
+
+  test('a feed the admin switched off again stays off when the body filter is switched off', async () => {
+    const f = repo.feeds.upsert({ platform: 'reddit', kind: 'community', target: 'gainerhub', enabled: 1, trusted: 1, origin: 'admin' }).feed;
+    await physique.textSweep(settings, { force: true });
+    assert.equal(repo.feeds.get(f.id).enabled, 0);
+    repo.logAction('feed', f.id, 'enable', 'admin', 'admin'); repo.feeds.update(f.id, { enabled: true });
+    repo.logAction('feed', f.id, 'disable', 'admin', 'admin'); repo.feeds.update(f.id, { enabled: false });
+    physique.reapply({ ...settings, physiqueFilter: false });
+    assert.equal(repo.feeds.get(f.id).enabled, 0);
+  });
+
   test('a creator an admin hid stays hidden whatever the body filter says', () => {
     const c = repo.creators.create({ handle: 'adminhid', origin: 'admin' });
     repo.creators.update(c.id, { status: 'hidden' });
