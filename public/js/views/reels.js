@@ -1,4 +1,4 @@
-import { h, icon, proxied, fmt, avatar, toast, copyText, emptyState } from '../dom.js';
+import { h, icon, proxied, fmt, avatar, toast, copyText, emptyState, openModal } from '../dom.js';
 import { get, post, reportBroken } from '../api.js';
 import { navigate, href } from '../router.js';
 import { prefs, favorites, follows, history as viewHistory, tastes, collections, platformLabel, bus } from '../store.js';
@@ -36,14 +36,24 @@ export async function reels(root, { query }) {
   const paintMute = () => muteBtn.replaceChildren(icon(prefs.muted ? 'mute' : 'volume'));
   paintMute();
 
-  const context = f.sort === 'foryou' && !f.creator && !f.tag && !f.tags && !f.anytags && !f.community && !f.q && !f.following && !f.platform && !f.after ? 'For you' : f.creator ? 'Creator' : f.following ? 'Following'
-    : f.tags ? f.tags.split(',').map((t) => `#${t}`).join(' + ') : f.anytags ? (f.label || f.anytags.split(',').slice(0, 3).map((t) => `#${t}`).join(' · ')) : f.tag ? `#${f.tag}` : f.community || (f.q ? `“${f.q}”` : (f.platform ? platformLabel(f.platform) : ((SORTS.find((x) => x[0] === f.sort) || [])[1] || 'Reels')));
+  // the order already shows in the select beside the title, so the title never repeats it
+  const context = f.creator ? 'Creator' : f.following ? 'Following'
+    : f.tags ? f.tags.split(',').map((t) => `#${t}`).join(' + ') : f.anytags ? (f.label || f.anytags.split(',').slice(0, 3).map((t) => `#${t}`).join(' · ')) : f.tag ? `#${f.tag}` : f.community || (f.q ? `“${f.q}”` : (f.platform ? platformLabel(f.platform) : 'Reels'));
   const top = h('div', { class: 'reels-top' },
     h('button', { class: 'btn icon ghost', 'aria-label': 'Back', title: 'Back', onclick: () => (window.history.length > 1 ? window.history.back() : navigate('/')) }, icon('chev-l')),
     h('div', { class: 'reels-title truncate' }, icon('film', 'sm'), context),
     h('div', { class: 'seg sm', role: 'group', 'aria-label': 'Media type' }, [['video', 'Videos'], ['all', 'All'], ['image', 'Photos']].map(([v, l]) => h('button', { class: f.type === v ? 'on' : '', 'aria-pressed': String(f.type === v), onclick: () => set({ type: v }) }, l))),
     h('select', { class: 'select sm', 'aria-label': 'Order', onchange: (e) => set({ sort: e.target.value }) }, SORTS.map(([v, l]) => h('option', { value: v, selected: f.sort === v }, l))),
+    // narrow phones: the type switch and order don't fit beside the title, so one button opens both
+    h('button', { class: 'btn sm ghost reels-tune', 'aria-label': 'Choose what plays', 'aria-haspopup': 'dialog', onclick: openTune }, icon('sliders', 'sm'), (SORTS.find((x) => x[0] === f.sort) || [])[1] || 'Order'),
     muteBtn);
+  function openTune() {
+    let m;
+    const pick = (patch) => () => { m.close(); set(patch); };
+    const group = (label, opts, key) => h('div', { class: 'field' }, h('label', null, label), h('div', { class: 'row wrap', style: { gap: '8px' } },
+      opts.map(([v, l]) => h('button', { class: `chip${f[key] === v ? ' on' : ''}`, 'aria-pressed': String(f[key] === v), onclick: pick({ [key]: v }) }, l))));
+    m = openModal({ title: 'What plays', body: h('div', { class: 'stack' }, group('Show', [['video', 'Videos'], ['all', 'Everything'], ['image', 'Photos']], 'type'), group('Order', SORTS, 'sort')) });
+  }
   const shell = h('div', { class: 'reels', role: 'region', 'aria-label': 'Reels' }, top, track);
   root.replaceChildren(shell);
 
@@ -279,7 +289,7 @@ export async function reels(root, { query }) {
   // First visit: show how to move on, then get out of the way.
   if (!prefs.reelsHint && slides.length > 1) {
     const touch = window.matchMedia('(pointer: coarse)').matches;
-    const hint = h('div', { class: 'reel-hint', role: 'status' }, icon(touch ? 'up' : 'chev-d', 'sm'), touch ? 'Swipe up for the next one · double-tap to save' : '↓ or J for the next one · M for sound · F to save');
+    const hint = h('div', { class: 'reel-hint', role: 'status' }, icon(touch ? 'up' : 'chev-d', 'sm'), touch ? 'Swipe up for the next one · double-tap to save' : 'Scroll, ↓ or J for the next one · M for sound · F to save');
     shell.appendChild(hint);
     const done = () => { hint.remove(); prefs.reelsHint = true; track.removeEventListener('scroll', done); };
     track.addEventListener('scroll', done, { passive: true, once: true });

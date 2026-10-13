@@ -1,5 +1,23 @@
 # UI changelog
 
+## 2026-10-13 — "Intuitive": phone flows, gestures, getting back
+
+**Audit findings** (demo seed, Chromium at 390×844 touch and 1440×900): on a phone the viewer's top bar held seven buttons in 390 px, squeezing the title to one letter and running the counter over the meta line; swipes only acted on release with no feedback, and a vertical drag was usually claimed by the browser (`touch-action: pan-y`) so drag-to-close rarely fired; the details sheet was laid out as a squeezed grid column instead of a sheet. Browse, the galaxy map, display settings, report and admin were reachable on a phone only from the footer, which an endless feed never lets you reach. Back from a creator put Explore at the top of a freshly fetched list. Explore's filters took ~360 px of a phone screen before the first card. Reels on a phone lost its type switch, repeated the order as its title ("Trending" next to a "Trending" select), and kept the app bar over the video.
+
+| Change | Files |
+|---|---|
+| **Viewer on phones**: compact top bar (close, title, position) and a thumb dock for save, collect, share, download and details; details open as a real bottom sheet | `components/lightbox.js`, `css/ux.css` |
+| **Viewer gestures follow the finger**: swipe left/right (rubber-band at the ends, flick-aware, next item glides in from that side), drag down to close with the viewer fading as you pull, swipe up for details, tap to hide/show the controls, a tap outside the details sheet closes it; pinch still zooms and a zoomed image pans | `components/lightbox.js`, `css/ux.css` |
+| **Phone "More" sheet** in the app bar: Browse, Creator galaxy, Collections, History, Surprise me, Find anything (palette), Display, Report content, Admin | `components/menu.js`, `main.js`, `css/ux.css` |
+| **Back returns you to where you were**: feeds stash what they loaded per page (15 min) and rebuild synchronously, so Explore, Home and creator pages restore their scroll position; a primary tab is a fresh start, and tapping the tab you are on scrolls to the top | `components/feed.js`, `main.js` |
+| Explore on phones: filters are one swipeable row; active filters get a "Clear all" when there are two or more | `views/explore.js`, `css/ux.css` |
+| Reels on phones: full-height (no app bar over the video); a "What plays" button opens type and order; the title names the context, never the order | `views/reels.js`, `css/ux.css` |
+| Phone search placeholder no longer cut mid-word | `main.js` |
+
+**Perf** (`scripts/perf-audit.js`, median of 3): unchanged within noise. Two more requests on load (`ux.css`, `menu.js`, +8 KB); feed fling 59.6 → 60 fps; Reels swipe-to-play 344 → 358 ms (noise: Reels playback code is untouched).
+
+**Verification**: 4 new guards in `tests/ux-flows.test.js`; every gesture above driven with CDP touch events on a phone viewport, desktop viewer/backdrop-close/keyboard re-checked, no console errors.
+
 ## 2026-10-12 — v4.13 "Fluid"
 
 **Audit findings** (measured with the new `scripts/perf-audit.js`: phone 390×844 @2x with touch, 4× CPU slowdown, 150 ms / 12 Mbps link for loads, demo library, median of 3 runs): an **untouched** Explore page spent ~2.4 s of main-thread and raster work in every 3 s, because every card's loading shimmer kept animating `background-position` under the finished image, forever. Flinging through the whole 158-card feed ran at **9 fps** with 12.6 s of long tasks. On Home, each rail's arrow/fade update forced a layout for the next rail (≈0.5 s at 4× slowdown). In Reels, the full-screen `blur(38px)` backdrop and the backdrop-blurred action buttons were re-rendered on every frame of a swipe (≈1.9 s of raster in 8 swipes), and the progress bar stepped ~4×/s via `timeupdate` + `width`. Smaller things: a growing `box-shadow` pulse and an animated conic-gradient ring repainted every frame; every card subscribed its own save listener that was only dropped at the next save; touch video previews started the moment Explore loaded; the galaxy view (the heaviest) was preloaded on every visit; on narrow cards the "Seen" badge ran under the save button.

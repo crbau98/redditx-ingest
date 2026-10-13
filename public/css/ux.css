@@ -1,0 +1,62 @@
+/* PRISM interaction & flow layer: the structural bits behind navigation, gestures and the
+ * phone layouts of the viewer, Reels and filters. Colours, type and surfaces come from
+ * app.css tokens; this file only places things and wires states. */
+
+/* ---------- phone "more" sheet ---------------------------------------------- */
+.menu-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.menu-item { display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 10px 12px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+.menu-item:hover, .menu-item:focus-visible { border-color: var(--line-strong); background: var(--surface-2); }
+.menu-item:active { transform: scale(.98); }
+.menu-ico { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: var(--surface-2); color: var(--accent); }
+.menu-txt { display: grid; min-width: 0; line-height: 1.25; }
+.menu-txt b { font-weight: 600; font-size: 14px; }
+.menu-txt small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 480px) { .menu-grid { grid-template-columns: minmax(0, 1fr); gap: 6px; } .menu-item { min-height: 54px; } }
+
+/* ---------- explore filters: one swipeable row on phones -------------------- */
+.filter-scroll { display: contents; }
+@media (max-width: 640px) {
+  .filterbar { gap: 8px; padding-top: 10px; padding-bottom: 10px; }
+  .filter-scroll { display: flex; align-items: center; gap: 8px; flex: 1 1 100%; min-width: 0; overflow-x: auto; scrollbar-width: none; margin: 0 calc(var(--pad) * -1); padding: 0 var(--pad); scroll-padding: 0 var(--pad); }
+  .filter-scroll::-webkit-scrollbar { display: none; }
+  .filter-scroll > * { flex: none; }
+  .filterbar .spacer { display: none; }
+  .filterbar .active-filters { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .filterbar .active-filters > * { flex: none; }
+}
+.chip.clear-all { color: var(--muted); border-style: dashed; }
+
+/* ---------- viewer: phone dock, immersive tap, drag-to-dismiss -------------- */
+.lb-actions { display: contents; }
+.lb-top, .lb-actions, .lb-ambient { transition: opacity .22s, transform .22s; }
+.lb.chrome-off .lb-top, .lb.chrome-off .lb-actions, .lb.chrome-off .lb-strip { opacity: 0; pointer-events: none; }
+.lb.dragging { background: rgba(4, 4, 7, calc(.96 - var(--drag, 0) * .9)); }
+.lb.dragging .lb-ambient.on { opacity: calc(.95 - var(--drag, 0)); }
+.lb.dragging .lb-top, .lb.dragging .lb-actions { opacity: calc(1 - var(--drag, 0) * 1.6); }
+@media (pointer: coarse) { .lb-stage { touch-action: none; } }
+@media (max-width: 900px) {
+  .lb-top { gap: 8px; padding-bottom: 6px; }
+  .lb-title .s { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lb-actions { display: flex; justify-content: space-evenly; align-items: center; gap: 6px; position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); z-index: 4; padding: 8px; border-radius: 22px; background: rgba(12, 12, 18, .62); border: 1px solid rgba(255, 255, 255, .1); backdrop-filter: blur(18px) saturate(1.4); -webkit-backdrop-filter: blur(18px) saturate(1.4); }
+  .lb-actions .btn.icon { width: 44px; height: 44px; }
+  .lb-stage { padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
+  .lb.chrome-off .lb-stage { padding-bottom: 14px; }
+  .lb.chrome-off .lb-actions { transform: translateY(16px); }
+  .lb.chrome-off .lb-top { transform: translateY(-12px); }
+  /* details: a bottom sheet over the media (not a squeezed grid column), with the dock floating on it */
+  .lb > .lb-info { position: absolute; grid-column: 1; z-index: 5; padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
+  .lb.info-open .lb-actions { z-index: 6; }
+}
+
+/* ---------- Reels: immersive on phones ------------------------------------- */
+.reels-tune { display: none; }
+@media (max-width: 899px) {
+  body.reels-mode .appbar { display: none; }
+  .reels { top: 0; }
+  .reels-top { padding-top: calc(10px + env(safe-area-inset-top)); }
+}
+@media (max-width: 480px) {
+  .reels-top .select { display: none; }
+  .reels-tune { display: inline-flex; color: #fff; background: rgba(0, 0, 0, .4); border: 1px solid rgba(255, 255, 255, .2); flex: none; }
+}

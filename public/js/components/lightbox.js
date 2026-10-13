@@ -5,7 +5,7 @@ import { parse, href, setParam } from '../router.js';
 import { openReport } from './report.js';
 import { attachVideo, releaseVideo, isM3u8 } from './video.js';
 import { openCollectionPicker } from './collections.js';
-import { playFlip, heartBurst } from './fx.js';
+import { playFlip, heartBurst, haptic } from './fx.js';
 import { makeZoomable } from './zoom.js';
 
 let S = null; // the single active lightbox session
@@ -105,6 +105,7 @@ function render() {
 
 function nav(delta) {
   if (!S) return;
+  S.dir = delta;
   const next = S.index + delta;
   if (next < 0) return;
   if (next >= S.items.length) {
@@ -122,6 +123,7 @@ function show(i, { push = false } = {}) {
   const target = parse();
   if (target.query.get('m') !== it.id) setParam('m', it.id, { replace: !push });
   paintTop(); paintStage(it); paintInfo(); paintStrip();
+  slideIn();
   scheduleSlide();
   S.prev.disabled = i === 0;
   S.next.disabled = i >= S.items.length - 1 && !S.loadMore;
@@ -184,14 +186,32 @@ function paintTop() {
     h('div', { class: 'lb-title' },
       h('div', { style: { minWidth: 0 } }, h('div', { class: 't' }, it.title || it.creator_name || 'Untitled'), h('div', { class: 's' }, [it.creator_name || it.author, platformLabel(it.platform), fmt.ago(it.posted_at)].filter(Boolean).join(' · ')))),
     h('span', { class: 'lb-count' }, `${S.index + 1} / ${S.items.length}`),
+    // on desktop these sit in the top bar; on a phone they become a dock under your thumb
+    h('div', { class: 'lb-actions' },
     h('button', { class: `btn icon fav${faved ? ' on' : ''}`, 'aria-label': faved ? 'Remove from saved' : 'Save', 'aria-pressed': String(faved), title: 'Save (F)', onclick: () => toggleFav(it) }, icon('heart')),
     h('button', { class: `btn icon${collections.containing(it.id).length ? ' on' : ''}`, 'aria-label': 'Add to collection', title: 'Add to collection (C)', onclick: () => openCollectionPicker(it) }, icon('bookmark')),
     h('button', { class: 'btn icon', 'aria-label': 'Share link', title: 'Copy link', onclick: () => share(it) }, icon('share')),
     downloadLink(it),
     h('button', { class: `btn icon hide-mobile${S.slide ? ' on' : ''}`, 'aria-label': S.slide ? 'Stop slideshow' : 'Start slideshow', 'aria-pressed': String(!!S.slide), title: 'Slideshow (S)', onclick: toggleSlideshow }, icon(S.slide ? 'pause' : 'play', S.slide ? '' : 'fill')),
     h('button', { class: 'btn icon hide-mobile', 'aria-label': 'Keyboard shortcuts', title: 'Keyboard shortcuts (?)', onclick: showHelp }, icon('sliders')),
-    h('button', { class: `btn icon${S.info ? ' on' : ''}`, 'aria-label': 'Details', 'aria-pressed': String(S.info), title: 'Details (I)', onclick: () => { S.info = !S.info; S.el.classList.toggle('info-open', S.info); paintTop(); } }, icon('info')));
+    h('button', { class: `btn icon${S.info ? ' on' : ''}`, 'aria-label': 'Details', 'aria-pressed': String(S.info), title: 'Details (I)', onclick: () => setInfo(!S.info) }, icon('info'))));
 }
+
+function setInfo(on) {
+  if (!S) return;
+  S.info = on;
+  S.el.classList.toggle('info-open', on);
+  if (on) S.el.classList.remove('chrome-off');
+  paintTop();
+}
+
+/** Touch: a tap on the media hides the controls for an unobstructed look; another brings them back. */
+function toggleChrome() {
+  if (!S) return;
+  if (S.info && phoneLayout()) { setInfo(false); return; } // a tap outside the details sheet closes it
+  S.el.classList.toggle('chrome-off');
+}
+const phoneLayout = () => window.matchMedia('(max-width: 900px)').matches;
 
 function toggleFav(it, burst = false) {
   const on = favorites.toggle(it.id, it);
@@ -266,7 +286,11 @@ function paintStage(it) {
       full.onload = () => { if (img.isConnected) img.src = full.src; };
       full.src = proxied(it.media_url);
     }
-    S.zoom = makeZoomable(img, S.stage);
+    S.zoom = makeZoomable(img, S.stage, { onSingleClick: () => {
+      // touch: tap toggles the controls (pinch zooms); a tap on a zoomed image still zooms back out
+      if (S && S.lastPointer !== 'mouse' && !(S.zoom && S.zoom.scale > 1)) { toggleChrome(); return false; }
+      return true;
+    } });
     img.addEventListener('dblclick', () => { if (img.classList.contains('zoomed')) return; toggleFav(it, true); });
     img.addEventListener('error', () => { reportBroken(it.id); S.stage.replaceChildren(...keep, h('div', { class: 'lb-loading' }, 'This image is no longer available at its source.')); });
   }
@@ -326,7 +350,7 @@ function onKey(e) {
     case 'ArrowRight': case 'j': nav(1); break;
     case 'f': case 'F': if (it) toggleFav(it, true); break;
     case 'c': case 'C': if (it) openCollectionPicker(it); break;
-    case 'i': case 'I': S.info = !S.info; S.el.classList.toggle('info-open', S.info); paintTop(); break;
+    case 'i': case 'I': setInfo(!S.info); break;
     case 's': case 'S': toggleSlideshow(); break;
     case '?': showHelp(); break;
     case 'm': case 'M': { const v = S.stage.querySelector('video'); if (v) v.muted = !v.muted; break; }
@@ -338,21 +362,107 @@ function onKey(e) {
   }
 }
 
+/** The next item glides in from the side it was swiped (or stepped) from. */
+function slideIn() {
+  const dir = S.dir; S.dir = 0;
+  if (!dir || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const m = S.stage.querySelector('img, video');
+  if (m && m.animate) m.animate([{ transform: `translateX(${dir * 56}px)`, opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: 240, easing: 'cubic-bezier(.2,.8,.2,1)' });
+}
+
+/*
+ * Touch gestures, all of which follow the finger while it moves:
+ *   swipe left / right  next / previous (rubber-bands at either end)
+ *   drag down           close, fading the viewer out as you pull
+ *   swipe up            open the details sheet
+ *   tap                 hide / show the controls (see toggleChrome)
+ * A second finger hands over to pinch-zoom; a zoomed image pans instead (zoom.js).
+ */
 function wireGestures() {
-  let start = null;
+  let g = null;
+  let fingers = 0;
+  const media = () => S && S.stage.querySelector('img, video');
+  const reset = (animate) => {
+    const m = media();
+    if (m) { m.style.transition = animate ? 'transform .26s cubic-bezier(.2,.8,.2,1), opacity .2s' : 'none'; m.style.transform = ''; m.style.opacity = ''; }
+    if (S) { S.el.classList.remove('dragging'); S.el.style.removeProperty('--drag'); }
+  };
+  const onControls = (e) => {
+    const v = e.target.closest('video');
+    return v && e.clientY > v.getBoundingClientRect().bottom - 56; // the native scrubber and buttons
+  };
+  // capture phase: counts fingers and notes the input type before zoom.js sees the event
   S.stage.addEventListener('pointerdown', (e) => {
-    if (e.pointerType === 'mouse' || e.target.closest('video, button')) { start = null; return; }
-    if (S.stage.classList.contains('zoomed-wrap')) { start = null; return; }
-    start = { x: e.clientX, y: e.clientY };
+    S.lastPointer = e.pointerType;
+    if (e.pointerType === 'mouse') return;
+    fingers++;
+    if (fingers > 1 && g) { g = null; reset(true); }
+  }, true);
+  const lift = (e) => { if (e.pointerType !== 'mouse') fingers = Math.max(0, fingers - 1); };
+  S.stage.addEventListener('pointerup', lift, true);
+  S.stage.addEventListener('pointercancel', lift, true);
+
+  S.stage.addEventListener('pointerdown', (e) => {
+    g = null;
+    if (e.pointerType === 'mouse' || fingers > 1 || e.target.closest('button') || onControls(e)) return;
+    if (S.stage.classList.contains('zoomed-wrap')) return;
+    g = { x: e.clientX, y: e.clientY, t: performance.now(), id: e.pointerId, axis: null, dx: 0, dy: 0, onMedia: !!e.target.closest('img, video') };
   });
-  S.stage.addEventListener('pointerup', (e) => {
-    if (!start) return;
-    const dx = e.clientX - start.x; const dy = e.clientY - start.y;
-    start = null;
-    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) nav(dx < 0 ? 1 : -1);
-    else if (dy > 110 && dy > Math.abs(dx) * 1.5) closeLightbox();
+  S.stage.addEventListener('pointermove', (e) => {
+    if (!g || e.pointerId !== g.id) return;
+    g.dx = e.clientX - g.x; g.dy = e.clientY - g.y;
+    if (!g.axis) {
+      if (Math.hypot(g.dx, g.dy) < 10) return;
+      g.axis = Math.abs(g.dx) > Math.abs(g.dy) ? 'x' : g.dy > 0 ? 'down' : 'up';
+    }
+    const m = media();
+    if (!m) return;
+    m.style.transition = 'none';
+    if (g.axis === 'x') {
+      const blocked = (g.dx > 0 && S.index === 0) || (g.dx < 0 && S.index >= S.items.length - 1 && !S.loadMore);
+      m.style.transform = `translateX(${blocked ? g.dx / 4 : g.dx}px) rotate(${(blocked ? 0 : g.dx) / 90}deg)`;
+    } else if (g.axis === 'down') {
+      const dy = Math.max(0, g.dy);
+      m.style.transform = `translate(${g.dx / 3}px, ${dy}px) scale(${1 - Math.min(dy / 1400, 0.3)})`;
+      S.el.classList.add('dragging');
+      S.el.style.setProperty('--drag', Math.min(dy / 360, 1).toFixed(3));
+    } else {
+      m.style.transform = `translateY(${Math.max(g.dy, -120) / 3}px)`;
+    }
   });
-  S.stage.addEventListener('pointercancel', () => { start = null; });
+  const end = (e) => {
+    if (!g || e.pointerId !== g.id) return;
+    const { axis, dx, dy, onMedia } = g;
+    const fast = performance.now() - g.t < 260; // a flick needs less distance
+    g = null;
+    if (!axis) {
+      // a tap on the dark area around the media (images report their own taps through zoom.js)
+      if (e.type === 'pointerup' && !onMedia) toggleChrome();
+      return;
+    }
+    const m = media();
+    if (axis === 'x' && (Math.abs(dx) > 80 || (fast && Math.abs(dx) > 30))) {
+      const d = dx < 0 ? 1 : -1;
+      const blocked = (d < 0 && S.index === 0) || (d > 0 && S.index >= S.items.length - 1 && !S.loadMore);
+      if (blocked) { reset(true); return; }
+      haptic(8);
+      if (m) { m.style.transition = 'transform .16s ease-in, opacity .16s'; m.style.transform = `translateX(${-d * window.innerWidth * 0.6}px) rotate(${-d * 4}deg)`; m.style.opacity = '0'; }
+      setTimeout(() => {
+        nav(d);
+        // the next page may still be loading (or there is none): never leave the old item invisible
+        setTimeout(() => { if (m && m.isConnected) reset(true); }, 700);
+      }, 140);
+    } else if (axis === 'down' && (dy > 120 || (fast && dy > 50))) {
+      if (m) { m.style.transition = 'transform .2s ease-in, opacity .2s'; m.style.transform = `translateY(${window.innerHeight * 0.5}px) scale(.7)`; m.style.opacity = '0'; }
+      S.el.style.setProperty('--drag', '1');
+      setTimeout(closeLightbox, 160);
+    } else if (axis === 'up' && (dy < -70 || (fast && dy < -30))) {
+      reset(true);
+      if (!S.info) setInfo(true);
+    } else reset(true);
+  };
+  S.stage.addEventListener('pointerup', end);
+  S.stage.addEventListener('pointercancel', end);
   // clicking the dark backdrop (not the media) closes on desktop
-  S.stage.addEventListener('click', (e) => { if (e.target === S.stage && window.matchMedia('(hover: hover)').matches) closeLightbox(); });
+  S.stage.addEventListener('click', (e) => { if (e.target === S.stage && S.lastPointer === 'mouse') closeLightbox(); });
 }

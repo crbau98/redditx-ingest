@@ -7,6 +7,8 @@ import { openPalette, paletteOpen, surpriseMe } from './components/palette.js';
 import { openDisplaySettings } from './components/display.js';
 import { initTilt, initRails, gpuTier } from './components/fx.js';
 import { openTakedownForm } from './components/report.js';
+import { openMenu } from './components/menu.js';
+import { dropFeedStash } from './components/feed.js';
 import { attachSuggest } from './components/suggest.js';
 import { primeEager } from './components/card.js';
 import { smartSearch } from './smart.js';
@@ -93,7 +95,12 @@ function wireShortcuts() {
 
 function buildShell() {
   const app = $('#app');
-  const searchInput = h('input', { class: 'input', type: 'search', id: 'global-search', placeholder: 'Search anything — “bearded guys at the beach, videos”', 'aria-label': 'Search', enterkeyhint: 'search', autocomplete: 'off' });
+  // the long example gets cut off mid-word on a phone, so narrow screens get a short one
+  const narrow = window.matchMedia('(max-width: 560px)');
+  const searchInput = h('input', { class: 'input', type: 'search', id: 'global-search', 'aria-label': 'Search', enterkeyhint: 'search', autocomplete: 'off' });
+  const paintPlaceholder = () => { searchInput.placeholder = narrow.matches ? 'Search creators, tags…' : 'Search anything — “bearded guys at the beach, videos”'; };
+  paintPlaceholder();
+  narrow.addEventListener('change', paintPlaceholder);
   attachSuggest(searchInput); // registered first so it can claim Enter for a highlighted suggestion
   searchInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { smartSearch(searchInput.value); searchInput.blur(); }
@@ -117,7 +124,8 @@ function buildShell() {
     h('a', { class: 'brand', href: href('/'), 'aria-label': 'PRISM home' }, icon('logo'), h('span', null, 'PRISM')),
     h('nav', { class: 'nav', 'aria-label': 'Primary' }, NAV.map(([key, path, label, ic]) => h('a', { href: href(path), dataset: { nav: key } }, icon(ic, 'sm'), label, key === 'saved' ? savedBadge : null))),
     h('div', { class: 'search' }, icon('search'), searchInput, h('span', { class: 'kbd hide-mobile' }, '/')),
-    h('div', { class: 'appbar-actions' }, h('button', { class: 'btn icon ghost hide-mobile', 'aria-label': 'Command palette', title: 'Command palette (Ctrl/⌘ K)', onclick: openPalette }, icon('command')), themeBtn, h('button', { class: 'btn icon ghost', 'aria-label': 'Display settings', title: 'Display settings', onclick: openDisplaySettings }, icon('palette')), h('a', { class: 'btn icon ghost hide-mobile', href: href('/admin'), 'aria-label': 'Admin', title: 'Admin' }, icon('sliders'))));
+    h('div', { class: 'appbar-actions' }, h('button', { class: 'btn icon ghost hide-mobile', 'aria-label': 'Command palette', title: 'Command palette (Ctrl/⌘ K)', onclick: openPalette }, icon('command')), themeBtn, h('button', { class: 'btn icon ghost', 'aria-label': 'Display settings', title: 'Display settings', onclick: openDisplaySettings }, icon('palette')), h('a', { class: 'btn icon ghost hide-mobile', href: href('/admin'), 'aria-label': 'Admin', title: 'Admin' }, icon('sliders')),
+      h('button', { class: 'btn icon ghost only-mobile', 'aria-label': 'More', title: 'More', 'aria-haspopup': 'dialog', onclick: openMenu }, icon('more'))));
 
   const main = h('main', { id: 'main', tabindex: '-1' });
   const footer = h('footer', { class: 'footer' },
@@ -130,6 +138,18 @@ function buildShell() {
     h('a', { href: href('/admin') }, 'Admin'));
   const bottom = h('nav', { class: 'bottomnav five', 'aria-label': 'Primary' }, h('span', { class: 'bn-ind', 'aria-hidden': 'true' }), NAV.filter((n) => !n[4]).map(([key, path, label, ic]) => h('a', { href: href(path), dataset: { nav: key } }, icon(ic, 'lg'), label)));
   window.addEventListener('resize', () => setNav(currentNav), { passive: true });
+  // A primary tab is a fresh start: it opens the page at the top (not where you left it), and
+  // tapping the tab you are already on scrolls back to the top, like a native app's tab bar.
+  app.addEventListener('click', (e) => {
+    const a = e.target.closest('a[data-nav]');
+    if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button) return;
+    if (a.getAttribute('href') === (location.hash || '#/')) {
+      e.preventDefault();
+      window.scrollTo({ top: 0, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+      return;
+    }
+    freshNav = true;
+  });
   const fab = h('button', { class: 'fab', hidden: true, 'aria-label': 'Back to top', onclick: () => window.scrollTo({ top: 0, behavior: 'smooth' }) }, icon('up'));
   window.addEventListener('scroll', () => { fab.hidden = window.scrollY < 900; }, { passive: true });
 
@@ -138,6 +158,7 @@ function buildShell() {
 }
 
 let currentNav = null;
+let freshNav = false; // the next render came from a primary tab: start at the top
 function setNav(key) {
   currentNav = key;
   document.querySelectorAll('[data-nav]').forEach((a) => { if (a.dataset.nav === key) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
@@ -158,6 +179,8 @@ async function render(shell) {
   const token = ++renderToken;
   if (currentKey) scrollMemory.set(currentKey, window.scrollY);
   currentKey = key;
+  const fresh = freshNav; freshNav = false;
+  if (fresh) { scrollMemory.delete(key); dropFeedStash(key); }
   if (cleanup) { try { cleanup(); } catch (e) { console.error(e); } cleanup = null; }
 
   const match = matchRoute(routes, p);
@@ -173,8 +196,10 @@ async function render(shell) {
     const result = await match.route.view(shell.main, { params: match.params, query: p.query });
     if (token !== renderToken) { if (typeof result === 'function') result(); return; }
     cleanup = typeof result === 'function' ? result : null;
+    // Back from a creator or a search lands where you were: feeds rebuild from their stash
+    // synchronously (see feed.js), so the old scroll position exists again by now.
     const y = scrollMemory.get(key);
-    window.scrollTo({ top: y && p.path !== '/explore' ? y : 0 });
+    window.scrollTo({ top: y || 0 });
   } catch (e) {
     if (token !== renderToken) return;
     console.error(e);
@@ -191,7 +216,7 @@ function wireLiveUpdates(shell) {
     const p = parse().path;
     if (p !== '/' && p !== '/explore') return;
     pending += evt.count || 1;
-    if (!pill) { pill = h('button', { class: 'btn primary newpill', onclick: () => { pending = 0; pill.remove(); pill = null; currentKey = null; render(shell); window.scrollTo({ top: 0 }); } }); document.body.appendChild(pill); }
+    if (!pill) { pill = h('button', { class: 'btn primary newpill', onclick: () => { pending = 0; pill.remove(); pill = null; dropFeedStash(); scrollMemory.clear(); currentKey = null; render(shell); window.scrollTo({ top: 0 }); } }); document.body.appendChild(pill); }
     pill.replaceChildren(icon('refresh', 'sm'), `${fmt.int(pending)} new — refresh`);
   });
   window.addEventListener('hashchange', () => { if (pill) { pill.remove(); pill = null; pending = 0; } });
