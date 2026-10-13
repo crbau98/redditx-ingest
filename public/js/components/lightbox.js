@@ -288,7 +288,10 @@ function paintStage(it) {
     }
     S.zoom = makeZoomable(img, S.stage, { onSingleClick: () => {
       // touch: tap toggles the controls (pinch zooms); a tap on a zoomed image still zooms back out
-      if (S && S.lastPointer !== 'mouse' && !(S.zoom && S.zoom.scale > 1)) { toggleChrome(); return false; }
+      if (S && S.lastPointer !== 'mouse' && !(S.zoom && S.zoom.scale > 1)) {
+        if (performance.now() - (S.dragEnd || 0) > 600) toggleChrome(); // a click synthesized after a swipe is not a tap
+        return false;
+      }
       return true;
     } });
     img.addEventListener('dblclick', () => { if (img.classList.contains('zoomed')) return; toggleFav(it, true); });
@@ -433,6 +436,7 @@ function wireGestures() {
   const end = (e) => {
     if (!g || e.pointerId !== g.id) return;
     const { axis, dx, dy, onMedia } = g;
+    if (axis) S.dragEnd = performance.now();
     const fast = performance.now() - g.t < 260; // a flick needs less distance
     g = null;
     if (!axis) {

@@ -74,6 +74,8 @@ export async function explore(root, { query }) {
     }).catch(() => {});
   }
 
+  // (before the smart banner takes the chips) Two or more filters in play: one tap clears them all (keeping only the media type).
+  if (active.length > 1) active.push(h('button', { class: 'chip clear-all', onclick: () => navigate('/explore', f.type ? { type: f.type } : {}, { replace: true }) }, 'Clear all'));
   // Smart search banner: shows how the typed words were read, with an escape hatch to plain words.
   let banner = null;
   if (f.smart && f.raw) {
@@ -111,8 +113,6 @@ export async function explore(root, { query }) {
   const reelsBtn = h('a', { class: 'btn sm', href: href('/reels', { type: f.type || 'all', sort: f.sort === 'relevance' || f.sort === 'oldest' ? 'recent' : f.sort, platform: f.platform, community: f.community, tag: f.tag, tags: f.tags, anytags: f.anytags, label: f.anytags ? f.label : '', creator: f.creator, since: f.since, after: f.after, q: f.q, following: f.following }), title: 'Play these results full screen' }, icon('film', 'sm'), 'Play as Reels');
 
   const followChip = h('button', { class: `chip${f.following ? ' on' : ''}`, 'aria-pressed': String(!!f.following), onclick: () => set({ following: f.following ? '' : '1' }) }, icon('heart', 'sm'), 'Following');
-  // Two or more filters in play: one tap clears them all (keeping only the media type).
-  if (active.length > 1) active.push(h('button', { class: 'chip clear-all', onclick: () => navigate('/explore', f.type ? { type: f.type } : {}, { replace: true }) }, 'Clear all'));
   const bar = h('div', { class: 'filterbar' }, h('div', { class: 'filter-scroll' }, typeSeg, followChip, seenChip, sortSel, sinceSel, platSel), h('span', { class: 'spacer' }), density, active.length ? h('div', { class: 'active-filters' }, active) : null);
 
   // Tag rail: with tags in play, show tags that go with them (click narrows); otherwise the most used tags.
