@@ -963,9 +963,16 @@ const media = {
     return { items: out.map((r) => { const m = serializeMedia(r); delete m.rec; return m; }), total, page, limit, personalized: true };
   },
 
-  recomputeHot() {
+  /**
+   * Refresh the "Trending" score. Only rows whose stored score drifted more than `tolerance` (2%) are rewritten: rewriting every
+   * published row each time put the whole table through the WAL, and so through Litestream to the backup, every ten minutes.
+   * A fresh post still moves on every pass; a month-old one is rewritten about once a day.
+   */
+  recomputeHot(tolerance = 0.02) {
     const now = Date.now();
-    return db.prepare(`UPDATE media SET hot = hot_score(score, likes, views, epoch_ms(posted_at), ?) WHERE publish_state = 'published'`).run(now).changes;
+    return db.prepare(`UPDATE media SET hot = hot_score(score, likes, views, epoch_ms(posted_at), @now)
+      WHERE publish_state = 'published' AND abs(hot - hot_score(score, likes, views, epoch_ms(posted_at), @now)) > @tol * hot_score(score, likes, views, epoch_ms(posted_at), @now)`)
+      .run({ now, tol: tolerance }).changes;
   },
 
   communities(limit = 60) {

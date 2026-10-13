@@ -119,6 +119,21 @@ function init() {
 const detectFaces = (buffer) => (pool ? pool.detect(buffer) : inProcess.detect(buffer));
 
 /* ----------------------------------------------------------------- analysis */
+/** Faces and/or perceptual hash of picture bytes already in memory. */
+async function readBuffer(buffer, { faces = true, hash = true } = {}) {
+  const res = { status: 'ok' };
+  const jobs = [];
+  if (hash) jobs.push(phash.hashBuffer(buffer).then((h) => { res.phash = h; if (h) counters.hashed++; }, () => { res.phash = null; }));
+  if (faces) {
+    jobs.push((async () => {
+      try { await init(); } catch (e) { res.status = 'unavailable'; res.reason = e.message; return; }
+      try { res.faces = await detectFaces(buffer); } catch (e) { counters.errors++; res.status = 'error'; res.reason = String(e.message || e).slice(0, 160); }
+    })());
+  }
+  await Promise.all(jobs);
+  return res;
+}
+
 /**
  * Fetch a picture ONCE and read both things we want from it: the faces (policy: women are excluded) and its perceptual hash
  * (policy: duplicates collapse). `faces:false` / `hash:false` skip a part. A failed model never costs the hash.
@@ -141,16 +156,7 @@ function analyze(url, { referer, timeout = 12000, faces = true, hash = true } = 
       counters.errors++;
       return { status: 'error', reason: String(e.message || e).slice(0, 160) };
     }
-    const res = { status: 'ok' };
-    const jobs = [];
-    if (hash) jobs.push(phash.hashBuffer(got.buffer).then((h) => { res.phash = h; if (h) counters.hashed++; }, () => { res.phash = null; }));
-    if (faces) {
-      jobs.push((async () => {
-        try { await init(); } catch (e) { res.status = 'unavailable'; res.reason = e.message; return; }
-        try { res.faces = await detectFaces(got.buffer); } catch (e) { counters.errors++; res.status = 'error'; res.reason = String(e.message || e).slice(0, 160); }
-      })());
-    }
-    await Promise.all(jobs);
+    const res = await readBuffer(got.buffer, { faces, hash });
     res.ms = Date.now() - t0;
     if (res.status === 'ok' || res.phash !== undefined) {
       counters.analyzed++; counters.totalMs += res.ms;
@@ -184,11 +190,21 @@ function imageUrlOf(item) {
  * @returns {Promise<{female: boolean, decided: boolean, status: string, faces: number, females: number, url?: string}>}
  */
 async function checkItem(item, { threshold = 0.5, faces = true, hash = false } = {}) {
-  const url = imageUrlOf(item);
-  if (!url) return { female: false, decided: false, status: 'no-image', faces: 0, females: 0, phash: null };
-  let referer;
-  try { referer = `${new URL(url).origin}/`; } catch { /* none */ }
-  const res = await analyze(url, { referer, faces, hash });
+  // A source may hand over the picture itself (item.localImage, e.g. a Telegram photo not uploaded yet): no fetch needed.
+  const local = Buffer.isBuffer(item.localImage) && item.localImage.length ? item.localImage : null;
+  const url = local ? null : imageUrlOf(item);
+  if (!local && !url) return { female: false, decided: false, status: 'no-image', faces: 0, females: 0, phash: null };
+  let res;
+  if (local) {
+    const t0 = Date.now();
+    res = analyzer ? await analyzer(`local:${item.sourceId || ''}`, { faces, hash }) : await readBuffer(local, { faces, hash });
+    res.ms = Date.now() - t0;
+    if (res.status === 'ok') { counters.analyzed++; counters.totalMs += res.ms; }
+  } else {
+    let referer;
+    try { referer = `${new URL(url).origin}/`; } catch { /* none */ }
+    res = await analyze(url, { referer, faces, hash });
+  }
   const verdict = faces ? judge(res, threshold) : { female: false, faces: 0, females: 0, males: 0, decided: false, status: res.status, reason: res.reason };
   if (verdict.female) counters.female++;
   return { ...verdict, url, phash: res.phash || null };
