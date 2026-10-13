@@ -435,7 +435,18 @@ function v6(db) {
   `);
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6];
+/**
+ * v7 (PRISM 4.14): physique. `physique` is the picture's heaviness score (0 = lean / athletic .. 100 = very large; NULL =
+ * not measured: no torso in view, or not checked yet). Items at or above the admin threshold are hidden, not deleted, so
+ * moving the threshold re-applies to the whole library in both directions.
+ */
+function v7(db) {
+  const cols = db.prepare('PRAGMA table_info(media)').all().map((c) => c.name);
+  if (!cols.includes('physique')) db.exec('ALTER TABLE media ADD COLUMN physique INTEGER');
+  db.exec('CREATE INDEX IF NOT EXISTS ix_media_physique ON media(creator_id, physique) WHERE physique IS NOT NULL');
+}
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

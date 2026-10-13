@@ -141,7 +141,10 @@ function moderate(id, action, reason, actor = 'admin') {
   const m = repo.media.get(id);
   if (!m) return null;
   switch (action) {
-    case 'approve': case 'publish': repo.media.update(id, { publish_state: 'published', scope: 'in' }); break;
+    case 'approve': case 'publish':
+      repo.media.update(id, { publish_state: 'published', scope: 'in' });
+      if (m.physique != null) repo.media.setPhysique(id, null); // a human said yes: the body filter never re-hides it
+      break;
     case 'hide': repo.media.setState(id, 'hidden', reason); break;
     case 'flag': repo.media.setState(id, 'review', reason); break;
     case 'reject': case 'remove': repo.media.setState(id, 'removed', reason); break;

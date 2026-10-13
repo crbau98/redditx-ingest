@@ -30,7 +30,7 @@ let initPromise = null;
 let initError = null;
 let analyzer = null;   // test hook: async (url) => result
 const cache = new Map();
-const counters = { analyzed: 0, female: 0, errors: 0, cached: 0, totalMs: 0, hashed: 0 };
+const counters = { analyzed: 0, female: 0, errors: 0, cached: 0, totalMs: 0, hashed: 0, measured: 0, heavy: 0 };
 
 /* ------------------------------------------------------------------ the model */
 /**
@@ -58,7 +58,7 @@ class Pool {
         const p = this.pending.get(m.id);
         if (!p) return;
         this.pending.delete(m.id); slot.busy--; slot.sync();
-        if (m.error) p.reject(new Error(m.error)); else p.resolve(m.faces);
+        if (m.error) p.reject(new Error(m.error)); else p.resolve(m.result);
       });
       w.on('error', (e) => { reject(e); this.failAll(slot, e); });
       w.on('exit', () => { this.workers = this.workers.filter((x) => x !== slot); this.failAll(slot, new Error('image worker exited')); });
@@ -68,7 +68,7 @@ class Pool {
 
   failAll(slot, err) { for (const [id, p] of this.pending) if (p.slot === slot) { this.pending.delete(id); p.reject(err); } }
 
-  detect(buffer) {
+  detect(buffer, opts = {}) {
     const slot = this.workers.reduce((a, b) => (!a || b.busy < a.busy ? b : a), null);
     if (!slot) return Promise.reject(new Error('no image workers'));
     const id = this.nextId++;
@@ -76,7 +76,7 @@ class Pool {
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject, slot });
       const copy = new Uint8Array(buffer); // the cached download stays usable: the copy is transferred
-      slot.w.postMessage({ type: 'detect', id, buffer: copy.buffer }, [copy.buffer]);
+      slot.w.postMessage({ type: 'detect', id, buffer: copy.buffer, body: !!opts.body }, [copy.buffer]);
     });
   }
 
@@ -116,18 +116,23 @@ function init() {
   return initPromise;
 }
 
-const detectFaces = (buffer) => (pool ? pool.detect(buffer) : inProcess.detect(buffer));
+/** @returns {Promise<{faces: object[], body: object|null}>} */
+const detectFaces = (buffer, opts) => (pool ? pool.detect(buffer, opts) : inProcess.detect(buffer, opts));
 
 /* ----------------------------------------------------------------- analysis */
-/** Faces and/or perceptual hash of picture bytes already in memory. */
-async function readBuffer(buffer, { faces = true, hash = true } = {}) {
+/** Faces (and, with `body`, the build) and/or perceptual hash of picture bytes already in memory. */
+async function readBuffer(buffer, { faces = true, hash = true, body = false } = {}) {
   const res = { status: 'ok' };
   const jobs = [];
   if (hash) jobs.push(phash.hashBuffer(buffer).then((h) => { res.phash = h; if (h) counters.hashed++; }, () => { res.phash = null; }));
   if (faces) {
     jobs.push((async () => {
       try { await init(); } catch (e) { res.status = 'unavailable'; res.reason = e.message; return; }
-      try { res.faces = await detectFaces(buffer); } catch (e) { counters.errors++; res.status = 'error'; res.reason = String(e.message || e).slice(0, 160); }
+      try {
+        const r = await detectFaces(buffer, { body });
+        res.faces = r.faces;
+        if (body) { res.body = r.body; if (r.body && r.body.decided) counters.measured++; }
+      } catch (e) { counters.errors++; res.status = 'error'; res.reason = String(e.message || e).slice(0, 160); }
     })());
   }
   await Promise.all(jobs);
@@ -135,14 +140,16 @@ async function readBuffer(buffer, { faces = true, hash = true } = {}) {
 }
 
 /**
- * Fetch a picture ONCE and read both things we want from it: the faces (policy: women are excluded) and its perceptual hash
- * (policy: duplicates collapse). `faces:false` / `hash:false` skip a part. A failed model never costs the hash.
- * @returns {Promise<{status:'ok'|'unavailable'|'error', faces?: object[], phash?: string|null, reason?: string, cached?: boolean, ms?: number}>}
+ * Fetch a picture ONCE and read everything we want from it: the faces (policy: women are excluded), the body's build
+ * (`body:true`, policy: heavy bodies are hidden; same model pass as the faces) and its perceptual hash (policy: duplicates
+ * collapse). `faces:false` / `hash:false` skip a part. A failed model never costs the hash.
+ * @returns {Promise<{status:'ok'|'unavailable'|'error', faces?: object[], body?: object|null, phash?: string|null, reason?: string, cached?: boolean, ms?: number}>}
  */
-function analyze(url, { referer, timeout = 12000, faces = true, hash = true } = {}) {
-  if (analyzer) return analyzer(url, { faces, hash });
+function analyze(url, { referer, timeout = 12000, faces = true, hash = true, body = false } = {}) {
+  if (body) faces = true; // one model pass reads both
+  if (analyzer) return analyzer(url, { faces, hash, body });
   const hit = cache.get(url);
-  if (hit && (!faces || hit.faces !== undefined) && (!hash || hit.phash !== undefined)) { counters.cached++; return Promise.resolve({ ...hit, cached: true }); }
+  if (hit && (!faces || hit.faces !== undefined) && (!body || hit.body !== undefined) && (!hash || hit.phash !== undefined)) { counters.cached++; return Promise.resolve({ ...hit, cached: true }); }
   return (async () => {
     const t0 = Date.now();
     let got;
@@ -156,7 +163,7 @@ function analyze(url, { referer, timeout = 12000, faces = true, hash = true } = 
       counters.errors++;
       return { status: 'error', reason: String(e.message || e).slice(0, 160) };
     }
-    const res = await readBuffer(got.buffer, { faces, hash });
+    const res = await readBuffer(got.buffer, { faces, hash, body });
     res.ms = Date.now() - t0;
     if (res.status === 'ok' || res.phash !== undefined) {
       counters.analyzed++; counters.totalMs += res.ms;
@@ -187,28 +194,35 @@ function imageUrlOf(item) {
 
 /**
  * Verdict for a pipeline item. Never throws.
- * @returns {Promise<{female: boolean, decided: boolean, status: string, faces: number, females: number, url?: string}>}
+ * `body: true` also measures the build: `physique` is the 0..100 heaviness score, or null when the body could not be measured.
+ * @returns {Promise<{female: boolean, decided: boolean, status: string, faces: number, females: number, url?: string, physique: number|null, physiqueReason?: string}>}
  */
-async function checkItem(item, { threshold = 0.5, faces = true, hash = false } = {}) {
+async function checkItem(item, { threshold = 0.5, faces = true, hash = false, body = false } = {}) {
+  const femalePolicy = faces;
+  if (body) faces = true; // one model pass reads both
   // A source may hand over the picture itself (item.localImage, e.g. a Telegram photo not uploaded yet): no fetch needed.
   const local = Buffer.isBuffer(item.localImage) && item.localImage.length ? item.localImage : null;
   const url = local ? null : imageUrlOf(item);
-  if (!local && !url) return { female: false, decided: false, status: 'no-image', faces: 0, females: 0, phash: null };
+  if (!local && !url) return { female: false, decided: false, status: 'no-image', faces: 0, females: 0, phash: null, physique: null };
   let res;
   if (local) {
     const t0 = Date.now();
-    res = analyzer ? await analyzer(`local:${item.sourceId || ''}`, { faces, hash }) : await readBuffer(local, { faces, hash });
+    res = analyzer ? await analyzer(`local:${item.sourceId || ''}`, { faces, hash, body }) : await readBuffer(local, { faces, hash, body });
     res.ms = Date.now() - t0;
     if (res.status === 'ok') { counters.analyzed++; counters.totalMs += res.ms; }
   } else {
     let referer;
     try { referer = `${new URL(url).origin}/`; } catch { /* none */ }
-    res = await analyze(url, { referer, faces, hash });
+    res = await analyze(url, { referer, faces, hash, body });
   }
-  const verdict = faces ? judge(res, threshold) : { female: false, faces: 0, females: 0, males: 0, decided: false, status: res.status, reason: res.reason };
+  const verdict = femalePolicy ? judge(res, threshold) : { female: false, faces: 0, females: 0, males: 0, decided: false, status: res.status, reason: res.reason };
   if (verdict.female) counters.female++;
-  return { ...verdict, url, phash: res.phash || null };
+  const b = body && res.status === 'ok' ? res.body : null;
+  return { ...verdict, url, phash: res.phash || null, physique: b && b.decided ? b.score : null, physiqueReason: b && !b.decided ? b.reason : undefined };
 }
+
+/** Count a picture the physique policy hid (for the admin status line). */
+function noteHeavy() { counters.heavy++; }
 
 /** Is the model usable? Starts loading it on first call. */
 async function available() {
@@ -226,8 +240,8 @@ function status() {
 /** Stop the worker threads (tests and graceful shutdown). */
 async function shutdown() { if (pool) { await pool.shutdown(); pool = null; } initPromise = null; }
 
-/** Test hook: replace the whole fetch+detect step with `fn(url, {faces, hash}) -> {status:'ok', faces:[{gender, score, confidence}], phash?}`. */
+/** Test hook: replace the whole fetch+detect step with `fn(url, {faces, hash, body}) -> {status:'ok', faces:[{gender, score, confidence}], body?: {decided, score}, phash?}`. */
 function _setAnalyzer(fn) { analyzer = fn; }
 function _reset() { cache.clear(); analyzer = null; }
 
-module.exports = { analyze, judge, checkItem, imageUrlOf, available, status, init, shutdown, _setAnalyzer, _reset };
+module.exports = { analyze, judge, checkItem, imageUrlOf, available, status, init, shutdown, noteHeavy, _setAnalyzer, _reset };

@@ -52,7 +52,7 @@ export async function render(root) {
           `7d: ${fmt.int(s.score.added)} added · ${s.score.yieldPerRun}/run · ${s.score.creators} creators · ${s.score.errorRate}% errors · ${s.score.emptyRate}% empty runs · ${fmt.int(s.score.filtered)} filtered`) : h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'No runs in the last 7 days'),
         h('div', { class: 'row wrap' },
           h('button', { class: 'btn sm', onclick: (e) => act(e.currentTarget, () => adminPost('/engine/run', { platforms: [s.platform] }), 'Sync queued') }, icon('refresh', 'sm'), 'Sync all'),
-          s.platform === 'telegram' ? h('button', { class: 'btn sm', title: 'Re-read the channels your account has joined and follow new ones', onclick: (e) => act(e.currentTarget, async () => { const r = await adminPost('/telegram/sync'); toast(`${r.channels} joined channel(s) · ${r.created} new feed(s)${r.skippedFemale.length ? ` · ${r.skippedFemale.length} skipped (male-only)` : ''}`); await load(); }) }, icon('refresh', 'sm'), 'Sync joined channels') : null,
+          s.platform === 'telegram' ? h('button', { class: 'btn sm', title: 'Re-read the channels your account has joined and follow new ones', onclick: (e) => act(e.currentTarget, async () => { const r = await adminPost('/telegram/sync'); toast(`${r.channels} joined channel(s) · ${r.created} new feed(s)${r.skippedFemale.length ? ` · ${r.skippedFemale.length} skipped (male-only)` : ''}${(r.skippedBody || []).length ? ` · ${r.skippedBody.length} skipped (body filter)` : ''}`); await load(); }) }, icon('refresh', 'sm'), 'Sync joined channels') : null,
           h('a', { class: 'btn sm ghost', href: href('/admin/feeds', { platform: s.platform }) }, 'View feeds', icon('chev-r', 'sm'))));
     }));
   }

@@ -136,6 +136,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
           case 'review': stats.review++; stats.added++; break;
           case 'dupe': stats.dupes++; break;
           case 'blocked': stats.blocked++; break;
+          case 'hidden': stats.skipped++; reasons['body filter (kept, hidden)'] = (reasons['body filter (kept, hidden)'] || 0) + 1; break;
           default: stats.skipped++; reasons[r.reason || r.outcome] = (reasons[r.reason || r.outcome] || 0) + 1;
         }
         if (r.outcome === 'blocked' && /^safety:/.test(r.reason || '')) events.log('WARN', `Blocked by safety gate (${r.reason}) in ${tag}`);
