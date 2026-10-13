@@ -118,6 +118,12 @@ function diversify(scored, pageSize, max) {
       v -= 1.2 * o;
       if (v > bestVal) { bestVal = v; best = i; }
     }
+    // One creator can fill the whole look-ahead (a prolific account under a broad tag): find the best
+    // uncapped candidate further down before letting it take a third slot.
+    const capped = (c) => (pageCreators.get(c.row.creator_id || c.row.id) || 0) >= 2;
+    if (best >= 0 && capped(rest[best])) {
+      for (let i = WINDOW; i < rest.length; i++) if (!capped(rest[i])) { best = i; break; }
+    }
     const [pick] = rest.splice(best, 1);
     const k = pick.row.creator_id || pick.row.id;
     pageCreators.set(k, (pageCreators.get(k) || 0) + 1);

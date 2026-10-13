@@ -224,9 +224,13 @@ router.get('/recommend', (req, res) => {
   const t = recs.tasteFromQuery(req.query, repo);
   const r = recs.recommend(t);
   // Nothing to go on yet (new visitor): fall back to what is trending, so the rail is never empty.
+  // Whatever was marked "Not interested" stays out of the fallback too.
   if (!r.personalized) {
-    const tr = repo.media.list({ sort: 'trending', page: t.page, limit: t.limit, type: t.type });
-    return res.json({ ...tr, items: tr.items.map(publicMedia), personalized: false });
+    const avoiding = t.avoidCreators.size || t.avoidTags.size;
+    const tr = repo.media.list({ sort: 'trending', page: t.page, limit: avoiding ? t.limit * 2 : t.limit, type: t.type, noCount: avoiding && t.page > 0 });
+    const keep = (m) => !(m.creator_id && t.avoidCreators.has(m.creator_id)) && !String(m.tags_text || '').split(' ').some((x) => t.avoidTags.has(x));
+    const items = avoiding ? tr.items.filter(keep).slice(0, t.limit) : tr.items;
+    return res.json({ ...tr, limit: t.limit, items: items.map(publicMedia), personalized: false });
   }
   res.json({ ...r, items: r.items.map(publicMedia) });
 });

@@ -116,6 +116,20 @@ describe('recommendations v2', () => {
     } finally { recs.setCacheTtl(0); }
   });
 
+  test('the per-page creator cap holds even when one creator fills the look-ahead', () => {
+    const mk = (cid, i, score) => ({ row: { id: `${cid}-${i}`, creator_id: cid, seq: i }, tags: new Set(), score });
+    const scored = [...Array.from({ length: 60 }, (_, i) => mk('big', i, 100 - i * 0.01)), mk('small', 0, 1), mk('tiny', 0, 0.5)];
+    const page = recs.diversify(scored, 4, 4);
+    assert.equal(page.filter((c) => c.row.creator_id === 'big').length, 2);
+  });
+
+  test('a negative-only taste keeps "not interested" creators and tags out of the trending fallback', async () => {
+    const r = await pub(`/api/recommend?avoid_creators=${world.a.id}&avoid_tags=tan&limit=60`);
+    assert.equal(r.json.personalized, false);
+    assert.ok(r.json.items.length > 0);
+    assert.ok(!r.json.items.some((x) => x.creator_id === world.a.id || x.tags.includes('tan')));
+  });
+
   test('"not interested": avoided creators vanish, avoided tags sink', async () => {
     const r = await pub(`/api/recommend?creators=${world.a.id}:6&tags=beach:2,blond:1&avoid_creators=${world.b.id}&avoid_tags=surfing&limit=40`);
     const items = r.json.items;
