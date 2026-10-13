@@ -445,6 +445,12 @@ function wireGestures() {
       const d = dx < 0 ? 1 : -1;
       const blocked = (d < 0 && S.index === 0) || (d > 0 && S.index >= S.items.length - 1 && !S.loadMore);
       if (blocked) { reset(true); return; }
+      if (d > 0 && S.index >= S.items.length - 1) {
+        // last loaded item: only move on if another page actually arrives (no exit into nothing)
+        reset(true);
+        S.loadMore().then((items) => { if (S && items && items.length > S.items.length) { S.items = items; nav(1); } });
+        return;
+      }
       haptic(8);
       if (m) { m.style.transition = 'transform .16s ease-in, opacity .16s'; m.style.transform = `translateX(${-d * window.innerWidth * 0.6}px) rotate(${-d * 4}deg)`; m.style.opacity = '0'; }
       setTimeout(() => {

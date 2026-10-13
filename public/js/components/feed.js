@@ -14,6 +14,9 @@ const STASH_MS = 15 * 60 * 1000;
 const STASH_MAX = 10;
 const stash = new Map();
 
+// the whole id list must count (a removed 41st save is a different list), but keys stay short
+const hashIds = (ids) => { let x = 0; for (const c of ids.join(',')) x = (Math.imul(x, 31) + c.charCodeAt(0)) | 0; return `${ids.length}:${x >>> 0}`; };
+
 /** Forget remembered feeds: all of them, or those of one page (a routeKey). */
 export function dropFeedStash(key) {
   if (!key) { stash.clear(); return; }
@@ -43,7 +46,7 @@ export function createFeed({ query = {}, endpoint = '/api/media', pageSize, empt
   const limit = pageSize || (prefs.density === 's' ? 48 : 36);
   // what makes two feeds "the same list": per-visit random seeds and exclusions don't count
   const { seed: _s, exclude: _e, ...stable } = query;
-  const stashKey = `${routeKey()}|${endpoint}|${JSON.stringify(stable)}|${hideSeen ? 1 : 0}|${limit}|${ids ? ids.slice(0, 40).join(',') : ''}`;
+  const stashKey = `${routeKey()}|${endpoint}|${JSON.stringify(stable)}|${hideSeen ? 1 : 0}|${limit}|${ids ? hashIds(ids) : ''}`;
 
   function openAt(item) {
     const idx = masonry.items.findIndex((m) => m.id === item.id);
@@ -102,7 +105,11 @@ export function createFeed({ query = {}, endpoint = '/api/media', pageSize, empt
     ({ page, total, done, fetched, hidden, seed } = saved);
     masonry.add(saved.items);
     if (done) sentinel.replaceChildren(h('span', { class: 'muted' }, 'You’ve reached the end'));
-    if (onTotal) queueMicrotask(() => { if (!destroyed) onTotal(total); });
+    queueMicrotask(() => {
+      if (destroyed) return;
+      if (onTotal) onTotal(total);
+      if (done && onDone) onDone(masonry.items.length); // fixed-id feeds reconcile missing items here
+    });
   }
 
   const io = new IntersectionObserver((entries) => { if (entries[0].isIntersecting && !errored) load(); }, { rootMargin: '1100px 0px' });
