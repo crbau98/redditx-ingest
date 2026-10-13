@@ -236,14 +236,34 @@ function visible(items) {
   return items.filter((m) => ok.has(m.id));
 }
 
-/* Ranked lists, per taste + seed, so scrolling pages through one stable order. */
+/* Ranked lists, per taste + seed + exclusions, so scrolling pages through one stable order. */
 const cache = new Map();
 let TTL = process.env.NODE_ENV === 'test' ? 0 : 5 * 60000;
+/** How long a scrolling session's served order is kept for its later pages. */
+const SESSION_MS = 60 * 60000;
 /** Tests only: keep ranked lists cached (to check what is filtered on the way out). */
 const setCacheTtl = (ms) => { TTL = ms; cache.clear(); };
 function keyOf(t) {
   const flat = (m) => [...m].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([k, w]) => `${k}:${Math.round(w * 100)}`).join(',');
-  return [flat(t.tags), flat(t.creators), flat(t.platforms), [...t.avoidTags].sort().join(','), [...t.avoidCreators].sort().join(','), t.video, t.type, t.seed, t.limit].join('|');
+  return [flat(t.tags), flat(t.creators), flat(t.platforms), [...t.avoidTags].sort().join(','), [...t.avoidCreators].sort().join(','), [...t.exclude].sort().join(','), t.video, t.type, t.seed, t.limit].join('|');
+}
+
+/**
+ * Adds pages to a session's served order until it holds `n` items (or candidates run out). Pages
+ * already served are never recomputed, so a later page cannot reshuffle an earlier one; each new
+ * page gets the variety pass over what is left, after dropping anything moderated since ranking.
+ */
+function extend(hit, n, limit) {
+  while (hit.served.length < n && hit.next < hit.list.length) {
+    const head = []; let i = hit.next;
+    for (; i < hit.list.length && head.length < limit * 2 + 80; i++) if (!hit.used.has(hit.list[i].row.id)) head.push(hit.list[i]);
+    const okIds = new Set(visible(head.map((x) => x.row)).map((m) => m.id));
+    for (const x of head) if (!okIds.has(x.row.id)) { hit.used.add(x.row.id); hit.dropped++; }
+    const page = diversify(head.filter((x) => okIds.has(x.row.id)), limit, limit);
+    for (const x of page) { hit.used.add(x.row.id); hit.served.push(x); }
+    while (hit.next < hit.list.length && hit.used.has(hit.list[hit.next].row.id)) hit.next++;
+    if (!page.length && i >= hit.list.length) break;
+  }
 }
 
 /**
@@ -255,25 +275,25 @@ function recommend(t) {
   if (!t.tags.size && !t.creators.size) return { items: [], total: 0, page, limit, personalized: false };
   const key = keyOf(t);
   let hit = cache.get(key);
-  // Later pages keep the order they started with; a first page re-ranks if the library changed.
-  if (!hit || Date.now() - hit.at > TTL || (page === 0 && hit.v !== library())) {
-    hit = { at: Date.now(), list: rank(t), v: library() };
-    cache.delete(key);
-    cache.set(key, hit);
-    if (cache.size > 40) cache.delete(cache.keys().next().value);
+  // A first page re-ranks once the list is stale or the library changed; later pages continue the
+  // order their session started with, however long the scrolling takes (up to SESSION_MS).
+  const stale = !hit || (page === 0 ? Date.now() - hit.at > TTL || hit.v !== library() : Date.now() - hit.at > SESSION_MS);
+  if (stale) {
+    // The ranked pool is shared by this taste; what the request has already seen is dropped once here.
+    const list = rank(t).filter((x) => !t.exclude.has(x.row.id));
+    hit = { at: Date.now(), list, v: library(), served: [], used: new Set(), next: 0, dropped: 0 };
   }
-  // The cached order is shared by every request with this taste; what this request has already
-  // seen, and anything moderated since the list was built, is filtered out on the way out.
-  // Variety (one creator at most twice per page, no tag runs) is applied after that filtering, so
-  // removed items never squeeze two pages' worth of one creator into one.
-  // Only the head of the list that this page can reach is re-checked (pages so far, plus room for
-  // the variety pass to look ahead), so later pages stay cheap.
-  const open = hit.list.filter((x) => !t.exclude.has(x.row.id));
-  const head = open.slice(0, (page + 2) * limit + 80);
-  const okIds = new Set(visible(head.map((x) => x.row)).map((m) => m.id));
-  const ranked = diversify(head.filter((x) => okIds.has(x.row.id)), limit, (page + 1) * limit);
-  const items = ranked.slice(page * limit).map((x) => x.row);
-  return { items, total: open.length - (head.length - okIds.size), page, limit, personalized: true };
+  cache.delete(key);
+  cache.set(key, hit);
+  if (cache.size > 40) cache.delete(cache.keys().next().value);
+  // Variety (one creator at most twice per page, no tag runs) is decided page by page as pages are
+  // first served, after filtering, so removed items never squeeze two pages of one creator into one.
+  extend(hit, (page + 1) * limit, limit);
+  const slice = hit.served.slice(page * limit, (page + 1) * limit);
+  // Anything moderated since its page was decided is still left out.
+  const okIds = new Set(visible(slice.map((x) => x.row)).map((m) => m.id));
+  const items = slice.filter((x) => okIds.has(x.row.id)).map((x) => x.row);
+  return { items, total: hit.list.length - hit.dropped, page, limit, personalized: true };
 }
 
 /**

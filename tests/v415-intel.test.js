@@ -95,6 +95,22 @@ describe('recommendations v2', () => {
     assert.deepEqual(p0.filter((id) => p1.includes(id)), []);
   });
 
+  test('later pages continue the order the session started with, even after the library changes', async () => {
+    const q = `creators=${world.a.id}:6&tags=beach:2,waves:1&limit=4&seed=13`;
+    const p0 = (await pub(`/api/recommend?${q}&page=0`)).json.items.map((x) => x.id);
+    // New, fresh posts that would rank near the top of a rebuilt list.
+    const fresh = [post(world.a, ['beach', 'blond', 'waves']), post(world.b, ['beach', 'waves', 'blond'])];
+    try {
+      const later = [];
+      for (const page of [1, 2]) later.push(...(await pub(`/api/recommend?${q}&page=${page}`)).json.items.map((x) => x.id));
+      assert.ok(later.length > 0);
+      assert.deepEqual(p0.filter((id) => later.includes(id)), [], 'no item of page 0 comes back on a later page');
+      assert.equal(new Set(later).size, later.length);
+      assert.ok(!later.some((id) => fresh.includes(id)), 'items added mid-session wait for the next fresh first page');
+      assert.ok((await pub(`/api/recommend?${q}&page=0`)).json.items.length > 0);
+    } finally { for (const id of fresh) repo.media.setState(id, 'hidden', 'admin'); }
+  });
+
   test('a cached ranking still honours each request\'s exclusions and later moderation', async () => {
     recs.setCacheTtl(60000);
     try {
