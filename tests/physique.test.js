@@ -350,6 +350,33 @@ describe('body filter policy (model replaced by a fake)', () => {
     assert.equal(dedupe.check({ phash: 'a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5', mediaType: 'image' }).dup, null);
   });
 
+  test('a profile refresh that hides a creator keeps the new bio, so switching off and on hides them again', () => {
+    const c = repo.creators.create({ handle: 'biochange', origin: 'admin' });
+    const f = repo.feeds.upsert({ platform: 'reddit', kind: 'user', target: 'biochange', creatorId: c.id, enabled: 1, trusted: 1, origin: 'admin' }).feed;
+    const r = require('../src/engine/creators').applyProfile(repo.feeds.get(f.id), { displayName: 'Bio Change', bio: 'proud gainer' }, settings);
+    assert.equal(r.hidden, true); assert.equal(repo.creators.get(c.id).bio, 'proud gainer');
+    physique.reapply({ ...settings, physiqueFilter: false });
+    assert.equal(repo.creators.get(c.id).status, 'active');
+    physique.reapply(settings);
+    assert.equal(repo.creators.get(c.id).status, 'hidden');
+  });
+
+  test('a linked or imported feed named in chub wording starts paused, reversibly', () => {
+    const r = repo.feeds.upsert({ platform: 'reddit', kind: 'community', target: 'superchubs_united', enabled: 1, trusted: 1, origin: 'import' });
+    assert.equal(physique.screenFeed(r), true);
+    assert.equal(repo.feeds.get(r.feed.id).enabled, 0);
+    physique.reapply({ ...settings, physiqueFilter: false });
+    assert.equal(repo.feeds.get(r.feed.id).enabled, 1);
+    assert.equal(physique.screenFeed(repo.feeds.upsert({ platform: 'reddit', kind: 'community', target: 'gaybros_fit', enabled: 1, trusted: 1, origin: 'import' })), false);
+  });
+
+  test('restoring a reported item still applies its body score', () => {
+    const id = repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: 'rep1', source_key: 'reddit:rep1:0', post_key: 'reddit:rep1', source_url: 'https://reddit.com/x', media_type: 'image', media_url: 'https://i.redd.it/rep1.jpg', hash: 'h-rep1', physique: 85, publish_state: 'hidden', review_reason: 'reported:spam' });
+    assert.equal(physique.publish(id, settings), 'hidden'); assert.equal(repo.media.get(id).review_reason, 'physique:85');
+    const ok = repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: 'rep2', source_key: 'reddit:rep2:0', post_key: 'reddit:rep2', source_url: 'https://reddit.com/x', media_type: 'image', media_url: 'https://i.redd.it/rep2.jpg', hash: 'h-rep2', physique: 15, publish_state: 'hidden', review_reason: 'reported:spam' });
+    assert.equal(physique.publish(ok, settings), 'published');
+  });
+
   test('the word sweep hides stored chub posts and pauses chub feeds; stats report it', async () => {
     const id = repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: 'ws1', source_key: 'reddit:ws1:0', post_key: 'reddit:ws1', source_url: 'https://reddit.com/x', title: 'superchub belly', media_type: 'image', media_url: 'https://i.redd.it/ws1.jpg', hash: 'h-ws1', publish_state: 'published' });
     const chubFeed = repo.feeds.upsert({ platform: 'reddit', kind: 'community', target: 'chubbyguys', enabled: 1, trusted: 1, origin: 'admin' }).feed;

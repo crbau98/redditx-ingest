@@ -121,6 +121,32 @@ function reapply(settings) {
   return res;
 }
 
+/**
+ * A feed just created by any path (a linked profile, an import, a discovered account): one named in chub wording starts
+ * paused, the same reversible way the word sweep pauses one. Pass `repo.feeds.upsert`'s result.
+ */
+function screenFeed(r) {
+  const f = r && r.created && r.feed;
+  if (!f || !f.enabled || !enabled(require('../settings').get())) return false;
+  const t = textCheck(f.target, f.label);
+  if (!t.heavy) return false;
+  repo.feeds.update(f.id, { enabled: false });
+  repo.logAction('feed', f.id, 'physique-feed-off', `body filter: "${t.rule.slice(REASON.length)}"`, 'system');
+  return true;
+}
+
+/**
+ * Publish a stored item (a report dismissed, a restore): its stored body score still applies, unless an admin approved it
+ * over the body filter.
+ */
+function publish(id, settings) {
+  const m = repo.media.get(id);
+  if (!m) return null;
+  const v = stateFor(m.physique, settings);
+  if (v) repo.media.setState(id, v.state, v.reason, { exact: true }); else repo.media.setState(id, 'published');
+  return repo.media.get(id).publish_state;
+}
+
 const TEXT_SWEEP_VERSION = '1'; // bump when the word list grows: stored items, creators and feeds are re-read once
 
 /**
@@ -183,4 +209,4 @@ function stats(settings) {
   return { enabled: enabled(settings), threshold: thr, creatorShare: settings ? settings.physiqueCreatorShare : null, measured: r.measured || 0, overThreshold: r.overThreshold || 0, hidden: r.hidden || 0, creatorsHidden: creators, histogram: buckets };
 }
 
-module.exports = { live, stateFor, reviewCreator, reapply, textSweep, stats, hideCreator, textCheck, enabled, threshold, REASON, MIN_MEASURED, APPROVED };
+module.exports = { live, screenFeed, publish, stateFor, reviewCreator, reapply, textSweep, stats, hideCreator, textCheck, enabled, threshold, REASON, MIN_MEASURED, APPROVED };

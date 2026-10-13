@@ -59,6 +59,7 @@ function importConfig(data) {
         platform: f.platform, kind: f.kind, target: String(f.target), label: f.label, creatorId: f.creatorRef ? refToId.get(f.creatorRef) || null : null,
         enabled: f.enabled !== false, trusted: f.trusted !== false, origin: 'import', intervalMin: repo.clampInt(f.interval_min, 5, 20160, 180), priority: repo.clampInt(f.priority, -10, 10, 0),
       });
+      require('../engine/physique').screenFeed(r);
       if (r.created) out.feeds.created++; else out.feeds.existing++;
     }
     for (const b of data.blocklist || []) {

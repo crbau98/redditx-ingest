@@ -193,7 +193,7 @@ router.post('/reports/:id/resolve', (req, res) => {
   const apply = {
     remove: () => report.media_id && repo.media.block(report.media_id, `report:${report.kind}`),
     block_creator: () => report.creator_id && repo.creators.block(report.creator_id, `report:${report.kind}`),
-    restore: () => report.media_id && repo.media.setState(report.media_id, 'published'),
+    restore: () => report.media_id && physique.publish(report.media_id, settingsStore.get()), // the body verdict still applies
     dismiss: () => null,
   };
   if (!apply[action]) return bad(res, 'action must be remove, block_creator, restore or dismiss');
