@@ -8,6 +8,7 @@ const repo = require('../db/repo');
 const registry = require('../sources');
 const { checkText } = require('../lib/safety');
 const { femaleCheck } = require('../lib/scope');
+const physiqueText = require('../lib/physique').textCheck;
 const { profileUrl } = require('../lib/links');
 
 const defaultInterval = (spec) => {
@@ -30,6 +31,11 @@ function addSpec(spec, { creatorId = null, origin = 'admin', trusted, hint } = {
   // Male-only: refuse accounts, communities and searches whose own name reads female / feminine.
   const gender = femaleCheck(spec.target, spec.label);
   if (gender.level === 'hard') return { status: 'invalid', reason: `Not male-focused (${gender.rule})` };
+  // Body filter: chub / gainer / dad-bod accounts and communities are refused while it is on (Admin → Settings).
+  if (require('../settings').get().physiqueFilter) {
+    const body = physiqueText(spec.target, spec.label);
+    if (body.heavy) return { status: 'invalid', reason: `Body filter (${body.rule.replace(/^physique:/, '')}): switch it off in Settings to add this` };
+  }
 
   let creator = creatorId ? repo.creators.get(creatorId) : null;
   if (spec.kind === 'user') {

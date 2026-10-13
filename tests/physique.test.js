@@ -189,6 +189,24 @@ describe('body filter policy (model replaced by a fake)', () => {
     assert.equal(repo.media.get(id).publish_state, 'published');
   });
 
+  test('a creator with an open safety report stays hidden when the body filter lets go', async () => {
+    const c = repo.creators.create({ handle: 'reportedbig', origin: 'admin' });
+    const own = repo.feeds.upsert({ platform: 'reddit', kind: 'user', target: 'reportedbig', creatorId: c.id, enabled: 1, trusted: 1, origin: 'admin' }).feed;
+    const scores = {}; ['r1', 'r2', 'r3', 'r4'].forEach((k) => { scores[`https://i.redd.it/${k}.jpg`] = 85; });
+    fake(scores);
+    for (const k of ['r1', 'r2', 'r3', 'r4']) await pipeline.processItem(item({ author: 'reportedbig', mediaUrl: `https://i.redd.it/${k}.jpg` }), own, null, settings);
+    assert.equal(repo.creators.get(c.id).status, 'hidden');
+    repo.reports.create({ creatorId: c.id, kind: 'underage', reason: 'test', reporterHash: 'x' });
+    physique.reapply({ ...settings, physiqueFilter: false });
+    assert.equal(repo.creators.get(c.id).status, 'hidden');
+  });
+
+  test('feeds named in chub wording cannot be added while the filter is on', () => {
+    const targets = require('../src/services/targets');
+    const r = targets.addSpec({ platform: 'reddit', kind: 'community', target: 'chubbyguys2', label: 'r/chubbyguys2' });
+    assert.equal(r.status, 'invalid'); assert.match(r.reason, /Body filter/);
+  });
+
   test('a creator an admin hid stays hidden whatever the body filter says', () => {
     const c = repo.creators.create({ handle: 'adminhid', origin: 'admin' });
     repo.creators.update(c.id, { status: 'hidden' });

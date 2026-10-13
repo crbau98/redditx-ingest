@@ -203,8 +203,21 @@ function startImageSweep() {
       if (s.dedupe) await hashSweep({ limit: s.imageSweepPerTick * 2, settings: s });
       if ((!s.imageFilter && !s.physiqueFilter) || sweepGaveUp) return;
       if (!(await imagefilter.available())) { sweepGaveUp = true; return; } // logged once by the filter itself
+      // The body sweep reads faces in the same pass, so while it has work the face-only sweep would download and analyse the
+      // same pictures a second time: let the body sweep go first and move the face sweep's cursor along with it.
+      if (s.physiqueFilter) {
+        const cursor = (k) => parseInt(repo.settings.get(k) || '0', 10) || 0;
+        const before = cursor('physique_sweep_seq');
+        const r = await physiqueSweep({ limit: s.imageSweepPerTick, settings: s });
+        if (!r.done) {
+          // only when the face sweep had reached the same point: the rows in between were just checked for faces too
+          if (s.imageFilter && repo.settings.get('image_sweep_version') === IMAGE_SWEEP_VERSION && cursor('image_sweep_seq') >= before) {
+            repo.settings.set('image_sweep_seq', String(Math.max(cursor('image_sweep_seq'), cursor('physique_sweep_seq'))));
+          }
+          return;
+        }
+      }
       if (s.imageFilter) await imageSweep({ limit: s.imageSweepPerTick, settings: s });
-      if (s.physiqueFilter) await physiqueSweep({ limit: s.imageSweepPerTick, settings: s });
     } catch (e) { events.log('WARN', `Image sweep: ${e.message}`); } finally { sweepBusy = false; }
   }, 60 * 1000);
   sweepTimer.unref();

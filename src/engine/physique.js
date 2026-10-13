@@ -46,6 +46,8 @@ function hideCreator(creator, why) {
 function unhideCreator(creator) {
   const last = lastCreatorAction(creator.id);
   if (creator.status !== 'hidden' || !last || last.action !== 'physique-hide') return false; // not ours to undo
+  // a safety report (e.g. underage) waiting for a human keeps the creator hidden whatever the body filter says
+  if (repo.db.prepare("SELECT 1 FROM reports WHERE creator_id = ? AND status = 'open' LIMIT 1").get(creator.id)) return false;
   const m = /\[feeds:([^\]]*)\]/.exec(last.reason || '');
   for (const id of m ? m[1].split(',').filter(Boolean) : []) { if (repo.feeds.get(id)) repo.feeds.update(id, { enabled: true }); }
   repo.creators.update(creator.id, { status: 'active' });
