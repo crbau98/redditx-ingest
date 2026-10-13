@@ -9,6 +9,7 @@ const events = require('../engine/events');
 const age = require('../middleware/age');
 const { publicAccounts } = require('../services/targets');
 const { understand, buildVocabulary } = require('../lib/query');
+const { creatorOnlyFans } = require('../lib/onlyfans');
 
 const router = express.Router();
 
@@ -34,6 +35,7 @@ function publicCreator(c) {
     id: c.id, handle: c.handle, display_name: c.display_name, bio: c.bio, avatar_url: c.avatar_url, banner_url: c.banner_url,
     links: c.links, verified: c.verified, media_count: c.media_count, video_count: c.video_count, total_score: c.total_score,
     last_media_at: c.last_media_at, previews: c.previews, platforms: c.platforms, added_at: c.created_at,
+    onlyfans: creatorOnlyFans(c),
   };
 }
 
@@ -194,6 +196,7 @@ router.get('/creators', (req, res) => {
     q: typeof req.query.q === 'string' ? req.query.q.slice(0, 80) : undefined,
     sort: ['media', 'score', 'recent', 'new', 'name'].includes(req.query.sort) ? req.query.sort : 'media',
     platform: /^[a-z]{2,20}$/.test(req.query.platform || '') ? req.query.platform : undefined,
+    onlyfans: req.query.onlyfans === '1',
   });
   res.json({ ...r, items: r.items.map(publicCreator) });
 });
@@ -216,7 +219,7 @@ router.get('/suggest', (req, res) => res.json(repo.suggest(typeof req.query.q ==
 router.get('/creators/:id/similar', (req, res) => {
   const c = repo.creators.get(req.params.id);
   if (!c || c.status !== 'active') return res.status(404).json({ error: 'Not found' });
-  res.json(repo.creators.similar(c.id, repo.clampInt(req.query.limit, 1, 24, 12)).map(publicCreator));
+  res.json(repo.creators.similar(c.id, repo.clampInt(req.query.limit, 1, 24, 12), { onlyfans: req.query.onlyfans === '1' }).map(publicCreator));
 });
 
 const recs = require('../engine/recommend');

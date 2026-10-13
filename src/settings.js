@@ -42,13 +42,22 @@ const SCHEMA = {
     type: 'text', group: 'discovery', label: 'Web-search topics (one per line; rotated, one per run)',
     default: ['gay male model bluesky', 'male fitness model onlyfans x.com', 'gay creator linktree 18+', 'muscle model telegram channel', 'gay twink creator redgifs', 'bear daddy creator onlyfans bluesky', 'gay amateur couple onlyfans twitter', 'male model throne wishlist',
       'gay bodybuilder creator linktree', 'hairy gay creator onlyfans', 'gay jock creator link in bio', 'gay otter creator bluesky 18+', 'gay daddy creator mastodon nsfw', 'gay content creator tumblr nsfw', 'gay muscle videos peertube',
-      'gay porn star official links', 'gay amateur creator allmylinks', 'gay bear creator beacons.ai', 'ゲイ 筋肉 クリエイター', 'ガチムチ 投稿者 リンク', 'gay cam model linktree', 'male nude model portfolio'].join('\n'),
+      'gay porn star official links', 'gay amateur creator allmylinks', 'gay bear creator beacons.ai', 'ゲイ 筋肉 クリエイター', 'ガチムチ 投稿者 リンク', 'gay cam model linktree', 'male nude model portfolio',
+      // OnlyFans pages in search results become leads (their snippet is the public bio); fit / athletic first
+      'site:onlyfans.com gay muscle', 'site:onlyfans.com male fitness model', 'site:onlyfans.com gay athlete', 'site:onlyfans.com gay jock', 'site:onlyfans.com free gay',
+      'free gay onlyfans telegram', 'gay onlyfans promo twitter muscle', 'male onlyfans creator redgifs fit'].join('\n'),
   },
   // --- discovery reach (v4.6) ---
   discoveryCommunities: { type: 'bool', default: true, label: 'Search Reddit, Lemmy and Bluesky for communities and custom feeds', group: 'discovery' },
   // --- link health (v4.8) ---
   linkHealth: { type: 'bool', default: true, label: 'Check media at the source and hide what has been removed there', group: 'maintenance' },
   linkHealthPerSweep: { type: 'int', default: 40, min: 0, max: 500, label: 'Items re-checked every 10 minutes', group: 'maintenance' },
+  creatorSeeds: {
+    type: 'text', group: 'discovery', label: 'Creators to find by name (one per line: a name, @handle or profile link). Each is looked up across every platform PRISM reads and his verified public accounts are followed; re-checked monthly',
+    // empty under test: a lookup reaches every platform, which tests must not do by accident
+    default: config.isTest ? '' : ['Christian Hogue', 'Jakipz', 'Michael Yerger', 'Chase Stobbe', 'HotAlex'].join('\n'),
+  },
+  discoveryOnlyFans: { type: 'bool', default: true, label: 'Trace OnlyFans creators: find the free public accounts (RedGIFs, Bluesky, X, Telegram, link pages) behind OnlyFans pages that creators promote. onlyfans.com itself is never read', group: 'discovery' },
   discoveryExpand: { type: 'bool', default: true, label: 'Find lookalike creators (Bluesky) and search Bluesky and RedGIFs for new people', group: 'discovery' },
   discoveryAutoCommunities: { type: 'bool', default: true, label: 'Auto-follow strong communities and feeds (their posts are still checked one by one)', group: 'discovery' },
   discoveryKeywords: {

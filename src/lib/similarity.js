@@ -30,6 +30,9 @@ function build(lib, generic) {
     }
     if (!v.size) continue;
     vecs.set(cid, v); norms.set(cid, Math.sqrt(ss));
+    // Every creator has a profile to compare from, but only those that may be shown can be found as
+    // a neighbour, so hidden or excluded creators never take one of the top-k slots.
+    if (lib.visibleCreators && !lib.visibleCreators.has(cid)) continue;
     for (const [t, x] of v) { if (!postings.has(t)) postings.set(t, []); postings.get(t).push([cid, x]); }
   }
   return { vecs, norms, postings, idf, neighbours: new Map() };

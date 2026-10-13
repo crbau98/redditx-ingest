@@ -13,6 +13,7 @@
  */
 
 const config = require('../config');
+const { ofHandle } = require('./onlyfans');
 
 const EXTERNAL = {
   'onlyfans.com': 'OnlyFans',
@@ -187,6 +188,13 @@ function parseProfile(input, hint = {}) {
     if (matches(h, lb)) return { platform: 'linkinbio', kind: 'page', target: url.href, ingestable: true, label: `${h}${url.pathname}`.replace(/\/$/, ''), url: url.href };
   }
 
+  // OnlyFans: one canonical link per person (campaign / post links collapse to the profile); site pages are not links.
+  if (matches(h, 'onlyfans.com')) {
+    const handle = ofHandle(url.href);
+    if (!handle) return null;
+    return { platform: 'external', kind: 'link', target: `https://onlyfans.com/${handle}`, ingestable: false, external: true, label: `OnlyFans · ${handle}`, service: 'OnlyFans', url: `https://onlyfans.com/${handle}`, handle };
+  }
+
   for (const [dom, label] of Object.entries(EXTERNAL)) {
     if (matches(h, dom)) {
       return { platform: 'external', kind: 'link', target: url.href, ingestable: false, external: true, label: `${label}${parts[0] ? ` · ${parts[0].replace(/^@/, '')}` : ''}`, service: label, url: url.href };
@@ -233,7 +241,8 @@ function parseProfile(input, hint = {}) {
 function extractLinks(text) {
   const found = [];
   const seen = new Set();
-  const urlRe = /(?:https?:\/\/|www\.)[^\s<>"')\]]+/gi;
+  // Full URLs, plus the bare "onlyfans.com/name" / "linktr.ee/name" people type into bios.
+  const urlRe = /(?:https?:\/\/|www\.)[^\s<>"')\]]+|(?<![\w./@-])(?:onlyfans\.com|fansly\.com|justfor\.fans|linktr\.ee|allmylinks\.com|beacons\.ai)\/[^\s<>"')\]]+/gi;
   for (const u of String(text || '').match(urlRe) || []) {
     const p = parseProfile(u);
     if (!p) continue;

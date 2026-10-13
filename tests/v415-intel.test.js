@@ -187,6 +187,19 @@ describe('recommendations v2', () => {
     assert.ok(!sim.includes(world.c.id));
   });
 
+  test('hidden or scope-excluded creators never take a neighbour slot or a related spot', () => {
+    const sim = require('../src/lib/similarity');
+    const lib = repo.library();
+    const near = sim.neighbours(lib, repo.GENERIC_TAGS, world.a.id, 50).map(([id]) => id);
+    assert.ok(!near.includes(world.d.id), 'hidden creator is not a neighbour');
+    repo.creators.update(world.e.id, { scope: 'excluded' });
+    try {
+      const near2 = sim.neighbours(repo.library(), repo.GENERIC_TAGS, world.a.id, 50).map(([id]) => id);
+      assert.ok(!near2.includes(world.e.id), 'excluded creator is not a neighbour');
+      assert.ok(!repo.media.related(world.aIds[0], 40).some((x) => x.creator_id === world.e.id), 'nor in more like this');
+    } finally { repo.creators.update(world.e.id, { scope: 'in' }); }
+  });
+
   test('"more like this": same post first, then a capped few from the creator, then lookalikes', () => {
     const rel = repo.media.related(world.carousel, 8);
     assert.equal(rel[0].id, world.carousel2);
