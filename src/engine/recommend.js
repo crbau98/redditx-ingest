@@ -160,7 +160,7 @@ function rank(t) {
   const maxIdf = Math.max(1e-9, ...topTags.map((x) => sim.idfOf(lib, GENERIC_TAGS, x) || Math.log(2)));
   const scored = [];
   for (const r of rows.values()) {
-    if (t.exclude.has(r.id) || (r.creator_id && avoidC.has(r.creator_id))) continue;
+    if (r.creator_id && avoidC.has(r.creator_id)) continue;
     const tags = new Set(String(r.tags_text || '').split(' ').filter((x) => x && !GENERIC_TAGS.has(x)));
     let score = 0; let reason = null; let best = 0;
     const cw = r.creator_id ? creatorW.get(r.creator_id) : undefined;
@@ -219,9 +219,22 @@ function rank(t) {
   return ranked.map((s) => { const m = repo.serializeMedia(s.row); delete m.rn; m.reason = s.reason ? s.reason.label : null; return m; });
 }
 
+/** The items still visible right now (published, not excluded, creator active): one indexed lookup. */
+function visible(items) {
+  if (!items.length) return items;
+  const ok = new Set();
+  for (let i = 0; i < items.length; i += 500) {
+    const ids = items.slice(i, i + 500).map((m) => m.id);
+    for (const r of db.prepare(`SELECT m.id FROM media m LEFT JOIN creators c ON c.id = m.creator_id WHERE m.id IN (${marks(ids)}) AND ${VISIBLE}`).all(...ids)) ok.add(r.id);
+  }
+  return items.filter((m) => ok.has(m.id));
+}
+
 /* Ranked lists, per taste + seed, so scrolling pages through one stable order. */
 const cache = new Map();
-const TTL = process.env.NODE_ENV === 'test' ? 0 : 5 * 60000;
+let TTL = process.env.NODE_ENV === 'test' ? 0 : 5 * 60000;
+/** Tests only: keep ranked lists cached (to check what is filtered on the way out). */
+const setCacheTtl = (ms) => { TTL = ms; cache.clear(); };
 function keyOf(t) {
   const flat = (m) => [...m].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([k, w]) => `${k}:${Math.round(w * 100)}`).join(',');
   return [flat(t.tags), flat(t.creators), flat(t.platforms), [...t.avoidTags].sort().join(','), [...t.avoidCreators].sort().join(','), t.video, t.type, t.seed, t.limit].join('|');
@@ -243,8 +256,11 @@ function recommend(t) {
     cache.set(key, hit);
     if (cache.size > 40) cache.delete(cache.keys().next().value);
   }
-  const items = hit.list.slice(page * limit, page * limit + limit);
-  return { items, total: hit.list.length, page, limit, personalized: true };
+  // The cached order is shared by every request with this taste; what this request has already
+  // seen, and anything moderated since the list was built, is filtered out on the way out.
+  const list = visible(hit.list).filter((m) => !t.exclude.has(m.id));
+  const items = list.slice(page * limit, page * limit + limit);
+  return { items, total: list.length, page, limit, personalized: true };
 }
 
 /**
@@ -302,4 +318,4 @@ function tasteFromQuery(q, { clampInt }) {
   };
 }
 
-module.exports = { recommend, creatorsForYou, tasteFromQuery, parseWeighted, diversify };
+module.exports = { recommend, creatorsForYou, tasteFromQuery, parseWeighted, diversify, setCacheTtl };

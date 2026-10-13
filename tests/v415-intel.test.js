@@ -95,6 +95,27 @@ describe('recommendations v2', () => {
     assert.deepEqual(p0.filter((id) => p1.includes(id)), []);
   });
 
+  test('a cached ranking still honours each request\'s exclusions and later moderation', async () => {
+    recs.setCacheTtl(60000);
+    try {
+      const q = `creators=${world.a.id}:6&tags=beach:2,waves:1&limit=40&seed=21`;
+      const all = (await pub(`/api/recommend?${q}`)).json.items.map((x) => x.id);
+      const victim = all.find((id) => world.bIds.includes(id)) || all[1];
+      const ex = (await pub(`/api/recommend?${q}&exclude=${all[0]}`)).json.items.map((x) => x.id);
+      assert.ok(!ex.includes(all[0]), 'excluded by this request, though the list is cached');
+      assert.ok((await pub(`/api/recommend?${q}`)).json.items.some((x) => x.id === all[0]), 'and not by the next one');
+      repo.media.setState(victim, 'hidden', 'admin');
+      for (const page of [0, 1]) {
+        const ids = (await pub(`/api/recommend?${q.replace('limit=40', 'limit=3')}&page=${page}`)).json.items.map((x) => x.id);
+        assert.ok(!ids.includes(victim), `hidden media drops out of the cached list (page ${page})`);
+      }
+      repo.creators.update(world.b.id, { status: 'hidden' });
+      assert.ok(!(await pub(`/api/recommend?${q}`)).json.items.some((x) => x.creator_id === world.b.id), 'a creator hidden after ranking drops out too');
+      repo.creators.update(world.b.id, { status: 'active' });
+      repo.media.setState(victim, 'published');
+    } finally { recs.setCacheTtl(0); }
+  });
+
   test('"not interested": avoided creators vanish, avoided tags sink', async () => {
     const r = await pub(`/api/recommend?creators=${world.a.id}:6&tags=beach:2,blond:1&avoid_creators=${world.b.id}&avoid_tags=surfing&limit=40`);
     const items = r.json.items;
