@@ -207,6 +207,14 @@ describe('body filter policy (model replaced by a fake)', () => {
     assert.equal((await maintenance.physiqueSweep({ limit: 500, settings })).checked, 0, 'cursor moved past everything');
   });
 
+  test('the word sweep leaves items in the review queue alone, so switching off never publishes them', async () => {
+    const id = repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: 'rv1', source_key: 'reddit:rv1:0', post_key: 'reddit:rv1', source_url: 'https://reddit.com/x', title: 'chubby and borderline', media_type: 'image', media_url: 'https://i.redd.it/rv1.jpg', hash: 'h-rv1', publish_state: 'review', review_reason: 'safety:teen' });
+    await physique.textSweep(settings, { force: true });
+    assert.equal(repo.media.get(id).publish_state, 'review'); assert.equal(repo.media.get(id).review_reason, 'safety:teen');
+    physique.reapply({ ...settings, physiqueFilter: false });
+    assert.equal(repo.media.get(id).publish_state, 'review');
+  });
+
   test('the word sweep hides stored chub posts and pauses chub feeds; stats report it', async () => {
     const id = repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: 'ws1', source_key: 'reddit:ws1:0', post_key: 'reddit:ws1', source_url: 'https://reddit.com/x', title: 'superchub belly', media_type: 'image', media_url: 'https://i.redd.it/ws1.jpg', hash: 'h-ws1', publish_state: 'published' });
     const chubFeed = repo.feeds.upsert({ platform: 'reddit', kind: 'community', target: 'chubbyguys', enabled: 1, trusted: 1, origin: 'admin' }).feed;

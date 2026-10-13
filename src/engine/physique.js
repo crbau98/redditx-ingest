@@ -115,8 +115,10 @@ async function textSweep(settings, { force = false } = {}) {
   if (!enabled(settings)) return res;
   if (!force && repo.settings.get('physique_text_sweep_version') === TEXT_SWEEP_VERSION) return res;
   let after = 0;
+  // Only published items: one waiting in the review queue keeps its own state and reason, so switching the filter off later
+  // can never publish something a human has not looked at.
   const stmt = repo.db.prepare(`SELECT seq, id, title, description, tags_text, community, author FROM media
-    WHERE publish_state IN ('published','review') AND seq > ? ORDER BY seq LIMIT 500`);
+    WHERE publish_state = 'published' AND seq > ? ORDER BY seq LIMIT 500`);
   for (;;) {
     const rows = stmt.all(after);
     if (!rows.length) break;

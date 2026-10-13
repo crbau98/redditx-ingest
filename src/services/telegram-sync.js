@@ -40,7 +40,17 @@ async function sync({ autoFollow = config.telegram.autoFollow } = {}) {
       joined.add(target.toLowerCase());
       const g = femaleCheck(d.title, d.username);
       if (g.level === 'hard') { res.skippedFemale.push(d.title); continue; }
-      if (bodyFilter && physique.textCheck(d.title, d.username).heavy) { res.skippedBody.push(d.title); continue; }
+      const heavy = bodyFilter ? physique.textCheck(d.title, d.username) : null;
+      if (heavy && heavy.heavy) {
+        res.skippedBody.push(d.title);
+        // a channel followed earlier and renamed since: pause its feed (still joined, so it is not mistaken for one the account left)
+        const f = repo.feeds.find('telegram', 'channel', target);
+        if (f && f.enabled && f.origin === 'telegram-sync') {
+          repo.feeds.update(f.id, { enabled: false });
+          repo.logAction('feed', f.id, 'physique-feed-off', `body filter: "${heavy.rule.replace(/^physique:/, '')}"`, 'system');
+        }
+        continue;
+      }
       if (!autoFollow) continue;
       if (repo.blocklist.has('creator', `telegram:${target.toLowerCase()}`)) continue;
       const { created } = repo.feeds.upsert({

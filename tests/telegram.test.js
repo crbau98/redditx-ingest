@@ -204,6 +204,17 @@ describe('joined channels: sync + ingestion', () => {
     client = fakeClient({ channels: [chan(100, 'gymbros', 'Gym Bros'), chan(200, null, 'Secret Club')], messages: MSGS }); mt._setFactory(async () => client);
   });
 
+  test('body filter: a followed channel renamed to chub wording is paused, not mistaken for one the account left', async () => {
+    const before = client;
+    client = fakeClient({ channels: [chan(100, 'gymbros', 'Chubby Gym Bros'), chan(200, null, 'Secret Club')], messages: MSGS }); mt._setFactory(async () => client);
+    const r = await sync.sync();
+    assert.deepEqual(r.skippedBody, ['Chubby Gym Bros']); assert.equal(r.switchedOff, 0);
+    const f = repo.db.prepare("SELECT id, enabled FROM feeds WHERE target = 'gymbros'").get();
+    assert.equal(f.enabled, 0);
+    repo.feeds.update(f.id, { enabled: true });
+    client = before; mt._setFactory(async () => client);
+  });
+
   test('first run reads the newest, later runs read only newer messages in order and back-fill history', async () => {
     const feed = repo.feeds.get(repo.db.prepare("SELECT id FROM feeds WHERE target = 'gymbros'").get().id);
     const ctx = (cursor) => ({ limit: 40, cursor, force: false, needProfile: true, aborted: () => false });
