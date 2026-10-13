@@ -13,12 +13,13 @@ Approximate monthly cost (check current prices): VPS €8–15, R2 storage free 
 
 ## 1. Server
 1. Create a Hetzner Cloud server: **CPX31** (4 vCPU, 8 GB) is the sweet spot; CPX21 (3 vCPU, 4 GB) is enough to start. Ubuntu 24.04, region near you, add your SSH key.
-2. On the server:
+2. On the server (as root):
    ```bash
-   curl -fsSL https://get.docker.com | sh
-   curl -fsSL https://tailscale.com/install.sh | sh && tailscale up
-   ufw default deny incoming && ufw allow OpenSSH && ufw enable      # or allow SSH only over tailscale0
+   git clone https://github.com/crbau98/redditx-ingest.git && cd redditx-ingest
+   bash deploy/vps-bootstrap.sh && tailscale up
    ```
+   The script installs Docker (container logs capped at 3 x 10 MB), a 2 GB swap file, automatic security updates, key-only SSH,
+   a firewall that lets in only SSH and Tailscale, Tailscale itself, and a `dc` shortcut for `docker compose -f deploy/docker-compose.yml`.
 
 ## 2. Object storage for backups
 1. Cloudflare dashboard → R2 → create bucket `prism-db`, then an **API token** with Object Read & Write on that bucket. Note the account endpoint (`https://<ACCOUNT_ID>.r2.cloudflarestorage.com`).
@@ -67,7 +68,19 @@ Fix what it flags (it prints the exact variable to set), then watch **Admin → 
 - **Restore drill** (do it once): on a fresh machine, `docker compose -f deploy/docker-compose.yml up -d --build` with the same `deploy/.env`; the `restore` service rebuilds `/data/prism.db` from R2 before the app starts. If the restore fails (bad credentials, network, corrupt replica) the stack stops there on purpose, so a recovery failure is visible instead of PRISM silently starting empty: read `docker compose -f deploy/docker-compose.yml logs restore`.
 - Admin → Settings also keeps nightly local copies (`VACUUM INTO`).
 
-## 7. Updating
+## 7. Moving to a new server (from another VPS or a Codespace)
+Only one machine may run the stack at a time: two Litestream processes writing the same replica, or two copies of one
+Telegram session, break each other.
+1. **Old machine**, stop PRISM first so Litestream ships the last writes, then stop the rest:
+   ```bash
+   docker compose -f deploy/docker-compose.yml stop prism && sleep 20 && docker compose -f deploy/docker-compose.yml down
+   ```
+2. Copy `deploy/.env` to the new server (`scp`, then `chmod 600`). Nothing else needs copying.
+3. **New server**: `docker compose -f deploy/docker-compose.yml up -d --build`. The `restore` service pulls the database from R2.
+4. Redo the Telegram login (section 3c step 2) and restart. In Telegram → Settings → Devices, end the **older** PRISM session.
+5. Once the new server is ingesting, delete the old machine's data volume (`docker volume rm prism_data`) so it can never start again by accident.
+
+## 8. Updating
 ```bash
 git pull && docker compose -f deploy/docker-compose.yml up -d --build
 ```
