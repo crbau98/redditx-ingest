@@ -511,7 +511,7 @@ function follow(candidate, { actor = 'discovery' } = {}) {
   // post is still scope-checked (untrusted). A human follow trusts it like an admin-added source.
   const shared = c.kind === 'community' || c.kind === 'feedgen' || c.kind === 'list';
   const trusted = actor !== 'discovery' ? true : shared ? false : c.scope === 'in' || !!identity;
-  const r = targets.addSpec(spec, { creatorId: identity || null, origin: 'discovered', trusted });
+  const r = targets.addSpec(spec, { creatorId: identity || null, origin: 'discovered', trusted, bodyOverride: actor !== 'discovery' });
   if (r.status !== 'created' && r.status !== 'exists') {
     repo.candidates.update(c.id, { status: 'rejected', reason: r.reason || r.status, decided_at: new Date().toISOString() });
     return { ok: false, reason: r.reason || r.status };

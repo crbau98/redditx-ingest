@@ -116,12 +116,16 @@ async function textSweep(settings, { force = false } = {}) {
   const res = { items: 0, creators: 0, feeds: 0 };
   if (!enabled(settings)) return res;
   if (!force && repo.settings.get('physique_text_sweep_version') === TEXT_SWEEP_VERSION) return res;
+  // It yields between batches: if an admin switches the filter off meanwhile (that request already re-showed everything),
+  // stop instead of hiding more with the settings captured at the start.
+  const stillOn = () => require('../settings').get().physiqueFilter === true;
   let after = 0;
   // Only published items: one waiting in the review queue keeps its own state and reason, so switching the filter off later
   // can never publish something a human has not looked at.
   const stmt = repo.db.prepare(`SELECT seq, id, title, description, tags_text, community, author FROM media
     WHERE publish_state = 'published' AND seq > ? ORDER BY seq LIMIT 500`);
   for (;;) {
+    if (!stillOn()) return res;
     const rows = stmt.all(after);
     if (!rows.length) break;
     repo.db.transaction(() => {
@@ -136,6 +140,7 @@ async function textSweep(settings, { force = false } = {}) {
     })();
     await new Promise((r) => setImmediate(r)); // let requests breathe
   }
+  if (!stillOn()) return res;
   for (const c of repo.db.prepare("SELECT id FROM creators WHERE status = 'active'").all()) {
     if (reviewCreator(c.id, settings) === 'hidden') res.creators++;
   }

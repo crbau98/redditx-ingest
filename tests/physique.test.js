@@ -207,6 +207,25 @@ describe('body filter policy (model replaced by a fake)', () => {
     assert.equal(r.status, 'invalid'); assert.match(r.reason, /Body filter/);
   });
 
+  test('approving an item from the safety review queue still applies its body verdict', () => {
+    const id = repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: 'aq1', source_key: 'reddit:aq1:0', post_key: 'reddit:aq1', source_url: 'https://reddit.com/x', media_type: 'image', media_url: 'https://i.redd.it/aq1.jpg', hash: 'h-aq1', physique: 90, publish_state: 'review', review_reason: 'safety:teen' });
+    require('../src/services/targets').moderate(id, 'approve', 'adult, fine');
+    assert.equal(repo.media.get(id).publish_state, 'hidden'); assert.equal(repo.media.get(id).physique, 90);
+  });
+
+  test('the word sweep stops when the filter is switched off mid-way', async () => {
+    const store = require('../src/settings');
+    const id = repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: 'off1', source_key: 'reddit:off1:0', post_key: 'reddit:off1', source_url: 'https://reddit.com/x', title: 'gainer pics', media_type: 'image', media_url: 'https://i.redd.it/off1.jpg', hash: 'h-off1', publish_state: 'published' });
+    store.update({ physiqueFilter: false });
+    try { await physique.textSweep(settings, { force: true }); } finally { store.update({ physiqueFilter: true }); }
+    assert.equal(repo.media.get(id).publish_state, 'published');
+  });
+
+  test('an admin can still add a chub-named feed explicitly (discovery Follow click)', () => {
+    const r = require('../src/services/targets').addSpec({ platform: 'reddit', kind: 'community', target: 'chubbyguys3' }, { bodyOverride: true });
+    assert.equal(r.status, 'created');
+  });
+
   test('a creator an admin hid stays hidden whatever the body filter says', () => {
     const c = repo.creators.create({ handle: 'adminhid', origin: 'admin' });
     repo.creators.update(c.id, { status: 'hidden' });
