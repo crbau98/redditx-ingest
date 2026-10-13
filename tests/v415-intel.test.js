@@ -214,3 +214,17 @@ describe('Reels taste signals', () => {
     assert.match(src, /tasteQ = \(page && tasteQ\) \|\| tastes\.query/);
   });
 });
+
+describe('taste store', () => {
+  test('quick skips of an unfamiliar creator build a negative that ends in avoid', async () => {
+    const mem = new Map();
+    global.localStorage = { getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: (k) => mem.delete(k) };
+    global.window = { matchMedia: () => ({ matches: false }) };
+    const { tastes } = await import(require('url').pathToFileURL(require('path').join(__dirname, '..', 'public', 'js', 'store.js')).href);
+    const item = { id: 'x', creator_id: '11111111-1111-1111-1111-111111111111', tags: ['beach', 'tan'], media_type: 'image', platform: 'reddit' };
+    for (let i = 0; i < 3; i++) tastes.skip(item);
+    const q = tastes.query();
+    assert.ok((q.avoid_creators || '').includes(item.creator_id), 'creator avoided after three quick skips');
+    assert.ok(!(q.avoid_tags || '').includes('beach'), 'a tag needs more than three skips');
+  });
+});

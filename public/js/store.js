@@ -228,12 +228,17 @@ export const tastes = {
     taste.t = trim(taste.t, 80); taste.c = trim(taste.c, 80); taste.p = trim(taste.p, 12);
     saveTaste();
   },
-  /** Swiped past almost at once: a small step away from its tags and creator. */
+  /**
+   * Swiped past almost at once: a small step away from its tags and creator. What you had no liking
+   * for yet builds up a negative instead, so a creator skipped three times or so drops out of
+   * "For you" (avoid at 2) and a tag skipped repeatedly sinks (avoid at 1); both decay like the rest.
+   */
   skip(item) {
     if (!item || prefs.historyOff) return;
     decayTaste();
-    for (const tg of styleTags(item, 6)) lower(taste.t, tg, 0.6);
-    if (item.creator_id) lower(taste.c, item.creator_id, 0.9);
+    for (const tg of styleTags(item, 6)) { if (taste.t[tg]) lower(taste.t, tg, 0.6); else taste.n.t[tg] = (taste.n.t[tg] || 0) + 0.25; }
+    if (item.creator_id) { if (taste.c[item.creator_id]) lower(taste.c, item.creator_id, 0.9); else taste.n.c[item.creator_id] = (taste.n.c[item.creator_id] || 0) + 0.7; }
+    taste.n.t = trim(taste.n.t, 40); taste.n.c = trim(taste.n.c, 100);
     saveTaste();
   },
   /** "Not interested": stop recommending this creator and push its tags down. */
