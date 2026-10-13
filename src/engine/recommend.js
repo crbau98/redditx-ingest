@@ -249,6 +249,25 @@ function keyOf(t) {
 }
 
 /**
+ * Which of `head` are visible, checked in bulk: one query covers the head plus the next few hundred
+ * unchecked candidates, so building many small pages at once (a deep page) stays a handful of
+ * queries. Served pages are re-checked live on the way out, so this cache only steers the build.
+ */
+function visibleAhead(hit, head) {
+  if (head.some((x) => !hit.vis.has(x.row.id))) {
+    const batch = head.filter((x) => !hit.vis.has(x.row.id));
+    const inBatch = new Set(batch.map((x) => x.row.id));
+    for (let i = hit.next; i < hit.list.length && batch.length < 600; i++) {
+      const x = hit.list[i];
+      if (!hit.vis.has(x.row.id) && !hit.used.has(x.row.id) && !inBatch.has(x.row.id)) { batch.push(x); inBatch.add(x.row.id); }
+    }
+    const ok = new Set(visible(batch.map((x) => x.row)).map((m) => m.id));
+    for (const x of batch) hit.vis.set(x.row.id, ok.has(x.row.id));
+  }
+  return new Set(head.filter((x) => hit.vis.get(x.row.id)).map((x) => x.row.id));
+}
+
+/**
  * Adds pages to a session's served order until it holds `n` items (or candidates run out). Pages
  * already served are never recomputed, so a later page cannot reshuffle an earlier one; each new
  * page gets the variety pass over what is left, after dropping anything moderated since ranking.
@@ -257,8 +276,8 @@ function extend(hit, n, limit) {
   while (hit.served.length < n && hit.next < hit.list.length) {
     const head = []; let i = hit.next;
     for (; i < hit.list.length && head.length < limit * 2 + 80; i++) if (!hit.used.has(hit.list[i].row.id)) head.push(hit.list[i]);
-    const okIds = new Set(visible(head.map((x) => x.row)).map((m) => m.id));
-    for (const x of head) if (!okIds.has(x.row.id)) { hit.used.add(x.row.id); hit.dropped++; }
+    const okIds = visibleAhead(hit, head);
+    for (const x of head) if (!okIds.has(x.row.id)) { hit.used.add(x.row.id); hit.gone.add(x.row.id); }
     const page = diversify(head.filter((x) => okIds.has(x.row.id)), limit, limit);
     for (const x of page) { hit.used.add(x.row.id); hit.served.push(x); }
     while (hit.next < hit.list.length && hit.used.has(hit.list[hit.next].row.id)) hit.next++;
@@ -276,7 +295,7 @@ function nextUnused(hit, page) {
     for (; i < hit.list.length && batch.length < 50; i++) if (!hit.used.has(hit.list[i].row.id)) batch.push(hit.list[i]);
     const okIds = new Set(visible(batch.map((x) => x.row)).map((m) => m.id));
     for (const x of batch) {
-      if (!okIds.has(x.row.id)) { hit.used.add(x.row.id); hit.dropped++; continue; }
+      if (!okIds.has(x.row.id)) { hit.used.add(x.row.id); hit.gone.add(x.row.id); continue; }
       if ((per.get(x.row.creator_id || x.row.id) || 0) < 2) { hit.used.add(x.row.id); return x; }
       if (!fallback) fallback = x;
     }
@@ -300,13 +319,15 @@ function recommend(t) {
   if (stale) {
     // The ranked pool is shared by this taste; what the request has already seen is dropped once here.
     const list = rank(t).filter((x) => !t.exclude.has(x.row.id));
-    hit = { at: Date.now(), list, v: library(), served: [], used: new Set(), next: 0, dropped: 0 };
+    hit = { at: Date.now(), list, v: library(), served: [], used: new Set(), next: 0, gone: new Set(), vis: new Map() };
   }
   cache.delete(key);
   cache.set(key, hit);
   if (cache.size > 40) cache.delete(cache.keys().next().value);
   // Variety (one creator at most twice per page, no tag runs) is decided page by page as pages are
   // first served, after filtering, so removed items never squeeze two pages of one creator into one.
+  // Nothing can sit beyond the ranked pool, so a far-off page costs nothing to answer.
+  if (page * limit >= hit.list.length) return { items: [], total: hit.list.length - hit.gone.size, page, limit, personalized: true };
   extend(hit, (page + 1) * limit, limit);
   const slice = hit.served.slice(page * limit, (page + 1) * limit);
   // Anything moderated since its page was decided is swapped, in place, for the next unused
@@ -315,14 +336,14 @@ function recommend(t) {
   if (okIds.size < slice.length) {
     for (let i = 0; i < slice.length; i++) {
       if (okIds.has(slice[i].row.id)) continue;
-      hit.used.add(slice[i].row.id); hit.dropped++;
+      hit.gone.add(slice[i].row.id); // a Set: retries of this page don't count it twice
       const sub = nextUnused(hit, slice.filter((x, j) => j !== i && okIds.has(x.row.id)));
       hit.served[page * limit + i] = sub || slice[i];
       if (sub) { slice[i] = sub; okIds.add(sub.row.id); }
     }
   }
   const items = slice.filter((x) => okIds.has(x.row.id)).map((x) => x.row);
-  return { items, total: hit.list.length - hit.dropped, page, limit, personalized: true };
+  return { items, total: hit.list.length - hit.gone.size, page, limit, personalized: true };
 }
 
 /**

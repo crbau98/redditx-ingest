@@ -132,6 +132,27 @@ describe('recommendations v2', () => {
     } finally { recs.setCacheTtl(0); if (victim) repo.media.setState(victim, 'published'); }
   });
 
+  test('a deep page is cheap, and retries of a page never shrink the total', async () => {
+    recs.setCacheTtl(60000);
+    const q = `creators=${world.a.id}:6,${world.b.id}:4&tags=beach:2,waves:1&limit=1&seed=19`;
+    let victim;
+    try {
+      const first = (await pub(`/api/recommend?${q}&page=0`)).json;
+      const far = await pub(`/api/recommend?${q}&page=100000`);
+      assert.equal(far.status, 200); assert.deepEqual(far.json.items, []);
+      const t0 = Date.now(); await pub(`/api/recommend?${q}&page=${first.total - 1}`);
+      assert.ok(Date.now() - t0 < 2000);
+      const last = (await pub(`/api/recommend?${q}&page=${first.total - 1}`)).json;
+      victim = last.items[0] && last.items[0].id;
+      if (victim) {
+        repo.media.setState(victim, 'hidden', 'admin');
+        const totals = [];
+        for (let k = 0; k < 4; k++) totals.push((await pub(`/api/recommend?${q}&page=${first.total - 1}`)).json.total);
+        assert.ok(totals.every((x) => x === totals[0] && x >= 0), JSON.stringify(totals));
+      }
+    } finally { recs.setCacheTtl(0); if (victim) repo.media.setState(victim, 'published'); }
+  });
+
   test('a cached ranking still honours each request\'s exclusions and later moderation', async () => {
     recs.setCacheTtl(60000);
     try {
