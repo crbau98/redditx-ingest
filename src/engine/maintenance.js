@@ -115,7 +115,7 @@ async function physiqueSweep({ limit = 12, settings } = {}) {
     repo.settings.set('physique_sweep_version', PHYSIQUE_SWEEP_VERSION); repo.settings.set('physique_sweep_seq', '0');
   }
   let after = parseInt(repo.settings.get('physique_sweep_seq') || '0', 10) || 0;
-  const rows = repo.db.prepare(`SELECT seq, id, creator_id, media_type, media_url, preview_url, thumbnail_url, publish_state FROM media
+  const rows = repo.db.prepare(`SELECT seq, id, creator_id, media_type, media_url, preview_url, thumbnail_url, publish_state, physique FROM media
     WHERE publish_state IN ('published','review','hidden') AND seq > ? ORDER BY seq LIMIT ?`).all(after, limit);
   if (!rows.length) { res.done = true; return res; }
   const creators = new Set();
@@ -129,7 +129,7 @@ async function physiqueSweep({ limit = 12, settings } = {}) {
     after = row.seq; res.checked++;
     if (v.female) { repo.media.block(row.id, 'physique sweep: picture shows a woman', 'system'); res.removed++; continue; }
     if (v.status === 'error' || v.status === 'unavailable') { res.errors++; continue; }
-    if (v.physique == null) continue;
+    if (v.physique == null || row.physique === physique.APPROVED) continue; // an admin approved it over the body filter
     res.measured++;
     repo.media.setPhysique(row.id, v.physique);
     const verdict = row.publish_state === 'published' ? physique.stateFor(v.physique, now) : null;

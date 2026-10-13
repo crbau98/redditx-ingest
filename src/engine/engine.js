@@ -129,7 +129,8 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
         const raw = items[next++];
         if (!raw) return;
         let r;
-        try { r = await processItem(raw, feed, adapter, cfg); } catch (e) { r = { outcome: 'skipped', reason: `error: ${e.message}` }; }
+        // the body filter's settings are re-read per item and after the model pass (a run can take minutes): see physique.live
+        try { r = await processItem(raw, feed, adapter, { ...cfg, liveBody: true }); } catch (e) { r = { outcome: 'skipped', reason: `error: ${e.message}` }; }
         if (r.creatorId) touched.add(r.creatorId);
         switch (r.outcome) {
           case 'added': stats.added++; break;

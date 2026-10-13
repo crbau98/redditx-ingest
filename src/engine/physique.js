@@ -19,10 +19,21 @@ const { textCheck } = require('../lib/physique');
 
 const MIN_MEASURED = 4;
 const TEXT_SCORE = 101; // stored on items hidden for their words: above any measured score, and never counted as a measured picture
+const APPROVED = -1;    // stored when an admin approves an item the body filter hid: no sweep or setting hides it again
 const REASON = 'physique:';
 
 const enabled = (s) => !!s && s.physiqueFilter === true;
 const threshold = (s) => (s && Number.isFinite(s.physiqueThreshold) ? s.physiqueThreshold : 60);
+
+/**
+ * The body filter's own settings as they are now, for a caller holding a snapshot (`liveBody: true`, e.g. a feed run that
+ * started minutes ago): switching the filter off or moving the threshold mid-run applies to the very next decision.
+ */
+function live(settings) {
+  if (!settings || !settings.liveBody) return settings;
+  const s = require('../settings').get();
+  return { ...settings, physiqueFilter: s.physiqueFilter, physiqueThreshold: s.physiqueThreshold, physiqueCreatorShare: s.physiqueCreatorShare };
+}
 
 /** Publish state for a new item with this score (or null to leave the pipeline's own decision alone). */
 function stateFor(score, settings) {
@@ -66,7 +77,7 @@ function reviewCreator(creatorId, settings) {
   if (!c) return null;
   const share = settings ? settings.physiqueCreatorShare : 50;
   const r = repo.db.prepare(`SELECT COUNT(*) AS measured, SUM(CASE WHEN physique >= ? THEN 1 ELSE 0 END) AS heavy FROM media
-    WHERE creator_id = ? AND physique IS NOT NULL AND physique <= 100 AND publish_state IN ('published','hidden','review')`).get(threshold(settings), c.id);
+    WHERE creator_id = ? AND physique BETWEEN 0 AND 100 AND publish_state IN ('published','hidden','review')`).get(threshold(settings), c.id);
   const text = textCheck(c.handle, c.display_name, c.bio);
   let why = null;
   if (enabled(settings) && text.heavy) why = `body filter: profile says "${text.rule.slice(REASON.length)}"`;
@@ -128,7 +139,7 @@ async function textSweep(settings, { force = false } = {}) {
   // Only published items: one waiting in the review queue keeps its own state and reason, so switching the filter off later
   // can never publish something a human has not looked at.
   const stmt = repo.db.prepare(`SELECT seq, id, title, description, tags_text, community, author FROM media
-    WHERE publish_state = 'published' AND seq > ? ORDER BY seq LIMIT 500`);
+    WHERE publish_state = 'published' AND (physique IS NULL OR physique >= 0) AND seq > ? ORDER BY seq LIMIT 500`);
   for (;;) {
     if (!stillOn()) return res;
     const rows = stmt.all(after);
@@ -164,12 +175,12 @@ async function textSweep(settings, { force = false } = {}) {
 /** Library numbers for the admin console. */
 function stats(settings) {
   const thr = threshold(settings);
-  const r = repo.db.prepare(`SELECT SUM(CASE WHEN physique <= 100 THEN 1 ELSE 0 END) AS measured,
+  const r = repo.db.prepare(`SELECT SUM(CASE WHEN physique BETWEEN 0 AND 100 THEN 1 ELSE 0 END) AS measured,
     SUM(CASE WHEN physique <= 100 AND physique >= ? THEN 1 ELSE 0 END) AS overThreshold,
     SUM(CASE WHEN publish_state = 'hidden' AND review_reason LIKE '${REASON}%' THEN 1 ELSE 0 END) AS hidden FROM media WHERE physique IS NOT NULL`).get(thr);
-  const buckets = repo.db.prepare(`SELECT (physique / 10) * 10 AS b, COUNT(*) AS n FROM media WHERE physique IS NOT NULL AND physique <= 100 AND publish_state != 'removed' GROUP BY b ORDER BY b`).all();
+  const buckets = repo.db.prepare(`SELECT (physique / 10) * 10 AS b, COUNT(*) AS n FROM media WHERE physique BETWEEN 0 AND 100 AND publish_state != 'removed' GROUP BY b ORDER BY b`).all();
   const creators = repo.db.prepare("SELECT COUNT(*) AS n FROM creators c WHERE c.status = 'hidden' AND (SELECT action FROM moderation_actions a WHERE a.target_type = 'creator' AND a.target_id = c.id ORDER BY a.id DESC LIMIT 1) = 'physique-hide'").get().n;
   return { enabled: enabled(settings), threshold: thr, creatorShare: settings ? settings.physiqueCreatorShare : null, measured: r.measured || 0, overThreshold: r.overThreshold || 0, hidden: r.hidden || 0, creatorsHidden: creators, histogram: buckets };
 }
 
-module.exports = { stateFor, reviewCreator, reapply, textSweep, stats, hideCreator, textCheck, enabled, threshold, REASON, MIN_MEASURED };
+module.exports = { live, stateFor, reviewCreator, reapply, textSweep, stats, hideCreator, textCheck, enabled, threshold, REASON, MIN_MEASURED, APPROVED };

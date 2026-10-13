@@ -184,7 +184,7 @@ describe('body filter policy (model replaced by a fake)', () => {
     fake({ 'https://i.redd.it/appr.jpg': 90 });
     const id = (await pipeline.processItem(item({ mediaUrl: 'https://i.redd.it/appr.jpg' }), feed, null, settings)).mediaId;
     require('../src/services/targets').moderate(id, 'approve', 'looks fit to me');
-    assert.equal(repo.media.get(id).publish_state, 'published'); assert.equal(repo.media.get(id).physique, null);
+    assert.equal(repo.media.get(id).publish_state, 'published'); assert.equal(repo.media.get(id).physique, physique.APPROVED);
     physique.reapply({ ...settings, physiqueThreshold: 20 });
     assert.equal(repo.media.get(id).publish_state, 'published');
   });
@@ -316,6 +316,38 @@ describe('body filter policy (model replaced by a fake)', () => {
     physique.reapply({ ...settings, physiqueFilter: false });
     assert.equal(repo.creators.get(c.id).status, 'active');
     assert.equal(repo.feeds.get(own.id).enabled, 0, 'the admin switched it off');
+  });
+
+  test('an approved word hit is not hidden again when the filter is switched off and on', async () => {
+    const id = repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: 'apw1', source_key: 'reddit:apw1:0', post_key: 'reddit:apw1', source_url: 'https://reddit.com/x', title: 'dad bod gym progress', media_type: 'image', media_url: 'https://i.redd.it/apw1.jpg', hash: 'h-apw1', publish_state: 'published' });
+    await physique.textSweep(settings, { force: true });
+    assert.equal(repo.media.get(id).publish_state, 'hidden');
+    require('../src/services/targets').moderate(id, 'approve', 'he is fit');
+    physique.reapply({ ...settings, physiqueFilter: false });
+    await physique.textSweep(settings, { force: true });
+    assert.equal(repo.media.get(id).publish_state, 'published');
+  });
+
+  test('a feed run applies a body filter switched off mid-run to the next item and to a slow model pass', async () => {
+    const store = require('../src/settings');
+    imagefilter._setAnalyzer(async () => { store.update({ physiqueFilter: false }); return { status: 'ok', faces: male, body: { decided: true, score: 95 } }; });
+    try {
+      const r = await pipeline.processItem(item({ mediaUrl: 'https://i.redd.it/live1.jpg' }), feed, null, { ...settings, liveBody: true });
+      assert.equal(r.outcome, 'added', 'switched off while the model ran');
+      const t = await pipeline.processItem(item({ title: 'chubby bear', mediaUrl: 'https://i.redd.it/live2.jpg' }), feed, null, { ...settings, liveBody: true });
+      assert.notEqual(t.outcome, 'excluded', JSON.stringify(t));
+    } finally { store.update({ physiqueFilter: true }); }
+  });
+
+  test('a picture the body sweep hides stays findable as a duplicate while the index is loaded', () => {
+    const dedupe = require('../src/services/dedupe');
+    dedupe.check({ phash: '0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f', mediaType: 'image' }); // loads the index
+    const id = repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: 'dx1', source_key: 'reddit:dx1:0', post_key: 'reddit:dx1', source_url: 'https://reddit.com/x', media_type: 'image', media_url: 'https://i.redd.it/dx1.jpg', hash: 'h-dx1', phash: 'a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5', publish_state: 'published' });
+    dedupe.remember(id, 'a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5', { mediaType: 'image' });
+    repo.media.setState(id, 'hidden', 'physique:90', { exact: true });
+    assert.equal(dedupe.check({ phash: 'a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5', mediaType: 'image' }).dup?.id, id);
+    repo.media.setState(id, 'hidden', 'reported:spam', { exact: true });
+    assert.equal(dedupe.check({ phash: 'a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5', mediaType: 'image' }).dup, null);
   });
 
   test('the word sweep hides stored chub posts and pauses chub feeds; stats report it', async () => {

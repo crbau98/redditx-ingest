@@ -150,7 +150,7 @@ function moderate(id, action, reason, actor = 'admin') {
     case 'approve': case 'publish':
       repo.media.update(id, { publish_state: 'published', scope: 'in' });
       if (m.physique != null) {
-        if (String(m.review_reason || '').startsWith('physique:')) repo.media.setPhysique(id, null); // overriding the body filter itself: never re-hidden
+        if (String(m.review_reason || '').startsWith('physique:')) repo.media.setPhysique(id, require('../engine/physique').APPROVED); // overriding the body filter itself: no sweep or setting hides it again
         else {
           // approved for another reason (safety / scope review): the body verdict still applies
           const physique = require('../engine/physique');

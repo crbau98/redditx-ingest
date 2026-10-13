@@ -183,7 +183,7 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   // ---- 4b. physique (text): "chubby", "superchub", "gainer", "dad bod" ... ----------------------
   // Only fit / athletic bodies are shown. Words in the item's own text exclude it before anything is downloaded; the same
   // words in the poster's handle / name / bio hide the creator as well (soft: reversible from the admin console).
-  if (physique.enabled(settings)) {
+  if (physique.enabled(physique.live(settings))) {
     const pt = physique.textCheck(item.title, item.text, item.altText, item.community, item.author, item.authorName, item.authorBio, item.tags, item.labels);
     if (pt.heavy) {
       if (physique.textCheck(item.author, item.authorName, item.authorBio).heavy) {
@@ -241,7 +241,7 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   // With the body filter on, the same model pass also measures the build (pose + silhouette): see engine/physique.
   const wantFaces = settings.imageFilter === true;
   const wantHash = settings.dedupe === true;
-  const wantBody = physique.enabled(settings);
+  const wantBody = physique.enabled(physique.live(settings));
   let phash = null;
   let physiqueScore = null;
   if (wantFaces || wantHash || wantBody) {
@@ -281,7 +281,8 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   if (safety.level === 'review') { state = 'review'; reviewReason = `safety:${safety.rule}`; }
   else if (sc.femaleSoft) { state = 'review'; reviewReason = `scope:${sc.rule}`; } // feminine-adjacent wording: a human decides, whatever the feed trust or scope mode
   else if (sc.scope === 'uncertain' && settings.scopeMode === 'strict') { state = 'review'; reviewReason = 'scope:unclear'; }
-  const bodyVerdict = state === 'published' ? physique.stateFor(physiqueScore, settings) : null;
+  const body = physique.live(settings); // the model pass can be slow: judge with the body-filter settings as they are now
+  const bodyVerdict = state === 'published' ? physique.stateFor(physiqueScore, body) : null;
   if (bodyVerdict) { state = bodyVerdict.state; reviewReason = bodyVerdict.reason; imagefilter.noteHeavy(); } // kept, hidden: the threshold can move
 
   const description = item.text && item.text !== item.title ? item.text.slice(0, 500) : null;
@@ -321,7 +322,7 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   if (!mediaId) return { outcome: 'dupe' };
   if (phash && (state === 'published' || state === 'review' || bodyVerdict)) dedupe.remember(mediaId, phash, { mediaType: item.mediaType, width: item.width, height: item.height });
 
-  if (physiqueScore != null && creator) physique.reviewCreator(creator.id, settings); // consistently heavy creators drop out too
+  if (physiqueScore != null && creator) physique.reviewCreator(creator.id, body); // consistently heavy creators drop out too
 
   if (state === 'published') events.newItems(1);
   if (state === 'hidden') return { outcome: 'hidden', mediaId, creatorId: creator ? creator.id : null, reason: reviewReason };
