@@ -3,6 +3,11 @@
 # Nothing is published to the internet: the app listens on 127.0.0.1 and is reached through Tailscale (see deploy/README.md).
 name: prism
 
+# Every container's log is capped (3 x 10 MB) so a chatty service can never fill the disk.
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
 services:
   # Restores the database from the replica when the volume is empty (new server / disaster recovery), then exits.
   restore:
@@ -16,6 +21,7 @@ services:
       - data:/data
       - ./litestream.yml:/etc/litestream.yml:ro
     restart: "no"
+    logging: *logging
 
   prism:
     build: ..
@@ -43,12 +49,14 @@ services:
     ports:
       - "127.0.0.1:3141:3141"
     restart: unless-stopped
+    logging: *logging
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3141/api/health"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 40s
+    stop_grace_period: 20s           # server.js waits up to 8 s for in-flight work; SIGKILL only after that
 
   # Continuous replication of the SQLite file to S3-compatible storage (Cloudflare R2 / Backblaze B2).
   litestream:
@@ -62,11 +70,15 @@ services:
       - data:/data
       - ./litestream.yml:/etc/litestream.yml:ro
     restart: unless-stopped
+    logging: *logging
+    stop_grace_period: 30s           # time for the final sync to R2 when the stack is stopped (server moves, updates)
 
   # Tor client (SOCKS5, compose-network only). Used solely to reach an onion SearXNG named in SEARXNG_URL.
   tor:
     build: ./tor
     restart: unless-stopped
+    logging: *logging
+    mem_limit: 256m                  # sidecars are capped so they can never starve PRISM's image workers of memory
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
 
@@ -78,6 +90,8 @@ services:
     volumes:
       - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
     restart: unless-stopped
+    logging: *logging
+    mem_limit: 1g
     cap_drop: [ALL]
     cap_add: [CHOWN, SETGID, SETUID]
 
