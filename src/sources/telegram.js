@@ -131,10 +131,26 @@ function messageToItem(msg, d, ch) {
     community: ch.username || ch.title || null,
     hasAudio: d.type === 'video',
   };
+  // stage(): fetch only the picture the image filter needs (the photo, or a video's thumbnail) and keep it in memory, so a post
+  // the filter or the duplicate check rejects never costs an upload, a delete, or (for a video) the video download at all.
+  let photo = null; let thumb; let staged = false;
+  item.stage = async (it) => {
+    if (await store.has(key)) return false; // stored by an earlier run: materialize() first, then check the stored copy
+    staged = true;
+    if (d.type === 'image') {
+      photo = await mt.download(msg);
+      if (!photo || !photo.length) throw new Error('empty download');
+      it.localImage = photo;
+    } else if (d.thumb) {
+      try { const t = await mt.download(msg, { thumb: true }); thumb = Buffer.isBuffer(t) && t.length ? t : null; } catch { thumb = null; }
+      it.localImage = thumb;
+    }
+    return true;
+  };
   item.materialize = async (it) => {
-    if (!(await store.has(key))) {
+    if (staged || !(await store.has(key))) {
       if (d.type === 'image') {
-        const buf = await mt.download(msg);
+        const buf = photo || await mt.download(msg);
         if (!buf || !buf.length) throw new Error('empty download');
         await store.put(key, buf, d.mime); stored.push(key);
         const sh = sharp();
@@ -148,14 +164,15 @@ function messageToItem(msg, d, ch) {
           if (!fs.existsSync(tmp) || fs.statSync(tmp).size === 0) throw new Error('empty download');
           await store.put(key, tmp, d.mime); stored.push(key);
         } finally { try { fs.unlinkSync(tmp); } catch { /* gone */ } }
-        if (d.thumb) {
-          try { const t = await mt.download(msg, { thumb: true }); if (Buffer.isBuffer(t) && t.length) { await store.put(posterKey, t, 'image/jpeg'); stored.push(posterKey); it.previewUrl = store.urlFor(posterKey); } } catch { /* no poster */ }
+        if (d.thumb && thumb !== null) {
+          try { const t = thumb || await mt.download(msg, { thumb: true }); if (Buffer.isBuffer(t) && t.length) { await store.put(posterKey, t, 'image/jpeg'); stored.push(posterKey); it.previewUrl = store.urlFor(posterKey); } } catch { /* no poster */ }
         }
       }
     } else if (await store.has(posterKey)) it.previewUrl = store.urlFor(posterKey);
     if (!it.previewUrl && d.type === 'video') it.previewUrl = null;
+    photo = null; thumb = undefined; it.localImage = null; // a run holds all its items: do not keep their pictures alive
   };
-  item.discard = async () => { while (stored.length) { try { await store.remove(stored.pop()); } catch { /* orphan: harmless */ } } };
+  item.discard = async () => { photo = null; thumb = undefined; item.localImage = null; while (stored.length) { try { await store.remove(stored.pop()); } catch { /* orphan: harmless */ } } };
   return item;
 }
 

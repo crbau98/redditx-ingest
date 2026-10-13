@@ -195,8 +195,14 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   // ---- 6a. fetch the media into our own storage -----------------------------------------
   // Sources whose files cannot be hotlinked (Telegram) hand over a `materialize()` instead of a finished URL. It runs only now,
   // after the cheap text gates and the duplicate check, so rejected posts never cost a download or any storage.
+  // A source that can stage() first hands over just the picture the checks below need, and the upload waits until they pass.
+  const failed = (e) => ({ outcome: 'skipped', reason: `download: ${String(e.message || e).slice(0, 160)}` });
+  let materializeLater = false;
   if (typeof item.materialize === 'function') {
-    try { await item.materialize(item); } catch (e) { return { outcome: 'skipped', reason: `download: ${String(e.message || e).slice(0, 160)}` }; }
+    try {
+      materializeLater = typeof item.stage === 'function' && await item.stage(item);
+      if (!materializeLater) await item.materialize(item);
+    } catch (e) { return failed(e); }
   }
 
   // ---- 6b. image filter: is there a woman in the picture? ---------------------------
@@ -227,6 +233,10 @@ async function processItemInner(rawItem, feed, adapter, settings) {
       repo.media.addAltSource(d.dup.id, { platform, source_url: item.permalink || item.mediaUrl, author: item.author ? cleanHandle(item.author) : null, community: item.community || null, posted_at: item.postedAt || null });
       return { outcome: 'dupe', reason: `similar picture (${d.dup.id.slice(0, 8)}, distance ${d.dup.p}/${d.dup.d})`, mediaId: d.dup.id };
     }
+  }
+
+  if (materializeLater) {
+    try { await item.materialize(item); } catch (e) { return failed(e); }
   }
 
   // ---- 7. creator -----------------------------------------------------------------

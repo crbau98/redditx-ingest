@@ -3,6 +3,10 @@
 const { parentPort } = require('worker_threads');
 const { createModel } = require('./imagefilter-core');
 
+// Background work: on Linux a thread has its own nice value, so this lowers only THIS worker (default 10, IMAGE_NICE=0 to keep
+// normal priority). On a small server the model then soaks up spare CPU while page loads and the API never wait behind it.
+try { require('os').setPriority(0, Math.min(19, Math.max(0, parseInt(process.env.IMAGE_NICE ?? '10', 10) || 0))); } catch { /* not permitted: harmless */ }
+
 let model = null;
 const ready = createModel().then((m) => { model = m; parentPort.postMessage({ type: 'ready', info: m.info }); }, (e) => { parentPort.postMessage({ type: 'failed', error: String(e.message || e) }); });
 

@@ -253,6 +253,24 @@ describe('joined channels: sync + ingestion', () => {
     const w = await pipeline.processItem(by['gymbros/2'], feed, tg, settings);
     assert.equal(w.outcome, 'excluded'); assert.equal(w.reason, 'image:female-face');
     assert.equal(await store.has('tg/100/2.jpg'), false, 'rejected media does not stay in the bucket');
+
+    // a video the picture filter rejects is judged on its thumbnail alone: the video itself is never downloaded or uploaded
+    client.downloads.length = 0;
+    const ch = { id: '100', username: 'gymbros', title: 'Gym Bros', target: 'gymbros', trusted: true };
+    const v8 = tg.messageToItem(videoMsg(8, 'second clip'), mt.describeMedia(videoMsg(8, 'x')), ch);
+    const wv = await pipeline.processItem(v8, feed, tg, settings);
+    assert.equal(wv.outcome, 'excluded');
+    assert.deepEqual(client.downloads, [{ id: 8, thumb: true }]);
+    assert.equal(await store.has('tg/100/8.mp4'), false); assert.equal(await store.has('tg/100/8-t.jpg'), false);
+    assert.equal(v8.localImage, null, 'the staged picture is released');
+
+    // an accepted photo is downloaded once: the filter reads the same bytes that are then stored
+    imagefilter._setAnalyzer(async () => ({ status: 'ok', faces: [{ gender: 'male', score: 0.9, confidence: 0.9 }] }));
+    client.downloads.length = 0;
+    const p9 = tg.messageToItem(photoMsg(9, 'pump day'), mt.describeMedia(photoMsg(9, 'x')), ch);
+    assert.equal((await pipeline.processItem(p9, feed, tg, settings)).outcome, 'added');
+    assert.deepEqual(client.downloads, [{ id: 9, thumb: false }]);
+    assert.equal(await store.has('tg/100/9.jpg'), true);
     imagefilter._reset();
   });
 
