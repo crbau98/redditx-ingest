@@ -111,6 +111,27 @@ describe('recommendations v2', () => {
     } finally { for (const id of fresh) repo.media.setState(id, 'hidden', 'admin'); }
   });
 
+  test('an item moderated after its page was served is replaced, so the page stays full', async () => {
+    recs.setCacheTtl(60000);
+    const q = `creators=${world.a.id}:6,${world.b.id}:4,${world.e.id}:3&tags=beach:2,waves:1&limit=3&seed=17`;
+    let victim;
+    try {
+      const p0 = (await pub(`/api/recommend?${q}&page=0`)).json.items.map((x) => x.id);
+      const p1 = (await pub(`/api/recommend?${q}&page=1`)).json.items.map((x) => x.id);
+      assert.equal(p1.length, 3);
+      victim = p1[1];
+      repo.media.setState(victim, 'hidden', 'admin');
+      // A retried (or shared) request for the same later page, after the moderation.
+      const again = (await pub(`/api/recommend?${q}&page=1`)).json.items.map((x) => x.id);
+      assert.equal(again.length, 3, 'a short page would end infinite scroll');
+      assert.ok(!again.includes(victim));
+      assert.deepEqual([again[0], again[2]], [p1[0], p1[2]], 'the rest of the page keeps its place');
+      assert.ok(!p0.includes(again[1]), 'the stand-in is something not shown before');
+      const p2 = (await pub(`/api/recommend?${q}&page=2`)).json.items.map((x) => x.id);
+      assert.deepEqual(p2.filter((id) => [...p0, ...again].includes(id)), []);
+    } finally { recs.setCacheTtl(0); if (victim) repo.media.setState(victim, 'published'); }
+  });
+
   test('a cached ranking still honours each request\'s exclusions and later moderation', async () => {
     recs.setCacheTtl(60000);
     try {

@@ -266,6 +266,25 @@ function extend(hit, n, limit) {
   }
 }
 
+/** The best unused, still-visible candidate, preferring a creator not already twice in `page`. */
+function nextUnused(hit, page) {
+  const per = new Map();
+  for (const x of page) { const k = x.row.creator_id || x.row.id; per.set(k, (per.get(k) || 0) + 1); }
+  let fallback = null;
+  for (let i = hit.next; i < hit.list.length;) {
+    const batch = [];
+    for (; i < hit.list.length && batch.length < 50; i++) if (!hit.used.has(hit.list[i].row.id)) batch.push(hit.list[i]);
+    const okIds = new Set(visible(batch.map((x) => x.row)).map((m) => m.id));
+    for (const x of batch) {
+      if (!okIds.has(x.row.id)) { hit.used.add(x.row.id); hit.dropped++; continue; }
+      if ((per.get(x.row.creator_id || x.row.id) || 0) < 2) { hit.used.add(x.row.id); return x; }
+      if (!fallback) fallback = x;
+    }
+  }
+  if (fallback) hit.used.add(fallback.row.id);
+  return fallback;
+}
+
 /**
  * @param t {tags, creators, platforms: Map<key, weight>, avoidTags, avoidCreators, exclude: Set,
  *           video: number|null, type, seed, page, limit}
@@ -290,8 +309,18 @@ function recommend(t) {
   // first served, after filtering, so removed items never squeeze two pages of one creator into one.
   extend(hit, (page + 1) * limit, limit);
   const slice = hit.served.slice(page * limit, (page + 1) * limit);
-  // Anything moderated since its page was decided is still left out.
+  // Anything moderated since its page was decided is swapped, in place, for the next unused
+  // candidate, so the page stays full (clients read a short page as the end) and no other page moves.
   const okIds = new Set(visible(slice.map((x) => x.row)).map((m) => m.id));
+  if (okIds.size < slice.length) {
+    for (let i = 0; i < slice.length; i++) {
+      if (okIds.has(slice[i].row.id)) continue;
+      hit.used.add(slice[i].row.id); hit.dropped++;
+      const sub = nextUnused(hit, slice.filter((x, j) => j !== i && okIds.has(x.row.id)));
+      hit.served[page * limit + i] = sub || slice[i];
+      if (sub) { slice[i] = sub; okIds.add(sub.row.id); }
+    }
+  }
   const items = slice.filter((x) => okIds.has(x.row.id)).map((x) => x.row);
   return { items, total: hit.list.length - hit.dropped, page, limit, personalized: true };
 }
