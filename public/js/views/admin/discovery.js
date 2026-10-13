@@ -4,9 +4,9 @@ import { parse, navigate } from '../../router.js';
 import { table, pager, toggle, platBadge, pageHead, act, kpi } from './ui.js';
 
 const STATUSES = [['pending', 'Waiting'], ['followed', 'Followed'], ['linked', 'Linked to a creator'], ['rejected', 'Rejected'], ['all', 'All']];
-const SIGNAL_LABEL = { identity: 'same name', mention: 'mentioned', cofollow: 'followed by', search: 'search', similar: 'looks like', hangout: 'creators post here' };
+const SIGNAL_LABEL = { identity: 'same name', mention: 'mentioned', cofollow: 'followed by', search: 'search', similar: 'looks like', hangout: 'creators post here', ofconfirmed: 'runs an OnlyFans page', onlyfans: 'same handle as an OnlyFans page' };
 // What each strategy found on the last run (keys of the run report).
-const STRATEGIES = [['mentions', 'Mentions'], ['graph', 'Bluesky follows'], ['lookalikes', 'Lookalikes'], ['people', 'People search'], ['communities', 'Communities & feeds'], ['hangouts', 'Where creators post'], ['topics', 'Web topics'], ['identity', 'Same-name search']];
+const STRATEGIES = [['mentions', 'Mentions'], ['graph', 'Bluesky follows'], ['lookalikes', 'Lookalikes'], ['people', 'People search'], ['communities', 'Communities & feeds'], ['hangouts', 'Where creators post'], ['topics', 'Web topics'], ['identity', 'Same-name search'], ['onlyfans', 'OnlyFans traced']];
 const foundOf = (r) => (r ? (r.found !== undefined ? r.found : r.linked || 0) : null);
 const SCOPE = { in: ['good', 'male-focused'], uncertain: ['', 'unclear'], excluded: ['bad', 'off-topic'] };
 
@@ -30,7 +30,7 @@ export async function render(root) {
   const q = parse().query;
   const f = { status: q.get('status') || 'pending', q: q.get('q') || '', sort: q.get('sort') || 'score', page: parseInt(q.get('page') || '0', 10) };
   const set = (patch) => navigate('/admin/discovery', { ...f, ...patch }, { replace: true });
-  const head = h('div'); const kpis = h('div', { class: 'kpis' }); const tableHost = h('div'); const tune = h('div');
+  const head = h('div'); const kpis = h('div', { class: 'kpis' }); const tableHost = h('div'); const tune = h('div'); const ofHost = h('div');
   const selected = new Set();
   let data;
 
@@ -99,6 +99,7 @@ export async function render(root) {
       h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Read who your Bluesky creators follow'), toggle(v.discoveryGraph, (on) => save({ discoveryGraph: on }))),
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Search for communities and custom feeds'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'NSFW subreddits, Lemmy communities and popular Bluesky feeds matching your keywords')), toggle(v.discoveryCommunities, (on) => save({ discoveryCommunities: on }))),
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Lookalikes and people search'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Accounts Bluesky rates as similar to your creators, plus Bluesky and RedGIFs people matching your keywords')), toggle(v.discoveryExpand, (on) => save({ discoveryExpand: on }))),
+      h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Trace OnlyFans creators'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'OnlyFans pages your creators promote lead to the same men’s free accounts on RedGIFs, Bluesky, X, Telegram and link pages. onlyfans.com itself is never read')), toggle(v.discoveryOnlyFans, (on) => save({ discoveryOnlyFans: on }))),
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Auto-follow strong communities'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Only male-focused ones; every post from them is still checked on its own')), toggle(v.discoveryAutoCommunities, (on) => save({ discoveryAutoCommunities: on }))),
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Auto-follow at score'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'same name = 6 · each creator who mentions them = 3 · Bluesky lookalike (per creator) = 2 · each who follows them = 1.5 · each creator posting there = 1.5 · each search hit = 2 · audience up to +3 · male-focused bio = +2')), num('discoveryAutoFollowScore', 3, 60)),
       h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Max follows per run'), num('discoveryMaxFollowsPerRun', 0, 100)),
@@ -108,6 +109,32 @@ export async function render(root) {
         h('button', { class: 'btn sm', style: { marginTop: '8px' }, onclick: () => save({ discoveryQueries: queries.value }) }, 'Save topics')),
       h('div', { class: 'field', style: { marginTop: '10px' } }, h('label', null, 'Community keywords (one per line — two are searched per run on Reddit and Bluesky)'), keywords,
         h('button', { class: 'btn sm', style: { marginTop: '8px' }, onclick: () => save({ discoveryKeywords: keywords.value }) }, 'Save keywords'))));
+  }
+
+  const OF_STATUS = { pending: ['', 'not traced yet'], searching: ['warn', 'nothing found yet'], found: ['good', 'accounts found'], claimed: ['info', 'followed creator'], rejected: ['bad', 'rejected'] };
+  async function loadOnlyFans() {
+    const r = await adminGet('/discovery/onlyfans', { limit: 15 });
+    const paste = h('textarea', { class: 'textarea', rows: 3, spellcheck: 'false', placeholder: 'onlyfans.com/name or just the handle, one per line' });
+    const add = h('button', { class: 'btn sm primary', onclick: (e) => act(e.currentTarget, async () => {
+      const out = await adminPost('/discovery/onlyfans', { handles: paste.value });
+      toast(`${out.added} added${out.claimed ? ` · ${out.claimed} already followed` : ''}${out.invalid.length ? ` · ${out.invalid.length} not recognised` : ''}`, 'ok');
+      paste.value = ''; loadOnlyFans();
+    }) }, icon('plus', 'sm'), 'Trace these');
+    const c = r.counts;
+    ofHost.replaceChildren(h('details', { class: 'panel', style: { marginTop: '14px' } },
+      h('summary', null, h('b', null, 'OnlyFans creators'), h('span', { class: 'muted', style: { marginLeft: '10px', fontSize: '13px' } },
+        `${fmt.int(c.creators)} followed creators have a page · ${fmt.int(c.pending + c.searching)} pages being traced · ${fmt.int(c.found)} traced to free accounts`)),
+      h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Pages named in posts, bios and web searches. Each is traced to the creator’s free public accounts, which then appear in the queue above with their score.'),
+      h('div', { class: 'field' }, paste, h('div', { style: { marginTop: '8px' } }, add)),
+      table([
+        { label: 'Page', render: (l) => h('div', { class: 'cell-stack' }, h('a', { href: `https://onlyfans.com/${l.handle}`, target: '_blank', rel: 'noopener noreferrer nofollow', style: { fontWeight: 600 } }, l.display_name || l.handle), h('span', { class: 'sub truncate', style: { maxWidth: '300px' }, title: l.bio || '' }, l.bio ? l.bio.slice(0, 100) : `@${l.handle}`)) },
+        { label: 'Named by', render: (l) => h('span', { class: 'sub' }, l.origin === 'search' ? 'web search' : l.origin === 'admin' ? 'you' : `${l.mentions} source${l.mentions === 1 ? '' : 's'}`, l.free ? h('span', { class: 'badge good', style: { marginLeft: '6px' } }, 'free') : null) },
+        { label: 'Status', render: (l) => h('div', { class: 'cell-stack' }, h('span', { class: `badge ${OF_STATUS[l.status][0]}` }, OF_STATUS[l.status][1]),
+          l.creator_handle ? h('a', { class: 'sub', href: `#/creator/${l.creator_id}` }, `@${l.creator_handle}`) : l.accounts.length ? h('span', { class: 'sub' }, l.accounts.map((a) => `${a.platform}${a.proven ? ' ✓' : ''}`).join(' · ')) : l.reason ? h('span', { class: 'sub' }, l.reason) : null) },
+        { label: '', render: (l) => h('div', { class: 'actions' }, l.status !== 'claimed' ? [
+          h('button', { class: 'btn sm ghost', onclick: (e) => act(e.currentTarget, async () => { await adminPost(`/discovery/onlyfans/${encodeURIComponent(l.handle)}`, { action: 'retry' }); loadOnlyFans(); }) }, 'Retrace'),
+          l.status !== 'rejected' ? h('button', { class: 'btn sm ghost', onclick: (e) => act(e.currentTarget, async () => { await adminPost(`/discovery/onlyfans/${encodeURIComponent(l.handle)}`, { action: 'reject' }); loadOnlyFans(); }) }, 'Reject') : null] : null) },
+      ], r.items, { empty: 'No OnlyFans pages seen yet. They are picked up from posts and bios as feeds sync, or paste some above.' })));
   }
 
   async function load() {
@@ -137,8 +164,9 @@ export async function render(root) {
       pager({ page: r.page, limit: r.limit, total: r.total, onPage: (p) => set({ page: p }) }));
   }
 
-  root.append(head, kpis, runLine, tune, bar, tableHost);
+  root.append(head, kpis, runLine, tune, ofHost, bar, tableHost);
   await load();
+  loadOnlyFans().catch(() => {});
   const timer = setInterval(() => { if (root.isConnected && data && data.running) load().catch(() => {}); }, 5000);
   return () => clearInterval(timer);
 }

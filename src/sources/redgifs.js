@@ -89,8 +89,29 @@ async function searchCreators(q, { order = 'trending', count = 80 } = {}) {
   return [...byName.values()].map((e) => ({ ...e, tags: [...e.tags].slice(0, 12) })).sort((a, b) => b.gifs - a.gifs);
 }
 
+/**
+ * One RedGIFs profile by username (discovery: "does this OnlyFans creator post free clips here?").
+ * Returns null when there is no such user. `links` is every URL the profile shows (bio + profile link).
+ */
+async function lookupUser(username) {
+  let json;
+  try { json = await api(`/v2/users/${encodeURIComponent(String(username).toLowerCase())}`); } catch (e) {
+    if (e.status === 404 || e.status === 410) return null;
+    throw e;
+  }
+  const u = (json && (json.user || json)) || null;
+  if (!u || !u.username) return null;
+  const links = [u.profileUrl, ...(Array.isArray(u.links) ? u.links.map((l) => (l && (l.url || l.href)) || l) : []), ...Object.values(u.socialMedia || u.social || {})]
+    .filter((x) => typeof x === 'string' && x);
+  return {
+    username: u.username, name: u.name || null, description: u.description || null, followers: u.followers || 0, gifs: u.gifs || u.publishedGifs || 0,
+    verified: !!u.verified, avatar: u.profileImageUrl || null, links,
+  };
+}
+
 module.exports = {
   searchCreators,
+  lookupUser,
   platform: 'redgifs',
   label: 'RedGIFs',
   color: '#e11d48',

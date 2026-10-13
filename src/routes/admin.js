@@ -257,6 +257,37 @@ router.post('/discovery/candidates', (req, res) => {
   res.json(out);
 });
 
+/* ---------------------------------------------------------- OnlyFans leads */
+// OnlyFans pages named in posts, bios and search results; PRISM traces each to the person's free public accounts.
+router.get('/discovery/onlyfans', (req, res) => {
+  const status = ['pending', 'searching', 'found', 'claimed', 'rejected', 'all'].includes(req.query.status) ? req.query.status : 'all';
+  res.json({ counts: repo.onlyfans.counts(), ...repo.onlyfans.list({ status, ...page(req, 200), q: typeof req.query.q === 'string' ? req.query.q.slice(0, 60) : undefined }) });
+});
+/** Paste OnlyFans links or handles (one per line): each becomes a lead the next discovery run traces. */
+router.post('/discovery/onlyfans', (req, res) => {
+  const { ofHandle, normal } = require('../lib/onlyfans');
+  const lines = String((req.body && req.body.handles) || '').split(/[\n,\s]+/).map((l) => l.trim()).filter(Boolean).slice(0, 200);
+  const out = { added: 0, claimed: 0, invalid: [] };
+  for (const line of lines) {
+    const handle = /onlyfans\.com/i.test(line) ? ofHandle(line) : normal(line);
+    if (!handle) { out.invalid.push(line.slice(0, 80)); continue; }
+    const owner = repo.onlyfans.ownerOf(handle);
+    if (owner) { repo.onlyfans.claim(handle, owner.id); out.claimed++; continue; }
+    const lead = repo.onlyfans.note(handle, { origin: 'admin' });
+    if (lead.status === 'rejected' || lead.status === 'searching') repo.onlyfans.update(handle, { status: 'pending', reason: null, attempts: 0 });
+    out.added++;
+  }
+  res.json(out);
+});
+router.post('/discovery/onlyfans/:handle', (req, res) => {
+  const lead = repo.onlyfans.get(req.params.handle);
+  if (!lead) return bad(res, 'Not found', 404);
+  const action = req.body && req.body.action;
+  if (action === 'retry') return res.json(repo.onlyfans.update(lead.handle, { status: 'pending', reason: null, attempts: 0 }));
+  if (action === 'reject') return res.json(repo.onlyfans.update(lead.handle, { status: 'rejected', reason: 'rejected by admin', checked_at: new Date().toISOString() }));
+  return bad(res, 'action must be retry or reject');
+});
+
 /* ------------------------------------------------------------ creator lookup */
 // Find a person by name, performer name, handle or link across platforms (read-only), then follow the chosen accounts.
 router.post('/lookup', async (req, res) => {
