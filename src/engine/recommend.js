@@ -214,15 +214,15 @@ function rank(t) {
     if (ph) seenPic.add(ph);
     unique.push(s);
   }
-  const ranked = diversify(unique, t.limit, MAX_RANKED);
-  const via = handles([...new Set(ranked.map((s) => s.reason && s.reason.via).filter(Boolean))]);
-  for (const s of ranked) {
-    if (s.reason && s.reason.via) {
-      const hnd = via.get(s.reason.via);
-      s.reason = hnd ? { kind: 'similar', label: `Like @${hnd}` } : { kind: 'similar', label: 'Matches your taste' };
-    }
-  }
-  return ranked.map((s) => { const m = repo.serializeMedia(s.row); delete m.rn; m.reason = s.reason ? s.reason.label : null; return m; });
+  const pool = unique.slice(0, MAX_RANKED);
+  const via = handles([...new Set(pool.map((x) => x.reason && x.reason.via).filter(Boolean))]);
+  // Scored candidates, best first; the variety pass runs per request, after that request's filtering.
+  return pool.map((x) => {
+    let reason = x.reason ? x.reason.label : null;
+    if (x.reason && x.reason.via) reason = via.get(x.reason.via) ? `Like @${via.get(x.reason.via)}` : 'Matches your taste';
+    const m = repo.serializeMedia(x.row); delete m.rn; m.reason = reason;
+    return { row: m, tags: x.tags, score: x.score };
+  });
 }
 
 /** The items still visible right now (published, not excluded, creator active): one indexed lookup. */
@@ -231,7 +231,7 @@ function visible(items) {
   const ok = new Set();
   for (let i = 0; i < items.length; i += 500) {
     const ids = items.slice(i, i + 500).map((m) => m.id);
-    for (const r of db.prepare(`SELECT m.id FROM media m LEFT JOIN creators c ON c.id = m.creator_id WHERE m.id IN (${marks(ids)}) AND ${VISIBLE}`).all(...ids)) ok.add(r.id);
+    for (const r of db.prepare(`SELECT m.id FROM media m LEFT JOIN creators c ON c.id = m.creator_id WHERE m.id IN (SELECT value FROM json_each(?)) AND ${VISIBLE}`).all(JSON.stringify(ids))) ok.add(r.id);
   }
   return items.filter((m) => ok.has(m.id));
 }
@@ -264,9 +264,16 @@ function recommend(t) {
   }
   // The cached order is shared by every request with this taste; what this request has already
   // seen, and anything moderated since the list was built, is filtered out on the way out.
-  const list = visible(hit.list).filter((m) => !t.exclude.has(m.id));
-  const items = list.slice(page * limit, page * limit + limit);
-  return { items, total: list.length, page, limit, personalized: true };
+  // Variety (one creator at most twice per page, no tag runs) is applied after that filtering, so
+  // removed items never squeeze two pages' worth of one creator into one.
+  // Only the head of the list that this page can reach is re-checked (pages so far, plus room for
+  // the variety pass to look ahead), so later pages stay cheap.
+  const open = hit.list.filter((x) => !t.exclude.has(x.row.id));
+  const head = open.slice(0, (page + 2) * limit + 80);
+  const okIds = new Set(visible(head.map((x) => x.row)).map((m) => m.id));
+  const ranked = diversify(head.filter((x) => okIds.has(x.row.id)), limit, (page + 1) * limit);
+  const items = ranked.slice(page * limit).map((x) => x.row);
+  return { items, total: open.length - (head.length - okIds.size), page, limit, personalized: true };
 }
 
 /**

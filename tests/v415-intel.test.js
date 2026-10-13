@@ -130,6 +130,29 @@ describe('recommendations v2', () => {
     assert.ok(!r.json.items.some((x) => x.creator_id === world.a.id || x.tags.includes('tan')));
   });
 
+  test('the negative-only fallback pages through the filtered list without gaps', async () => {
+    const q = `avoid_creators=${world.a.id}&avoid_tags=tan`;
+    const all = (await pub(`/api/recommend?${q}&limit=60`)).json.items.map((x) => x.id);
+    const p0 = (await pub(`/api/recommend?${q}&limit=3&page=0`)).json.items.map((x) => x.id);
+    const p1 = (await pub(`/api/recommend?${q}&limit=3&page=1`)).json.items.map((x) => x.id);
+    assert.deepEqual([...p0, ...p1], all.slice(0, 6));
+  });
+
+  test('variety holds on every page after this request\'s exclusions', async () => {
+    recs.setCacheTtl(60000);
+    try {
+      const q = `creators=${world.a.id}:6,${world.b.id}:5,${world.e.id}:4&tags=beach:2&limit=4&seed=5`;
+      const first = (await pub(`/api/recommend?${q}&limit=40`)).json.items.map((x) => x.id);
+      const ex = first.filter((id, i) => i % 3 === 1).join(',');
+      for (let page = 0; page < 3; page++) {
+        const items = (await pub(`/api/recommend?${q}&exclude=${ex}&page=${page}`)).json.items;
+        const per = {};
+        for (const it of items) per[it.creator_id] = (per[it.creator_id] || 0) + 1;
+        if (Object.keys(per).length > 1) assert.ok(Object.values(per).every((n) => n <= 2), `page ${page}: ${JSON.stringify(per)}`);
+      }
+    } finally { recs.setCacheTtl(0); }
+  });
+
   test('"not interested": avoided creators vanish, avoided tags sink', async () => {
     const r = await pub(`/api/recommend?creators=${world.a.id}:6&tags=beach:2,blond:1&avoid_creators=${world.b.id}&avoid_tags=surfing&limit=40`);
     const items = r.json.items;

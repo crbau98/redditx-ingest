@@ -739,6 +739,14 @@ function buildMediaWhere(f) {
     if (!f.creators.length) where.push('0=1');
     else { where.push(`m.creator_id IN (${f.creators.map(() => '?').join(',')})`); params.push(...f.creators); }
   }
+  // what the viewer asked to see less of ("Not interested")
+  if (Array.isArray(f.notCreators) && f.notCreators.length) {
+    where.push(`(m.creator_id IS NULL OR m.creator_id NOT IN (${f.notCreators.map(() => '?').join(',')}))`); params.push(...f.notCreators);
+  }
+  if (Array.isArray(f.notTags) && f.notTags.length) {
+    const list = f.notTags.slice(0, 30).map(cleanTag);
+    where.push(`m.id NOT IN (SELECT mt.media_id FROM media_tags mt JOIN tags t ON t.id = mt.tag_id WHERE t.name IN (${list.map(() => '?').join(',')}))`); params.push(...list);
+  }
   if (Array.isArray(f.ids)) {
     if (!f.ids.length) where.push('0=1');
     else { where.push(`m.id IN (${f.ids.map(() => '?').join(',')})`); params.push(...f.ids); }
