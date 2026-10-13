@@ -27,7 +27,7 @@ export function createMasonry({ density = 'm', render }) {
 
   const estimate = (item) => {
     const r = item.width && item.height ? Math.min(Math.max(item.height / item.width, 0.52), 1.8) : 1.25;
-    return colWidth * r + (cur === 's' ? 0 : 64);
+    return colWidth * r; // the caption sits over the image (v4.16), so a card is exactly its media
   };
 
   function build() {

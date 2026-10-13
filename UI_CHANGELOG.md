@@ -1,5 +1,30 @@
 # UI changelog
 
+## 2026-10-13 — v4.16 "Lumen"
+
+**Design direction**: depth from light, not borders. Every raised surface (buttons, chips, inputs, panels, the tab bar, dialogs) is lit from above: a hairline of light on its top edge, a faint top-down sheen and a soft two-layer shadow beneath. Media gets the room: cards lose their frame and their caption block, and the caption sits over the bottom of the image instead. Type is tighter at display sizes, headings balance their lines (no one-word orphans on phones) and paragraphs wrap "pretty". Motion uses the v4.13 spring for buttons, chips, the tab-bar highlight, toasts and dialogs.
+
+**Audit findings** (same `scripts/perf-audit.js` conditions as v4.13: phone 390×844 @2x, 4× CPU slowdown, 150 ms / 12 Mbps link, demo library, median of 3 runs; the old build was measured twice, back to back with the new one): the web fonts came from Google (two extra origins, 70 KB) and the admin console's stylesheet loaded on every public page. On a phone, a creator's header stacked a 112 px avatar, name, four buttons and two rows of wrapping chips before any content. Opening Reels or the Galaxy shifted the whole layer by the app bar's height (the page-enter animation put a transform on `<main>`, which made it the containing block of their fixed layer until the animation ended).
+
+| Change | Files | Measured (old → new) |
+|---|---|---|
+| **Fonts self-hosted** and subset: Inter variable 400–700 and Space Grotesk variable 500–700, Latin-1 + common punctuation, preloaded from the shell; Google Fonts dropped from the CSP | `public/fonts/*` (OFL licence included), `index.html`, `theme-init.js`, `src/app.js`, `app.css` | fonts 70.4 → 44.7 KB, two fewer origins; Explore LCP 2.76–3.08 → 2.24–2.28 s; Reels LCP 2.23–2.29 → 2.12–2.15 s |
+| **admin.css loads with the console only** (resolved from the admin module's own versioned URL, awaited before the console renders); `.chart-axis`, the one rule a public page shared, moved to app.css | `views/admin/index.js`, `index.html`, `sw.js`, `app.css`, `admin.css` | stylesheet bytes on every public page 25.8 → 23.8 KB, one request fewer |
+| **Image-first cards**: no frame, caption over the image on a static scrim (no blur), a ring of light drawn above the image, platform as a tinted tag; dense grid shows the picture only (caption on hover on desktop); tighter gutters on phones | `app.css`, `components/card.js` ("why" chip moves into the caption), `components/masonry.js` (a card's height is now exactly its media) | feed fling 27.4–27.5 → 28.3–29.7 fps, long tasks 2.1–2.3 → 1.0–1.7 s; the same 158 cards take 24% less scrolling |
+| Lit controls: buttons, chips, segmented controls, inputs, nav pill, link chips, tabs, modals, toasts, empty states | `app.css` | |
+| New tokens: `--hi`, `--raise`, `--ring`, `--scrim`; deeper neutrals; softer two-layer shadows; light theme retuned to match | `app.css` | |
+| Phones: creator header in two rows (80 px avatar beside the name, actions full width), account links and tags in one sideways-scrolling row each; a shorter home hero | `app.css` | |
+| Keyboard focus: a two-tone ring that reads on any background; on cards it is drawn inside the media | `app.css` | |
+| Reels and Galaxy no longer run the page-enter animation (it caused the layout shift above) | `app.css` | Reels CLS 0.039 → 0 under throttling |
+
+**Tried and dropped**: `:has()` selectors for the card focus ring and the creator tag row. They made style recalculation during a feed fling ~45% more expensive (339 → 494 ms), so both use plain selectors now.
+
+**Left to the usability thread's PR**: the phone layouts of Reels (full screen, the order picker in a sheet) and of the Explore filters (one swipeable row, `.filter-scroll`). This release only fades the edge of that row.
+
+**Unchanged, for the record**: first paint ~0.53 s and Home LCP ~3.4 s are within run-to-run noise (Home's largest paint is the hero orbit). Reels swipe-to-first-frame stays ~0.39 s.
+
+**Verification**: 481 unit tests (6 new in `tests/v416-lumen.test.js`: no Google Fonts anywhere, both fonts declared, preloaded and under 30 KB, licence present; admin.css not in the shell and loaded by the console; no public view using an admin-only class; captions over the image with the matching masonry estimate; no new live blur on cards, chips or Reels controls). The v4.13 compositor-only guard still passes. Before/after screenshots on a phone and on desktop (dark and light) of Home, Explore, Creators, a creator page, Saved and the admin console, with no console errors.
+
 ## 2026-10-12 — v4.13 "Fluid"
 
 **Audit findings** (measured with the new `scripts/perf-audit.js`: phone 390×844 @2x with touch, 4× CPU slowdown, 150 ms / 12 Mbps link for loads, demo library, median of 3 runs): an **untouched** Explore page spent ~2.4 s of main-thread and raster work in every 3 s, because every card's loading shimmer kept animating `background-position` under the finished image, forever. Flinging through the whole 158-card feed ran at **9 fps** with 12.6 s of long tasks. On Home, each rail's arrow/fade update forced a layout for the next rail (≈0.5 s at 4× slowdown). In Reels, the full-screen `blur(38px)` backdrop and the backdrop-blurred action buttons were re-rendered on every frame of a swipe (≈1.9 s of raster in 8 swipes), and the progress bar stepped ~4×/s via `timeupdate` + `width`. Smaller things: a growing `box-shadow` pulse and an animated conic-gradient ring repainted every frame; every card subscribed its own save listener that was only dropped at the next save; touch video previews started the moment Explore loaded; the galaxy view (the heaviest) was preloaded on every visit; on narrow cards the "Seen" badge ran under the save button.

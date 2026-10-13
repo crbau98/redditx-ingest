@@ -3,8 +3,8 @@
  * always loads fresh when online and still opens (showing its own error states)
  * when offline. API calls, media and admin traffic are NEVER cached: adult
  * content must not linger in a shared device cache. */
-const VERSION = 'prism-shell-v4.8';
-const SHELL = ['/', '/css/app.css', '/css/admin.css', '/js/main.js', '/favicon.svg', '/manifest.webmanifest'];
+const VERSION = 'prism-shell-v4.16';
+const SHELL = ['/', '/css/app.css', '/js/main.js', '/favicon.svg', '/manifest.webmanifest'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -46,7 +46,7 @@ self.addEventListener('fetch', (event) => {
   event.respondWith((async () => {
     try {
       const res = await fetch(req);
-      if (res.ok && (req.mode === 'navigate' || /^\/(css|js|vendor|v)\/|^\/(favicon\.svg|manifest\.webmanifest)$/.test(url.pathname))) {
+      if (res.ok && (req.mode === 'navigate' || /^\/(css|js|vendor|v|fonts)\/|^\/(favicon\.svg|manifest\.webmanifest)$/.test(url.pathname))) {
         const copy = res.clone();
         caches.open(VERSION).then((c) => c.put(req.mode === 'navigate' ? '/' : req, copy)).catch(() => {});
       }
