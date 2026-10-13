@@ -192,3 +192,14 @@ describe('duplicate creators', () => {
     assert.ok(groups.every((g) => g.every((c) => c.links === undefined)), 'raw links are not sent');
   });
 });
+
+describe('Reels taste signals', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'public', 'js', 'views', 'reels.js'), 'utf8');
+  test('dwell is settled when a slide stops being active, not when its buffer is torn down', () => {
+    assert.match(src, /if \(slides\[active\]\) \{ settle\(slides\[active\]\);/);
+    assert.doesNotMatch(src.match(/function activate\(s\) \{[\s\S]*?\n {2}\}/)[0], /tastes\.record/, 'no positive signal before the dwell is known');
+  });
+  test('later For you pages reuse the taste the session started with', () => {
+    assert.match(src, /tasteQ = \(page && tasteQ\) \|\| tastes\.query/);
+  });
+});

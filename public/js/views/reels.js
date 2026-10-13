@@ -25,6 +25,7 @@ export async function reels(root, { query }) {
   const set = (patch) => navigate('/reels', { ...f, ...patch }, { replace: true });
   const followIds = f.following ? follows.list().map((c) => c.id).slice(0, 100) : null;
   let seed = Math.floor(Math.random() * 1e6);
+  let tasteQ = null; // taste as of this session's first page, so later pages continue the same ranking
 
   const slides = [];
   let page = 0; let done = false; let loading = false; let active = -1; let destroyed = false;
@@ -164,12 +165,15 @@ export async function reels(root, { query }) {
     s.handle.promote();
     v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
   }
+  // How long a slide held attention tunes "For you": a quick swipe past counts against, a long look
+  // for. Settled the moment the slide stops being the active one (it may stay mounted as a buffer).
+  function settle(s) {
+    if (!s || !s.at) return;
+    const sec = (performance.now() - s.at) / 1000; s.at = 0;
+    if (sec < 1.2) tastes.skip(s.it); else tastes.record(s.it, sec >= (s.isVideo ? 8 : 5) ? 2 : 1);
+  }
   function deactivate(s) {
-    // How long it held attention tunes "For you": a quick swipe past counts against, a long look for.
-    if (s.at) {
-      const sec = (performance.now() - s.at) / 1000; s.at = 0;
-      if (sec < 1.2) tastes.skip(s.it); else tastes.record(s.it, sec >= (s.isVideo ? 8 : 5) ? 2 : 1);
-    }
+    settle(s);
     if (!s.isVideo) return;
     if (s.handle) { s.handle.destroy(); s.handle = null; }
     releaseVideo(s.stage.querySelector('video'));
@@ -190,7 +194,7 @@ export async function reels(root, { query }) {
 
   function setActive(i) {
     if (i === active || !slides[i]) return;
-    if (slides[active]) slides[active].el.classList.remove('is-active');
+    if (slides[active]) { settle(slides[active]); slides[active].el.classList.remove('is-active'); }
     active = i;
     slides[i].el.classList.add('is-active');
     slides.forEach((s, k) => {
@@ -213,7 +217,7 @@ export async function reels(root, { query }) {
     loading = true;
     try {
       const forYou = f.sort === 'foryou' && !f.creator && !f.tag && !f.tags && !f.anytags && !f.community && !f.q && !f.following && !f.platform && !f.after;
-      const res = forYou ? await get('/api/recommend', { ...tastes.query({ exclude: viewHistory.list().slice(0, 100) }), type: f.type === 'all' ? undefined : f.type, seed, page, limit: PAGE }) : await get('/api/media', {
+      const res = forYou ? await get('/api/recommend', { ...(tasteQ = (page && tasteQ) || tastes.query({ exclude: viewHistory.list().slice(0, 100) })), type: f.type === 'all' ? undefined : f.type, seed, page, limit: PAGE }) : await get('/api/media', {
         type: f.type === 'all' ? undefined : f.type, sort: f.sort === 'foryou' ? 'trending' : f.sort, platform: f.platform, tag: f.tag, tags: f.tags || undefined, anytags: f.anytags || undefined, since: f.since || undefined, after: f.after || undefined, community: f.community, creator: f.creator, q: f.q,
         creators: followIds ? (followIds.length ? followIds.join(',') : '00000000-0000-0000-0000-000000000000') : undefined,
         seed: f.sort === 'random' ? seed : undefined, page, limit: PAGE,
@@ -245,7 +249,7 @@ export async function reels(root, { query }) {
   /** Start over in place (a new shuffle) without a route change. */
   function restart() {
     slides.forEach((s) => { unmount(s); io.unobserve(s.el); });
-    slides.length = 0; page = 0; done = false; active = -1; seed = Math.floor(Math.random() * 1e6);
+    slides.length = 0; page = 0; done = false; active = -1; seed = Math.floor(Math.random() * 1e6); tasteQ = null;
     track.replaceChildren(); track.scrollTop = 0;
     load();
   }
