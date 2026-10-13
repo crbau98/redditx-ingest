@@ -25,6 +25,7 @@ function publicMedia(m) {
     creator_id: m.creator_id, creator_handle: m.creator_handle, creator_name: m.creator_name, creator_avatar: m.creator_avatar,
     tags: m.tags || (m.tags_text ? m.tags_text.split(' ').filter(Boolean).slice(0, 10) : []),
     position: m.position, post_key: m.post_key,
+    ...(m.reason ? { reason: m.reason } : {}),
   };
 }
 
@@ -221,22 +222,23 @@ router.get('/creators/:id/similar', (req, res) => {
   res.json(repo.creators.similar(c.id, repo.clampInt(req.query.limit, 1, 24, 12), { onlyfans: req.query.onlyfans === '1' }).map(publicCreator));
 });
 
-const csv = (v, re, max) => (typeof v === 'string' ? v.split(',').map((x) => x.trim()).filter((x) => re.test(x)).slice(0, max) : []);
-const UUID = /^[0-9a-f-]{36}$/i;
+const recs = require('../engine/recommend');
 router.get('/recommend', (req, res) => {
-  const q = req.query;
-  const video = q.video !== undefined && q.video !== '' && Number.isFinite(Number(q.video)) ? Math.min(1, Math.max(0, Number(q.video))) : null;
-  const r = repo.media.recommend({
-    tags: csv(q.tags, /^[\p{L}\p{N}-]{2,40}$/u, 20), creators: csv(q.creators, UUID, 40), platforms: csv(q.platforms, /^[a-z]{2,20}$/, 8),
-    video, exclude: csv(q.exclude, UUID, 200), seed: repo.clampInt(q.seed, 0, 2147483647, 1), type: q.type === 'image' || q.type === 'video' ? q.type : undefined,
-    page: repo.clampInt(q.page, 0, 1000, 0), limit: repo.clampInt(q.limit, 1, 60, 36),
-  });
+  const t = recs.tasteFromQuery(req.query, repo);
+  const r = recs.recommend(t);
   // Nothing to go on yet (new visitor): fall back to what is trending, so the rail is never empty.
+  // Whatever was marked "Not interested" stays out of the fallback too.
   if (!r.personalized) {
-    const t = repo.media.list({ sort: 'trending', page: r.page, limit: r.limit, type: q.type === 'image' || q.type === 'video' ? q.type : undefined });
-    return res.json({ ...t, items: t.items.map(publicMedia), personalized: false });
+    const tr = repo.media.list({ sort: 'trending', page: t.page, limit: t.limit, type: t.type, notCreators: [...t.avoidCreators], notTags: [...t.avoidTags] });
+    return res.json({ ...tr, items: tr.items.map(publicMedia), personalized: false });
   }
   res.json({ ...r, items: r.items.map(publicMedia) });
+});
+
+/** Creators you might like, from the same taste profile (exclude = creators already followed). */
+router.get('/recommend/creators', (req, res) => {
+  const t = recs.tasteFromQuery(req.query, repo);
+  res.json(recs.creatorsForYou(t, repo.clampInt(req.query.limit, 1, 30, 12)).map((c) => ({ ...publicCreator(c), reason: c.reason })));
 });
 
 router.get('/graph', (req, res) => res.json(graphCached()));

@@ -25,6 +25,7 @@ export async function reels(root, { query }) {
   const set = (patch) => navigate('/reels', { ...f, ...patch }, { replace: true });
   const followIds = f.following ? follows.list().map((c) => c.id).slice(0, 100) : null;
   let seed = Math.floor(Math.random() * 1e6);
+  let tasteQ = null; // taste as of this session's first page, so later pages continue the same ranking
 
   const slides = [];
   let page = 0; let done = false; let loading = false; let active = -1; let destroyed = false;
@@ -155,7 +156,7 @@ export async function reels(root, { query }) {
     mount(s);
     if (!viewed.has(s.it.id)) { viewed.add(s.it.id); post(`/api/media/${s.it.id}/view`).catch(() => {}); }
     viewHistory.add(s.it.id);
-    tastes.record(s.it, 1);
+    s.at = performance.now(); s.ms = 0; // the taste signal waits for how long it held attention (settle)
     if (!s.isVideo) return;
     const v = s.stage.querySelector('video');
     if (!v) return;
@@ -164,7 +165,18 @@ export async function reels(root, { query }) {
     s.handle.promote();
     v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
   }
+  // How long a slide held attention tunes "For you": a quick swipe past counts against, a long look
+  // for. Settled the moment the slide stops being the active one (it may stay mounted as a buffer);
+  // time with the tab hidden doesn't count. Leaving Reels (a tap on the creator, a route change) is
+  // not a swipe, so a teardown never counts as a skip.
+  const dwell = (s) => (s.ms || 0) + (s.at ? performance.now() - s.at : 0);
+  function settle(s, { teardown = false } = {}) {
+    if (!s || (!s.at && !s.ms)) return;
+    const sec = dwell(s) / 1000; s.at = 0; s.ms = 0;
+    if (sec < 1.2) { if (!teardown) tastes.skip(s.it); } else tastes.record(s.it, sec >= (s.isVideo ? 8 : 5) ? 2 : 1);
+  }
   function deactivate(s) {
+    settle(s, { teardown: true });
     if (!s.isVideo) return;
     if (s.handle) { s.handle.destroy(); s.handle = null; }
     releaseVideo(s.stage.querySelector('video'));
@@ -185,7 +197,7 @@ export async function reels(root, { query }) {
 
   function setActive(i) {
     if (i === active || !slides[i]) return;
-    if (slides[active]) slides[active].el.classList.remove('is-active');
+    if (slides[active]) { settle(slides[active]); slides[active].el.classList.remove('is-active'); }
     active = i;
     slides[i].el.classList.add('is-active');
     slides.forEach((s, k) => {
@@ -208,7 +220,7 @@ export async function reels(root, { query }) {
     loading = true;
     try {
       const forYou = f.sort === 'foryou' && !f.creator && !f.tag && !f.tags && !f.anytags && !f.community && !f.q && !f.following && !f.platform && !f.after;
-      const res = forYou ? await get('/api/recommend', { ...tastes.query({ exclude: viewHistory.list().slice(0, 100) }), type: f.type === 'all' ? undefined : f.type, seed, page, limit: PAGE }) : await get('/api/media', {
+      const res = forYou ? await get('/api/recommend', { ...(tasteQ = (page && tasteQ) || tastes.query({ exclude: viewHistory.list().slice(0, 100) })), type: f.type === 'all' ? undefined : f.type, seed, page, limit: PAGE }) : await get('/api/media', {
         type: f.type === 'all' ? undefined : f.type, sort: f.sort === 'foryou' ? 'trending' : f.sort, platform: f.platform, tag: f.tag, tags: f.tags || undefined, anytags: f.anytags || undefined, since: f.since || undefined, after: f.after || undefined, community: f.community, creator: f.creator, q: f.q,
         creators: followIds ? (followIds.length ? followIds.join(',') : '00000000-0000-0000-0000-000000000000') : undefined,
         seed: f.sort === 'random' ? seed : undefined, page, limit: PAGE,
@@ -240,7 +252,7 @@ export async function reels(root, { query }) {
   /** Start over in place (a new shuffle) without a route change. */
   function restart() {
     slides.forEach((s) => { unmount(s); io.unobserve(s.el); });
-    slides.length = 0; page = 0; done = false; active = -1; seed = Math.floor(Math.random() * 1e6);
+    slides.length = 0; page = 0; done = false; active = -1; seed = Math.floor(Math.random() * 1e6); tasteQ = null;
     track.replaceChildren(); track.scrollTop = 0;
     load();
   }
@@ -268,7 +280,11 @@ export async function reels(root, { query }) {
     bus.on('follow', () => slides.forEach((s) => s.paintFollow())),
   ];
   // Pause when the tab is hidden; resume when it returns.
-  const onVis = () => { const v = slides[active] && slides[active].stage.querySelector('video'); if (!v) return; if (document.hidden) v.pause(); else if (!lightboxOpen()) v.play().catch(() => {}); };
+  const onVis = () => {
+    const cur = slides[active];
+    if (cur && document.hidden && cur.at) { cur.ms = dwell(cur); cur.at = 0; } // pause the dwell clock
+    else if (cur && !document.hidden && !cur.at && cur.ms) cur.at = performance.now();
+    const v = cur && cur.stage.querySelector('video'); if (!v) return; if (document.hidden) v.pause(); else if (!lightboxOpen()) v.play().catch(() => {}); };
   document.addEventListener('visibilitychange', onVis);
   // The viewer has its own player: pause ours while it is open.
   const onHash = () => { const v = slides[active] && slides[active].stage.querySelector('video'); if (v && lightboxOpen()) v.pause(); };

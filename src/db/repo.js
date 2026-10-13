@@ -268,7 +268,6 @@ const creators = {
 // Tags that say nothing about a creator's style (platform names, generic words).
 const GENERIC_TAGS = new Set([...PLATFORM_TAGS, 'gay', 'nsfw', 'video', 'photo', 'image']);
 
-/** Creators who post in a similar style: shared tags, weighting rare tags higher than common ones. */
 /*
  * Library snapshot: tag counts and each creator's tag profile over public media, built in one
  * aggregate pass and shared by autocomplete, related tags and similar creators (which otherwise
@@ -295,7 +294,9 @@ function buildLibrary() {
   }
   const tagList = [...tagCount.entries()].filter(([n]) => !PLATFORM_TAGS.includes(n)).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
   const total = db.prepare("SELECT COUNT(*) AS n FROM media WHERE publish_state = 'published' AND scope != 'excluded'").get().n;
-  return { tagCount, creatorTags, tagCreators, tagList, total };
+  // Creators that may be shown (similarity indexes only these, so hidden ones never take a slot).
+  const visibleCreators = new Set(db.prepare("SELECT id FROM creators WHERE status = 'active' AND scope != 'excluded'").all().map((r) => r.id));
+  return { tagCount, creatorTags, tagCreators, tagList, total, visibleCreators };
 }
 function library() {
   const v = changesV.get().v;
@@ -307,22 +308,13 @@ function library() {
   return snap.data;
 }
 
+/**
+ * Creators who post in a similar style: cosine similarity of tf-idf tag profiles (rare tags count
+ * for more than common ones), served from an index built once per library snapshot.
+ * "OnlyFans creators like him" draws from a wider pool, since only some creators have a page.
+ */
 creators.similar = function similar(id, limit = 12, { onlyfans: ofOnly = false } = {}) {
-  const lib = library();
-  const own = lib.creatorTags.get(id);
-  if (!own) return [];
-  const mine = [...own.entries()].filter(([t]) => !GENERIC_TAGS.has(t)).sort((a, b) => b[1] - a[1]).slice(0, 25).map(([t]) => t);
-  if (!mine.length) return [];
-  const weight = new Map(mine.map((t) => [t, 1 / ((lib.tagCount.get(t) || 0) + 5)]));
-  const score = new Map();
-  for (const [cid, tags] of lib.creatorTags) {
-    if (cid === id) continue;
-    let sc = 0;
-    for (const t of mine) if (tags.has(t)) sc += weight.get(t);
-    if (sc) score.set(cid, sc);
-  }
-  // "OnlyFans creators like him" draws from a wider pool, since only some creators have a page.
-  const top = [...score.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit * (ofOnly ? 10 : 2)).map(([cid]) => cid);
+  const top = require('../lib/similarity').neighbours(library(), GENERIC_TAGS, id, limit * (ofOnly ? 10 : 2)).map(([cid]) => cid);
   if (!top.length) return [];
   const found = db.prepare(`${SELECT_CREATOR_CARD} WHERE c.id IN (${top.map(() => '?').join(',')}) AND c.status = 'active' AND c.scope != 'excluded' AND c.media_count > 0${ofOnly ? " AND c.links GLOB '*onlyfans.com/[A-Za-z0-9]*'" : ''}`)
     .all(...top).map(serializeCreator);
@@ -330,17 +322,93 @@ creators.similar = function similar(id, limit = 12, { onlyfans: ofOnly = false }
   return found.slice(0, limit);
 };
 
-/** Groups of creators whose handles collapse to the same string (probable duplicates across platforms). */
+/**
+ * Probable duplicate creators (the same person added twice, usually from different platforms).
+ * Evidence, strongest first: the same link-in-bio / profile link, the same profile picture, handles
+ * that collapse to the same string once punctuation and filler suffixes (_xo, _fit, official…) go,
+ * handles one typo apart, and the same display name with a similar posting style. Each group lists
+ * the creator to keep first (most posts); every other member carries `match`: why it was grouped.
+ */
 creators.duplicates = function duplicates() {
-  const norm = (h) => String(h || '').toLowerCase().replace(/[^a-z0-9]/g, '').replace(/(official|xo|fit|real|the)+$/g, '');
-  const groups = new Map();
-  for (const c of db.prepare("SELECT id, handle, display_name, avatar_url, media_count, status FROM creators WHERE status != 'blocked'").all()) {
-    const key = norm(c.handle);
-    if (key.length < 4) continue;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(c);
+  const core = (h) => String(h || '').toLowerCase().replace(/@.*$/, '').replace(/\.(bsky\.social|social)$/, '').replace(/[^a-z0-9]/g, '').replace(/(official|xo|fit|real|the|xxx|tv|vip)+$/g, '').replace(/^(the|real|its|im)/, '');
+  const nameKey = (n) => String(n || '').toLowerCase().normalize('NFKD').replace(/[^a-z]/g, '');
+  const linkKey = (u) => {
+    try {
+      const x = new URL(u);
+      const path = x.pathname.replace(/\/+$/, '').toLowerCase();
+      if (path.length < 3) return null; // a bare site says nothing about who
+      return `${x.hostname.replace(/^www\./, '').toLowerCase()}${path}`;
+    } catch { return null; }
+  };
+  const rows = db.prepare("SELECT id, handle, display_name, avatar_url, links, media_count, status FROM creators WHERE status != 'blocked'").all();
+  const parent = new Map(rows.map((r) => [r.id, r.id]));
+  const find = (x) => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
+  const why = new Map(); // id -> Set(reason)
+  const join = (a, b, reason) => {
+    if (a === b) return;
+    for (const id of [a, b]) { if (!why.has(id)) why.set(id, new Set()); why.get(id).add(reason); }
+    const ra = find(a); const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+  const bucket = (keyFn, reason, minLen = 1) => {
+    const first = new Map();
+    for (const r of rows) {
+      for (const k of [].concat(keyFn(r) || [])) {
+        if (!k || k.length < minLen) continue;
+        if (first.has(k)) join(first.get(k), r.id, typeof reason === 'function' ? reason(k) : reason); else first.set(k, r.id);
+      }
+    }
+  };
+  bucket((r) => { try { return JSON.parse(r.links || '[]').map((l) => linkKey(l && l.url)).filter(Boolean); } catch { return []; } }, (k) => `same link (${k})`, 6);
+  // A picture alone is weak evidence (instances hand out shared default avatars): only a URL no more
+  // than two creators use, that doesn't look like a placeholder, and only with a matching name or style.
+  const avatarUses = new Map();
+  for (const r of rows) if (r.avatar_url) avatarUses.set(r.avatar_url, (avatarUses.get(r.avatar_url) || 0) + 1);
+  const firstPic = new Map(); const lib0 = library(); const sim0 = require('../lib/similarity');
+  for (const r of rows) {
+    const u = r.avatar_url;
+    if (!u || u.length < 10 || avatarUses.get(u) > 2 || /(default|missing|placeholder|anonymous|no[-_]?avatar|blank)/i.test(u)) continue;
+    const o = firstPic.get(u);
+    if (!o) { firstPic.set(u, r); continue; }
+    const sameName = nameKey(o.display_name).length >= 4 && nameKey(o.display_name) === nameKey(r.display_name);
+    if (sameName || sim0.between(lib0, GENERIC_TAGS, o.id, r.id) >= 0.2) join(o.id, r.id, 'same profile picture');
   }
-  return [...groups.values()].filter((g) => g.length > 1).map((g) => g.sort((a, b) => b.media_count - a.media_count));
+  bucket((r) => core(r.handle), 'same handle', 4);
+  // One typo apart: every handle's single-character deletions meet in a shared key.
+  const del = new Map();
+  for (const r of rows) {
+    const c = core(r.handle);
+    if (c.length < 6) continue;
+    const keys = new Set([c]);
+    for (let i = 0; i < c.length; i++) keys.add(c.slice(0, i) + c.slice(i + 1));
+    for (const k of keys) { if (!del.has(k)) del.set(k, []); del.get(k).push(r.id); }
+  }
+  const coreOf = new Map(rows.map((r) => [r.id, core(r.handle)]));
+  const digits = (id) => coreOf.get(id).replace(/\D/g, '');
+  for (const ids of del.values()) {
+    if (ids.length < 2 || ids.length > 4) continue;
+    // Numbered handles (jake1, jake2) are as often different people as backups: a typo must be in the letters.
+    for (const other of ids.slice(1)) if (find(other) !== find(ids[0]) && digits(other) === digits(ids[0])) join(ids[0], other, 'nearly the same handle');
+  }
+  // Same display name: only with a similar style too, since first names repeat.
+  const lib = library(); const similarity = require('../lib/similarity');
+  const byName = new Map();
+  for (const r of rows) { const k = nameKey(r.display_name); if (k.length >= 5) { if (!byName.has(k)) byName.set(k, []); byName.get(k).push(r.id); } }
+  for (const ids of byName.values()) {
+    if (ids.length < 2 || ids.length > 6) continue;
+    for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
+      if (similarity.between(lib, GENERIC_TAGS, ids[i], ids[j]) >= 0.3) join(ids[i], ids[j], 'same name, similar posts');
+    }
+  }
+  const groups = new Map();
+  for (const r of rows) {
+    const root = find(r.id);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(r);
+  }
+  return [...groups.values()].filter((g) => g.length > 1)
+    .map((g) => g.sort((a, b) => b.media_count - a.media_count).map(({ links, ...c }, i) => (i === 0 ? c : { ...c, match: [...(why.get(c.id) || [])] })))
+    .sort((a, b) => b.reduce((n, c) => n + c.media_count, 0) - a.reduce((n, c) => n + c.media_count, 0));
 };
 
 /**
@@ -637,6 +705,8 @@ const SORTS = {
   ingested: 'm.ingested_at DESC, m.seq DESC',
 };
 const SINCE_DAYS = { day: 1, week: 7, month: 30, year: 365 };
+// BM25 column weights for media_fts(title, author, community, tags_text, description).
+const FTS_WEIGHTS = '5.0, 4.0, 2.0, 4.0, 1.0';
 
 const MEDIA_SELECT = `SELECT m.*, c.handle AS creator_handle, c.display_name AS creator_name, c.avatar_url AS creator_avatar
   FROM media m LEFT JOIN creators c ON c.id = m.creator_id`;
@@ -678,6 +748,14 @@ function buildMediaWhere(f) {
   if (Array.isArray(f.creators)) {
     if (!f.creators.length) where.push('0=1');
     else { where.push(`m.creator_id IN (${f.creators.map(() => '?').join(',')})`); params.push(...f.creators); }
+  }
+  // what the viewer asked to see less of ("Not interested")
+  if (Array.isArray(f.notCreators) && f.notCreators.length) {
+    where.push(`(m.creator_id IS NULL OR m.creator_id NOT IN (${f.notCreators.map(() => '?').join(',')}))`); params.push(...f.notCreators);
+  }
+  if (Array.isArray(f.notTags) && f.notTags.length) {
+    const list = f.notTags.slice(0, 30).map(cleanTag);
+    where.push(`m.id NOT IN (SELECT mt.media_id FROM media_tags mt JOIN tags t ON t.id = mt.tag_id WHERE t.name IN (${list.map(() => '?').join(',')}))`); params.push(...list);
   }
   if (Array.isArray(f.ids)) {
     if (!f.ids.length) where.push('0=1');
@@ -870,15 +948,17 @@ const media = {
     const page = clampInt(f.page, 0, 100000, 0);
     const { where, params } = buildMediaWhere(f);
     const match = ftsQuery(f.q);
-    let join = '';
+    let join = false;
     let order;
     const joinParams = [];
     if (f.q && !match) where.push('0=1'); // query had no searchable tokens
     if (match) {
       if (!f.sort || f.sort === 'relevance') {
-        join = 'JOIN (SELECT rowid AS rid, rank FROM media_fts WHERE media_fts MATCH ?) fts ON fts.rid = m.seq';
+        join = true;
         joinParams.push(match);
-        order = 'fts.rank, m.posted_at DESC, m.seq DESC';
+        // Best match: BM25 with a hit in the title, creator or tags counting for more than one in a
+        // long description, nudged by popularity so a well-liked exact match beats an obscure one.
+        order = 'fts.rank * (1 + 0.12 * ln(1 + MAX(m.hot, 0))), m.posted_at DESC, m.seq DESC';
       } else {
         where.push('m.seq IN (SELECT rowid FROM media_fts WHERE media_fts MATCH ?)');
         params.push(match);
@@ -893,7 +973,7 @@ const media = {
     const forced = !join && f.sort !== 'random' ? sortIndexFor(f, SORTS[f.sort] ? f.sort : 'recent', where) : null;
     // With a text match, CROSS JOIN pins the loop order: run the MATCH once, then look rows up by key.
     const base = join
-      ? `FROM (SELECT rowid AS rid, rank FROM media_fts WHERE media_fts MATCH ?) fts CROSS JOIN media m ON m.seq = fts.rid LEFT JOIN creators c ON c.id = m.creator_id WHERE ${whereSql}`
+      ? `FROM (SELECT rowid AS rid, bm25(media_fts, ${FTS_WEIGHTS}) AS rank FROM media_fts WHERE media_fts MATCH ?) fts CROSS JOIN media m ON m.seq = fts.rid LEFT JOIN creators c ON c.id = m.creator_id WHERE ${whereSql}`
       : `FROM media m${forced ? ` INDEXED BY ${forced}` : ''} LEFT JOIN creators c ON c.id = m.creator_id WHERE ${whereSql}`;
     // Count with an IN-subquery, never the FTS join: with the join SQLite may drive the loop from
     // media and re-run the MATCH once per row (minutes on a large library instead of milliseconds).
@@ -905,70 +985,50 @@ const media = {
     return { items: rows.map(serializeMedia), total, page, limit };
   },
 
+  /**
+   * "More like this": the rest of the same post, a few from the same creator, then posts sharing
+   * the most *distinctive* tags (a shared rare tag counts for more than a shared common one), then
+   * the best posts of creators with a similar style, then more from the creator and the community.
+   */
   related(id, limit = 12) {
     const m = db.prepare('SELECT id, creator_id, post_key, community FROM media WHERE id = ?').get(id);
     if (!m) return [];
     const seen = new Set([id]);
     const out = [];
-    const take = (rows) => { for (const r of rows) { if (!seen.has(r.id) && out.length < limit) { seen.add(r.id); out.push(serializeMedia(r)); } } };
-    const pub = "m.publish_state = 'published' AND m.scope != 'excluded'";
+    const take = (rows, cap = limit) => { let n = 0; for (const r of rows) { if (!seen.has(r.id) && out.length < limit && n < cap) { seen.add(r.id); out.push(serializeMedia(r)); n++; } } };
+    const pub = "m.publish_state = 'published' AND m.scope != 'excluded' AND (m.creator_id IS NULL OR m.creator_id NOT IN (SELECT id FROM creators WHERE status != 'active' OR scope = 'excluded'))";
     if (m.post_key) take(db.prepare(`${MEDIA_SELECT} WHERE m.post_key = ? AND m.id != ? AND ${pub} ORDER BY m.position LIMIT ?`).all(m.post_key, id, limit));
-    if (m.creator_id && out.length < limit) take(db.prepare(`${MEDIA_SELECT} WHERE m.creator_id = ? AND m.id != ? AND ${pub} ORDER BY m.score DESC LIMIT ?`).all(m.creator_id, id, limit));
+    const own = m.creator_id ? db.prepare(`${MEDIA_SELECT} WHERE m.creator_id = ? AND m.id != ? AND ${pub} ORDER BY m.score DESC LIMIT ?`).all(m.creator_id, id, limit) : [];
+    take(own, Math.max(3, Math.ceil(limit / 3)));
     if (out.length < limit) {
-      take(db.prepare(`${MEDIA_SELECT} WHERE m.id IN (
-          SELECT mt2.media_id FROM media_tags mt1 JOIN media_tags mt2 ON mt1.tag_id = mt2.tag_id
-          WHERE mt1.media_id = ? AND mt2.media_id != ? GROUP BY mt2.media_id ORDER BY COUNT(*) DESC LIMIT 60) AND ${pub}
-        ORDER BY m.score DESC LIMIT ?`).all(id, id, limit));
+      // Very common tags would join against most of the library and say little; skip them.
+      const ranked = db.prepare(`SELECT mt2.media_id AS id, SUM(1.0 / ln(2 + t.usage_count)) AS w
+          FROM media_tags mt1 JOIN tags t ON t.id = mt1.tag_id JOIN media_tags mt2 ON mt2.tag_id = mt1.tag_id
+          WHERE mt1.media_id = ? AND mt2.media_id != ? AND t.usage_count <= 5000 AND t.name NOT IN (${PLATFORM_TAGS_SQL}, 'gay', 'nsfw', 'video', 'photo', 'image')
+          GROUP BY mt2.media_id ORDER BY w DESC LIMIT 80`).all(id, id);
+      if (ranked.length) {
+        const byId = new Map(db.prepare(`${MEDIA_SELECT} WHERE m.id IN (${ranked.map(() => '?').join(',')}) AND ${pub}`).all(...ranked.map((r) => r.id)).map((r) => [r.id, r]));
+        // Variety: no more than two from any one other creator.
+        const per = new Map();
+        take(ranked.map((r) => byId.get(r.id)).filter((r) => {
+          if (!r) return false;
+          const k = r.creator_id || r.id; const n = per.get(k) || 0;
+          if (r.creator_id === m.creator_id || n >= 2) return false;
+          per.set(k, n + 1); return true;
+        }));
+      }
     }
+    if (out.length < limit && m.creator_id) {
+      const near = require('../lib/similarity').neighbours(library(), GENERIC_TAGS, m.creator_id, 6).map(([cid]) => cid);
+      if (near.length) {
+        take(db.prepare(`SELECT * FROM (SELECT m.*, c.handle AS creator_handle, c.display_name AS creator_name, c.avatar_url AS creator_avatar,
+            ROW_NUMBER() OVER (PARTITION BY m.creator_id ORDER BY m.score DESC) AS rn
+          FROM media m LEFT JOIN creators c ON c.id = m.creator_id WHERE m.creator_id IN (${near.map(() => '?').join(',')}) AND ${pub}) WHERE rn <= 2 ORDER BY rn, score DESC`).all(...near).map((r) => { delete r.rn; return r; }));
+      }
+    }
+    if (out.length < limit) take(own);
     if (out.length < limit && m.community) take(db.prepare(`${MEDIA_SELECT} WHERE m.community = ? AND m.id != ? AND ${pub} ORDER BY m.score DESC LIMIT ?`).all(m.community, id, limit));
     return out;
-  },
-
-  /**
-   * Personal recommendations from a taste profile the *client* sends (tags, creators, sources it
-   * engages with — the server keeps nothing per visitor). Items matching the taste rank by how
-   * well they match, blended with freshness/popularity and a little seeded jitter for variety;
-   * no creator takes more than two slots per page.
-   */
-  recommend({ tags = [], creators: cids = [], platforms: plats = [], video = null, type, exclude = [], seed = 1, page = 0, limit = 36 } = {}) {
-    const tagIds = tags.length ? db.prepare(`SELECT id FROM tags WHERE name IN (${tags.map(() => '?').join(',')})`).all(...tags.map(cleanTag)).map((r) => r.id) : [];
-    if (!tagIds.length && !cids.length) return { items: [], total: 0, page, limit, personalized: false };
-    const inList = (arr) => arr.map(() => '?').join(',');
-    const match = [];
-    const matchParams = [];
-    if (cids.length) { match.push(`m.creator_id IN (${inList(cids)})`); matchParams.push(...cids); }
-    if (tagIds.length) { match.push(`m.id IN (SELECT media_id FROM media_tags WHERE tag_id IN (${inList(tagIds)}))`); matchParams.push(...tagIds); }
-    const where = ["m.publish_state = 'published'", "m.scope != 'excluded'", "(m.creator_id IS NULL OR m.creator_id NOT IN (SELECT id FROM creators WHERE status != 'active'))", `(${match.join(' OR ')})`];
-    const whereParams = [...matchParams];
-    if (exclude.length) { where.push(`m.id NOT IN (${inList(exclude)})`); whereParams.push(...exclude); }
-    if (type === 'image' || type === 'video') { where.push('m.media_type = ?'); whereParams.push(type); }
-    const scoreSql = `
-      (CASE WHEN ${cids.length ? `m.creator_id IN (${inList(cids)})` : '0'} THEN 3.0 ELSE 0 END)
-      + ${tagIds.length ? `1.2 * (SELECT COUNT(*) FROM media_tags mt WHERE mt.media_id = m.id AND mt.tag_id IN (${inList(tagIds)}))` : '0'}
-      + (CASE WHEN ${plats.length ? `m.platform IN (${inList(plats)})` : '0'} THEN 0.5 ELSE 0 END)
-      + (CASE WHEN ? IS NULL THEN 0 WHEN m.media_type = 'video' THEN ? ELSE 1 - ? END)
-      + MIN(m.hot, 10) / 5.0
-      + (hash_seed(m.id, ?) % 1000) / 1400.0`;
-    const scoreParams = [...cids, ...tagIds, ...plats, video, video, video, seed | 0];
-    const total = cachedCount(`SELECT COUNT(*) AS n FROM media m WHERE ${where.join(' AND ')}`, whereParams);
-    // Score only the hottest matches (walked in hot order, so it stops early) instead of every match:
-    // on a large library a broad taste matches tens of thousands of rows, and the per-row tag count
-    // dominates. The cap still leaves ~50 pages before the pool runs dry.
-    const POOL = Math.max(3000, (page + 2) * limit * 2);
-    const pool = db.prepare(`SELECT m.*, c.handle AS creator_handle, c.display_name AS creator_name, c.avatar_url AS creator_avatar, ${scoreSql} AS rec
-      FROM (SELECT * FROM media m INDEXED BY ix_media_pub_hot WHERE ${where.join(' AND ')} ORDER BY m.hot DESC LIMIT ${POOL}) m
-      LEFT JOIN creators c ON c.id = m.creator_id
-      ORDER BY rec DESC, m.seq DESC LIMIT ? OFFSET ?`).all(...scoreParams, ...whereParams, limit * 2, page * limit * 2);
-    // Diversity: walk the pool in score order, letting each creator take at most two slots per page.
-    const perCreator = new Map(); const out = []; const spill = [];
-    for (const r of pool) {
-      const k = r.creator_id || r.id;
-      const n = perCreator.get(k) || 0;
-      if (n < 2) { perCreator.set(k, n + 1); out.push(r); } else spill.push(r);
-      if (out.length >= limit) break;
-    }
-    while (out.length < limit && spill.length) out.push(spill.shift());
-    return { items: out.map((r) => { const m = serializeMedia(r); delete m.rec; return m; }), total, page, limit, personalized: true };
   },
 
   /**
@@ -1376,5 +1436,6 @@ function discoveryTargets({ platform, prefix, staleDays, limit, minMedia = 1, ma
 module.exports = {
   db, nowIso, clampInt, cleanTag, ftsQuery, settings, hosts, blocklist, logAction, suggest, audit,
   creators, feeds, runs, media, reports, addTags, publicStats, adminOverview, discover,
-  candidates, discoveryState, onlyfans, mentionSource, discoveryTargets, communityHangouts, PLATFORM_TAGS, tagIntel, library,
+  candidates, discoveryState, onlyfans, mentionSource, discoveryTargets, communityHangouts, PLATFORM_TAGS, GENERIC_TAGS, tagIntel, library,
+  serializeMedia, serializeCreator, SELECT_CREATOR_CARD,
 };

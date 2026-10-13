@@ -17,8 +17,15 @@ import { topicCards, becauseRails } from '../components/topics.js';
 /** "For you": a rail ranked from this device's taste, with the taste shown (and editable) right there. */
 async function forYouSection(open) {
   if (!tastes.ready()) return null;
-  let res;
-  try { res = await get('/api/recommend', { ...tastes.query({ exclude: viewHistory.list().slice(0, 60) }), limit: 18, seed: Math.floor(Math.random() * 1e6) }); } catch { return null; }
+  let res; let people = [];
+  const q = tastes.query({ exclude: viewHistory.list().slice(0, 60) });
+  try {
+    [res, people] = await Promise.all([
+      get('/api/recommend', { ...q, limit: 18, seed: Math.floor(Math.random() * 1e6) }),
+      // Creators like the ones you engage with, minus the ones you already follow.
+      get('/api/recommend/creators', { tags: q.tags, creators: q.creators, avoid_creators: q.avoid_creators, exclude: follows.list().map((c) => c.id).slice(0, 150).join(',') || undefined, limit: 12 }).catch(() => []),
+    ]);
+  } catch { return null; }
   if (!res.items.length) return null;
   const chips = h('div', { class: 'row wrap taste-chips' });
   const paintChips = () => chips.replaceChildren(h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Tuned to'),
@@ -29,7 +36,10 @@ async function forYouSection(open) {
     sectionHead('sparkle', 'For you', 'Picked from what you watch, save and follow — learned on this device only', { href: href('/explore', { sort: 'foryou' }), label: 'See all' }),
     chips,
     h('div', { class: 'rail' }, res.items.map((it) => mediaCard(it, { open: open(res.items), compact: false, why: tastes.why(it) }))),
-    h('a', { class: 'btn sm', href: href('/reels', { sort: 'foryou', type: 'all' }), style: { marginTop: '6px' } }, icon('film', 'sm'), 'Play For you as Reels'));
+    h('a', { class: 'btn sm', href: href('/reels', { sort: 'foryou', type: 'all' }), style: { marginTop: '6px' } }, icon('film', 'sm'), 'Play For you as Reels'),
+    people.length >= 3 ? h('div', { class: 'stack', style: { marginTop: '18px' } },
+      h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase' } }, 'Creators you might like'),
+      h('div', { class: 'rail' }, people.map((c) => creatorCard(c, { mini: true, badge: c.reason })))) : null);
 }
 
 /**

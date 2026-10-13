@@ -193,57 +193,89 @@ export const searches = {
 
 /* ---------------------------------------------------------------- taste */
 // A small, decaying model of what this device likes: tags, creators, sources and the
-// photo/video mix, learned from views, saves, collections and follows. It powers "For you"
-// and is sent to the server only as a short query (top tags / creators), never stored there.
+// photo/video mix, learned from views (longer looks count more, quick skips count against),
+// saves, collections and follows, plus what you asked to see less of. It powers "For you" and
+// is sent to the server only as a short weighted query, never stored there.
 const TASTE_KEY = 'prism.taste';
 const HALF_LIFE_DAYS = 21;
-let taste = read(TASTE_KEY, { t: {}, c: {}, p: {}, video: 0, image: 0, at: Date.now(), events: 0 });
+const blankTaste = () => ({ t: {}, c: {}, p: {}, n: { t: {}, c: {} }, video: 0, image: 0, at: Date.now(), events: 0 });
+let taste = { ...blankTaste(), ...read(TASTE_KEY, {}) };
+if (!taste.n) taste.n = { t: {}, c: {} };
 const decayTaste = () => {
   const days = (Date.now() - (taste.at || Date.now())) / 86400000;
   if (days < 0.5) return;
   const f = 0.5 ** (days / HALF_LIFE_DAYS);
-  for (const k of ['t', 'c', 'p']) for (const key of Object.keys(taste[k])) { taste[k][key] *= f; if (taste[k][key] < 0.05) delete taste[k][key]; }
+  for (const obj of [taste.t, taste.c, taste.p, taste.n.t, taste.n.c]) for (const key of Object.keys(obj)) { obj[key] *= f; if (obj[key] < 0.05) delete obj[key]; }
   taste.video *= f; taste.image *= f; taste.at = Date.now();
 };
 const trim = (obj, n) => Object.fromEntries(Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, n));
 let tasteTimer = null;
 const saveTaste = () => { clearTimeout(tasteTimer); tasteTimer = setTimeout(() => { write(TASTE_KEY, taste); bus.emit('taste', null); }, 400); };
 const GENERIC = new Set(['reddit', 'redgifs', 'bluesky', 'mastodon', 'misskey', 'tumblr', 'peertube', 'lemmy', 'x', 'telegram', 'rss', 'web', 'gay', 'nsfw']);
+const styleTags = (item, n = 8) => (item.tags || []).filter((x) => !GENERIC.has(x)).slice(0, n);
+const lower = (obj, key, by) => { if (obj[key] === undefined) return; obj[key] -= by; if (obj[key] < 0.05) delete obj[key]; };
+const weighted = (obj, n) => Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, w]) => `${k}:${Math.max(0.1, w).toFixed(1)}`).join(',');
 export const tastes = {
-  /** weight: view 1 · collect 3 · save 4 · follow 5 */
+  /** weight: view 1 · long look 1 more · collect 3 · save 4 · follow 5 */
   record(item, weight = 1) {
     if (!item || prefs.historyOff) return;
     decayTaste();
-    for (const tg of (item.tags || []).filter((x) => !GENERIC.has(x)).slice(0, 8)) taste.t[tg] = (taste.t[tg] || 0) + weight;
-    if (item.creator_id) taste.c[item.creator_id] = (taste.c[item.creator_id] || 0) + weight * 1.5;
+    for (const tg of styleTags(item)) { taste.t[tg] = (taste.t[tg] || 0) + weight; lower(taste.n.t, tg, weight * 0.5); }
+    if (item.creator_id) { taste.c[item.creator_id] = (taste.c[item.creator_id] || 0) + weight * 1.5; lower(taste.n.c, item.creator_id, weight); }
     if (item.platform) taste.p[item.platform] = (taste.p[item.platform] || 0) + weight * 0.5;
     if (item.media_type === 'video') taste.video += weight; else taste.image += weight;
     taste.events = (taste.events || 0) + 1;
     taste.t = trim(taste.t, 80); taste.c = trim(taste.c, 80); taste.p = trim(taste.p, 12);
     saveTaste();
   },
-  recordCreator(id, weight = 5) { if (!id || prefs.historyOff) return; decayTaste(); taste.c[id] = (taste.c[id] || 0) + weight; taste.c = trim(taste.c, 80); saveTaste(); },
-  forgetTag(tag) { delete taste.t[tag]; saveTaste(); },
-  reset() { taste = { t: {}, c: {}, p: {}, video: 0, image: 0, at: Date.now(), events: 0 }; write(TASTE_KEY, taste); bus.emit('taste', null); },
+  /**
+   * Swiped past almost at once: a small step away from its tags and creator. What you had no liking
+   * for yet builds up a negative instead, so a creator skipped three times or so drops out of
+   * "For you" (avoid at 2) and a tag skipped repeatedly sinks (avoid at 1); both decay like the rest.
+   */
+  skip(item) {
+    if (!item || prefs.historyOff) return;
+    decayTaste();
+    for (const tg of styleTags(item, 6)) { if (taste.t[tg]) lower(taste.t, tg, 0.6); else taste.n.t[tg] = (taste.n.t[tg] || 0) + 0.25; }
+    if (item.creator_id) { if (taste.c[item.creator_id]) lower(taste.c, item.creator_id, 0.9); else taste.n.c[item.creator_id] = (taste.n.c[item.creator_id] || 0) + 0.7; }
+    taste.n.t = trim(taste.n.t, 40); taste.n.c = trim(taste.n.c, 100);
+    saveTaste();
+  },
+  /** "Not interested": stop recommending this creator and push its tags down. */
+  dislike(item) {
+    if (!item) return;
+    decayTaste();
+    for (const tg of styleTags(item, 3)) { taste.n.t[tg] = (taste.n.t[tg] || 0) + 1; if (taste.t[tg]) taste.t[tg] *= 0.5; }
+    if (item.creator_id) { taste.n.c[item.creator_id] = (taste.n.c[item.creator_id] || 0) + 3; delete taste.c[item.creator_id]; }
+    taste.n.t = trim(taste.n.t, 40); taste.n.c = trim(taste.n.c, 100);
+    saveTaste();
+  },
+  recordCreator(id, weight = 5) { if (!id || prefs.historyOff) return; decayTaste(); taste.c[id] = (taste.c[id] || 0) + weight; delete taste.n.c[id]; taste.c = trim(taste.c, 80); saveTaste(); },
+  /** "Show less #tag". */
+  forgetTag(tag) { delete taste.t[tag]; taste.n.t[tag] = (taste.n.t[tag] || 0) + 1.5; saveTaste(); },
+  reset() { taste = blankTaste(); write(TASTE_KEY, taste); bus.emit('taste', null); },
   /** Enough signal to personalise? */
   ready: () => (taste.events || 0) >= 3 && (Object.keys(taste.t).length > 0 || Object.keys(taste.c).length > 0),
   topTags: (n = 8) => Object.entries(taste.t).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k]) => k),
-  /** A short human reason an item was picked for you ("A creator you like", "#beach"), or null. */
+  /** A short human reason an item was picked for you ("A creator you like", "#beach", "Like @jake"), or null. */
   why(item) {
     if (!item) return null;
+    if (item.reason) return item.reason;
     const creators = Object.entries(taste.c).sort((a, b) => b[1] - a[1]).slice(0, 25).map(([k]) => k);
     if (item.creator_id && creators.includes(item.creator_id)) return 'A creator you like';
     const top = Object.entries(taste.t).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([k]) => k);
     const hit = (item.tags || []).find((t) => top.includes(t));
     return hit ? `#${hit}` : null;
   },
-  /** Query parameters for /api/recommend. */
+  /** Query parameters for /api/recommend (weighted: "beach:3.5,beard:1.2"). */
   query({ exclude = [] } = {}) {
     decayTaste();
-    const top = (obj, n) => Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k]) => k);
     const total = taste.video + taste.image;
+    const avoid = (obj, min) => Object.entries(obj).filter(([, w]) => w >= min).sort((a, b) => b[1] - a[1]).map(([k]) => k);
     return {
-      tags: top(taste.t, 12).join(','), creators: top(taste.c, 25).join(','), platforms: top(taste.p, 4).join(','),
+      tags: weighted(taste.t, 16), creators: weighted(taste.c, 30), platforms: weighted(taste.p, 4),
+      avoid_tags: avoid(taste.n.t, 1).slice(0, 20).join(',') || undefined,
+      avoid_creators: avoid(taste.n.c, 2).slice(0, 60).join(',') || undefined,
       video: total >= 5 ? (taste.video / total).toFixed(2) : undefined,
       exclude: exclude.slice(0, 150).join(',') || undefined,
     };

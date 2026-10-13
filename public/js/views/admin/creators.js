@@ -110,14 +110,14 @@ async function duplicatesDialog(onDone) {
   const body = groups.length ? h('div', { class: 'stack' }, groups.map((g) => {
     const keep = g[0];
     return h('div', { class: 'panel' },
-      h('div', { class: 'stack', style: { gap: '8px' } }, g.map((c, i) => h('div', { class: 'row' }, avatar(c, 30), h('span', { class: 'grow' }, `${c.display_name || c.handle} · @${c.handle}`), h('span', { class: 'muted' }, `${c.media_count} posts`), i === 0 ? h('span', { class: 'badge good' }, 'keep') : null))),
+      h('div', { class: 'stack', style: { gap: '8px' } }, g.map((c, i) => h('div', { class: 'row' }, avatar(c, 30), h('span', { class: 'grow' }, `${c.display_name || c.handle} · @${c.handle}`, c.match && c.match.length ? h('span', { class: 'muted', style: { display: 'block', fontSize: '12px' } }, c.match.join(' · ')) : null), h('span', { class: 'muted' }, `${c.media_count} posts`), i === 0 ? h('span', { class: 'badge good' }, 'keep') : null))),
       h('div', { class: 'row', style: { marginTop: '12px', justifyContent: 'flex-end' } }, h('button', { class: 'btn sm primary', onclick: async (e) => {
         if (!(await confirmDialog(`Merge ${g.length - 1} into “${keep.display_name || keep.handle}”? Their media and accounts move across.`, { confirmLabel: 'Merge', danger: true }))) return;
         await act(e.currentTarget, async () => { for (const c of g.slice(1)) await adminPost('/creators/merge', { keepId: keep.id, mergeId: c.id }); }, 'Merged');
         m.close(); onDone();
       } }, 'Merge into the first')));
   })) : h('p', { class: 'muted' }, 'No probable duplicates found.');
-  const m = openModal({ title: 'Possible duplicate creators', sub: 'Handles that match once punctuation and common suffixes (_xo, _fit, official…) are ignored. Only merge if it is really the same person.', wide: true, body, actions: [h('button', { class: 'btn', onclick: () => m.close() }, 'Close')] });
+  const m = openModal({ title: 'Possible duplicate creators', sub: 'Grouped by a shared link or profile picture, matching or nearly matching handles, or the same name with similar posts. Each row says why. Only merge if it is really the same person.', wide: true, body, actions: [h('button', { class: 'btn', onclick: () => m.close() }, 'Close')] });
 }
 
 async function detailDialog(id, onDone) {
