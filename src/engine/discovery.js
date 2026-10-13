@@ -590,6 +590,67 @@ async function onlyfansDiscovery({ leads = 6, reach = 3, searches = 2, budget, a
   return out;
 }
 
+/**
+ * Creators the admin named (Admin → Discovery → creators to find): each is looked up by name across every
+ * platform (handle probes, people search, web search, bios and link pages, every account verified through its
+ * adapter) and his strong, new matches are followed as one creator. A name is retried monthly, so accounts he
+ * opens later are picked up; one or two names per run, since a lookup is the heaviest thing discovery does.
+ */
+async function seedCreators({ perRun = 2, staleDays = 30, aborted = () => false, lookupImpl } = {}) {
+  const lookup = lookupImpl || require('./lookup');
+  const names = String(settingsStore.get().creatorSeeds || '').split('\n').map((n) => n.trim()).filter(Boolean);
+  const out = { checked: 0, followed: 0, accounts: 0, results: [] };
+  const due = names.filter((n) => {
+    const at = repo.discoveryState.touchedAt(`seed.${n.toLowerCase()}`);
+    return !at || Date.now() - new Date(at).getTime() > staleDays * 86400000;
+  }).slice(0, perRun);
+  for (const name of due) {
+    if (aborted()) break;
+    let r;
+    try { r = await lookup.findAndFollow(name, { minConfidence: 0.7 }); } catch (e) { r = { error: e.message }; }
+    out.checked++;
+    const f = r && r.followed && r.followed.ok ? r.followed : null;
+    const known = r && r.candidates ? r.candidates.filter((c) => c.status === 'following' && c.confidence >= 0.7) : [];
+    const summary = {
+      at: new Date().toISOString(), error: (r && r.error) || null,
+      creatorId: f ? f.creator.id : (known[0] && known[0].creatorId) || null,
+      followed: f ? f.feeds.length : 0, already: known.length,
+      onlyfans: ((r && r.externalLinks) || []).filter((l) => l.handle).map((l) => l.handle),
+      note: (r && r.note) || null,
+    };
+    if (f) { out.followed++; out.accounts += f.feeds.length; }
+    // already followed earlier: the page he links still belongs on his profile
+    if (!f && summary.creatorId && summary.onlyfans.length) {
+      repo.creators.enrich(summary.creatorId, { links: summary.onlyfans.map((h) => ofLink(h)) });
+      for (const h of summary.onlyfans) repo.onlyfans.claim(h, summary.creatorId);
+    }
+    // "creators like him": pages that come up next to his name (lists, collabs) become OnlyFans leads to trace
+    if (websearch.configured() && !summary.error) {
+      try {
+        for (const res of await websearch.search(`"${name}" male onlyfans creators like`, { budget: settingsStore.get().braveDailyBudget })) {
+          const spec = parseProfile(res.url);
+          const pages = spec && spec.service === 'OnlyFans' && spec.handle ? [spec.handle] : findOnlyFans(`${res.title || ''} ${res.description || ''}`);
+          for (const h of pages) if (!summary.onlyfans.includes(h) && noteSearchedOnlyFans(h, spec && spec.handle === h ? res : { title: null, description: null })) summary.similar = (summary.similar || 0) + 1;
+        }
+      } catch { /* out of budget / no provider: next month */ }
+    }
+    repo.discoveryState.set(`seed.${name.toLowerCase()}`, JSON.stringify(summary));
+    out.results.push({ name, ...summary });
+    events.log(f ? 'OK' : 'INFO', `Discovery: "${name}" — ${f ? `followed ${f.feeds.length} account(s)` : summary.already ? `already following ${summary.already} account(s)` : summary.error || 'no strong match yet'}`);
+  }
+  return out;
+}
+
+/** What each named creator's last lookup found (for the admin panel). */
+function seedStatus() {
+  const names = String(settingsStore.get().creatorSeeds || '').split('\n').map((n) => n.trim()).filter(Boolean);
+  return names.map((name) => {
+    let last = null; try { last = JSON.parse(repo.discoveryState.get(`seed.${name.toLowerCase()}`) || 'null'); } catch { last = null; }
+    const creator = last && last.creatorId ? repo.creators.get(last.creatorId) : null;
+    return { name, last, creator: creator ? { id: creator.id, handle: creator.handle, display_name: creator.display_name, media_count: creator.media_count } : null };
+  });
+}
+
 /** A profile read later (enrich) that links the OnlyFans page we guessed from its handle proves it. */
 function confirmOnlyFans(c, bio) {
   const handle = (c.signals.onlyfans || [])[0];
@@ -757,6 +818,7 @@ async function run({ trigger = 'schedule' } = {}) {
       report.identity = await braveIdentity({ budget: s.braveDailyBudget, aborted });
       report.topics = await braveTopics({ budget: s.braveDailyBudget, aborted });
     }
+    report.seeds = await seedCreators({ aborted });
     if (s.discoveryOnlyFans) report.onlyfans = await onlyfansDiscovery({ budget: s.braveDailyBudget, aborted });
     if (s.discoveryCommunities) report.communities = await communityDiscovery({ aborted });
     if (s.discoveryCommunities) report.hangouts = creatorHangouts();
@@ -767,7 +829,7 @@ async function run({ trigger = 'schedule' } = {}) {
     report.enrich = await enrich();
     report.promote = s.autoDiscover || trigger === 'manual' ? promote(s) : { followed: 0, linked: 0 };
     report.pruned = repo.candidates.prune();
-    events.log('INFO', `Discovery ${trigger === 'manual' ? '(manual) ' : ''}finished: ${report.mentions.found} mention leads, ${report.graph ? report.graph.found : 0} graph leads, ${report.topics ? report.topics.found : 0} search leads, ${report.communities ? report.communities.found : 0} community/feed leads, ${report.hangouts ? report.hangouts.found : 0} hangouts, ${report.lookalikes ? report.lookalikes.found : 0} lookalikes, ${report.people ? report.people.found : 0} people-search leads, ${report.identity ? report.identity.linked : 0} identity matches, ${report.onlyfans ? report.onlyfans.found : 0} OnlyFans creators traced (${report.onlyfans ? report.onlyfans.linked : 0} accounts linked); followed ${report.promote.followed}, linked ${report.promote.linked}`);
+    events.log('INFO', `Discovery ${trigger === 'manual' ? '(manual) ' : ''}finished: ${report.mentions.found} mention leads, ${report.graph ? report.graph.found : 0} graph leads, ${report.topics ? report.topics.found : 0} search leads, ${report.communities ? report.communities.found : 0} community/feed leads, ${report.hangouts ? report.hangouts.found : 0} hangouts, ${report.lookalikes ? report.lookalikes.found : 0} lookalikes, ${report.people ? report.people.found : 0} people-search leads, ${report.identity ? report.identity.linked : 0} identity matches, ${report.seeds ? report.seeds.followed : 0} named creators found, ${report.onlyfans ? report.onlyfans.found : 0} OnlyFans creators traced (${report.onlyfans ? report.onlyfans.linked : 0} accounts linked); followed ${report.promote.followed}, linked ${report.promote.linked}`);
   } catch (e) {
     report.error = e.message;
     events.log('ERR', `Discovery failed: ${e.message}`);
@@ -809,6 +871,7 @@ function status() {
     websearch: websearch.status(),
     telegramBot: tgBot.configured(), xApi: !!config.creds.xBearer, communities: s.discoveryCommunities, autoCommunities: s.discoveryAutoCommunities, expand: s.discoveryExpand,
     onlyfans: { enabled: s.discoveryOnlyFans, ...repo.onlyfans.counts() },
+    seeds: seedStatus(),
     auto: s.autoDiscover, intervalMin: s.discoveryIntervalMin, threshold: s.discoveryAutoFollowScore,
   };
 }
@@ -827,4 +890,4 @@ function start() {
 }
 function stop() { stopFlag = true; clearInterval(timer); timer = null; }
 
-module.exports = { onlyfansDiscovery, noteOnlyFans, probeOnlyFans, run, status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskyLookalikes, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };
+module.exports = { seedCreators, seedStatus, onlyfansDiscovery, noteOnlyFans, probeOnlyFans, run, status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskyLookalikes, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };

@@ -138,6 +138,38 @@ describe('OnlyFans discovery', () => {
   });
 });
 
+describe('Creators named by the admin', () => {
+  test('each name is looked up once a month, two per run; strong matches are followed and their page claimed', async () => {
+    const settingsStore = require('../src/settings');
+    settingsStore.update({ creatorSeeds: 'Seed One\nSeed Two\nSeed Three' });
+    const asked = [];
+    const made = repo.creators.create({ handle: 'seedone' });
+    const fake = { findAndFollow: async (name) => {
+      asked.push(name);
+      if (name === 'Seed One') return { candidates: [], externalLinks: [{ platform: 'external', service: 'OnlyFans', url: 'https://onlyfans.com/seedone', handle: 'seedone' }], followed: { ok: true, creator: made, feeds: [{ id: 'f1' }, { id: 'f2' }] } };
+      return { candidates: [], externalLinks: [], followed: null, note: 'No strong new match' };
+    } };
+    const r = await discovery.seedCreators({ lookupImpl: fake });
+    assert.deepEqual(asked, ['Seed One', 'Seed Two']);
+    assert.equal(r.followed, 1); assert.equal(r.accounts, 2);
+    const again = await discovery.seedCreators({ lookupImpl: fake });
+    assert.deepEqual(asked.slice(2), ['Seed Three'], 'already-checked names wait a month');
+    assert.equal(again.checked, 1);
+    const st = discovery.seedStatus();
+    assert.equal(st[0].creator.id, made.id);
+    assert.deepEqual(st[0].last.onlyfans, ['seedone']);
+    assert.equal(st[1].last.note, 'No strong new match');
+    settingsStore.update({ creatorSeeds: '' });
+  });
+  test('lookup keeps OnlyFans pages canonical and claims them for the creator it follows', () => {
+    const lookup = require('../src/engine/lookup');
+    const r = lookup.follow({ name: 'Page Guy', selections: [{ platform: 'redgifs', kind: 'user', target: 'pageguy' }], externalLinks: [{ service: 'OnlyFans', label: 'OnlyFans', url: 'https://onlyfans.com/PageGuy/c7' }] });
+    assert.ok(r.ok, JSON.stringify(r));
+    assert.deepEqual(require('../src/lib/onlyfans').creatorOnlyFans(repo.creators.get(r.creator.id)), { handle: 'pageguy', url: 'https://onlyfans.com/pageguy', free: false });
+    assert.equal(repo.onlyfans.get('pageguy').status, 'claimed');
+  });
+});
+
 describe('OnlyFans in the app', () => {
   const call = async (p, opts = {}) => { const res = await fetch(`${base}${p}`, { headers: AGE, ...opts }); return { status: res.status, json: await res.json().catch(() => null) }; };
   test('creators carry their page and can be filtered to OnlyFans creators', async () => {

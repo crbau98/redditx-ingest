@@ -6,7 +6,7 @@ import { table, pager, toggle, platBadge, pageHead, act, kpi } from './ui.js';
 const STATUSES = [['pending', 'Waiting'], ['followed', 'Followed'], ['linked', 'Linked to a creator'], ['rejected', 'Rejected'], ['all', 'All']];
 const SIGNAL_LABEL = { identity: 'same name', mention: 'mentioned', cofollow: 'followed by', search: 'search', similar: 'looks like', hangout: 'creators post here', ofconfirmed: 'runs an OnlyFans page', onlyfans: 'same handle as an OnlyFans page' };
 // What each strategy found on the last run (keys of the run report).
-const STRATEGIES = [['mentions', 'Mentions'], ['graph', 'Bluesky follows'], ['lookalikes', 'Lookalikes'], ['people', 'People search'], ['communities', 'Communities & feeds'], ['hangouts', 'Where creators post'], ['topics', 'Web topics'], ['identity', 'Same-name search'], ['onlyfans', 'OnlyFans traced']];
+const STRATEGIES = [['mentions', 'Mentions'], ['graph', 'Bluesky follows'], ['lookalikes', 'Lookalikes'], ['people', 'People search'], ['communities', 'Communities & feeds'], ['hangouts', 'Where creators post'], ['topics', 'Web topics'], ['identity', 'Same-name search'], ['onlyfans', 'OnlyFans traced'], ['seeds', 'Named creators']];
 const foundOf = (r) => (r ? (r.found !== undefined ? r.found : r.linked || 0) : null);
 const SCOPE = { in: ['good', 'male-focused'], uncertain: ['', 'unclear'], excluded: ['bad', 'off-topic'] };
 
@@ -32,7 +32,7 @@ export async function render(root) {
   const set = (patch) => navigate('/admin/discovery', { ...f, ...patch }, { replace: true });
   const head = h('div'); const kpis = h('div', { class: 'kpis' }); const tableHost = h('div'); const tune = h('div'); const ofHost = h('div');
   const selected = new Set();
-  let data;
+  let data; let seedsText = '';
 
   const runBtn = h('button', { class: 'btn primary', onclick: (e) => act(e.currentTarget, async () => { await adminPost('/discovery/run'); toast('Discovery started — watch the Live log', 'ok'); setTimeout(load, 2500); }) }, icon('sparkle', 'sm'), 'Run discovery now');
   head.append(pageHead('Discovery', 'Finds creators, communities and custom feeds you are not following yet — from who your creators mention and follow, keyword searches on Reddit, Lemmy and Bluesky, and web searches — scores them, and follows the strong ones automatically.', runBtn));
@@ -121,11 +121,24 @@ export async function render(root) {
       paste.value = ''; loadOnlyFans();
     }) }, icon('plus', 'sm'), 'Trace these');
     const c = r.counts;
+    const seeds = h('textarea', { class: 'textarea', rows: 4, spellcheck: 'false', placeholder: 'Christian Hogue\n@somehandle\nhttps://x.com/someone' });
+    seeds.value = seedsText;
+    const seedRows = ((data && data.seeds) || []).map((sd) => h('div', { class: 'row', style: { gap: '8px', fontSize: '13px', padding: '3px 0' } },
+      h('b', null, sd.name),
+      !sd.last ? h('span', { class: 'badge' }, 'not looked up yet')
+        : sd.creator ? h('a', { class: 'badge good', href: `#/creator/${sd.creator.id}` }, `@${sd.creator.handle} · ${sd.creator.media_count} posts`)
+          : h('span', { class: `badge ${sd.last.error ? 'bad' : 'warn'}`, title: sd.last.error || sd.last.note || '' }, sd.last.error ? 'lookup failed' : 'no strong match yet'),
+      sd.last && sd.last.onlyfans && sd.last.onlyfans.length ? h('span', { class: 'badge of' }, 'OF') : null,
+      sd.last && sd.last.similar ? h('span', { class: 'sub' }, `${sd.last.similar} similar pages found`) : null,
+      sd.last ? h('span', { class: 'sub' }, fmt.ago(sd.last.at)) : null));
     ofHost.replaceChildren(h('details', { class: 'panel', style: { marginTop: '14px' } },
       h('summary', null, h('b', null, 'OnlyFans creators'), h('span', { class: 'muted', style: { marginLeft: '10px', fontSize: '13px' } },
         `${fmt.int(c.creators)} followed creators have a page · ${fmt.int(c.pending + c.searching)} pages being traced · ${fmt.int(c.found)} traced to free accounts`)),
       h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Pages named in posts, bios and web searches. Each is traced to the creator’s free public accounts, which then appear in the queue above with their score.'),
-      h('div', { class: 'field' }, paste, h('div', { style: { marginTop: '8px' } }, add)),
+      h('div', { class: 'field' }, h('label', null, 'Creators to find by name (one per line). Each is looked up across every platform PRISM reads, two per discovery run, and re-checked monthly'), seeds,
+        h('button', { class: 'btn sm', style: { marginTop: '8px' }, onclick: (e) => act(e.currentTarget, async () => { await adminPut('/settings', { creatorSeeds: seeds.value }); seedsText = seeds.value; toast('Saved: the next discovery run looks them up', 'ok'); }) }, 'Save names')),
+      seedRows.length ? h('div', { style: { margin: '6px 0 14px' } }, seedRows) : null,
+      h('div', { class: 'field' }, h('label', null, 'OnlyFans pages to trace'), paste, h('div', { style: { marginTop: '8px' } }, add)),
       table([
         { label: 'Page', render: (l) => h('div', { class: 'cell-stack' }, h('a', { href: `https://onlyfans.com/${l.handle}`, target: '_blank', rel: 'noopener noreferrer nofollow', style: { fontWeight: 600 } }, l.display_name || l.handle), h('span', { class: 'sub truncate', style: { maxWidth: '300px' }, title: l.bio || '' }, l.bio ? l.bio.slice(0, 100) : `@${l.handle}`)) },
         { label: 'Named by', render: (l) => h('span', { class: 'sub' }, l.origin === 'search' ? 'web search' : l.origin === 'admin' ? 'you' : `${l.mentions} source${l.mentions === 1 ? '' : 's'}`, l.free ? h('span', { class: 'badge good', style: { marginLeft: '6px' } }, 'free') : null) },
@@ -140,6 +153,7 @@ export async function render(root) {
   async function load() {
     const [d, settings] = await Promise.all([adminGet('/discovery', { status: f.status, q: f.q, sort: f.sort, page: f.page, limit: 40 }), data ? Promise.resolve(null) : adminGet('/settings')]);
     data = d;
+    if (settings) seedsText = settings.values.creatorSeeds || '';
     paintKpis(d); paintRun(d);
     if (settings) paintTune(d, settings);
     const r = d.candidates;

@@ -52,6 +52,11 @@ const SCHEMA = {
   // --- link health (v4.8) ---
   linkHealth: { type: 'bool', default: true, label: 'Check media at the source and hide what has been removed there', group: 'maintenance' },
   linkHealthPerSweep: { type: 'int', default: 40, min: 0, max: 500, label: 'Items re-checked every 10 minutes', group: 'maintenance' },
+  creatorSeeds: {
+    type: 'text', group: 'discovery', label: 'Creators to find by name (one per line: a name, @handle or profile link). Each is looked up across every platform PRISM reads and his verified public accounts are followed; re-checked monthly',
+    // empty under test: a lookup reaches every platform, which tests must not do by accident
+    default: config.isTest ? '' : ['Christian Hogue', 'Jakipz', 'Michael Yerger', 'Chase Stobbe', 'HotAlex'].join('\n'),
+  },
   discoveryOnlyFans: { type: 'bool', default: true, label: 'Trace OnlyFans creators: find the free public accounts (RedGIFs, Bluesky, X, Telegram, link pages) behind OnlyFans pages that creators promote. onlyfans.com itself is never read', group: 'discovery' },
   discoveryExpand: { type: 'bool', default: true, label: 'Find lookalike creators (Bluesky) and search Bluesky and RedGIFs for new people', group: 'discovery' },
   discoveryAutoCommunities: { type: 'bool', default: true, label: 'Auto-follow strong communities and feeds (their posts are still checked one by one)', group: 'discovery' },
