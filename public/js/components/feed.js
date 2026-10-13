@@ -43,10 +43,10 @@ export function createFeed({ query = {}, endpoint = '/api/media', pageSize, empt
   let hidden = 0;
   let fetched = 0; // raw items received (masonry may hold fewer when hiding seen ones)
   let seed = Math.floor(Math.random() * 1e6);
-  const limit = pageSize || (prefs.density === 's' ? 48 : 36);
+  let limit = pageSize || (prefs.density === 's' ? 48 : 36);
   // what makes two feeds "the same list": per-visit random seeds and exclusions don't count
   const { seed: _s, exclude: _e, ...stable } = query;
-  const stashKey = `${routeKey()}|${endpoint}|${JSON.stringify(stable)}|${hideSeen ? 1 : 0}|${limit}|${ids ? hashIds(ids) : ''}`;
+  const stashKey = `${routeKey()}|${endpoint}|${JSON.stringify(stable)}|${hideSeen ? 1 : 0}|${ids ? hashIds(ids) : ''}`;
 
   function openAt(item) {
     const idx = masonry.items.findIndex((m) => m.id === item.id);
@@ -102,7 +102,7 @@ export function createFeed({ query = {}, endpoint = '/api/media', pageSize, empt
   stash.delete(stashKey);
   const restored = !!(saved && Date.now() - saved.at < STASH_MS);
   if (restored) {
-    ({ page, total, done, fetched, hidden, seed } = saved);
+    ({ page, total, done, fetched, hidden, seed, limit } = saved); // its own page size: density may have changed since
     masonry.add(saved.items);
     if (done) sentinel.replaceChildren(h('span', { class: 'muted' }, 'You’ve reached the end'));
     queueMicrotask(() => {
@@ -124,7 +124,7 @@ export function createFeed({ query = {}, endpoint = '/api/media', pageSize, empt
     load,
     destroy() {
       if (!destroyed && masonry.items.length && !errored) {
-        stash.set(stashKey, { at: Date.now(), items: masonry.items, page, total, done, fetched, hidden, seed });
+        stash.set(stashKey, { at: Date.now(), items: masonry.items, page, total, done, fetched, hidden, seed, limit });
         while (stash.size > STASH_MAX) stash.delete(stash.keys().next().value);
       }
       destroyed = true; io.disconnect(); offDensity(); masonry.destroy();

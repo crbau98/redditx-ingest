@@ -180,8 +180,9 @@ async function render(shell) {
   if (currentKey) scrollMemory.set(currentKey, window.scrollY);
   currentKey = key;
   const fresh = freshNav; freshNav = false;
-  if (fresh) { scrollMemory.delete(key); dropFeedStash(key); }
   if (cleanup) { try { cleanup(); } catch (e) { console.error(e); } cleanup = null; }
+  // after cleanup: tearing the old page down stashes its feed, which a fresh start must not reuse
+  if (fresh) { scrollMemory.delete(key); dropFeedStash(key); }
 
   const match = matchRoute(routes, p);
   if (!match) { navigate('/', {}, { replace: true }); return; }
@@ -216,7 +217,7 @@ function wireLiveUpdates(shell) {
     const p = parse().path;
     if (p !== '/' && p !== '/explore') return;
     pending += evt.count || 1;
-    if (!pill) { pill = h('button', { class: 'btn primary newpill', onclick: () => { pending = 0; pill.remove(); pill = null; dropFeedStash(); scrollMemory.clear(); currentKey = null; render(shell); window.scrollTo({ top: 0 }); } }); document.body.appendChild(pill); }
+    if (!pill) { pill = h('button', { class: 'btn primary newpill', onclick: () => { pending = 0; pill.remove(); pill = null; dropFeedStash(); scrollMemory.clear(); freshNav = true; currentKey = null; render(shell); window.scrollTo({ top: 0 }); } }); document.body.appendChild(pill); }
     pill.replaceChildren(icon('refresh', 'sm'), `${fmt.int(pending)} new — refresh`);
   });
   window.addEventListener('hashchange', () => { if (pill) { pill.remove(); pill = null; pending = 0; } });
