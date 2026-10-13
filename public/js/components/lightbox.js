@@ -436,8 +436,8 @@ function wireGestures() {
     const fast = performance.now() - g.t < 260; // a flick needs less distance
     g = null;
     if (!axis) {
-      // a tap on the dark area around the media (images report their own taps through zoom.js)
-      if (!onMedia) toggleChrome();
+      // a tap on a video or the dark area around the media (images report their own taps through zoom.js)
+      if (!onMedia || e.target.closest('video')) toggleChrome();
       return;
     }
     const m = media();
@@ -448,7 +448,13 @@ function wireGestures() {
       if (d > 0 && S.index >= S.items.length - 1) {
         // last loaded item: only move on if another page actually arrives (no exit into nothing)
         reset(true);
-        S.loadMore().then((items) => { if (S && items && items.length > S.items.length) { S.items = items; nav(1); } });
+        // the prefetch may land first and grow S.items itself, so compare against the index we wanted
+        const want = S.index + 1;
+        S.loadMore().then((items) => {
+          if (!S) return;
+          if (items && items.length > S.items.length) S.items = items;
+          if (S.index === want - 1 && S.items.length > want) { S.dir = 1; show(want); }
+        });
         return;
       }
       haptic(8);
