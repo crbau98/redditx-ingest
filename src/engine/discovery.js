@@ -313,7 +313,8 @@ async function braveTopics({ queries = 1, budget, aborted = () => false } = {}) 
 
 /** A web search surfaced someone's OnlyFans page: its search snippet is their public bio. */
 function noteSearchedOnlyFans(handle, r) {
-  const name = (r.title || '').replace(/\s*[|(].*$/, '').replace(/\bonly\s?fans\b/ig, '').replace(/[-–—·:]+\s*$/, '').trim() || null;
+  const title = (r.title || '').split(/\s*[[(|]/, 1)[0];
+  const name = (title.match(/^[\s\S]*?(?=\bonly\s*fans\b|$)/i)?.[0] || '').replace(/[-–—·:]+\s*$/, '').trim() || null;
   const bio = r.description || null;
   if (repo.onlyfans.ownerOf(handle)) return false;
   const existing = repo.onlyfans.get(handle);
