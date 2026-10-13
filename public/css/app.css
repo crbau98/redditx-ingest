@@ -935,3 +935,20 @@ main.tinted .tag { border-color: color-mix(in srgb, var(--accent) 30%, var(--lin
 /* Badges never run under the save button on narrow cards: they wrap to a second line instead. */
 .card-badges { right: 52px; flex-wrap: wrap; }
 .card.compact .card-badges { right: 50px; }
+
+/* ---- OnlyFans (v4.14): a link-out to the creator's own page; PRISM never shows paywalled content ---- */
+:root { --of: #00aff0; --of-2: #0091ea; }
+.of-mark { display: inline-block; width: 12px; height: 12px; flex: none; border-radius: 50%; border: 3px solid currentColor; position: relative; vertical-align: -1px; margin-right: 2px; }
+.of-mark::after { content: ''; position: absolute; right: -6px; top: -3px; width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: .85; }
+.badge.of { height: 18px; padding: 0 7px; margin-left: 6px; font-size: 10.5px; letter-spacing: .04em; background: color-mix(in srgb, var(--of) 18%, transparent); color: var(--of); }
+.badge.of.free { background: linear-gradient(120deg, color-mix(in srgb, var(--of) 26%, transparent), color-mix(in srgb, var(--good) 26%, transparent)); color: color-mix(in srgb, var(--of) 60%, var(--good)); }
+.btn.of-cta { position: relative; overflow: hidden; isolation: isolate; color: #fff; border-color: transparent; background: linear-gradient(120deg, var(--of-2), var(--of) 60%, #4cc9ff); box-shadow: 0 6px 22px -8px color-mix(in srgb, var(--of) 70%, transparent); }
+.btn.of-cta:hover { filter: brightness(1.08); transform: translateY(-1px); }
+.btn.of-cta::before { content: ''; position: absolute; inset: 0; z-index: -1; background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, .35) 50%, transparent 70%); transform: translateX(-120%); animation: of-sheen 3.6s var(--ease, ease) 1s infinite; }
+.btn.of-cta.free { background: linear-gradient(120deg, var(--of-2), var(--of) 55%, #34d399); }
+.chip.of-chip .of-mark { width: 10px; height: 10px; border-width: 2.5px; margin-right: 6px; color: var(--of); }
+.chip.of-chip.on { background: var(--of); border-color: var(--of); color: #fff; }
+.chip.of-chip.on .of-mark { color: #fff; }
+.section-head h2 .of-mark { color: var(--of); margin-right: 10px; }
+@keyframes of-sheen { 0%, 70% { transform: translateX(-120%); } 100% { transform: translateX(120%); } }
+@media (prefers-reduced-motion: reduce) { .btn.of-cta::before { animation: none; } }

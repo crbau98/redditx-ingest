@@ -9,6 +9,7 @@ const registry = require('../sources');
 const events = require('./events');
 const { checkText } = require('../lib/safety');
 const { femaleCheck } = require('../lib/scope');
+const { findOnlyFans, freeHint, ofLink } = require('../lib/onlyfans');
 
 const LINKABLE_KINDS = new Set(['user', 'feed', 'page']);
 const MAX_LINKED_FEEDS_PER_CREATOR = 10;
@@ -47,7 +48,9 @@ function applyProfile(feed, profile, settings) {
   if (profile.verified && !creator.verified) repo.creators.update(creator.id, { verified: true });
 
   const externals = [];
+  const free = freeHint(profile.bio);
   for (const l of profile.links || []) {
+    if (l.external && l.handle && l.service === 'OnlyFans') { externals.push(ofLink(l.handle, { free })); continue; }
     if (l.external) { externals.push({ platform: 'external', service: l.service, label: l.label, url: l.url }); continue; }
     if (!settings.autoLinkProfiles || !l.ingestable || !LINKABLE_KINDS.has(l.kind) || l.platform === 'web') continue;
     const adapter = registry.get(l.platform);
@@ -66,7 +69,10 @@ function applyProfile(feed, profile, settings) {
     physique.screenFeed(r);
     if (r.created) { out.linked++; events.log('INFO', `Linked ${l.platform}:${l.target} to ${creator.handle}`); }
   }
+  // "OnlyFans: @name" written out in the bio, with no link.
+  for (const handle of findOnlyFans(profile.bio)) if (!externals.some((e) => e.handle === handle)) externals.push(ofLink(handle, { free }));
   if (externals.length) repo.creators.enrich(creator.id, { links: externals });
+  for (const e of externals) if (e.handle) repo.onlyfans.claim(e.handle, creator.id);
   return out;
 }
 

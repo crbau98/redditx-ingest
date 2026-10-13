@@ -34,8 +34,8 @@ const repo = require('../src/db/repo');
 
 describe('migration from a real v3 database', () => {
   test('upgrades in place and reports it', () => {
-    assert.deepEqual(migration, { from: 0, to: 7 });
-    assert.equal(db.pragma('user_version', { simple: true }), 7);
+    assert.deepEqual(migration, { from: 0, to: 8 });
+    assert.equal(db.pragma('user_version', { simple: true }), 8);
     assert.equal(db.pragma('integrity_check', { simple: true }), 'ok');
     assert.deepEqual(db.pragma('foreign_key_check'), []);
   });
@@ -80,7 +80,7 @@ describe('migration from a real v3 database', () => {
   });
   test('opening again is a no-op', () => {
     const { migrate } = require('../src/db/schema');
-    assert.deepEqual(migrate(db), { from: 7, to: 7 });
+    assert.deepEqual(migrate(db), { from: 8, to: 8 });
   });
 });
 

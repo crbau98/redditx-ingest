@@ -446,7 +446,42 @@ function v7(db) {
   db.exec('CREATE INDEX IF NOT EXISTS ix_media_physique ON media(creator_id, physique) WHERE physique IS NOT NULL');
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7];
+/**
+ * v8 (PRISM 4.14): OnlyFans leads. Every OnlyFans handle PRISM sees named in a bio, a post or a web
+ * search result, whether or not we follow that person yet. onlyfans.com itself is never read; a lead is
+ * worked by finding the same person's free public accounts elsewhere (RedGIFs, Bluesky, X, Reddit...).
+ *   status   pending (not looked for yet) | searching (looked, nothing yet) | found (accounts queued in
+ *            discovery) | claimed (a followed creator links to this page) | rejected (safety / scope)
+ *   sources  JSON array of creator ids whose posts named it (shout-outs, promo channels)
+ */
+function v8(db) {
+ const cols = db.prepare('PRAGMA table_info(media)').all().map((c) => c.name);
+ if (!cols.includes('physique')) db.exec('ALTER TABLE media ADD COLUMN physique INTEGER');
+ db.exec('CREATE INDEX IF NOT EXISTS ix_media_physique ON media(creator_id, physique) WHERE physique IS NOT NULL');
+ db.exec(`
+   CREATE TABLE IF NOT EXISTS onlyfans_leads (
+     handle TEXT PRIMARY KEY COLLATE NOCASE,
+      creator_id TEXT REFERENCES creators(id) ON DELETE SET NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','searching','found','claimed','rejected')),
+      mentions INTEGER NOT NULL DEFAULT 0,
+      sources TEXT NOT NULL DEFAULT '[]',
+      origin TEXT,
+      display_name TEXT,
+      bio TEXT,
+      free INTEGER NOT NULL DEFAULT 0,
+      accounts TEXT NOT NULL DEFAULT '[]',
+      reason TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      first_seen TEXT NOT NULL DEFAULT (${NOW}),
+      last_seen TEXT NOT NULL DEFAULT (${NOW}),
+      checked_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ix_of_leads_queue ON onlyfans_leads(status, mentions DESC);
+    CREATE INDEX IF NOT EXISTS ix_of_leads_creator ON onlyfans_leads(creator_id);
+  `);
+}
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

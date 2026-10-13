@@ -178,16 +178,23 @@ const creators = {
     if (links && links.length) {
       let existing = []; try { existing = JSON.parse(c.links || '[]'); } catch { /* ignore */ }
       const seen = new Set(existing.map((l) => l.url));
+      // A page that says it is free now (or no longer) updates the stored link's flag.
+      let changed = false;
+      for (const l of links) {
+        const old = l.handle && existing.find((e) => e.url === l.url);
+        if (old && !!old.free !== !!l.free) { old.free = !!l.free; old.handle = l.handle; changed = true; }
+      }
       const merged = existing.concat(links.filter((l) => l.url && !seen.has(l.url)));
-      if (merged.length !== existing.length) patch.links = merged.slice(0, 24);
+      if (merged.length !== existing.length || changed) patch.links = merged.slice(0, 24);
     }
     if (Object.keys(patch).length) creators.update(id, patch);
   },
 
   refreshStats(id) { if (id) creatorQ.stats.run({ id }); },
 
-  list({ page = 0, limit = 48, q: query, sort = 'media', platform, admin = false, minMedia } = {}) {
+  list({ page = 0, limit = 48, q: query, sort = 'media', platform, admin = false, minMedia, onlyfans: ofOnly = false } = {}) {
     const where = []; const params = [];
+    if (ofOnly) where.push("c.links GLOB '*onlyfans.com/[A-Za-z0-9]*'");
     if (!admin) { where.push("c.status = 'active'", "c.scope != 'excluded'"); }
     const min = minMedia !== undefined ? minMedia : (admin ? 0 : 1);
     if (min > 0) { where.push('c.media_count >= ?'); params.push(min); }
@@ -300,7 +307,7 @@ function library() {
   return snap.data;
 }
 
-creators.similar = function similar(id, limit = 12) {
+creators.similar = function similar(id, limit = 12, { onlyfans: ofOnly = false } = {}) {
   const lib = library();
   const own = lib.creatorTags.get(id);
   if (!own) return [];
@@ -314,9 +321,10 @@ creators.similar = function similar(id, limit = 12) {
     for (const t of mine) if (tags.has(t)) sc += weight.get(t);
     if (sc) score.set(cid, sc);
   }
-  const top = [...score.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit * 2).map(([cid]) => cid);
+  // "OnlyFans creators like him" draws from a wider pool, since only some creators have a page.
+  const top = [...score.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit * (ofOnly ? 10 : 2)).map(([cid]) => cid);
   if (!top.length) return [];
-  const found = db.prepare(`${SELECT_CREATOR_CARD} WHERE c.id IN (${top.map(() => '?').join(',')}) AND c.status = 'active' AND c.scope != 'excluded' AND c.media_count > 0`)
+  const found = db.prepare(`${SELECT_CREATOR_CARD} WHERE c.id IN (${top.map(() => '?').join(',')}) AND c.status = 'active' AND c.scope != 'excluded' AND c.media_count > 0${ofOnly ? " AND c.links GLOB '*onlyfans.com/[A-Za-z0-9]*'" : ''}`)
     .all(...top).map(serializeCreator);
   found.sort((a, b) => top.indexOf(a.id) - top.indexOf(b.id));
   return found.slice(0, limit);
@@ -1248,6 +1256,92 @@ const discoveryState = {
   touchedAt(key) { const r = db.prepare('SELECT updated_at FROM discovery_state WHERE key = ?').get(key); return r ? r.updated_at : null; },
 };
 
+/* ------------------------------------------------------- OnlyFans leads (v7) */
+const parseLead = (r) => {
+  if (!r) return null;
+  const out = { ...r, free: !!r.free };
+  try { out.sources = JSON.parse(r.sources || '[]'); } catch { out.sources = []; }
+  try { out.accounts = JSON.parse(r.accounts || '[]'); } catch { out.accounts = []; }
+  return out;
+};
+const onlyfans = {
+  get(handle) { return parseLead(db.prepare('SELECT * FROM onlyfans_leads WHERE handle = ?').get(String(handle))); },
+  /**
+   * Someone named this OnlyFans page. `sourceId` is the creator whose post/bio named it (null for web search).
+   * Counts one mention per distinct source, so a promo channel reposting the same creator does not inflate it.
+   */
+  note(handle, { sourceId = null, origin = 'post', displayName = null, bio = null, free = false } = {}) {
+    const h = String(handle).toLowerCase();
+    const cur = onlyfans.get(h);
+    if (!cur) {
+      db.prepare(`INSERT INTO onlyfans_leads (handle, mentions, sources, origin, display_name, bio, free) VALUES (?, 1, ?, ?, ?, ?, ?)`)
+        .run(h, JSON.stringify(sourceId ? [sourceId] : []), origin, displayName, bio, free ? 1 : 0);
+      return onlyfans.get(h);
+    }
+    const sources = new Set(cur.sources);
+    const fresh = sourceId ? !sources.has(sourceId) : origin !== cur.origin;
+    if (sourceId) sources.add(sourceId);
+    db.prepare(`UPDATE onlyfans_leads SET mentions = mentions + ?, sources = ?, display_name = COALESCE(display_name, ?), bio = COALESCE(bio, ?),
+        free = MAX(free, ?), last_seen = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE handle = ?`)
+      .run(fresh ? 1 : 0, JSON.stringify([...sources].slice(-25)), displayName, bio, free ? 1 : 0, h);
+    return onlyfans.get(h);
+  },
+  /** A followed creator links to this page: it is theirs. */
+  claim(handle, creatorId) {
+    const h = String(handle).toLowerCase();
+    db.prepare(`INSERT INTO onlyfans_leads (handle, creator_id, status, origin, checked_at) VALUES (?, ?, 'claimed', 'profile', strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      ON CONFLICT(handle) DO UPDATE SET creator_id = excluded.creator_id, status = 'claimed', last_seen = excluded.last_seen`).run(h, creatorId);
+  },
+  update(handle, patch) {
+    const cols = ['status', 'reason', 'display_name', 'bio', 'creator_id', 'checked_at', 'attempts'];
+    const sets = []; const params = { handle: String(handle).toLowerCase() };
+    for (const c of cols) if (patch[c] !== undefined) { sets.push(`${c} = @${c}`); params[c] = patch[c]; }
+    if (patch.accounts !== undefined) { sets.push('accounts = @accounts'); params.accounts = JSON.stringify(patch.accounts.slice(0, 12)); }
+    if (patch.free !== undefined) { sets.push('free = @free'); params.free = patch.free ? 1 : 0; }
+    if (!sets.length) return onlyfans.get(handle);
+    db.prepare(`UPDATE onlyfans_leads SET ${sets.join(', ')} WHERE handle = @handle`).run(params);
+    return onlyfans.get(handle);
+  },
+  /** Leads to look for next: never-checked first, then the most-mentioned whose last look is older than `staleDays`. */
+  workable(limit = 10, staleDays = 14) {
+    const since = new Date(Date.now() - staleDays * 86400000).toISOString();
+    return db.prepare(`SELECT * FROM onlyfans_leads WHERE (status = 'pending') OR (status = 'searching' AND attempts < 4 AND (checked_at IS NULL OR checked_at < ?))
+      ORDER BY status = 'pending' DESC, mentions DESC, last_seen DESC LIMIT ?`).all(since, limit).map(parseLead);
+  },
+  list({ status, page = 0, limit = 50, q: query } = {}) {
+    const where = []; const params = [];
+    if (status && status !== 'all') { where.push('l.status = ?'); params.push(status); }
+    if (query) { where.push("l.handle LIKE ? ESCAPE '\\'"); params.push(`%${String(query).replace(/[\\%_]/g, (m) => `\\${m}`)}%`); }
+    const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const total = db.prepare(`SELECT COUNT(*) AS n FROM onlyfans_leads l ${w}`).get(...params).n;
+    const items = db.prepare(`SELECT l.*, c.handle AS creator_handle, c.display_name AS creator_name, c.media_count AS creator_media
+      FROM onlyfans_leads l LEFT JOIN creators c ON c.id = l.creator_id ${w} ORDER BY l.mentions DESC, l.last_seen DESC LIMIT ? OFFSET ?`)
+      .all(...params, limit, page * limit).map(parseLead);
+    return { items, total, page, limit };
+  },
+  /** The active creator whose stored links point at this OnlyFans page, if any. */
+  ownerOf(handle) {
+    const h = String(handle).toLowerCase().replace(/[\\%_]/g, (m) => `\\${m}`);
+    return db.prepare(`SELECT id, handle FROM creators WHERE status = 'active' AND links LIKE ? ESCAPE '\\' LIMIT 1`).get(`%onlyfans.com/${h}"%`) || null;
+  },
+  /** Creators with an OnlyFans page but few known accounts elsewhere, least recently searched first. */
+  reachTargets(limit = 4, staleDays = 30, maxAccounts = 4) {
+    const since = new Date(Date.now() - staleDays * 86400000).toISOString();
+    return db.prepare(`SELECT c.id, c.handle, c.display_name, c.links,
+        (SELECT COUNT(*) FROM feeds x WHERE x.creator_id = c.id AND x.kind IN ('user','page')) AS accounts
+      FROM creators c LEFT JOIN discovery_state ds ON ds.key = 'of.reach.' || c.id
+      WHERE c.status = 'active' AND c.scope != 'excluded' AND c.links GLOB '*onlyfans.com/[A-Za-z0-9]*' AND (ds.updated_at IS NULL OR ds.updated_at < ?)
+        AND (SELECT COUNT(*) FROM feeds x WHERE x.creator_id = c.id AND x.kind IN ('user','page')) <= ?
+      ORDER BY ds.updated_at IS NOT NULL, ds.updated_at ASC, c.media_count DESC LIMIT ?`).all(since, maxAccounts, limit);
+  },
+  counts() {
+    const out = { pending: 0, searching: 0, found: 0, claimed: 0, rejected: 0 };
+    for (const r of db.prepare('SELECT status, COUNT(*) AS n FROM onlyfans_leads GROUP BY status').all()) out[r.status] = r.n;
+    out.creators = db.prepare("SELECT COUNT(*) AS n FROM creators WHERE status = 'active' AND links GLOB '*onlyfans.com/[A-Za-z0-9]*'").get().n;
+    return out;
+  },
+};
+
 /** Recently ingested text from active creators — raw material for mention mining. */
 function mentionSource(afterIso, limit = 2000) {
   return db.prepare(`SELECT m.platform, m.title, m.description, m.creator_id, m.ingested_at FROM media m JOIN creators c ON c.id = m.creator_id
@@ -1286,5 +1380,5 @@ function discoveryTargets({ platform, prefix, staleDays, limit, minMedia = 1, ma
 module.exports = {
   db, nowIso, clampInt, cleanTag, ftsQuery, settings, hosts, blocklist, logAction, suggest, audit,
   creators, feeds, runs, media, reports, addTags, publicStats, adminOverview, discover,
-  candidates, discoveryState, mentionSource, discoveryTargets, communityHangouts, PLATFORM_TAGS, tagIntel, library,
+  candidates, discoveryState, onlyfans, mentionSource, discoveryTargets, communityHangouts, PLATFORM_TAGS, tagIntel, library,
 };
