@@ -22,6 +22,7 @@ const imagefilter = require('../lib/imagefilter');
 const { parseProfile, extractLinks, profileUrl } = require('../lib/links');
 const { checkText } = require('../lib/safety');
 const { femaleCheck, classify } = require('../lib/scope');
+const { ofLink, ofHandle } = require('../lib/onlyfans');
 const events = require('./events');
 
 const PROBE_TIMEOUT_MS = 18000;
@@ -258,7 +259,7 @@ async function searchWeb(q, pl, notes) {
 /** Everything external a verified candidate links to (OnlyFans, Throne...): shown and stored, never read. */
 function externalLinksOf(c) {
   const out = [];
-  for (const l of c.links || []) if (l.external) out.push({ platform: 'external', service: l.service, label: l.label, url: l.url });
+  for (const l of c.links || []) if (l.external) out.push(l.handle ? ofLink(l.handle) : { platform: 'external', service: l.service, label: l.label, url: l.url });
   return out;
 }
 
@@ -416,8 +417,10 @@ function follow({ name, selections, externalLinks = [], bio, creatorId = null } 
     res = targets.addCreator({ name: cleanName, bio, inputs: accepted.map(tokenFor).join('\n') });
   }
   if (res.error) return { ...res, rejected };
-  const ext = (externalLinks || []).filter((l) => l && /^https?:\/\//i.test(l.url || '')).slice(0, 12).map((l) => ({ platform: 'external', service: l.service, label: l.label, url: l.url }));
+  const ext = (externalLinks || []).filter((l) => l && /^https?:\/\//i.test(l.url || '')).slice(0, 12)
+    .map((l) => { const h = ofHandle(l.url); return h ? ofLink(h) : { platform: 'external', service: l.service, label: l.label, url: l.url }; });
   if (ext.length) repo.creators.enrich(res.creator.id, { links: ext });
+  for (const l of ext) if (l.handle) repo.onlyfans.claim(l.handle, res.creator.id); // their page: no need to trace it as a lead
   const feedIds = res.feeds.map((f) => f.id);
   let queued = 0;
   try { queued = require('./engine').enqueue(feedIds, { force: true, trigger: 'lookup', limit: 300 }); } catch { /* engine not running (tests) */ }
