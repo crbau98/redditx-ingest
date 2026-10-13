@@ -105,7 +105,8 @@ const PHYSIQUE_SWEEP_VERSION = '1'; // bump to re-measure the whole library (e.g
 /**
  * Measure the build in stored pictures that have no physique score yet (oldest first, cursor `physique_sweep_seq`), hide the
  * heavy ones and re-judge their creators. Same model pass as the face check, so a woman found on the way is removed too.
- * Each picture is looked at once per sweep version: "no torso in view" stays NULL and is not retried.
+ * Each picture is looked at once per sweep version: "no torso in view" stays NULL and is not retried. Hidden pictures are
+ * measured too (only published ones change state), so one restored later (a report dismissed, a threshold raised) has a score.
  */
 async function physiqueSweep({ limit = 12, settings } = {}) {
   const s = settings || settingsStore.get();
@@ -115,25 +116,27 @@ async function physiqueSweep({ limit = 12, settings } = {}) {
   }
   let after = parseInt(repo.settings.get('physique_sweep_seq') || '0', 10) || 0;
   const rows = repo.db.prepare(`SELECT seq, id, creator_id, media_type, media_url, preview_url, thumbnail_url, publish_state FROM media
-    WHERE publish_state IN ('published','review') AND seq > ? ORDER BY seq LIMIT ?`).all(after, limit);
+    WHERE publish_state IN ('published','review','hidden') AND seq > ? ORDER BY seq LIMIT ?`).all(after, limit);
   if (!rows.length) { res.done = true; return res; }
   const creators = new Set();
   for (const row of rows) {
     const v = await imagefilter.checkItem({ mediaType: row.media_type, mediaUrl: row.media_url, previewUrl: row.preview_url, thumbnailUrl: row.thumbnail_url },
       { threshold: (s.imageFilterThreshold || 50) / 100, faces: s.imageFilter === true, body: true });
-    // switched off while the model was busy (that request already re-showed everything): stop, and resume from this row later
-    if (!settingsStore.get().physiqueFilter) { res.stopped = true; break; }
+    // the settings may have changed while the model was busy (that request already re-applied the library): judge this row
+    // with the current ones, and if the filter was switched off, stop and resume from this row later
+    const now = settingsStore.get();
+    if (!now.physiqueFilter) { res.stopped = true; break; }
     after = row.seq; res.checked++;
     if (v.female) { repo.media.block(row.id, 'physique sweep: picture shows a woman', 'system'); res.removed++; continue; }
     if (v.status === 'error' || v.status === 'unavailable') { res.errors++; continue; }
     if (v.physique == null) continue;
     res.measured++;
     repo.media.setPhysique(row.id, v.physique);
-    const verdict = row.publish_state === 'published' ? physique.stateFor(v.physique, s) : null;
+    const verdict = row.publish_state === 'published' ? physique.stateFor(v.physique, now) : null;
     if (verdict) { repo.media.setState(row.id, verdict.state, verdict.reason, { exact: true }); imagefilter.noteHeavy(); res.hidden++; }
     if (row.creator_id) creators.add(row.creator_id);
   }
-  for (const id of creators) physique.reviewCreator(id, s);
+  if (creators.size) { const now = settingsStore.get(); for (const id of creators) physique.reviewCreator(id, now); }
   repo.settings.set('physique_sweep_seq', String(after));
   if (res.hidden || res.removed) events.log('OK', `Body sweep: ${res.measured} of ${res.checked} measured · ${res.hidden} hidden (heavy)${res.removed ? ` · ${res.removed} removed (women)` : ''}`);
   return res;
@@ -141,7 +144,7 @@ async function physiqueSweep({ limit = 12, settings } = {}) {
 
 function physiqueSweepProgress() {
   const cursor = parseInt(repo.settings.get('physique_sweep_seq') || '0', 10) || 0;
-  const remaining = repo.db.prepare("SELECT COUNT(*) AS n FROM media WHERE publish_state IN ('published','review') AND seq > ?").get(cursor).n;
+  const remaining = repo.db.prepare("SELECT COUNT(*) AS n FROM media WHERE publish_state IN ('published','review','hidden') AND seq > ?").get(cursor).n;
   return { cursor, remaining, version: PHYSIQUE_SWEEP_VERSION };
 }
 

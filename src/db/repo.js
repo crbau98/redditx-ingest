@@ -765,7 +765,8 @@ const media = {
   setPhash(id, hex) { db.prepare('UPDATE media SET phash = ? WHERE id = ?').run(hex || null, id); },
   setPhysique(id, score) { db.prepare('UPDATE media SET physique = ? WHERE id = ?').run(Number.isFinite(score) ? Math.round(score) : null, id); },
   /** Pictures that already have a perceptual hash and are visible or awaiting review (feeds the in-memory index). */
-  hashedRows() { return db.prepare("SELECT id, phash, media_type, width, height FROM media WHERE phash IS NOT NULL AND publish_state IN ('published','review')").all(); },
+  // body-filter hides are reversible (a threshold change shows them again), so they stay indexed: a copy is never stored twice
+  hashedRows() { return db.prepare("SELECT id, phash, media_type, width, height FROM media WHERE phash IS NOT NULL AND (publish_state IN ('published','review') OR (publish_state = 'hidden' AND review_reason LIKE 'physique:%'))").all(); },
   hashInfo(id) { return db.prepare('SELECT phash, media_type, width, height, publish_state FROM media WHERE id = ?').get(id); },
   /** Another place the SAME picture was posted. */
   addAltSource(mediaId, { platform, source_url, author = null, community = null, posted_at = null }) {

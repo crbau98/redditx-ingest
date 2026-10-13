@@ -319,7 +319,7 @@ async function processItemInner(rawItem, feed, adapter, settings) {
     physique: physiqueScore,
   }, tags);
   if (!mediaId) return { outcome: 'dupe' };
-  if (phash && (state === 'published' || state === 'review')) dedupe.remember(mediaId, phash, { mediaType: item.mediaType, width: item.width, height: item.height });
+  if (phash && (state === 'published' || state === 'review' || bodyVerdict)) dedupe.remember(mediaId, phash, { mediaType: item.mediaType, width: item.width, height: item.height });
 
   if (physiqueScore != null && creator) physique.reviewCreator(creator.id, settings); // consistently heavy creators drop out too
 

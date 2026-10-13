@@ -31,7 +31,7 @@ function stateFor(score, settings) {
 }
 
 function lastCreatorAction(id) {
-  return repo.db.prepare("SELECT action, reason FROM moderation_actions WHERE target_type = 'creator' AND target_id = ? ORDER BY id DESC LIMIT 1").get(String(id));
+  return repo.db.prepare("SELECT id, action, reason FROM moderation_actions WHERE target_type = 'creator' AND target_id = ? ORDER BY id DESC LIMIT 1").get(String(id));
 }
 
 function hideCreator(creator, why) {
@@ -50,7 +50,11 @@ function unhideCreator(creator) {
   // a safety report (e.g. underage) waiting for a human keeps the creator hidden whatever the body filter says
   if (repo.db.prepare("SELECT 1 FROM reports WHERE creator_id = ? AND status = 'open' LIMIT 1").get(creator.id)) return false;
   const m = /\[feeds:([^\]]*)\]/.exec(last.reason || '');
-  for (const id of m ? m[1].split(',').filter(Boolean) : []) { if (repo.feeds.get(id)) repo.feeds.update(id, { enabled: true }); }
+  // a feed someone enabled or disabled since the hide keeps that decision
+  const touched = repo.db.prepare("SELECT 1 FROM moderation_actions WHERE target_type = 'feed' AND target_id = ? AND id > ? LIMIT 1");
+  for (const id of m ? m[1].split(',').filter(Boolean) : []) {
+    if (repo.feeds.get(id) && !touched.get(String(id), last.id)) repo.feeds.update(id, { enabled: true });
+  }
   repo.creators.update(creator.id, { status: 'active' });
   repo.logAction('creator', creator.id, 'physique-unhide', 'body filter no longer applies', 'system');
   return true;

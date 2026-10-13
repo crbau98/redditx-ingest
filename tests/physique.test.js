@@ -278,6 +278,46 @@ describe('body filter policy (model replaced by a fake)', () => {
     assert.equal(repo.media.get(id).publish_state, 'review');
   });
 
+  test('the body sweep also measures hidden pictures (without showing them), so one restored later has a score', async () => {
+    const id = repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: 'hid1', source_key: 'reddit:hid1:0', post_key: 'reddit:hid1', source_url: 'https://reddit.com/x', media_type: 'image', media_url: 'https://i.redd.it/hid1.jpg', preview_url: 'https://i.redd.it/hid1.jpg', hash: 'h-hid1', publish_state: 'hidden', review_reason: 'reported:spam' });
+    fake({ 'https://i.redd.it/hid1.jpg': 88 });
+    await maintenance.physiqueSweep({ limit: 500, settings });
+    assert.equal(repo.media.get(id).physique, 88);
+    assert.equal(repo.media.get(id).publish_state, 'hidden'); assert.equal(repo.media.get(id).review_reason, 'reported:spam');
+  });
+
+  test('the body sweep judges each picture with the settings current when its measurement returns', async () => {
+    const store = require('../src/settings');
+    const id = repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: 'thr1', source_key: 'reddit:thr1:0', post_key: 'reddit:thr1', source_url: 'https://reddit.com/x', media_type: 'image', media_url: 'https://i.redd.it/thr1.jpg', preview_url: 'https://i.redd.it/thr1.jpg', hash: 'h-thr1', publish_state: 'published' });
+    const was = store.get().physiqueThreshold;
+    imagefilter._setAnalyzer(async () => { store.update({ physiqueThreshold: 90 }); return { status: 'ok', faces: male, body: { decided: true, score: 80 } }; });
+    try { await maintenance.physiqueSweep({ limit: 500, settings }); } finally { store.update({ physiqueThreshold: was }); }
+    assert.equal(repo.media.get(id).physique, 80);
+    assert.equal(repo.media.get(id).publish_state, 'published', 'threshold raised to 90 while measuring');
+  });
+
+  test('pictures the body filter hid stay in the duplicate index, so a threshold change never shows two copies', async () => {
+    fake({ 'https://i.redd.it/dupheavy.jpg': 90 });
+    const r = await pipeline.processItem(item({ mediaUrl: 'https://i.redd.it/dupheavy.jpg' }), feed, null, settings);
+    assert.equal(r.outcome, 'hidden');
+    repo.db.prepare('UPDATE media SET phash = ? WHERE id = ?').run('ffff0000ffff0000', r.mediaId);
+    assert.ok(repo.media.hashedRows().some((x) => x.id === r.mediaId));
+  });
+
+  test('a creator feed the admin changed after the body filter paused it keeps the admin decision', async () => {
+    const c = repo.creators.create({ handle: 'bigtom', origin: 'admin' });
+    const own = repo.feeds.upsert({ platform: 'reddit', kind: 'user', target: 'bigtom', creatorId: c.id, enabled: 1, trusted: 1, origin: 'admin' }).feed;
+    const scores = {}; ['t1', 't2', 't3', 't4'].forEach((k) => { scores[`https://i.redd.it/${k}.jpg`] = 85; });
+    fake(scores);
+    for (const k of ['t1', 't2', 't3', 't4']) await pipeline.processItem(item({ author: 'bigtom', mediaUrl: `https://i.redd.it/${k}.jpg` }), own, null, settings);
+    assert.equal(repo.creators.get(c.id).status, 'hidden'); assert.equal(repo.feeds.get(own.id).enabled, 0);
+    repo.logAction('feed', own.id, 'enable', 'admin', 'admin'); repo.feeds.update(own.id, { enabled: true });
+    repo.logAction('feed', own.id, 'disable', 'admin', 'admin'); repo.feeds.update(own.id, { enabled: false });
+    physique.reapply({ ...settings, physiqueFilter: false });
+    assert.equal(repo.creators.get(c.id).status, 'active');
+    assert.equal(repo.feeds.get(own.id).enabled, 0, 'the admin switched it off');
+  });
+
   test('the word sweep hides stored chub posts and pauses chub feeds; stats report it', async () => {
     const id = repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: 'ws1', source_key: 'reddit:ws1:0', post_key: 'reddit:ws1', source_url: 'https://reddit.com/x', title: 'superchub belly', media_type: 'image', media_url: 'https://i.redd.it/ws1.jpg', hash: 'h-ws1', publish_state: 'published' });
     const chubFeed = repo.feeds.upsert({ platform: 'reddit', kind: 'community', target: 'chubbyguys', enabled: 1, trusted: 1, origin: 'admin' }).feed;
