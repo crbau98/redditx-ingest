@@ -297,6 +297,7 @@ function paintInfo() {
     it.also && it.also.length ? h('div', { class: 'tagrow' }, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Also on'), it.also.map((a) => h('a', { class: 'tag', href: a.source_url, target: '_blank', rel: 'noopener noreferrer nofollow', title: [a.author, a.community].filter(Boolean).join(' · ') }, platformLabel(a.platform)))) : null,
     h('div', { class: 'row wrap' },
       it.source_url ? h('a', { class: 'btn sm', href: it.source_url, target: '_blank', rel: 'noopener noreferrer nofollow' }, icon('external', 'sm'), 'View original') : null,
+      h('button', { class: 'btn sm ghost', title: 'Recommend less from this creator and these tags', onclick: (e) => { tastes.dislike(it); e.currentTarget.disabled = true; toast('Got it. “For you” will show less like this'); } }, icon('x', 'sm'), 'Not interested'),
       h('button', { class: 'btn sm ghost', onclick: () => openReport({ mediaId: it.id }) }, icon('flag', 'sm'), 'Report')),
     h('div', null, h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase', margin: '4px 0 10px' } }, 'More like this'), rel));
   const paintRelated = (items) => {

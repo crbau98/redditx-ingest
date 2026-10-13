@@ -156,6 +156,7 @@ export async function reels(root, { query }) {
     if (!viewed.has(s.it.id)) { viewed.add(s.it.id); post(`/api/media/${s.it.id}/view`).catch(() => {}); }
     viewHistory.add(s.it.id);
     tastes.record(s.it, 1);
+    s.at = performance.now();
     if (!s.isVideo) return;
     const v = s.stage.querySelector('video');
     if (!v) return;
@@ -165,6 +166,11 @@ export async function reels(root, { query }) {
     v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
   }
   function deactivate(s) {
+    // How long it held attention tunes "For you": a quick swipe past counts against, a long look for.
+    if (s.at) {
+      const sec = (performance.now() - s.at) / 1000; s.at = 0;
+      if (sec < 1.2) tastes.skip(s.it); else if (sec >= (s.isVideo ? 8 : 5)) tastes.record(s.it, 1);
+    }
     if (!s.isVideo) return;
     if (s.handle) { s.handle.destroy(); s.handle = null; }
     releaseVideo(s.stage.querySelector('video'));
