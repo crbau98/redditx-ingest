@@ -2,7 +2,8 @@
 /**
  * Perceptual duplicate detection (the decision layer over lib/phash + lib/phash-index).
  *
- *   live      hashes of every published / in-review picture, kept current through repo state hooks
+ *   live      hashes of every published / in-review picture (and of those the body filter hid: that hide is reversible),
+ *             kept current through repo state hooks
  *   blocked   hashes of pictures an admin (or a gate) removed: a re-upload anywhere is refused too
  *
  * The same picture posted again (another platform, another creator, re-encoded, resized) does not become a second item:
@@ -24,12 +25,13 @@ function load() {
   for (const h of repo.media.phashBlocked()) blocked.add(h, h);
 }
 
-repo.media.onState((id, state) => {
+const indexed = (r) => r.publish_state === 'published' || r.publish_state === 'review' || (r.publish_state === 'hidden' && String(r.review_reason || '').startsWith('physique:'));
+
+repo.media.onState((id) => {
   if (!loaded) return;
-  if (state === 'published' || state === 'review') {
-    const r = repo.media.hashInfo(id);
-    if (r && r.phash) live.add(id, r.phash, { type: r.media_type, aspect: aspectOf(r.width, r.height) });
-  } else live.remove(id);
+  const r = repo.media.hashInfo(id);
+  if (r && r.phash && indexed(r)) live.add(id, r.phash, { type: r.media_type, aspect: aspectOf(r.width, r.height) });
+  else live.remove(id);
 });
 repo.media.onPhashBlocked((hex) => { if (loaded) blocked.add(hex, hex); });
 

@@ -8,6 +8,7 @@ const repo = require('../db/repo');
 const registry = require('../sources');
 const { checkText } = require('../lib/safety');
 const { femaleCheck } = require('../lib/scope');
+const physiqueText = require('../lib/physique').textCheck;
 const { profileUrl } = require('../lib/links');
 
 const defaultInterval = (spec) => {
@@ -19,7 +20,7 @@ const defaultInterval = (spec) => {
  * Add one parsed spec. Returns {status, feed?, creator?, reason?}
  *   created | exists | conflict | external | invalid
  */
-function addSpec(spec, { creatorId = null, origin = 'admin', trusted, hint } = {}) {
+function addSpec(spec, { creatorId = null, origin = 'admin', trusted, hint, bodyOverride = false } = {}) {
   if (typeof spec === 'string') spec = registry.parseInput(spec, hint);
   if (!spec) return { status: 'invalid', reason: 'Not a recognised handle, community or link' };
   if (spec.external) return { status: 'external', spec };
@@ -30,6 +31,11 @@ function addSpec(spec, { creatorId = null, origin = 'admin', trusted, hint } = {
   // Male-only: refuse accounts, communities and searches whose own name reads female / feminine.
   const gender = femaleCheck(spec.target, spec.label);
   if (gender.level === 'hard') return { status: 'invalid', reason: `Not male-focused (${gender.rule})` };
+  // Body filter: chub / gainer / dad-bod accounts and communities are refused while it is on (Admin → Settings).
+  if (!bodyOverride && require('../settings').get().physiqueFilter) {
+    const body = physiqueText(spec.target, spec.label);
+    if (body.heavy) return { status: 'invalid', reason: `Body filter (${body.rule.replace(/^physique:/, '')}): switch it off in Settings to add this` };
+  }
 
   let creator = creatorId ? repo.creators.get(creatorId) : null;
   if (spec.kind === 'user') {
@@ -141,7 +147,18 @@ function moderate(id, action, reason, actor = 'admin') {
   const m = repo.media.get(id);
   if (!m) return null;
   switch (action) {
-    case 'approve': case 'publish': repo.media.update(id, { publish_state: 'published', scope: 'in' }); break;
+    case 'approve': case 'publish':
+      repo.media.update(id, { publish_state: 'published', scope: 'in' });
+      if (m.physique != null) {
+        if (String(m.review_reason || '').startsWith('physique:')) repo.media.setPhysique(id, require('../engine/physique').APPROVED); // overriding the body filter itself: no sweep or setting hides it again
+        else {
+          // approved for another reason (safety / scope review): the body verdict still applies
+          const physique = require('../engine/physique');
+          const v = physique.stateFor(m.physique, require('../settings').get());
+          if (v) repo.media.setState(id, v.state, v.reason, { exact: true });
+        }
+      }
+      break;
     case 'hide': repo.media.setState(id, 'hidden', reason); break;
     case 'flag': repo.media.setState(id, 'review', reason); break;
     case 'reject': case 'remove': repo.media.setState(id, 'removed', reason); break;

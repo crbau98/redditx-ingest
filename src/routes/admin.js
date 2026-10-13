@@ -8,6 +8,7 @@ const events = require('../engine/events');
 const breaker = require('../engine/breaker');
 const maintenance = require('../engine/maintenance');
 const imagefilter = require('../lib/imagefilter');
+const physique = require('../engine/physique');
 const settingsStore = require('../settings');
 const targets = require('../services/targets');
 const portability = require('../services/portability');
@@ -25,7 +26,7 @@ const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
 
 /* ---------------------------------------------------------------- overview */
 router.get('/overview', (req, res) => {
-  res.json({ ...repo.adminOverview(), engine: engine.status(), health: require('../engine/health').stats(), imageFilter: { enabled: settingsStore.get().imageFilter, ...imagefilter.status(), sweep: maintenance.imageSweepProgress(), dedupe: maintenance.hashSweepProgress() }, version: config.version, adminOpen: !config.adminKey });
+  res.json({ ...repo.adminOverview(), engine: engine.status(), health: require('../engine/health').stats(), imageFilter: { enabled: settingsStore.get().imageFilter, ...imagefilter.status(), sweep: maintenance.imageSweepProgress(), dedupe: maintenance.hashSweepProgress() }, physique: { ...physique.stats(settingsStore.get()), sweep: maintenance.physiqueSweepProgress() }, version: config.version, adminOpen: !config.adminKey });
 });
 
 router.get('/stream', (req, res) => {
@@ -89,6 +90,9 @@ router.post('/feeds/import', (req, res) => {
 router.patch('/feeds/:id', (req, res) => {
   if (!repo.feeds.get(req.params.id)) return bad(res, 'Not found', 404);
   const b = req.body || {};
+  // logged, so automatic pauses (e.g. the body filter) never undo an admin's own switch later
+  const was = repo.feeds.get(req.params.id);
+  if (b.enabled !== undefined && !!b.enabled !== !!was.enabled) repo.logAction('feed', was.id, b.enabled ? 'enable' : 'disable', 'admin', 'admin');
   res.json(repo.feeds.update(req.params.id, { label: b.label, enabled: b.enabled, trusted: b.trusted, intervalMin: b.intervalMin, priority: b.priority, resetErrors: !!b.resetErrors, runNow: !!b.runNow }));
 });
 
@@ -189,7 +193,7 @@ router.post('/reports/:id/resolve', (req, res) => {
   const apply = {
     remove: () => report.media_id && repo.media.block(report.media_id, `report:${report.kind}`),
     block_creator: () => report.creator_id && repo.creators.block(report.creator_id, `report:${report.kind}`),
-    restore: () => report.media_id && repo.media.setState(report.media_id, 'published'),
+    restore: () => report.media_id && physique.publish(report.media_id, settingsStore.get()), // the body verdict still applies
     dismiss: () => null,
   };
   if (!apply[action]) return bad(res, 'action must be remove, block_creator, restore or dismiss');
@@ -221,7 +225,18 @@ router.get('/settings', (req, res) => {
     security: { adminKeySet: !!config.adminKey, ageGateEnforced: config.ageGateEnforce },
   });
 });
-router.put('/settings', (req, res) => res.json({ values: settingsStore.update(req.body || {}) }));
+const PHYSIQUE_KEYS = ['physiqueFilter', 'physiqueThreshold', 'physiqueCreatorShare'];
+router.put('/settings', (req, res) => {
+  const before = settingsStore.get();
+  const values = settingsStore.update(req.body || {});
+  // The body filter hides, it never deletes: a new threshold (or switching it off) re-applies to the stored library at once.
+  if (PHYSIQUE_KEYS.some((k) => values[k] !== before[k])) {
+    const applied = physique.reapply(values);
+    if (values.physiqueFilter && !before.physiqueFilter) physique.textSweep(values, { force: true }).catch((e) => events.log('WARN', `Body filter: ${e.message}`));
+    return res.json({ values, physique: applied });
+  }
+  res.json({ values });
+});
 
 /* --------------------------------------------------------------- discovery */
 router.get('/discovery', (req, res) => {
@@ -291,7 +306,13 @@ router.post('/maintenance/sweep', async (req, res) => {
 });
 router.get('/maintenance/image-filter', async (req, res) => {
   const s = settingsStore.get();
-  res.json({ enabled: s.imageFilter, threshold: s.imageFilterThreshold, sweep: { enabled: s.imageSweep, perMinute: s.imageSweepPerTick, ...maintenance.imageSweepProgress() }, dedupe: { enabled: s.dedupe, distance: s.dedupeDistance, ...maintenance.hashSweepProgress() }, model: { available: await imagefilter.available(), ...imagefilter.status() } });
+  res.json({ enabled: s.imageFilter, threshold: s.imageFilterThreshold, sweep: { enabled: s.imageSweep, perMinute: s.imageSweepPerTick, ...maintenance.imageSweepProgress() }, physique: { ...physique.stats(s), sweep: maintenance.physiqueSweepProgress() }, dedupe: { enabled: s.dedupe, distance: s.dedupeDistance, ...maintenance.hashSweepProgress() }, model: { available: await imagefilter.available(), ...imagefilter.status() } });
+});
+router.post('/maintenance/physique-sweep', async (req, res) => {
+  try {
+    const n = Math.min(Math.max(parseInt(req.body && req.body.limit, 10) || 50, 1), 300);
+    res.json({ ok: true, ...(await maintenance.physiqueSweep({ limit: n })), ...maintenance.physiqueSweepProgress() });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 router.post('/maintenance/image-sweep', async (req, res) => {
   try {

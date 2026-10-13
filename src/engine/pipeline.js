@@ -3,8 +3,8 @@
  * The per-item pipeline. Every raw item from every adapter goes through the
  * same ordered gates, so rules are enforced in exactly one place:
  *
- *   resolve -> safety -> blocklist -> scope -> media checks -> dedupe
- *           -> creator -> insert -> tags
+ *   resolve -> safety -> blocklist -> scope -> physique (text) -> media checks -> dedupe
+ *           -> image (faces, physique, perceptual hash) -> creator -> insert -> tags
  */
 const crypto = require('crypto');
 const repo = require('../db/repo');
@@ -14,6 +14,7 @@ const { classify, femaleCheck } = require('../lib/scope');
 const { canonicalUrl, hostOf, hostBlocked, hostTrusted, looksLikeDirectMedia, normalizeMediaUrl, isJunkTitle } = require('../lib/mediaurl');
 const { probeMedia } = require('./probe');
 const imagefilter = require('../lib/imagefilter');
+const physique = require('./physique');
 const dedupe = require('../services/dedupe');
 const events = require('./events');
 
@@ -86,6 +87,15 @@ function blockFemaleCreator(item, feed, rule) {
   }
 }
 
+/** The creator this item belongs to, if one is already known (never creates one). */
+function knownCreator(item, feed) {
+  if (feed.creator_id && ['user', 'feed', 'page'].includes(feed.kind)) return repo.creators.get(feed.creator_id);
+  if (['rss', 'web', 'linkinbio'].includes(feed.platform)) return null;
+  const handle = cleanHandle(item.author);
+  if (!handle || SKIP_AUTHORS.has(handle.toLowerCase())) return null;
+  return repo.creators.byAccount(feed.platform, handle);
+}
+
 /** Which creator does this item belong to? May create one. */
 function resolveCreator(item, feed, adapter) {
   // Feeds that belong to a specific creator (their profile, their RSS, their page).
@@ -122,7 +132,7 @@ function resolveCreator(item, feed, adapter) {
 }
 
 /**
- * @returns {Promise<{outcome: 'added'|'dupe'|'blocked'|'review'|'skipped'|'excluded', reason?: string, mediaId?: string, creatorId?: string}>}
+ * @returns {Promise<{outcome: 'added'|'dupe'|'blocked'|'review'|'hidden'|'skipped'|'excluded', reason?: string, mediaId?: string, creatorId?: string}>}
  */
 async function processItemInner(rawItem, feed, adapter, settings) {
   const item = { ...rawItem, tags: [...(rawItem.tags || [])] };
@@ -170,6 +180,20 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   // (a "gay" search returns mostly women on some platforms). Set "Unclear items from open feeds" to review to keep them.
   if (sc.scope === 'uncertain' && !sc.femaleSoft && !feed.trusted && settings.scopeMode === 'strict' && settings.untrustedUnclear === 'drop') return { outcome: 'excluded', reason: 'scope:no male signal' };
 
+  // ---- 4b. physique (text): "chubby", "superchub", "gainer", "dad bod" ... ----------------------
+  // Only fit / athletic bodies are shown. Words in the item's own text exclude it before anything is downloaded; the same
+  // words in the poster's handle / name / bio hide the creator as well (soft: reversible from the admin console).
+  if (physique.enabled(physique.live(settings))) {
+    const pt = physique.textCheck(item.title, item.text, item.altText, item.community, item.author, item.authorName, item.authorBio, item.tags, item.labels);
+    if (pt.heavy) {
+      if (physique.textCheck(item.author, item.authorName, item.authorBio).heavy) {
+        const c = knownCreator(item, feed);
+        if (c) physique.hideCreator(c, `body filter: profile says "${pt.rule.slice(physique.REASON.length)}"`);
+      }
+      return { outcome: 'excluded', reason: pt.rule };
+    }
+  }
+
   // ---- 5. media sanity ---------------------------------------------------------
   if (isJunkTitle(item.title)) return { outcome: 'skipped', reason: 'junk title' };
   const mediaHost = hostOf(item.mediaUrl);
@@ -192,6 +216,10 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   // ---- 6. dedupe ----------------------------------------------------------------
   if (repo.media.hashExists(hash) || repo.media.keyExists(sourceKey)) return { outcome: 'dupe' };
 
+  // A creator that is already hidden or blocked would be refused at step 7 anyway: refuse now, before any download or model work.
+  const known = knownCreator(item, feed);
+  if (known && known.status !== 'active') return { outcome: 'blocked', reason: 'creator blocked' };
+
   // ---- 6a. fetch the media into our own storage -----------------------------------------
   // Sources whose files cannot be hotlinked (Telegram) hand over a `materialize()` instead of a finished URL. It runs only now,
   // after the cheap text gates and the duplicate check, so rejected posts never cost a download or any storage.
@@ -210,11 +238,14 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   // No face / no image / model unavailable = no verdict: the text gates above already decided.
   // The picture is downloaded ONCE and read twice: faces (policy: women are excluded) and a perceptual hash
   // (policy: the same picture posted again collapses into one item).
+  // With the body filter on, the same model pass also measures the build (pose + silhouette): see engine/physique.
   const wantFaces = settings.imageFilter === true;
   const wantHash = settings.dedupe === true;
+  const wantBody = physique.enabled(physique.live(settings));
   let phash = null;
-  if (wantFaces || wantHash) {
-    const ir = await imagefilter.checkItem(item, { threshold: (settings.imageFilterThreshold || 50) / 100, faces: wantFaces, hash: wantHash });
+  let physiqueScore = null;
+  if (wantFaces || wantHash || wantBody) {
+    const ir = await imagefilter.checkItem(item, { threshold: (settings.imageFilterThreshold || 50) / 100, faces: wantFaces, hash: wantHash, body: wantBody });
     if (ir.female) {
       repo.blocklist.add('hash', hash, 'image filter: female face');
       dedupe.blockHash(ir.phash, 'image filter: female face'); // the same picture under another URL is refused without another look
@@ -222,6 +253,7 @@ async function processItemInner(rawItem, feed, adapter, settings) {
       return { outcome: 'excluded', reason: 'image:female-face' };
     }
     phash = wantHash ? ir.phash : null;
+    physiqueScore = ir.physique;
   }
 
   // ---- 6c. perceptual duplicates -----------------------------------------------------
@@ -249,6 +281,9 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   if (safety.level === 'review') { state = 'review'; reviewReason = `safety:${safety.rule}`; }
   else if (sc.femaleSoft) { state = 'review'; reviewReason = `scope:${sc.rule}`; } // feminine-adjacent wording: a human decides, whatever the feed trust or scope mode
   else if (sc.scope === 'uncertain' && settings.scopeMode === 'strict') { state = 'review'; reviewReason = 'scope:unclear'; }
+  const body = physique.live(settings); // the model pass can be slow: judge with the body-filter settings as they are now
+  const bodyVerdict = state === 'published' ? physique.stateFor(physiqueScore, body) : null;
+  if (bodyVerdict) { state = bodyVerdict.state; reviewReason = bodyVerdict.reason; imagefilter.noteHeavy(); } // kept, hidden: the threshold can move
 
   const description = item.text && item.text !== item.title ? item.text.slice(0, 500) : null;
   const tags = [...item.tags, item.community, platform, item.query];
@@ -282,11 +317,15 @@ async function processItemInner(rawItem, feed, adapter, settings) {
     review_reason: reviewReason,
     posted_at: item.postedAt || new Date().toISOString(),
     phash,
+    physique: physiqueScore,
   }, tags);
   if (!mediaId) return { outcome: 'dupe' };
-  if (phash && (state === 'published' || state === 'review')) dedupe.remember(mediaId, phash, { mediaType: item.mediaType, width: item.width, height: item.height });
+  if (phash && (state === 'published' || state === 'review' || bodyVerdict)) dedupe.remember(mediaId, phash, { mediaType: item.mediaType, width: item.width, height: item.height });
+
+  if (physiqueScore != null && creator) physique.reviewCreator(creator.id, body); // consistently heavy creators drop out too
 
   if (state === 'published') events.newItems(1);
+  if (state === 'hidden') return { outcome: 'hidden', mediaId, creatorId: creator ? creator.id : null, reason: reviewReason };
   return { outcome: state === 'review' ? 'review' : 'added', mediaId, creatorId: creator ? creator.id : null, reason: reviewReason };
 }
 
@@ -297,7 +336,7 @@ async function processItemInner(rawItem, feed, adapter, settings) {
 async function processItem(rawItem, feed, adapter, settings) {
   let result;
   try { result = await processItemInner(rawItem, feed, adapter, settings); } catch (e) { result = { outcome: 'error', error: e }; }
-  if (typeof rawItem.discard === 'function' && result.outcome !== 'added' && result.outcome !== 'review') {
+  if (typeof rawItem.discard === 'function' && result.outcome !== 'added' && result.outcome !== 'review' && result.outcome !== 'hidden') {
     try { await rawItem.discard(); } catch { /* best effort */ }
   }
   if (result.outcome === 'error') throw result.error;

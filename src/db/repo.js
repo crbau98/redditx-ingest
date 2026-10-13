@@ -646,10 +646,11 @@ const mediaQ = {
   byKey: db.prepare('SELECT id FROM media WHERE source_key = ?'),
   byPost: db.prepare('SELECT 1 AS ok FROM media WHERE post_key = ? LIMIT 1'),
   insert: db.prepare(`INSERT INTO media (id, creator_id, feed_id, platform, source_id, source_key, post_key, position, source_url, community, author, title, description,
-      media_type, media_url, preview_url, thumbnail_url, hls_url, has_audio, width, height, duration, mime_type, score, hash, nsfw_level, scope, publish_state, review_reason, posted_at, phash)
+      media_type, media_url, preview_url, thumbnail_url, hls_url, has_audio, width, height, duration, mime_type, score, hash, nsfw_level, scope, publish_state, review_reason, posted_at, phash, physique)
     VALUES (@id, @creator_id, @feed_id, @platform, @source_id, @source_key, @post_key, @position, @source_url, @community, @author, @title, @description,
-      @media_type, @media_url, @preview_url, @thumbnail_url, @hls_url, @has_audio, @width, @height, @duration, @mime_type, @score, @hash, @nsfw_level, @scope, @publish_state, @review_reason, @posted_at, @phash)`),
+      @media_type, @media_url, @preview_url, @thumbnail_url, @hls_url, @has_audio, @width, @height, @duration, @mime_type, @score, @hash, @nsfw_level, @scope, @publish_state, @review_reason, @posted_at, @phash, @physique)`),
   state: db.prepare("UPDATE media SET publish_state = ?, review_reason = COALESCE(?, review_reason), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?"),
+  stateExact: db.prepare("UPDATE media SET publish_state = ?, review_reason = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?"),
   like: db.prepare('UPDATE media SET likes = likes + 1 WHERE id = ?'),
   unlike: db.prepare('UPDATE media SET likes = MAX(0, likes - 1) WHERE id = ?'),
   view: db.prepare('UPDATE media SET views = views + 1 WHERE id = ?'),
@@ -762,9 +763,11 @@ const media = {
   onState(fn) { stateHooks.push(fn); },
   onPhashBlocked(fn) { blockedHooks.push(fn); },
   setPhash(id, hex) { db.prepare('UPDATE media SET phash = ? WHERE id = ?').run(hex || null, id); },
+  setPhysique(id, score) { db.prepare('UPDATE media SET physique = ? WHERE id = ?').run(Number.isFinite(score) ? Math.round(score) : null, id); },
   /** Pictures that already have a perceptual hash and are visible or awaiting review (feeds the in-memory index). */
-  hashedRows() { return db.prepare("SELECT id, phash, media_type, width, height FROM media WHERE phash IS NOT NULL AND publish_state IN ('published','review')").all(); },
-  hashInfo(id) { return db.prepare('SELECT phash, media_type, width, height, publish_state FROM media WHERE id = ?').get(id); },
+  // body-filter hides are reversible (a threshold change shows them again), so they stay indexed: a copy is never stored twice
+  hashedRows() { return db.prepare("SELECT id, phash, media_type, width, height FROM media WHERE phash IS NOT NULL AND (publish_state IN ('published','review') OR (publish_state = 'hidden' AND review_reason LIKE 'physique:%'))").all(); },
+  hashInfo(id) { return db.prepare('SELECT phash, media_type, width, height, publish_state, review_reason FROM media WHERE id = ?').get(id); },
   /** Another place the SAME picture was posted. */
   addAltSource(mediaId, { platform, source_url, author = null, community = null, posted_at = null }) {
     if (!mediaId || !source_url) return false;
@@ -795,7 +798,7 @@ const media = {
           id, creator_id: null, feed_id: null, source_id: null, source_key: null, post_key: null, position: 0, source_url: null,
           community: null, author: null, title: null, description: null, preview_url: null, thumbnail_url: null, hls_url: null,
           has_audio: 0, width: null, height: null, duration: null, mime_type: null, score: 0, nsfw_level: 'explicit', scope: 'in',
-          publish_state: 'published', review_reason: null, posted_at: nowIso(), phash: null, ...row,
+          publish_state: 'published', review_reason: null, posted_at: nowIso(), phash: null, physique: null, ...row,
         });
       } catch (e) {
         // Duplicate hash / source_key: expected and harmless. Anything else is a real bug.
@@ -809,10 +812,11 @@ const media = {
     return run();
   },
 
-  setState(id, state, reason) {
+  /** `exact`: write `reason` as given (null clears it) instead of keeping the previous reason when none is passed. */
+  setState(id, state, reason, { exact = false } = {}) {
     if (!PUBLISH_STATES.includes(state)) throw new Error('bad state');
     const m = db.prepare('SELECT creator_id FROM media WHERE id = ?').get(id);
-    mediaQ.state.run(state, reason || null, id);
+    (exact ? mediaQ.stateExact : mediaQ.state).run(state, reason || null, id);
     if (m && m.creator_id) creators.refreshStats(m.creator_id);
     notifyState(id, state);
   },
