@@ -437,7 +437,7 @@ function wireGestures() {
     g = null;
     if (!axis) {
       // a tap on the dark area around the media (images report their own taps through zoom.js)
-      if (e.type === 'pointerup' && !onMedia) toggleChrome();
+      if (!onMedia) toggleChrome();
       return;
     }
     const m = media();
@@ -468,7 +468,8 @@ function wireGestures() {
     } else reset(true);
   };
   S.stage.addEventListener('pointerup', end);
-  S.stage.addEventListener('pointercancel', end);
+  // the browser took the touch away: drop the gesture, never act on it
+  S.stage.addEventListener('pointercancel', (e) => { if (g && e.pointerId === g.id) { g = null; reset(true); } });
   // clicking the dark backdrop (not the media) closes on desktop
   S.stage.addEventListener('click', (e) => { if (e.target === S.stage && S.lastPointer === 'mouse') closeLightbox(); });
 }

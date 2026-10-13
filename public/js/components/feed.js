@@ -53,7 +53,15 @@ export function createFeed({ query = {}, endpoint = '/api/media', pageSize, empt
     openLightbox(masonry.items, Math.max(0, idx), { loadMore: () => load().then(() => masonry.items) });
   }
 
-  async function load() {
+  // a caller arriving while a page is in flight (the viewer at the last item) waits for that page
+  let inflight = null;
+  function load() {
+    if (loading && inflight) return inflight;
+    inflight = loadPage();
+    return inflight;
+  }
+
+  async function loadPage() {
     if (loading || done || destroyed) return;
     loading = true; errored = false;
     sentinel.replaceChildren(h('div', { class: 'spinner' }));
