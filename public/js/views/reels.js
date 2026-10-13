@@ -156,7 +156,7 @@ export async function reels(root, { query }) {
     mount(s);
     if (!viewed.has(s.it.id)) { viewed.add(s.it.id); post(`/api/media/${s.it.id}/view`).catch(() => {}); }
     viewHistory.add(s.it.id);
-    s.at = performance.now(); // the taste signal waits for how long it held attention (deactivate)
+    s.at = performance.now(); s.ms = 0; // the taste signal waits for how long it held attention (settle)
     if (!s.isVideo) return;
     const v = s.stage.querySelector('video');
     if (!v) return;
@@ -166,14 +166,17 @@ export async function reels(root, { query }) {
     v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
   }
   // How long a slide held attention tunes "For you": a quick swipe past counts against, a long look
-  // for. Settled the moment the slide stops being the active one (it may stay mounted as a buffer).
-  function settle(s) {
-    if (!s || !s.at) return;
-    const sec = (performance.now() - s.at) / 1000; s.at = 0;
-    if (sec < 1.2) tastes.skip(s.it); else tastes.record(s.it, sec >= (s.isVideo ? 8 : 5) ? 2 : 1);
+  // for. Settled the moment the slide stops being the active one (it may stay mounted as a buffer);
+  // time with the tab hidden doesn't count. Leaving Reels (a tap on the creator, a route change) is
+  // not a swipe, so a teardown never counts as a skip.
+  const dwell = (s) => (s.ms || 0) + (s.at ? performance.now() - s.at : 0);
+  function settle(s, { teardown = false } = {}) {
+    if (!s || (!s.at && !s.ms)) return;
+    const sec = dwell(s) / 1000; s.at = 0; s.ms = 0;
+    if (sec < 1.2) { if (!teardown) tastes.skip(s.it); } else tastes.record(s.it, sec >= (s.isVideo ? 8 : 5) ? 2 : 1);
   }
   function deactivate(s) {
-    settle(s);
+    settle(s, { teardown: true });
     if (!s.isVideo) return;
     if (s.handle) { s.handle.destroy(); s.handle = null; }
     releaseVideo(s.stage.querySelector('video'));
@@ -277,7 +280,11 @@ export async function reels(root, { query }) {
     bus.on('follow', () => slides.forEach((s) => s.paintFollow())),
   ];
   // Pause when the tab is hidden; resume when it returns.
-  const onVis = () => { const v = slides[active] && slides[active].stage.querySelector('video'); if (!v) return; if (document.hidden) v.pause(); else if (!lightboxOpen()) v.play().catch(() => {}); };
+  const onVis = () => {
+    const cur = slides[active];
+    if (cur && document.hidden && cur.at) { cur.ms = dwell(cur); cur.at = 0; } // pause the dwell clock
+    else if (cur && !document.hidden && !cur.at && cur.ms) cur.at = performance.now();
+    const v = cur && cur.stage.querySelector('video'); if (!v) return; if (document.hidden) v.pause(); else if (!lightboxOpen()) v.play().catch(() => {}); };
   document.addEventListener('visibilitychange', onVis);
   // The viewer has its own player: pause ours while it is open.
   const onHash = () => { const v = slides[active] && slides[active].stage.querySelector('video'); if (v && lightboxOpen()) v.pause(); };

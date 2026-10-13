@@ -190,6 +190,15 @@ describe('duplicate creators', () => {
     assert.ok(links.slice(1).every((c) => c.match.some((m) => m.startsWith('same link'))));
     assert.ok(!groupOf(loner.id));
     assert.ok(groups.every((g) => g.every((c) => c.links === undefined)), 'raw links are not sent');
+    // shared default avatars are not evidence; a unique picture plus the same name is
+    const pic = 'https://files.example.social/accounts/avatars/original/missing.png';
+    const m1 = repo.creators.create({ handle: 'alpha_mast', avatarUrl: pic }); const m2 = repo.creators.create({ handle: 'zed_other', avatarUrl: pic });
+    const p1 = repo.creators.create({ handle: 'kai_one', displayName: 'Kai Storm', avatarUrl: 'https://cdn.example.com/u/kai-storm-77.jpg' });
+    const p2 = repo.creators.create({ handle: 'stormy_k', displayName: 'Kai Storm', avatarUrl: 'https://cdn.example.com/u/kai-storm-77.jpg' });
+    const again = repo.creators.duplicates();
+    const g = (id) => again.find((x) => x.some((c) => c.id === id));
+    assert.ok(!g(m1.id) && !g(m2.id), 'placeholder avatars do not group strangers');
+    assert.ok(g(p1.id) && g(p1.id).some((c) => c.id === p2.id && c.match.includes('same profile picture')));
   });
 });
 
@@ -197,6 +206,8 @@ describe('Reels taste signals', () => {
   const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'public', 'js', 'views', 'reels.js'), 'utf8');
   test('dwell is settled when a slide stops being active, not when its buffer is torn down', () => {
     assert.match(src, /if \(slides\[active\]\) \{ settle\(slides\[active\]\);/);
+    assert.match(src, /function deactivate\(s\) \{\s*settle\(s, \{ teardown: true \}\)/, 'leaving Reels is not a skip');
+    assert.match(src, /document\.hidden && cur\.at\) \{ cur\.ms = dwell\(cur\)/, 'background time does not count');
     assert.doesNotMatch(src.match(/function activate\(s\) \{[\s\S]*?\n {2}\}/)[0], /tastes\.record/, 'no positive signal before the dwell is known');
   });
   test('later For you pages reuse the taste the session started with', () => {

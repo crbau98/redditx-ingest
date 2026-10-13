@@ -350,7 +350,19 @@ creators.duplicates = function duplicates() {
     }
   };
   bucket((r) => { try { return JSON.parse(r.links || '[]').map((l) => linkKey(l && l.url)).filter(Boolean); } catch { return []; } }, (k) => `same link (${k})`, 6);
-  bucket((r) => r.avatar_url, 'same profile picture', 10);
+  // A picture alone is weak evidence (instances hand out shared default avatars): only a URL no more
+  // than two creators use, that doesn't look like a placeholder, and only with a matching name or style.
+  const avatarUses = new Map();
+  for (const r of rows) if (r.avatar_url) avatarUses.set(r.avatar_url, (avatarUses.get(r.avatar_url) || 0) + 1);
+  const firstPic = new Map(); const lib0 = library(); const sim0 = require('../lib/similarity');
+  for (const r of rows) {
+    const u = r.avatar_url;
+    if (!u || u.length < 10 || avatarUses.get(u) > 2 || /(default|missing|placeholder|anonymous|no[-_]?avatar|blank)/i.test(u)) continue;
+    const o = firstPic.get(u);
+    if (!o) { firstPic.set(u, r); continue; }
+    const sameName = nameKey(o.display_name).length >= 4 && nameKey(o.display_name) === nameKey(r.display_name);
+    if (sameName || sim0.between(lib0, GENERIC_TAGS, o.id, r.id) >= 0.2) join(o.id, r.id, 'same profile picture');
+  }
   bucket((r) => core(r.handle), 'same handle', 4);
   // One typo apart: every handle's single-character deletions meet in a shared key.
   const del = new Map();
