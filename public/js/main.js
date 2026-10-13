@@ -145,7 +145,10 @@ function buildShell() {
     if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button) return;
     if (a.getAttribute('href') === (location.hash || '#/')) {
       e.preventDefault();
-      window.scrollTo({ top: 0, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+      const behavior = matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+      window.scrollTo({ top: 0, behavior });
+      const track = document.querySelector('.reels-track'); // Reels scrolls its own track, not the page
+      if (track) track.scrollTo({ top: 0, behavior });
       return;
     }
     freshNav = true;

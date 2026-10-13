@@ -108,10 +108,13 @@ export function createFeed({ query = {}, endpoint = '/api/media', pageSize, empt
 
   const saved = stash.get(stashKey);
   stash.delete(stashKey);
-  const restored = !!(saved && Date.now() - saved.at < STASH_MS);
+  // "Hide seen" means what you have opened since, too (e.g. the item you left the page through)
+  const keep = saved ? (hideSeen ? saved.items.filter((it) => !history.has(it.id)) : saved.items) : [];
+  const restored = !!(saved && keep.length && Date.now() - saved.at < STASH_MS);
   if (restored) {
     ({ page, total, done, fetched, hidden, seed, limit } = saved); // its own page size: density may have changed since
-    masonry.add(saved.items);
+    hidden += saved.items.length - keep.length;
+    masonry.add(keep);
     if (done) sentinel.replaceChildren(h('span', { class: 'muted' }, 'You’ve reached the end'));
     queueMicrotask(() => {
       if (destroyed) return;
