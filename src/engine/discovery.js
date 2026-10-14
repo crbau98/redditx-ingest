@@ -480,12 +480,12 @@ async function blueskyLookalikes({ creators = 4, aborted = () => false } = {}) {
 }
 
 /**
- * Keyword people search: Bluesky accounts whose name/bio match, and the RedGIFs creators behind the
- * top results for the keyword. Uses the same rotating community keywords (one per run).
+ * Keyword people search: Bluesky and Misskey-family accounts whose name/bio match, and the RedGIFs
+ * creators behind the top results for the keyword. Uses the same rotating community keywords (one per run).
  */
 async function peopleSearch({ aborted = () => false } = {}) {
   const list = keywordList();
-  const out = { searched: 0, found: 0, bluesky: 0, redgifs: 0 };
+  const out = { searched: 0, found: 0, bluesky: 0, redgifs: 0, misskey: 0 };
   if (!list.length) return out;
   let idx = parseInt(repo.discoveryState.get('people.index', '0'), 10) || 0;
   const kw = list[idx % list.length];
@@ -502,6 +502,20 @@ async function peopleSearch({ aborted = () => false } = {}) {
         if (c && c.status === 'pending' && c.scope !== 'excluded') { out.found++; out.bluesky++; }
       }
     } catch (e) { events.log('WARN', `Discovery: Bluesky people search "${kw}" — ${e.message}`); }
+  }
+  const mk = registry.get('misskey');
+  if (mk && mk.searchUsers && !aborted()) {
+    for (const host of (config.misskeyInstances || []).slice(0, 2)) {
+      if (aborted()) break;
+      try {
+        out.searched++;
+        for (const u of await mk.searchUsers(kw, host, 10)) {
+          if (!CREATOR_STRONG.test(`${u.displayName || ''} ${u.description || ''}`)) continue;
+          const c = consider(parseProfile(`@${u.username}@${u.host}`, { platform: 'misskey' }), 'search', `misskey-people:${kw}`, { displayName: u.displayName, bio: u.description, avatarUrl: u.avatar, popularity: u.followers });
+          if (c && c.status === 'pending' && c.scope !== 'excluded') { out.found++; out.misskey++; }
+        }
+      } catch (e) { events.log('WARN', `Discovery: Misskey people search "${kw}" on ${host} — ${e.message}`); }
+    }
   }
   const rg = registry.get('redgifs');
   if (rg && rg.searchCreators && !aborted()) {
