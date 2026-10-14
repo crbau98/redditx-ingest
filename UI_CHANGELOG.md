@@ -1,5 +1,10 @@
 # UI changelog
 
+## 2026-10-14 — v5 platform switcher, phase 2 of Features and usability
+
+| Change | Files |
+|---|---|
+| **Platform switcher** for a creator's page: a row of pills (All, then each platform PRISM has his posts from, busiest first, with counts) that filters his feed; arrow keys move and pick. Hidden when he only posts in one place. Below it, his paid pages (OnlyFans first, Fansly, JustFor.Fans and others) as link-out cards with a Free tier badge and the price when known; one swipeable row on phones. The creator page mounts it (Design thread) | `components/platform-switcher.js`, `components/elsewhere.js` (`paidPages`), `css/ux.css` |
 ## 2026-10-14 — v5 "Motion", phase 1: one motion vocabulary, shared elements
 
 **Design direction**: nothing just appears or vanishes. Things that move between views keep their identity on the way, and every moving part in the app speaks the same three springs.
