@@ -58,6 +58,22 @@ export function get(path, query, opts) {
   promise.catch(() => { if (cache.get(url) && cache.get(url).promise === promise) cache.delete(url); });
   return promise.then((d) => structuredClone(d));
 }
+/**
+ * A read that carries its question in a POST body (a follow list does not fit in a URL). Shares
+ * the GET cache, and unlike `post` it never clears it: nothing on the server changes.
+ */
+export function query(path, body, opts) {
+  const key = `POST ${path} ${JSON.stringify(body ?? {})}`;
+  const run = () => api(path, { method: 'POST', body: body ?? {}, ...opts });
+  if (opts && (opts.signal || opts.fresh)) return run();
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.promise.then((d) => structuredClone(d));
+  const promise = run();
+  cache.set(key, { at: Date.now(), promise });
+  if (cache.size > 250) cache.delete(cache.keys().next().value);
+  promise.catch(() => { if (cache.get(key) && cache.get(key).promise === promise) cache.delete(key); });
+  return promise.then((d) => structuredClone(d));
+}
 /** Warm the cache for a likely next request (hover, idle time). Errors are ignored. */
 export function prefetch(path, query) { get(path, query).catch(() => {}); }
 export function clearApiCache() { cache.clear(); }

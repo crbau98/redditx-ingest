@@ -10,6 +10,7 @@ const config = require('./config');
 require('./db'); // runs migrations
 
 const publicRoutes = require('./routes/public');
+const followRoutes = require('./routes/follow');
 const proxyRoutes = require('./routes/proxy');
 const adminRoutes = require('./routes/admin');
 const age = require('./middleware/age');
@@ -63,6 +64,7 @@ function createApp() {
   // Proxy + HLS sit behind the age gate too (they serve the content itself).
   app.use('/api', (req, res, next) => (['/proxy', '/hls'].includes(req.path) ? age.requireAge(req, res, next) : next()));
   app.use('/api', proxyRoutes);
+  app.use('/api', followRoutes);
   app.use('/api', publicRoutes);
   app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 

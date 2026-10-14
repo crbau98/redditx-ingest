@@ -18,6 +18,7 @@ function staticCommands() {
   const go = (path, query) => () => navigate(path, query || {});
   return [
     { group: 'Go to', icon: 'home', label: 'Home', run: go('/') },
+    { group: 'Go to', icon: 'rss', label: 'Following', hint: 'new from creators you follow', run: go('/following') },
     { group: 'Go to', icon: 'compass', label: 'Explore', run: go('/explore') },
     { group: 'Go to', icon: 'film', label: 'Reels', hint: 'full-screen, swipe through', run: go('/reels') },
     { group: 'Go to', icon: 'layers', label: 'Browse tags & sources', run: go('/browse') },
@@ -31,7 +32,7 @@ function staticCommands() {
     { group: 'Actions', icon: 'shuffle', label: 'Shuffle reels', run: go('/reels', { sort: 'random', type: 'all' }) },
     { group: 'Actions', icon: 'video', label: 'Newest videos', run: go('/explore', { type: 'video', sort: 'recent' }) },
     { group: 'Actions', icon: 'flame', label: 'Trending this week', run: go('/explore', { sort: 'trending', since: 'week' }) },
-    { group: 'Actions', icon: 'heart', label: 'Latest from people I follow', run: go('/explore', { following: '1', sort: 'recent' }) },
+    { group: 'Actions', icon: 'heart', label: 'Latest from people I follow', run: go('/following') },
     { group: 'Actions', icon: document.documentElement.dataset.theme === 'light' ? 'moon' : 'sun', label: 'Toggle light / dark theme', run: () => { prefs.theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'; } },
     { group: 'Actions', icon: 'palette', label: 'Display settings', hint: 'theme, accent colour, grid', run: () => import('./display.js').then((m) => m.openDisplaySettings()) },
     { group: 'Actions', icon: 'eye', label: prefs.hideSeen ? 'Show items I’ve already seen' : 'Hide items I’ve already seen', run: () => { prefs.hideSeen = !prefs.hideSeen; } },
