@@ -95,11 +95,15 @@ function parsePost(post) {
   const url = decodeHtml(src.url_overridden_by_dest || src.url || '');
   const host = hostOf(url);
 
+  // A crosspost of somebody else's post is credited to the original poster; his own crossposts stay his.
+  const original = cp && !ownMedia && cp.author && cp.author !== '[deleted]' && String(cp.author).toLowerCase() !== String(d.author || '').toLowerCase() ? cp.author : null;
   const base = {
     sourceId: d.id,
     title: clip(d.title || '', 300),
     text: clip(d.selftext || '', 400),
-    author: d.author,
+    author: original || d.author,
+    ...(original ? { repostOf: { platform: 'reddit', handle: original, via: d.author } } : {}),
+    ...(cp && cp.subreddit && String(cp.subreddit).toLowerCase() !== String(d.subreddit || '').toLowerCase() ? { crosspostFrom: cp.subreddit } : {}),
     community: d.subreddit,
     score: d.score || 0,
     postedAt: toIso(d.created_utc),

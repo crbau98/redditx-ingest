@@ -19,6 +19,7 @@ const config = require('../config');
 const net = require('../lib/net');
 const cache = require('../lib/media-cache');
 const repo = require('../db/repo');
+const playback = require('../engine/playback');
 
 const router = express.Router();
 
@@ -77,6 +78,15 @@ router.get('/proxy', async (req, res) => {
 
   const status = up.statusCode;
   const type = String(up.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  // A stale RedGIFs / X link: ask the source for a current one and send the player there (every video plays in PRISM).
+  if ([401, 403, 404, 410].includes(status) && playback.canRefresh(t.host)) {
+    up.resume();
+    const fresh = await playback.refresh(t.url);
+    if (fresh && fresh !== t.url && !res.headersSent) {
+      res.set({ 'Cache-Control': 'no-store', 'Cross-Origin-Resource-Policy': 'same-origin' });
+      return res.redirect(307, `/api/proxy?url=${encodeURIComponent(fresh)}`);
+    }
+  }
   if (status >= 400) { up.resume(); return sendError(res, [status === 404 || status === 410 ? 404 : status >= 500 ? 502 : status, 'Upstream error']); }
   if (type === 'image/svg+xml' || type.startsWith('text/') || type === 'application/json' || type === 'application/xml') {
     up.resume(); return sendError(res, [415, 'Unsupported media type']);

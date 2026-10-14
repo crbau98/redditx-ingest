@@ -16,7 +16,7 @@
 const config = require('../config');
 const net = require('../lib/net');
 const http = require('./http').forPlatform('bluesky', 400);
-const { toIso, clip, errorDetail } = require('./util');
+const { toIso, clip, errorDetail, repostsOn } = require('./util');
 const { extractLinks } = require('../lib/links');
 
 const base = config.baseUrls.bsky;
@@ -98,11 +98,14 @@ function mediaOf(embed) {
   return [];
 }
 
-/** feed[] view entry -> items. Reposts are skipped (the original poster owns it). */
+/** feed[] view entry -> items. A repost is kept (setting "reposts") and credited to the original poster. */
 function parsePostView(entry) {
   const post = entry.post || entry;
   if (!post || !post.uri) return [];
-  if (entry.reason && /reasonRepost/.test(entry.reason.$type || '')) return [];
+  const reposted = entry.reason && /reasonRepost/.test(entry.reason.$type || '');
+  const via = reposted && entry.reason.by ? entry.reason.by.handle || null : null;
+  // Kept only when we know who reposted it and it is somebody else's post (a self-repost adds nothing).
+  if (reposted && (!repostsOn() || !via || via === (post.author && post.author.handle))) return [];
   const selfLabels = post.record && post.record.labels && Array.isArray(post.record.labels.values) ? post.record.labels.values : [];
   const labels = [...(post.labels || []), ...selfLabels, ...((post.author && post.author.labels) || [])].map((l) => l && l.val).filter(Boolean);
   if (labels.some((l) => LOGIN_REQUIRED.has(l))) return [];
@@ -135,6 +138,7 @@ function parsePostView(entry) {
     labels,
     nsfw,
     trusted: true,
+    ...(reposted && handle ? { repostOf: { platform: 'bluesky', handle, via } } : {}),
   }));
 }
 

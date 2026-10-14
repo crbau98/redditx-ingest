@@ -60,6 +60,44 @@ function computeNextRun(feed, failures, retryAfterMs = 0, factor = 1) {
 const ITEM_CONCURRENCY = 4;
 
 /* -------------------------------------------------------------- run a feed */
+/**
+ * Reposts and crossposts are ways in to more creators and more sources (v5 A6):
+ *   - the original poster of a repost becomes a creator (resolveCreator) and is auto-followed like any other;
+ *   - an account in an open feed that reposts known creators is a candidate source ("mention" signal per creator), so a
+ *     fan account that keeps reposting followed creators is followed itself once discovery scores it high enough;
+ *   - the subreddit a creator's crosspost came from is a candidate community ("hangout").
+ */
+function noteWaysIn(raw, r, feed, w) {
+  const rp = raw.repostOf;
+  if (rp && r.creatorId) {
+    w.originals.add(r.creatorId);
+    const ownFeed = feed.kind === 'user' && String(feed.target).toLowerCase() === String(rp.via || '').toLowerCase();
+    if (rp.via && !ownFeed) {
+      const k = String(rp.via);
+      if (!w.reposters.has(k)) w.reposters.set(k, new Set());
+      w.reposters.get(k).add(String(rp.handle));
+    }
+  }
+  if (raw.crosspostFrom && feed.platform === 'reddit' && feed.trusted) w.hangouts.add(String(raw.crosspostFrom).toLowerCase());
+}
+
+const REPOSTER_KIND = { x: 'user', bluesky: 'user', tumblr: 'user', reddit: 'user' };
+function followWaysIn(w, feed) {
+  if (!w.reposters.size && !w.hangouts.size) return;
+  let discovery;
+  try { discovery = require('./discovery'); } catch { return; }
+  for (const [via, originals] of w.reposters) {
+    const kind = REPOSTER_KIND[feed.platform];
+    if (!kind) continue;
+    for (const handle of originals) {
+      try { discovery.consider({ platform: feed.platform, kind, target: via, label: via, ingestable: true }, 'mention', `reposts ${handle}`); } catch { /* best effort */ }
+    }
+  }
+  for (const sub of w.hangouts) {
+    try { discovery.consider({ platform: 'reddit', kind: 'community', target: sub, label: `r/${sub}`, ingestable: true }, 'hangout', `crosspost in ${feed.label || feed.target}`); } catch { /* best effort */ }
+  }
+}
+
 async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
   const feed = typeof feedOrId === 'string' ? repo.feeds.get(feedOrId) : feedOrId;
   if (!feed) return { status: 'error', error: 'feed not found' };
@@ -124,6 +162,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     // Items are processed a few at a time: most of the wait is network (probing unknown hosts, resolving RedGIFs
     // links, downloading a picture for the image filter), and the database steps between awaits are synchronous
     // and idempotent (a duplicate hash simply loses the insert), so overlapping them is safe and much faster.
+    const waysIn = { originals: new Set(), reposters: new Map(), hangouts: new Set() };
     let next = 0;
     const worker = async () => {
       for (;;) {
@@ -134,6 +173,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
         // the body filter's settings are re-read per item and after the model pass (a run can take minutes): see physique.live
         try { r = await processItem(raw, feed, adapter, { ...cfg, liveBody: true }); } catch (e) { r = { outcome: 'skipped', reason: `error: ${e.message}` }; }
         if (r.creatorId) touched.add(r.creatorId);
+        if (r.outcome === 'added' || r.outcome === 'review' || r.outcome === 'dupe') noteWaysIn(raw, r, feed, waysIn);
         switch (r.outcome) {
           case 'added': stats.added++; break;
           case 'review': stats.review++; stats.added++; break;
@@ -151,6 +191,8 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     for (const id of touched) repo.creators.refreshStats(id);
     if (feed.creator_id) repo.creators.refreshStats(feed.creator_id);
     if (feed.kind !== 'user') autoTrack(touched, cfg);
+    else if (waysIn.originals.size) autoTrack(waysIn.originals, cfg); // creators this account reposts
+    followWaysIn(waysIn, feed);
 
     const status = stats.fetched === 0 ? 'empty' : 'ok';
     // "Why zero?": a run that adds nothing says why (nothing came back / all dupes / everything filtered).
