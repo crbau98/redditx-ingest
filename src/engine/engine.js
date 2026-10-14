@@ -16,6 +16,7 @@ const settingsStore = require('../settings');
 const breaker = require('./breaker');
 const events = require('./events');
 const { processItem } = require('./pipeline');
+const physique = require('./physique');
 const { applyProfile, autoTrack } = require('./creators');
 
 const state = {
@@ -112,12 +113,13 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     }).slice(0, runLimit * 4);
     stats.fetched = items.length;
 
-    if (result.profile) applyProfile(feed, result.profile, cfg);
+    // the fetch can take a while: profile decisions read the body filter's settings as they are now (see physique.live)
+    if (result.profile) applyProfile(feed, result.profile, { ...cfg, liveBody: true });
     if (result.discoveredFeed && feed.creator_id && cfg.autoLinkProfiles) {
       const d = result.discoveredFeed;
-      repo.feeds.upsert({ platform: d.platform, kind: d.kind, target: d.target, creatorId: feed.creator_id, trusted: 1, origin: 'linked', intervalMin: 180 });
+      physique.screenFeed(repo.feeds.upsert({ platform: d.platform, kind: d.kind, target: d.target, creatorId: feed.creator_id, trusted: 1, origin: 'linked', intervalMin: 180 }));
     }
-    if (result.links && feed.creator_id) applyProfile(feed, { links: result.links }, cfg);
+    if (result.links && feed.creator_id) applyProfile(feed, { links: result.links }, { ...cfg, liveBody: true });
 
     // Items are processed a few at a time: most of the wait is network (probing unknown hosts, resolving RedGIFs
     // links, downloading a picture for the image filter), and the database steps between awaits are synchronous
@@ -129,13 +131,15 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
         const raw = items[next++];
         if (!raw) return;
         let r;
-        try { r = await processItem(raw, feed, adapter, cfg); } catch (e) { r = { outcome: 'skipped', reason: `error: ${e.message}` }; }
+        // the body filter's settings are re-read per item and after the model pass (a run can take minutes): see physique.live
+        try { r = await processItem(raw, feed, adapter, { ...cfg, liveBody: true }); } catch (e) { r = { outcome: 'skipped', reason: `error: ${e.message}` }; }
         if (r.creatorId) touched.add(r.creatorId);
         switch (r.outcome) {
           case 'added': stats.added++; break;
           case 'review': stats.review++; stats.added++; break;
           case 'dupe': stats.dupes++; break;
           case 'blocked': stats.blocked++; break;
+          case 'hidden': stats.skipped++; reasons['body filter (kept, hidden)'] = (reasons['body filter (kept, hidden)'] || 0) + 1; break;
           default: stats.skipped++; reasons[r.reason || r.outcome] = (reasons[r.reason || r.outcome] || 0) + 1;
         }
         if (r.outcome === 'blocked' && /^safety:/.test(r.reason || '')) events.log('WARN', `Blocked by safety gate (${r.reason}) in ${tag}`);

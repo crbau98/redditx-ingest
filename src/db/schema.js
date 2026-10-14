@@ -436,17 +436,31 @@ function v6(db) {
 }
 
 /**
- * v7 (PRISM 4.14): OnlyFans leads. Every OnlyFans handle PRISM sees named in a bio, a post or a web
+ * v7 (PRISM 4.14): physique. `physique` is the picture's heaviness score (0 = lean / athletic .. 100 = very large; NULL =
+ * not measured: no torso in view, or not checked yet). Items at or above the admin threshold are hidden, not deleted, so
+ * moving the threshold re-applies to the whole library in both directions.
+ */
+function v7(db) {
+  const cols = db.prepare('PRAGMA table_info(media)').all().map((c) => c.name);
+  if (!cols.includes('physique')) db.exec('ALTER TABLE media ADD COLUMN physique INTEGER');
+  db.exec('CREATE INDEX IF NOT EXISTS ix_media_physique ON media(creator_id, physique) WHERE physique IS NOT NULL');
+}
+
+/**
+ * v8 (PRISM 4.14): OnlyFans leads. Every OnlyFans handle PRISM sees named in a bio, a post or a web
  * search result, whether or not we follow that person yet. onlyfans.com itself is never read; a lead is
  * worked by finding the same person's free public accounts elsewhere (RedGIFs, Bluesky, X, Reddit...).
  *   status   pending (not looked for yet) | searching (looked, nothing yet) | found (accounts queued in
  *            discovery) | claimed (a followed creator links to this page) | rejected (safety / scope)
  *   sources  JSON array of creator ids whose posts named it (shout-outs, promo channels)
  */
-function v7(db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS onlyfans_leads (
-      handle TEXT PRIMARY KEY COLLATE NOCASE,
+function v8(db) {
+ const cols = db.prepare('PRAGMA table_info(media)').all().map((c) => c.name);
+ if (!cols.includes('physique')) db.exec('ALTER TABLE media ADD COLUMN physique INTEGER');
+ db.exec('CREATE INDEX IF NOT EXISTS ix_media_physique ON media(creator_id, physique) WHERE physique IS NOT NULL');
+ db.exec(`
+   CREATE TABLE IF NOT EXISTS onlyfans_leads (
+     handle TEXT PRIMARY KEY COLLATE NOCASE,
       creator_id TEXT REFERENCES creators(id) ON DELETE SET NULL,
       status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','searching','found','claimed','rejected')),
       mentions INTEGER NOT NULL DEFAULT 0,
@@ -467,7 +481,7 @@ function v7(db) {
   `);
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7];
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

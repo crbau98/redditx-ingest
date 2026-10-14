@@ -37,6 +37,14 @@ function applyProfile(feed, profile, settings) {
   }
 
   repo.creators.enrich(creator.id, { displayName: profile.displayName, bio: profile.bio, avatarUrl: profile.avatarUrl, bannerUrl: profile.bannerUrl });
+
+  // Body filter: a refreshed profile that now reads chub / gainer / dad bod hides the creator (reversible, see engine/physique).
+  // The profile is stored first, so switching the filter off and on again re-reaches the same verdict.
+  const physique = require('./physique');
+  if (physique.enabled(physique.live(settings))) {
+    const body = physique.textCheck(creator.handle, profile.displayName, profile.bio);
+    if (body.heavy && physique.hideCreator(repo.creators.get(creator.id), `body filter: profile says "${body.rule.slice(physique.REASON.length)}"`)) return { ...out, hidden: true };
+  }
   if (profile.verified && !creator.verified) repo.creators.update(creator.id, { verified: true });
 
   const externals = [];
@@ -58,6 +66,7 @@ function applyProfile(feed, profile, settings) {
       platform: l.platform, kind: l.kind, target: l.target, label: l.label, creatorId: creator.id, trusted: 1, origin: 'linked',
       intervalMin: (adapter.intervalMin && adapter.intervalMin[l.kind]) || 240,
     });
+    physique.screenFeed(r);
     if (r.created) { out.linked++; events.log('INFO', `Linked ${l.platform}:${l.target} to ${creator.handle}`); }
   }
   // "OnlyFans: @name" written out in the bio, with no link.

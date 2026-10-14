@@ -143,7 +143,7 @@ router.post('/report', reportLimiter, (req, res) => {
   // Safety reports act immediately; a human reviews afterwards.
   if (AUTO_HIDE_KINDS.has(kind)) {
     if (media) repo.media.setState(media.id, 'hidden', `reported:${kind}`);
-    if (creator && kind === 'underage') repo.creators.update(creator.id, { status: 'hidden' });
+    if (creator && kind === 'underage') { repo.creators.update(creator.id, { status: 'hidden' }); repo.logAction('creator', creator.id, 'report-hide', kind, 'system'); }
     repo.logAction('report', id, 'auto-hide', kind, 'system');
   }
   events.admin('report', { id, kind });

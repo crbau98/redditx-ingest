@@ -5,7 +5,8 @@
  *   join a channel in the Telegram app  ->  the next sync (every TELEGRAM_SYNC_HOURS, or "Sync now" in Admin) follows it
  *   leave it                            ->  its feed is switched off (history already stored stays)
  *
- * Channels whose name or handle reads female / feminine are never followed (male-only library). Feeds an admin switched off or
+ * Channels whose name or handle reads female / feminine are never followed (male-only library); with the body filter on, neither
+ * are chub / gainer / dad-bod channels (skippedBody). Feeds an admin switched off or
  * edited are left alone; only brand-new channels are created.
  */
 const repo = require('../db/repo');
@@ -13,6 +14,8 @@ const config = require('../config');
 const events = require('../engine/events');
 const mt = require('../lib/telegram-mtproto');
 const { femaleCheck } = require('../lib/scope');
+const physique = require('../lib/physique');
+const settingsStore = require('../settings');
 
 const KEY = 'telegram_sync';
 let timer = null; let busy = false;
@@ -29,13 +32,25 @@ async function sync({ autoFollow = config.telegram.autoFollow } = {}) {
   busy = true;
   try {
     const list = await mt.dialogs();
-    const res = { channels: list.length, created: 0, switchedOff: 0, skippedFemale: [], at: new Date().toISOString() };
+    const res = { channels: list.length, created: 0, switchedOff: 0, skippedFemale: [], skippedBody: [], at: new Date().toISOString() };
+    const bodyFilter = settingsStore.get().physiqueFilter === true;
     const joined = new Set();
     for (const d of list) {
       const target = targetOf(d);
       joined.add(target.toLowerCase());
       const g = femaleCheck(d.title, d.username);
       if (g.level === 'hard') { res.skippedFemale.push(d.title); continue; }
+      const heavy = bodyFilter ? physique.textCheck(d.title, d.username) : null;
+      if (heavy && heavy.heavy) {
+        res.skippedBody.push(d.title);
+        // a channel followed earlier and renamed since: pause its feed (still joined, so it is not mistaken for one the account left)
+        const f = repo.feeds.find('telegram', 'channel', target);
+        if (f && f.enabled && f.origin === 'telegram-sync') {
+          repo.feeds.update(f.id, { enabled: false });
+          repo.logAction('feed', f.id, 'physique-feed-off', `body filter: "${heavy.rule.replace(/^physique:/, '')}"`, 'system');
+        }
+        continue;
+      }
       if (!autoFollow) continue;
       if (repo.blocklist.has('creator', `telegram:${target.toLowerCase()}`)) continue;
       const { created } = repo.feeds.upsert({
@@ -48,8 +63,8 @@ async function sync({ autoFollow = config.telegram.autoFollow } = {}) {
     for (const f of repo.db.prepare("SELECT id, target FROM feeds WHERE platform = 'telegram' AND kind = 'channel' AND origin = 'telegram-sync' AND enabled = 1").all()) {
       if (!joined.has(String(f.target).toLowerCase())) { repo.feeds.update(f.id, { enabled: false }); res.switchedOff++; }
     }
-    repo.settings.set(KEY, JSON.stringify({ ...res, skippedFemale: res.skippedFemale.slice(0, 50) }));
-    events.log(res.created ? 'OK' : 'INFO', `Telegram sync: ${res.channels} joined channel(s), ${res.created} new feed(s)${res.switchedOff ? `, ${res.switchedOff} left` : ''}${res.skippedFemale.length ? `, ${res.skippedFemale.length} skipped (male-only)` : ''}`);
+    repo.settings.set(KEY, JSON.stringify({ ...res, skippedFemale: res.skippedFemale.slice(0, 50), skippedBody: res.skippedBody.slice(0, 50) }));
+    events.log(res.created ? 'OK' : 'INFO', `Telegram sync: ${res.channels} joined channel(s), ${res.created} new feed(s)${res.switchedOff ? `, ${res.switchedOff} left` : ''}${res.skippedFemale.length ? `, ${res.skippedFemale.length} skipped (male-only)` : ''}${res.skippedBody.length ? `, ${res.skippedBody.length} skipped (body filter)` : ''}`);
     return res;
   } finally { busy = false; }
 }

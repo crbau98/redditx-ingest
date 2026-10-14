@@ -13,6 +13,7 @@ const { hostBlocked, hostOf, isJunkTitle } = require('../lib/mediaurl');
 const { probeMedia } = require('./probe');
 const imagefilter = require('../lib/imagefilter');
 const dedupe = require('../services/dedupe');
+const physique = require('./physique');
 const settingsStore = require('../settings');
 
 // Bump whenever the safety or male-only scope rules get stricter: existing libraries are re-swept once.
@@ -98,6 +99,55 @@ async function imageSweep({ limit = 12, settings } = {}) {
   return res;
 }
 
+/* ------------------------------------------------------------- physique sweep */
+const PHYSIQUE_SWEEP_VERSION = '1'; // bump to re-measure the whole library (e.g. after better anchors or a better model)
+
+/**
+ * Measure the build in stored pictures that have no physique score yet (oldest first, cursor `physique_sweep_seq`), hide the
+ * heavy ones and re-judge their creators. Same model pass as the face check, so a woman found on the way is removed too.
+ * Each picture is looked at once per sweep version: "no torso in view" stays NULL and is not retried. Hidden pictures are
+ * measured too (only published ones change state), so one restored later (a report dismissed, a threshold raised) has a score.
+ */
+async function physiqueSweep({ limit = 12, settings } = {}) {
+  const s = settings || settingsStore.get();
+  const res = { checked: 0, measured: 0, hidden: 0, removed: 0, errors: 0, done: false };
+  if (repo.settings.get('physique_sweep_version') !== PHYSIQUE_SWEEP_VERSION) {
+    repo.settings.set('physique_sweep_version', PHYSIQUE_SWEEP_VERSION); repo.settings.set('physique_sweep_seq', '0');
+  }
+  let after = parseInt(repo.settings.get('physique_sweep_seq') || '0', 10) || 0;
+  const rows = repo.db.prepare(`SELECT seq, id, creator_id, media_type, media_url, preview_url, thumbnail_url, publish_state, physique FROM media
+    WHERE publish_state IN ('published','review','hidden') AND seq > ? ORDER BY seq LIMIT ?`).all(after, limit);
+  if (!rows.length) { res.done = true; return res; }
+  const creators = new Set();
+  for (const row of rows) {
+    const v = await imagefilter.checkItem({ mediaType: row.media_type, mediaUrl: row.media_url, previewUrl: row.preview_url, thumbnailUrl: row.thumbnail_url },
+      { threshold: (s.imageFilterThreshold || 50) / 100, faces: s.imageFilter === true, body: true });
+    // the settings may have changed while the model was busy (that request already re-applied the library): judge this row
+    // with the current ones, and if the filter was switched off, stop and resume from this row later
+    const now = settingsStore.get();
+    if (!now.physiqueFilter) { res.stopped = true; break; }
+    after = row.seq; res.checked++;
+    if (v.female) { repo.media.block(row.id, 'physique sweep: picture shows a woman', 'system'); res.removed++; continue; }
+    if (v.status === 'error' || v.status === 'unavailable') { res.errors++; continue; }
+    if (v.physique == null || row.physique === physique.APPROVED) continue; // an admin approved it over the body filter
+    res.measured++;
+    repo.media.setPhysique(row.id, v.physique);
+    const verdict = row.publish_state === 'published' ? physique.stateFor(v.physique, now) : null;
+    if (verdict) { repo.media.setState(row.id, verdict.state, verdict.reason, { exact: true }); imagefilter.noteHeavy(); res.hidden++; }
+    if (row.creator_id) creators.add(row.creator_id);
+  }
+  if (creators.size) { const now = settingsStore.get(); for (const id of creators) physique.reviewCreator(id, now); }
+  repo.settings.set('physique_sweep_seq', String(after));
+  if (res.hidden || res.removed) events.log('OK', `Body sweep: ${res.measured} of ${res.checked} measured · ${res.hidden} hidden (heavy)${res.removed ? ` · ${res.removed} removed (women)` : ''}`);
+  return res;
+}
+
+function physiqueSweepProgress() {
+  const cursor = parseInt(repo.settings.get('physique_sweep_seq') || '0', 10) || 0;
+  const remaining = repo.db.prepare("SELECT COUNT(*) AS n FROM media WHERE publish_state IN ('published','review','hidden') AND seq > ?").get(cursor).n;
+  return { cursor, remaining, version: PHYSIQUE_SWEEP_VERSION };
+}
+
 /* ------------------------------------------------------------- hash sweep */
 /**
  * Give every stored picture a perceptual hash (oldest first, cursor `hash_sweep_seq`) and collapse look-alikes: when a
@@ -156,9 +206,23 @@ function startImageSweep() {
     sweepBusy = true;
     try {
       if (s.dedupe) await hashSweep({ limit: s.imageSweepPerTick * 2, settings: s });
-      if (!s.imageFilter || sweepGaveUp) return;
+      if ((!s.imageFilter && !s.physiqueFilter) || sweepGaveUp) return;
       if (!(await imagefilter.available())) { sweepGaveUp = true; return; } // logged once by the filter itself
-      await imageSweep({ limit: s.imageSweepPerTick, settings: s });
+      // The body sweep reads faces in the same pass, so while it has work the face-only sweep would download and analyse the
+      // same pictures a second time: let the body sweep go first and move the face sweep's cursor along with it.
+      if (s.physiqueFilter) {
+        const cursor = (k) => parseInt(repo.settings.get(k) || '0', 10) || 0;
+        const before = cursor('physique_sweep_seq');
+        const r = await physiqueSweep({ limit: s.imageSweepPerTick, settings: s });
+        if (!r.done) {
+          // only when the face sweep had reached the same point: the rows in between were just checked for faces too
+          if (s.imageFilter && repo.settings.get('image_sweep_version') === IMAGE_SWEEP_VERSION && cursor('image_sweep_seq') >= before) {
+            repo.settings.set('image_sweep_seq', String(Math.max(cursor('image_sweep_seq'), cursor('physique_sweep_seq'))));
+          }
+          return;
+        }
+      }
+      if (s.imageFilter) await imageSweep({ limit: s.imageSweepPerTick, settings: s });
     } catch (e) { events.log('WARN', `Image sweep: ${e.message}`); } finally { sweepBusy = false; }
   }, 60 * 1000);
   sweepTimer.unref();
@@ -167,6 +231,7 @@ function stopImageSweep() { if (sweepTimer) clearInterval(sweepTimer); sweepTime
 
 /** Run the safety sweep once per rule-set version, in the background after boot. */
 function startupSweepIfNeeded() {
+  setTimeout(() => { physique.textSweep(settingsStore.get()).catch((e) => events.log('WARN', `Body filter: ${e.message}`)); }, 3000).unref();
   if (repo.settings.get('safety_sweep_version') === SAFETY_SWEEP_VERSION) return;
   setTimeout(async () => {
     try { await sweep(); repo.settings.set('safety_sweep_version', SAFETY_SWEEP_VERSION); }
@@ -174,4 +239,4 @@ function startupSweepIfNeeded() {
   }, 1500).unref();
 }
 
-module.exports = { sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, hashSweep, hashSweepProgress, startImageSweep, stopImageSweep };
+module.exports = { sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, physiqueSweep, physiqueSweepProgress, hashSweep, hashSweepProgress, startImageSweep, stopImageSweep };

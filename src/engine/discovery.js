@@ -30,6 +30,14 @@ const registry = require('../sources');
 const { parseProfile, extractLinks, profileUrl } = require('../lib/links');
 const { checkText } = require('../lib/safety');
 const { classify, femaleCheck } = require('../lib/scope');
+const physiqueText = require('../lib/physique').textCheck;
+
+/** Body filter on and the name / bio reads chub, gainer, dad bod ...: the rule that matched, else null. */
+function heavyRule(...texts) {
+  if (!settingsStore.get().physiqueFilter) return null;
+  const t = physiqueText(...texts);
+  return t.heavy ? t.rule : null;
+}
 const { findOnlyFans, freeHint, ofLink, creatorOnlyFans } = require('../lib/onlyfans');
 const bskyHttp = require('../sources/http').forPlatform('bluesky', 400);
 
@@ -117,9 +125,11 @@ function consider(spec, type, value, meta = {}) {
   }
 
   // Male-only: a female / feminine / trans-feminine name, bio or community is rejected for good, never queued.
+  // Fit / athletic only: chub, gainer, dad-bod people and spaces are rejected the same way (body filter).
   const gender = femaleCheck(target, spec.label, displayName, bio);
-  if (gender.level === 'hard') {
-    const row = { status: 'rejected', reason: `scope: ${gender.rule}`, decided_at: new Date().toISOString() };
+  const heavy = gender.level === 'hard' ? null : heavyRule(target, spec.label, displayName, bio);
+  if (gender.level === 'hard' || heavy) {
+    const row = { status: 'rejected', reason: heavy ? `body filter: ${heavy}` : `scope: ${gender.rule}`, decided_at: new Date().toISOString() };
     if (c) return repo.candidates.update(c.id, row);
     return repo.candidates.insert({ platform: spec.platform, kind: spec.kind, target, label: spec.label, url: spec.url || profileUrl(spec.platform, spec.kind, target), signals: {}, ...row });
   }
@@ -303,7 +313,8 @@ async function braveTopics({ queries = 1, budget, aborted = () => false } = {}) 
 
 /** A web search surfaced someone's OnlyFans page: its search snippet is their public bio. */
 function noteSearchedOnlyFans(handle, r) {
-  const name = (r.title || '').replace(/\s*[|(].*$/, '').replace(/\bonly\s?fans\b/ig, '').replace(/[-–—·:]+\s*$/, '').trim() || null;
+  const title = (r.title || '').split(/\s*[[(|]/, 1)[0];
+  const name = (title.match(/^[\s\S]*?(?=\bonly\s*fans\b|$)/i)?.[0] || '').replace(/[-–—·:]+\s*$/, '').trim() || null;
   const bio = r.description || null;
   if (repo.onlyfans.ownerOf(handle)) return false;
   const existing = repo.onlyfans.get(handle);
@@ -733,6 +744,12 @@ function follow(candidate, { actor = 'discovery' } = {}) {
     repo.candidates.update(c.id, { status: 'rejected', reason, decided_at: new Date().toISOString() });
     return { ok: false, reason };
   }
+  const heavy = actor === 'discovery' ? heavyRule(c.target, c.label, c.display_name, c.bio) : null; // an admin's own Follow click wins
+  if (heavy) {
+    const reason = `body filter: ${heavy}`;
+    repo.candidates.update(c.id, { status: 'rejected', reason, decided_at: new Date().toISOString() });
+    return { ok: false, reason };
+  }
   const targets = require('../services/targets');
   const spec = { platform: c.platform, kind: c.kind, target: c.target, label: c.label || c.target, ingestable: true };
   const identity = (c.signals.identity || [])[0];
@@ -740,7 +757,7 @@ function follow(candidate, { actor = 'discovery' } = {}) {
   // post is still scope-checked (untrusted). A human follow trusts it like an admin-added source.
   const shared = c.kind === 'community' || c.kind === 'feedgen' || c.kind === 'list';
   const trusted = actor !== 'discovery' ? true : shared ? false : c.scope === 'in' || !!identity;
-  const r = targets.addSpec(spec, { creatorId: identity || null, origin: 'discovered', trusted });
+  const r = targets.addSpec(spec, { creatorId: identity || null, origin: 'discovered', trusted, bodyOverride: actor !== 'discovery' });
   if (r.status !== 'created' && r.status !== 'exists') {
     repo.candidates.update(c.id, { status: 'rejected', reason: r.reason || r.status, decided_at: new Date().toISOString() });
     return { ok: false, reason: r.reason || r.status };
