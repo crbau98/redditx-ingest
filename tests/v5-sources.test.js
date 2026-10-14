@@ -98,7 +98,7 @@ test('a leak link hidden behind innocent anchor text is caught (RSS / Tumblr and
   assert.equal(r.outcome, 'blocked'); assert.match(r.reason, /leak-site:mega\.nz/);
   const [m] = registry.get('mastodon').parseStatus({ id: '1', created_at: '2026-10-10T00:00:00Z', url: 'https://m.example/@a/1', account: { acct: 'a' },
     content: '<p>new set <a href="https://gofile.io/d/xyz">here</a></p>', media_attachments: [{ type: 'image', url: 'https://m.example/a.jpg' }] }, 'm.example');
-  assert.ok(m.links.includes('https://gofile.io/d/xyz'));
+  assert.deepEqual(m.links, ['https://gofile.io/d/xyz']);
 });
 
 /* ---------------------------------------------------------------- reposts */
