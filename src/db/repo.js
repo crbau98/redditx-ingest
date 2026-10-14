@@ -5,6 +5,7 @@
 const crypto = require('crypto');
 const { v4: uuid } = require('uuid');
 const { db } = require('./index');
+const { normAlias } = require('../lib/alias');
 
 const nowIso = () => new Date().toISOString();
 const clampInt = (v, min, max, d) => {
@@ -199,9 +200,12 @@ const creators = {
     const min = minMedia !== undefined ? minMedia : (admin ? 0 : 1);
     if (min > 0) { where.push('c.media_count >= ?'); params.push(min); }
     if (query) {
-      where.push('(c.handle LIKE ? ESCAPE \'\\\' OR c.display_name LIKE ? ESCAPE \'\\\')');
+      // also any name or handle he goes by elsewhere (creator_aliases, engine/identity)
+      const norm = normAlias(query);
+      where.push(`(c.handle LIKE ? ESCAPE '\\' OR c.display_name LIKE ? ESCAPE '\\'${norm.length >= 3 ? ' OR EXISTS (SELECT 1 FROM creator_aliases a WHERE a.creator_id = c.id AND a.norm LIKE ?)' : ''})`);
       const like = `%${String(query).replace(/[\\%_]/g, (m) => '\\' + m)}%`;
       params.push(like, like);
+      if (norm.length >= 3) params.push(`${norm}%`);
     }
     if (platform) {
       where.push('EXISTS (SELECT 1 FROM media m WHERE m.creator_id = c.id AND m.platform = ? AND m.publish_state = \'published\')');
@@ -230,6 +234,8 @@ const creators = {
       enabled: !!f.enabled, last_success_at: f.last_success_at, last_status: f.last_status,
     }));
     out.topTags = creatorQ.topTags.all(id);
+    out.aliases = db.prepare("SELECT alias, kind, platform FROM creator_aliases WHERE creator_id = ? AND source != 'bio' ORDER BY kind DESC, created_at LIMIT 24").all(id)
+      .filter((a) => a.alias.toLowerCase() !== String(c.handle).toLowerCase());
     return out;
   },
 
@@ -240,6 +246,8 @@ const creators = {
     db.transaction(() => {
       db.prepare('UPDATE media SET creator_id = ? WHERE creator_id = ?').run(keepId, mergeId);
       db.prepare('UPDATE feeds SET creator_id = ? WHERE creator_id = ?').run(keepId, mergeId);
+      db.prepare(`INSERT OR IGNORE INTO creator_aliases (creator_id, norm, alias, kind, platform, source, created_at)
+        SELECT ?, norm, alias, kind, platform, source, created_at FROM creator_aliases WHERE creator_id = ?`).run(keepId, mergeId);
       creators.enrich(keepId, { displayName: gone.display_name, bio: gone.bio, avatarUrl: gone.avatar_url, bannerUrl: gone.banner_url, links: JSON.parse(gone.links || '[]') });
       db.prepare('DELETE FROM creators WHERE id = ?').run(mergeId);
       creatorQ.stats.run({ id: keepId });

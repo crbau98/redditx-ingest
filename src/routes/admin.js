@@ -15,6 +15,7 @@ const portability = require('../services/portability');
 const backup = require('../engine/backup');
 const discovery = require('../engine/discovery');
 const lookup = require('../engine/lookup');
+const identity = require('../engine/identity');
 const { adminAuth } = require('../middleware/auth');
 
 const router = express.Router();
@@ -26,7 +27,7 @@ const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
 
 /* ---------------------------------------------------------------- overview */
 router.get('/overview', (req, res) => {
-  res.json({ ...repo.adminOverview(), engine: engine.status(), health: require('../engine/health').stats(), imageFilter: { enabled: settingsStore.get().imageFilter, ...imagefilter.status(), sweep: maintenance.imageSweepProgress(), dedupe: maintenance.hashSweepProgress() }, physique: { ...physique.stats(settingsStore.get()), sweep: maintenance.physiqueSweepProgress() }, version: config.version, adminOpen: !config.adminKey });
+  res.json({ ...repo.adminOverview(), engine: engine.status(), health: require('../engine/health').stats(), imageFilter: { enabled: settingsStore.get().imageFilter, ...imagefilter.status(), sweep: maintenance.imageSweepProgress(), dedupe: maintenance.hashSweepProgress() }, physique: { ...physique.stats(settingsStore.get()), sweep: maintenance.physiqueSweepProgress() }, identity: identity.counts(), version: config.version, adminOpen: !config.adminKey });
 });
 
 router.get('/stream', (req, res) => {
@@ -133,7 +134,7 @@ router.patch('/creators/:id', (req, res) => {
 router.post('/creators/merge', (req, res) => {
   const { keepId, mergeId } = req.body || {};
   if (!keepId || !mergeId) return bad(res, 'keepId and mergeId required');
-  const out = repo.creators.merge(keepId, mergeId);
+  const out = identity.mergeCreators(keepId, mergeId, { actor: 'admin' });
   if (!out) return bad(res, 'One or both creators not found', 404);
   res.json(out);
 });
@@ -146,6 +147,33 @@ router.post('/creators/:id/block', (req, res) => {
 router.post('/creators/:id/restore', (req, res) => {
   if (!repo.creators.get(req.params.id)) return bad(res, 'Not found', 404);
   res.json(repo.creators.update(req.params.id, { status: 'active' }));
+});
+
+/* --------------------------------------------------------------- identity */
+// Same-creator queue (engine/identity): pairs of creators whose own profiles point at each other.
+router.get('/identities', (req, res) => res.json({ ...identity.queue({ status: req.query.status, ...page(req, 100) }), counts: identity.counts() }));
+router.post('/identities/scan', (req, res) => res.json({ ok: true, ...identity.scan() }));
+router.post('/identities/:id', (req, res) => {
+  const id = int(req.params.id, 1, Number.MAX_SAFE_INTEGER, 0);
+  const { action, keepId } = req.body || {};
+  if (action === 'merge') { const out = identity.merge(id, { keepId, actor: 'admin' }); return out ? res.json({ ok: true, creator: out }) : bad(res, 'Not found or already decided', 404); }
+  if (action === 'reject') return identity.reject(id, 'admin') ? res.json({ ok: true }) : bad(res, 'Not found or already decided', 404);
+  return bad(res, 'action must be merge or reject');
+});
+router.get('/creators/:id/aliases', (req, res) => {
+  if (!repo.creators.get(req.params.id)) return bad(res, 'Not found', 404);
+  res.json(identity.aliasesOf(req.params.id));
+});
+router.post('/creators/:id/aliases', (req, res) => {
+  const alias = String((req.body && req.body.alias) || '').trim();
+  if (!repo.creators.get(req.params.id)) return bad(res, 'Not found', 404);
+  if (!alias) return bad(res, 'alias required');
+  identity.addAlias(req.params.id, alias, { kind: req.body.kind === 'name' ? 'name' : 'handle', source: 'admin' });
+  res.json(identity.aliasesOf(req.params.id));
+});
+router.delete('/creators/:id/aliases/:alias', (req, res) => {
+  identity.removeAlias(req.params.id, req.params.alias);
+  res.json(identity.aliasesOf(req.params.id));
 });
 
 /* ------------------------------------------------------------------- media */
