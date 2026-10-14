@@ -119,3 +119,9 @@ describe('v5 creator stage (phase 2)', () => {
     assert.doesNotMatch(v5, /:has\(/);
   });
 });
+
+test('morphs scale about the centre even though the viewer image keeps a 0 0 origin for pinch-zoom', () => {
+  const tr = js('components/transitions.js');
+  assert.match(tr, /const moveA = \{ transform: [^\n]*, transformOrigin: '50% 50%' \};/);
+  assert.match(tr, /const moveB = \{ transform: [^\n]*, transformOrigin: '50% 50%' \};/);
+});
