@@ -481,7 +481,63 @@ function v8(db) {
   `);
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8];
+/**
+ * v9 (PRISM 5.0): creator identity. One person, many accounts and names.
+ *   creator_aliases  every name / handle a creator goes by: his own handles on each platform, display names, and
+ *                    "backup / new / old account" handles he names in his own bio. `norm` is the comparison key
+ *                    (lower case, letters and digits only), so "Jake.Fit" and "jakefit" meet.
+ *   identity_links   evidence that two creator rows are the same man, collected only from what the creators publish
+ *                    about themselves (bio links, link-in-bio pages, a shared OnlyFans page) or set by the admin.
+ *                    pending = waiting for the admin, merged = folded together, rejected = different people (never
+ *                    suggested again). `a_id` < `b_id` so a pair is stored once. No foreign keys: a merge deletes one of
+ *                    the two creators, and the decision (with the handles at the time, a_label / b_label, and the
+ *                    survivor, kept_id) is kept as history.
+ */
+function v9(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS creator_aliases (
+      creator_id TEXT NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
+      norm TEXT NOT NULL,
+      alias TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'handle' CHECK (kind IN ('handle','name')),
+      platform TEXT,
+      source TEXT NOT NULL DEFAULT 'account' CHECK (source IN ('account','profile','bio','admin','lookup','merge')),
+      created_at TEXT NOT NULL DEFAULT (${NOW}),
+      PRIMARY KEY (creator_id, norm)
+    );
+    CREATE INDEX IF NOT EXISTS ix_creator_aliases_norm ON creator_aliases(norm);
+    CREATE TABLE IF NOT EXISTS identity_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      a_id TEXT NOT NULL,
+      b_id TEXT NOT NULL,
+      a_label TEXT,
+      b_label TEXT,
+      kept_id TEXT,
+      evidence TEXT NOT NULL DEFAULT '[]',
+      strength INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','merged','rejected')),
+      created_at TEXT NOT NULL DEFAULT (${NOW}),
+      updated_at TEXT NOT NULL DEFAULT (${NOW}),
+      decided_by TEXT,
+      UNIQUE (a_id, b_id),
+      CHECK (a_id < b_id)
+    );
+    CREATE INDEX IF NOT EXISTS ix_identity_links_queue ON identity_links(status, strength DESC);
+    CREATE INDEX IF NOT EXISTS ix_identity_links_b ON identity_links(b_id);
+  `);
+  // Every account PRISM already follows, and every display name, is an alias of its creator.
+  const { normAlias } = require('../lib/alias');
+  const ins = db.prepare('INSERT OR IGNORE INTO creator_aliases (creator_id, norm, alias, kind, platform, source) VALUES (?, ?, ?, ?, ?, ?)');
+  for (const f of db.prepare("SELECT creator_id, platform, target FROM feeds WHERE creator_id IS NOT NULL AND kind = 'user'").all()) {
+    const n = normAlias(f.target); if (n) ins.run(f.creator_id, n, f.target, 'handle', f.platform, 'account');
+  }
+  for (const c of db.prepare('SELECT id, handle, display_name FROM creators').all()) {
+    const h = normAlias(c.handle); if (h) ins.run(c.id, h, c.handle, 'handle', null, 'account');
+    const d = normAlias(c.display_name); if (d) ins.run(c.id, d, c.display_name, 'name', null, 'profile');
+  }
+}
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

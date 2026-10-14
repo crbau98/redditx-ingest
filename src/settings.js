@@ -16,6 +16,7 @@ const SCHEMA = {
   autoTrack: { type: 'bool', default: true, label: 'Auto-follow creators discovered in communities' },
   autoTrackMinItems: { type: 'int', default: 2, min: 1, max: 20, label: 'Posts before a creator is auto-followed' },
   autoLinkProfiles: { type: 'bool', default: true, label: 'Follow creators’ other public accounts found in their bios' },
+  identityAutoMerge: { type: 'bool', default: true, label: 'Merge a creator’s accounts on their own when his profiles link to each other (or to the same OnlyFans / link page) and he uses the same name on both. Anything less certain waits in Creators → Same person?' },
   adaptiveScheduling: { type: 'bool', default: true, label: 'Adaptive scheduling: check busy feeds sooner, quiet ones less often' },
   maxFeeds: { type: 'int', default: 600, min: 10, max: 5000, label: 'Cap on enabled feeds' },
   hostReachability: { type: 'bool', default: true, label: 'Skip items from media hosts that refuse this server (Cloudflare challenge, hotlink blocks)' },
