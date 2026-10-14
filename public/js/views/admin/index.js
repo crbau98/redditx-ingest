@@ -28,8 +28,25 @@ function keyGate(root, message, retry) {
   setTimeout(() => input.focus(), 30);
 }
 
+// The console's stylesheet arrives with the console: public pages never download it. Resolved from
+// this module's own URL, so it shares the deploy's versioned (immutable) prefix.
+let styles = null;
+export function adminStyles() {
+  if (!styles) {
+    styles = new Promise((resolve) => {
+      const l = document.createElement('link');
+      l.rel = 'stylesheet';
+      l.href = new URL('../../../css/admin.css', import.meta.url).href;
+      l.onload = l.onerror = () => resolve();
+      document.head.appendChild(l);
+    });
+  }
+  return styles;
+}
+
 export async function admin(root, { params }) {
   document.title = 'Admin — PRISM';
+  await adminStyles();
   const tabKey = params.tab || 'overview';
   const tab = TABS.find((t) => t[0] === tabKey);
   if (!tab) { navigate('/admin/overview', {}, { replace: true }); return () => {}; }
