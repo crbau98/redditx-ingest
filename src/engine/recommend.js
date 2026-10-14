@@ -4,13 +4,19 @@
  * nothing per visitor). The profile is weighted — tags, creators and sources with how strongly
  * they were engaged — plus what the viewer asked to see less of.
  *
+ * Creator first (v5): the feed decides which creators you most want right now, then shows each
+ * one's best fresh post; a creator's further posts rank a step lower each, so one prolific account
+ * never floods the feed and every page reaches more creators.
+ *
  * 1. Candidates, each from an index: the liked creators' best recent posts, posts from creators
  *    whose style resembles theirs (tf-idf tag similarity, see lib/similarity.js), and the hottest
  *    posts carrying the liked tags.
  * 2. Score: creator affinity, similar-creator affinity, tag affinity (rare tags count for more,
  *    tag-stuffed posts don't win by volume), source and photo/video preference, popularity,
  *    freshness and a little seeded jitter; "show less" tags push items down.
- * 3. Re-rank for variety: one item per post / identical picture, at most two per creator in any
+ * 3. Creator first: group by creator, score the creator (best match, how many posts match, how
+ *    recently he posted), lead with his best fresh post and step each further post down.
+ * 4. Re-rank for variety: one item per post / identical picture, at most two per creator in any
  *    page, and a penalty for repeating the tags of the last few picks.
  *
  * The ranked list is cached per (taste, seed) for a few minutes so infinite scroll pages through
@@ -26,6 +32,8 @@ const LIKED_PER_CREATOR = 40;
 const SIMILAR_PER_CREATOR = 16;
 const TAG_POOL = 1500;
 const MAX_RANKED = 1200;
+/** How far each further post from one creator drops below his first (creator-first ordering). */
+const CREATOR_STEP = 1.1;
 
 /** "beach:3.5,beard" → Map(beach → 3.5, beard → 1). Weights are clamped; junk is dropped. */
 function parseWeighted(v, re, max, clean = (x) => x) {
@@ -60,7 +68,7 @@ const hash = (id, seed) => {
   return h;
 };
 
-const COLS = `m.*, c.handle AS creator_handle, c.display_name AS creator_name, c.avatar_url AS creator_avatar`;
+const COLS = `m.*, c.handle AS creator_handle, c.display_name AS creator_name, c.avatar_url AS creator_avatar, c.last_media_at AS creator_last_at`;
 const VISIBLE = `m.publish_state = 'published' AND m.scope != 'excluded' AND (m.creator_id IS NULL OR (c.status = 'active' AND c.scope != 'excluded'))`;
 const marks = (a) => a.map(() => '?').join(',');
 
@@ -132,6 +140,34 @@ function diversify(scored, pageSize, max) {
   return out;
 }
 
+const ageDays = (iso, now) => Math.max(0, (now - (Date.parse(iso) || now)) / 86400000);
+
+/**
+ * Creator-first order. Each creator's candidates are sorted with fresh posts leading (freshness
+ * counts for more inside one creator's list than across creators), the creator is scored on his
+ * best candidate plus how many posts match and how recently he posted, and his k-th post sits
+ * k steps below that. Items with no creator stand alone. Returns the list best first, with each
+ * item's `score` replaced by its creator-first score (the variety pass reads it).
+ */
+function creatorFirst(scored, now) {
+  const groups = new Map();
+  for (const s of scored) {
+    const k = s.row.creator_id || `m:${s.row.id}`;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(s);
+  }
+  const out = [];
+  for (const items of groups.values()) {
+    for (const s of items) s.lead = s.score + 0.9 * Math.exp(-ageDays(s.row.posted_at, now) / 4);
+    items.sort((a, b) => b.lead - a.lead || b.row.seq - a.row.seq);
+    const first = items[0];
+    let creator = first.score + 0.15 * Math.min(3, items.length - 1); // several matching posts: a safer bet
+    if (first.row.creator_id) creator += 0.5 * Math.exp(-ageDays(first.row.creator_last_at || first.row.posted_at, now) / 5); // posting right now
+    items.forEach((s, k) => out.push({ ...s, score: creator - CREATOR_STEP * k + 0.3 * (s.lead - first.lead) }));
+  }
+  return out.sort((a, b) => b.score - a.score || b.row.seq - a.row.seq);
+}
+
 function rank(t) {
   const lib = library();
   const tagW = normalise(t.tags); const creatorW = normalise(t.creators); const platW = normalise(t.platforms);
@@ -198,16 +234,15 @@ function rank(t) {
     if (pw) score += 0.3 * pw;
     if (t.video !== null) score += (r.media_type === 'video' ? t.video - 0.5 : 0.5 - t.video) * 1.2;
     score += 0.45 * Math.min(1, Math.log1p(Math.max(0, r.hot || 0)) / Math.log1p(10));
-    const ageDays = Math.max(0, (now - (Date.parse(r.posted_at) || now)) / 86400000);
-    score += 0.35 * Math.exp(-ageDays / 10);
+    score += 0.35 * Math.exp(-ageDays(r.posted_at, now) / 10);
     score += (hash(r.id, t.seed) % 1000) / 1000 * 0.4;
     scored.push({ row: r, tags, score, reason });
   }
-  scored.sort((a, b) => b.score - a.score || (b.row.seq - a.row.seq));
+  const ordered = creatorFirst(scored, now);
 
   // One per post (carousel siblings) and per identical picture posted twice.
   const seenPost = new Set(); const seenPic = new Set(); const unique = [];
-  for (const s of scored) {
+  for (const s of ordered) {
     const pk = s.row.post_key; const ph = s.row.phash;
     if ((pk && seenPost.has(pk)) || (ph && seenPic.has(ph))) continue;
     if (pk) seenPost.add(pk);
@@ -220,7 +255,7 @@ function rank(t) {
   return pool.map((x) => {
     let reason = x.reason ? x.reason.label : null;
     if (x.reason && x.reason.via) reason = via.get(x.reason.via) ? `Like @${via.get(x.reason.via)}` : 'Matches your taste';
-    const m = repo.serializeMedia(x.row); delete m.rn; m.reason = reason;
+    const m = repo.serializeMedia(x.row); delete m.rn; delete m.creator_last_at; m.reason = reason;
     return { row: m, tags: x.tags, score: x.score };
   });
 }
@@ -348,7 +383,8 @@ function recommend(t) {
 
 /**
  * Creators you might like: those most similar to the creators in your taste (weighted by how
- * much you like each), or matching your tags when you have no favourites yet. Excludes creators
+ * much you like each), or matching your tags when you have no favourites yet; recent posting
+ * breaks near-ties. Excludes creators
  * you already like, follow or asked to see less of.
  */
 function creatorsForYou(t, limit = 12) {
@@ -372,7 +408,10 @@ function creatorsForYou(t, limit = 12) {
   const top = [...score].sort((a, b) => b[1] - a[1]).slice(0, limit * 2).map(([id]) => id);
   if (!top.length) return [];
   const found = db.prepare(`${repo.SELECT_CREATOR_CARD} WHERE c.id IN (${marks(top)}) AND c.status = 'active' AND c.scope != 'excluded' AND c.media_count > 0`).all(...top).map(repo.serializeCreator);
-  found.sort((a, b) => top.indexOf(a.id) - top.indexOf(b.id));
+  // Among close matches, creators posting right now come first.
+  const now = Date.now();
+  const live = (c) => score.get(c.id) * (0.85 + 0.15 * Math.exp(-ageDays(c.last_media_at, now) / 14));
+  found.sort((a, b) => live(b) - live(a));
   const names = handles([...new Set(found.map((c) => via.get(c.id) && via.get(c.id)[0]).filter(Boolean))]);
   return found.slice(0, limit).map((c) => {
     const v = via.get(c.id);
@@ -401,4 +440,4 @@ function tasteFromQuery(q, { clampInt }) {
   };
 }
 
-module.exports = { recommend, creatorsForYou, tasteFromQuery, parseWeighted, diversify, setCacheTtl };
+module.exports = { recommend, creatorsForYou, tasteFromQuery, parseWeighted, diversify, creatorFirst, setCacheTtl };
