@@ -5,6 +5,8 @@
 | Change | Files |
 |---|---|
 | **Platform switcher** for a creator's page: a row of pills (All, then each platform PRISM has his posts from, busiest first, with counts) that filters his feed; arrow keys move and pick. Hidden when he only posts in one place. Below it, his paid pages (OnlyFans first, Fansly, JustFor.Fans and others) as link-out cards with a Free tier badge and the price when known; one swipeable row on phones. The creator page mounts it (Design thread) | `components/platform-switcher.js`, `components/elsewhere.js` (`paidPages`), `css/ux.css` |
+| **Following fixes**: "Play as Reels" from Following now covers all followed creators (up to 500, was 100); badges recount when the follow list changes mid-request; creators removed from PRISM are unfollowed quietly | `views/reels.js`, `following.js` |
+
 ## 2026-10-14 — v5 "Motion", phase 1: one motion vocabulary, shared elements
 
 **Design direction**: nothing just appears or vanishes. Things that move between views keep their identity on the way, and every moving part in the app speaks the same three springs.
