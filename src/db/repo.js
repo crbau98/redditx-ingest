@@ -192,9 +192,10 @@ const creators = {
 
   refreshStats(id) { if (id) creatorQ.stats.run({ id }); },
 
-  list({ page = 0, limit = 48, q: query, sort = 'media', platform, admin = false, minMedia, onlyfans: ofOnly = false } = {}) {
+  list({ page = 0, limit = 48, q: query, sort = 'media', platform, admin = false, minMedia, onlyfans: ofOnly = false, paidHost } = {}) {
     const where = []; const params = [];
     if (ofOnly) where.push("c.links GLOB '*onlyfans.com/[A-Za-z0-9]*'");
+    if (paidHost) { where.push("c.links LIKE ? ESCAPE '\\'"); params.push(`%${String(paidHost).replace(/[\\%_]/g, (x) => `\\${x}`)}/%`); }
     if (!admin) { where.push("c.status = 'active'", "c.scope != 'excluded'"); }
     const min = minMedia !== undefined ? minMedia : (admin ? 0 : 1);
     if (min > 0) { where.push('c.media_count >= ?'); params.push(min); }
@@ -746,6 +747,10 @@ function buildMediaWhere(f) {
   if (f.platform) { where.push('m.platform = ?'); params.push(f.platform); }
   if (f.community) { where.push('m.community = ? COLLATE NOCASE'); params.push(f.community); }
   if (f.creator) { where.push('m.creator_id = ?'); params.push(f.creator); }
+  // creators with a page on a paid platform ("on Fansly"): their free posts, from any source
+  if (f.paidHost) { where.push("m.creator_id IN (SELECT id FROM creators WHERE links LIKE ? ESCAPE '\\')"); params.push(`%${String(f.paidHost).replace(/[\\%_]/g, (x) => `\\${x}`)}/%`); }
+  // pictures the physique model measured as lean or athletic (0..100 heaviness; -1 and 101 are markers)
+  if (f.build === 'fit') where.push('m.physique BETWEEN 0 AND 30');
   if (Array.isArray(f.creators)) {
     if (!f.creators.length) where.push('0=1');
     else { where.push(`m.creator_id IN (${f.creators.map(() => '?').join(',')})`); params.push(...f.creators); }
@@ -805,7 +810,7 @@ function tagRows(name) {
 function sortIndexFor(f, sort, where) {
   const idx = SORT_INDEX[sort || 'recent'];
   if (!idx || !where.includes("m.publish_state = 'published'")) return null; // partial indexes cover published rows only
-  if (f.creator || (Array.isArray(f.ids) && f.ids.length) || f.community || f.minScore) return null;
+  if (f.creator || (Array.isArray(f.ids) && f.ids.length) || f.community || f.minScore || f.paidHost) return null;
   const all = [...(f.tag ? [f.tag] : []), ...(Array.isArray(f.tagsAll) ? f.tagsAll : [])].map(cleanTag);
   if (all.length && Math.min(...all.map(tagRows)) < BROAD_TAG_MIN) return null;
   if (Array.isArray(f.tagsAny) && f.tagsAny.length && f.tagsAny.map(cleanTag).reduce((a, t) => a + tagRows(t), 0) < BROAD_TAG_MIN) return null;
