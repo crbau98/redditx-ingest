@@ -18,7 +18,7 @@ const router = express.Router();
 router.use('/follow', age.requireAge);
 
 const MAX_FOLLOWS = 500;
-const NEW_CAP = 99; // "99+" is all a badge needs, and capping keeps each count cheap
+const NEW_CAP = 99; // "99+" is all a badge needs, and capping keeps each count cheap (100 means "more than 99")
 const UUID = /^[0-9a-f-]{36}$/i;
 const iso = (v) => (typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null);
 
@@ -43,7 +43,7 @@ router.post('/follow/summary', (req, res) => {
   let total = 0;
   const creators = rows.map((c) => {
     const since = seen.get(c.id);
-    const n = since ? Math.min(newStmt.get(c.id, since).n, NEW_CAP) : 0;
+    const n = since ? Math.min(newStmt.get(c.id, since).n, NEW_CAP + 1) : 0;
     total += n;
     return { ...c, verified: !!c.verified, new_count: n };
   });
@@ -66,7 +66,7 @@ router.post('/follow/feed', (req, res) => {
   if (!follows.size) return res.json({ items: [], total: 0, page, limit });
   const params = [];
   for (const [id, since] of follows) params.push(id, since);
-  const where = [VISIBLE, "c.status = 'active'"];
+  const where = [VISIBLE, "c.status = 'active'", "c.scope != 'excluded'"];
   if (b.type === 'image' || b.type === 'video') { where.push('m.media_type = ?'); params.push(b.type); }
   if (split) where.push(b.part === 'new' ? 'm.ingested_at > f.since' : 'm.ingested_at <= f.since');
   const withF = `WITH f(id, since) AS (VALUES ${Array(follows.size).fill('(?, ?)').join(', ')})`;
