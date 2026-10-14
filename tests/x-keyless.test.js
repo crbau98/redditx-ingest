@@ -24,10 +24,11 @@ before(async () => {
       return { json: { __typename: 'Tweet', id_str: url.searchParams.get('id'), text: 'gay jock', created_at: '2026-10-10T10:00:00.000Z', user: { screen_name: 'jockfit', name: 'Jock' },
         mediaDetails: [{ type: 'video', media_url_https: 'https://pbs.twimg.com/v.jpg', video_info: { variants: [{ content_type: 'video/mp4', bitrate: 832000, url: 'https://video.twimg.com/lo.mp4' }, { content_type: 'video/mp4', bitrate: 2176000, url: 'https://video.twimg.com/hi.mp4' }] } }] } };
     },
+    '/2/tweets/search/recent': () => ({ status: 402, json: { title: 'CreditsDepleted' } }),
     '/srv/timeline-profile/screen-name/jockfit': () => ({ body: '<html>Rate limit exceeded</html>' }),
     '/jockfit': () => ({ json: { code: 200, user: { screen_name: 'jockfit', name: 'Jock Fit', description: 'gym. more at linktr.ee/jockfit', avatar_url: 'https://pbs.twimg.com/p_normal.jpg' } } }),
   });
-  prepareEnv({ SEARXNG_URL: mock.url, SEARCH_PROVIDERS: 'searxng', FXTWITTER_BASE_URL: mock.url, X_EMBED_URL: mock.url, X_SYNDICATION_URL: mock.url, X_BEARER_TOKEN: '' });
+  prepareEnv({ SEARXNG_URL: mock.url, SEARCH_PROVIDERS: 'searxng', FXTWITTER_BASE_URL: mock.url, X_EMBED_URL: mock.url, X_SYNDICATION_URL: mock.url, X_BASE_URL: mock.url, X_BEARER_TOKEN: '' });
   x = require('../src/sources/x');
   websearch = require('../src/lib/websearch');
   reddit = require('../src/sources/reddit');
@@ -114,5 +115,19 @@ describe('X links in other posts', () => {
     assert.ok(['added', 'review'].includes(r.outcome), JSON.stringify(r));
     const row = repo.db.prepare('SELECT media_url FROM media WHERE id = ?').get(r.mediaId);
     assert.equal(row.media_url, 'https://pbs.twimg.com/media/1001.jpg');
+  });
+});
+
+describe('a token X refuses', () => {
+  test('402 parks the API and the same run falls back to keyless', async () => {
+    const config = require('../src/config');
+    config.creds.xBearer = 'paid-plan-missing';
+    websearch._clear();
+    searx.results = [{ url: 'https://x.com/jockfit/status/1001' }];
+    const r = await x.fetch({ kind: 'search', target: 'gay jock 402' }, ctx());
+    assert.match(r.via, /^websearch/); assert.equal(r.items[0].sourceId, '1001');
+    assert.equal(x.apiAvailable(), false);
+    assert.match(x.isConfigured('search').note, /402/);
+    config.creds.xBearer = '';
   });
 });
