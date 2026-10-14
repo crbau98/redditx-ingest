@@ -50,7 +50,7 @@ function mediaFilters(q) {
     page: repo.clampInt(q.page, 0, 100000, 0),
     limit: repo.clampInt(q.limit, 1, 120, 48),
     type: q.type === 'image' || q.type === 'video' ? q.type : undefined,
-    platform: /^[a-z]{2,20}$/.test(q.platform || '') ? q.platform : undefined,
+    platform: /^[a-z]{1,20}$/.test(q.platform || '') ? q.platform : undefined,
     community: str(q.community || q.subreddit),
     creator: /^[0-9a-f-]{36}$/i.test(q.creator || '') ? q.creator : undefined,
     tag: str(q.tag, 60),
@@ -214,7 +214,7 @@ router.get('/creators', (req, res) => {
     page: repo.clampInt(req.query.page, 0, 100000, 0), limit: repo.clampInt(req.query.limit, 1, 100, 36),
     q: typeof req.query.q === 'string' ? req.query.q.slice(0, 80) : undefined,
     sort: ['media', 'score', 'recent', 'new', 'name'].includes(req.query.sort) ? req.query.sort : 'media',
-    platform: /^[a-z]{2,20}$/.test(req.query.platform || '') ? req.query.platform : undefined,
+    platform: /^[a-z]{1,20}$/.test(req.query.platform || '') ? req.query.platform : undefined,
     onlyfans: req.query.onlyfans === '1',
     paidHost: Object.prototype.hasOwnProperty.call(PAID, req.query.paid || '') ? PAID[req.query.paid].host : undefined,
   });
