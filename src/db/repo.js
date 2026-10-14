@@ -246,6 +246,7 @@ const creators = {
     db.transaction(() => {
       db.prepare('UPDATE media SET creator_id = ? WHERE creator_id = ?').run(keepId, mergeId);
       db.prepare('UPDATE feeds SET creator_id = ? WHERE creator_id = ?').run(keepId, mergeId);
+      db.prepare('UPDATE onlyfans_leads SET creator_id = ? WHERE creator_id = ?').run(keepId, mergeId);
       db.prepare(`INSERT OR IGNORE INTO creator_aliases (creator_id, norm, alias, kind, platform, source, created_at)
         SELECT ?, norm, alias, kind, platform, source, created_at FROM creator_aliases WHERE creator_id = ?`).run(keepId, mergeId);
       creators.enrich(keepId, { displayName: gone.display_name, bio: gone.bio, avatarUrl: gone.avatar_url, bannerUrl: gone.banner_url, links: JSON.parse(gone.links || '[]') });

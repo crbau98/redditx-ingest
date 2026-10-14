@@ -102,6 +102,21 @@ describe('creator identity', () => {
     assert.ok(moved && [moved.a.id, moved.b.id].includes(a.c.id), 'suggestion now points at the survivor');
   });
 
+  test('merging pools evidence for a shared third man, carries OnlyFans claims, and never overrides "different people"', () => {
+    const k = person('eli_keep'); const g = person('eli_gone'); const t = person('elithird');
+    identity.noteLink(k.c.id, t.c.id, { type: 'bio-link', from: k.c.id, detail: 'x:elithird' }, { autoMerge: false });
+    identity.noteLink(g.c.id, t.c.id, { type: 'same-onlyfans', detail: 'elifree' }, { autoMerge: false });
+    repo.onlyfans.note('eligonefree', { origin: 'post' }); repo.onlyfans.claim('eligonefree', g.c.id);
+    identity.mergeCreators(k.c.id, g.c.id);
+    const pooled = identity.queue().items.find((l) => [l.a.id, l.b.id].sort().join() === [k.c.id, t.c.id].sort().join());
+    assert.deepEqual(pooled.evidence.map((e) => e.type).sort(), ['bio-link', 'same-onlyfans']);
+    assert.equal(pooled.strength, 6);
+    assert.equal(repo.onlyfans.get('eligonefree').creator_id, k.c.id);
+    assert.equal(identity.reject(pooled.id), true);
+    assert.equal(identity.merge(pooled.id), null, 'a rejected pair cannot be merged from the queue');
+    assert.ok(repo.creators.get(t.c.id));
+  });
+
   test('a couple who link each other but use different names wait for the admin', () => {
     const a = person('ryan_and_co', 'x');
     const b = person('lukepump', 'x');

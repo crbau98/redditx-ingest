@@ -166,7 +166,7 @@ function settle(creatorId) {
 /** Fold two linked creators into one: the one with more posts stays. */
 function merge(linkId, { keepId = null, actor = 'admin' } = {}) {
   const row = q.linkById.get(linkId);
-  if (!row || row.status === 'merged') return null;
+  if (!row || row.status !== 'pending') return null; // decided already: a "different people" verdict is never overridden from the queue
   const A = repo.creators.get(row.a_id); const B = repo.creators.get(row.b_id);
   if (!A || !B) return null;
   const keep = keepId === B.id || (!keepId && (B.media_count || 0) > (A.media_count || 0)) ? B : A;
@@ -195,6 +195,13 @@ function mergeCreators(keepId, goneId, { actor = 'admin', reason = 'merge', link
     const clash = q.link.get(a, b);
     if (clash) {
       if (r.status === 'rejected' && clash.status === 'pending') q.decide.run('rejected', r.decided_by || actor, clash.id); // "different people" carries over
+      else if (r.status === 'pending' && clash.status === 'pending') { // both suggested the same third man: pool the evidence
+        let ev = []; try { ev = JSON.parse(clash.evidence || '[]'); } catch { ev = []; }
+        let more = []; try { more = JSON.parse(r.evidence || '[]'); } catch { more = []; }
+        for (const e of more) if (!ev.some((x) => x.type === e.type && x.from === e.from && x.detail === e.detail)) ev.push(e);
+        ev = ev.slice(-20);
+        q.updLink.run(JSON.stringify(ev), strengthOf(ev), clash.id);
+      }
       q.delLink.run(r.id);
       continue;
     }
