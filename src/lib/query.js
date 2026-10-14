@@ -29,6 +29,24 @@ const PLATFORM_WORDS = {
   mastodon: ['mastodon', 'fediverse', 'toots'], misskey: ['misskey', 'sharkey'], tumblr: ['tumblr'], peertube: ['peertube'], lemmy: ['lemmy'],
   x: ['twitter', 'tweets', 'tweet', 'x.com'], telegram: ['telegram', 'tg'], rss: ['rss', 'blog', 'blogs'],
 };
+// Paid creator platforms: PRISM shows these as profile cards and link-outs, so "on Fansly" means
+// "creators with a Fansly page", not posts hosted there.
+const PAID = {
+  onlyfans: { words: ['onlyfans', 'onlyfan', 'of'], label: 'OnlyFans', host: 'onlyfans.com' },
+  fansly: { words: ['fansly'], label: 'Fansly', host: 'fansly.com' },
+  justforfans: { words: ['justforfans', 'justfor.fans', 'jff'], label: 'JustFor.Fans', host: 'justfor.fans' },
+  manyvids: { words: ['manyvids', 'mv'], label: 'ManyVids', host: 'manyvids.com' },
+  loyalfans: { words: ['loyalfans'], label: 'LoyalFans', host: 'loyalfans.com' },
+  fancentro: { words: ['fancentro'], label: 'FanCentro', host: 'fancentro.com' },
+  fanvue: { words: ['fanvue'], label: 'Fanvue', host: 'fanvue.com' },
+  clips4sale: { words: ['clips4sale', 'c4s'], label: 'Clips4Sale', host: 'clips4sale.com' },
+};
+// Build words, used when the library has no tag of that name: they filter to pictures the
+// physique model measured as lean or athletic.
+const BUILD = new Set(['athletic', 'fit', 'fitness', 'lean', 'toned', 'slim', 'trim', 'vtaper', 'v-taper', 'aesthetic', 'swimmer', 'swimmers', 'runner', 'runners']);
+// Short abbreviations that are platform words only right after "on" ("on of", "on mv").
+const SHORT_PAID = new Set(['of', 'mv']);
+
 // Words that carry no filtering meaning in this app (everything here is about men).
 const STOP = new Set(['a', 'an', 'the', 'of', 'with', 'and', 'or', 'in', 'on', 'at', 'for', 'from', 'by', 'to', 'into', 'show', 'me', 'find',
   'get', 'give', 'some', 'any', 'all', 'more', 'most', 'this', 'that', 'these', 'past', 'last', 'posts', 'post', 'content', 'stuff', 'please', 'pls',
@@ -47,6 +65,7 @@ const stems = (w) => [w.length > 5 && w.endsWith('ing') ? w.slice(0, -3) : null,
 
 const lookup = (table) => { const m = new Map(); for (const [k, words] of Object.entries(table)) for (const w of words) m.set(w, k); return m; };
 const TYPE_W = lookup(TYPE); const SORT_W = lookup(SORT); const SINCE_W = lookup(SINCE); const PLAT_W = lookup(PLATFORM_WORDS);
+const PAID_W = lookup(Object.fromEntries(Object.entries(PAID).map(([k, v]) => [k, v.words])));
 
 /** Optimal-string-alignment distance, bounded (returns max+1 when over). */
 function distance(a, b, max = 2) {
@@ -86,11 +105,36 @@ function buildVocabulary({ tags = [], creators = [], communities = [] }) {
     }
   }
   const communityMap = new Map(communities.map((c) => [String(c.name).toLowerCase(), c]));
-  return { tags, tagMap, bySingular, creatorMap, communityMap };
+  // Names long enough to correct a typo in, bucketed by length so a lookup only compares near lengths.
+  const creatorByLen = new Map();
+  for (const [key, c] of creatorMap) {
+    if (key.length < 5) continue;
+    if (!creatorByLen.has(key.length)) creatorByLen.set(key.length, []);
+    creatorByLen.get(key.length).push([key, c]);
+  }
+  return { tags, tagMap, bySingular, creatorMap, communityMap, creatorByLen };
 }
 
 /**
- * @returns {{type?, sort?, since?, platform?, tags: string[] (≤6), creator?, community?, text: string,
+ * The creator whose handle or name is closest to `key` (letters and digits only), within one edit
+ * for names up to 9 characters and two for longer ones; ties go to the creator with more posts.
+ * @returns {{c, d}|null}
+ */
+function fuzzyCreator(vocab, key, maxOverride) {
+  if (!vocab.creatorByLen || key.length < 5) return null;
+  const max = maxOverride !== undefined ? maxOverride : key.length >= 10 ? 2 : 1;
+  let best = null;
+  for (let len = key.length - max; len <= key.length + max; len++) {
+    for (const [name, c] of vocab.creatorByLen.get(len) || []) {
+      const d = distance(key, name, max);
+      if (d <= max && (!best || d < best.d || (d === best.d && c.media_count > best.c.media_count))) best = { c, d };
+    }
+  }
+  return best;
+}
+
+/**
+ * @returns {{type?, sort?, since?, platform?, paid?, build?, tags: string[] (≤6), creator?, community?, text: string,
  *   chips: {key, value, label}[], corrections: {from, to}[], understood: boolean}}
  */
 function understand(text, vocab) {
@@ -122,8 +166,14 @@ function understand(text, vocab) {
       const t = vocab.tagMap.has(phrase) ? phrase : vocab.bySingular.has(singular(phrase)) ? vocab.bySingular.get(singular(phrase)).name : null;
       if (t) { addTag(t); i += n - 1; matched = true; }
       else {
-        const c = vocab.creatorMap.get(core(words.slice(i, i + n).join('')));
-        if (c && core(words.slice(i, i + n).join('')).length >= 5) { setOnce('creator', c, `by ${c.display_name || c.handle}`); i += n - 1; matched = true; }
+        const joined = core(words.slice(i, i + n).join(''));
+        const c = vocab.creatorMap.get(joined);
+        if (c && joined.length >= 5) { setOnce('creator', c, `by ${c.display_name || c.handle}`); i += n - 1; matched = true; }
+        else if (!out.creator && joined.length >= 9 && words.slice(i, i + n).every((x) => !STOP.has(x) && !vocab.tagMap.has(x))) {
+          // a full name typed with a slip ("christan hogue"); ordinary words and tags never combine into one
+          const fc = fuzzyCreator(vocab, joined, joined.length >= 12 ? 2 : 1);
+          if (fc) { setOnce('creator', fc.c, `by ${fc.c.display_name || fc.c.handle}`); out.corrections.push({ from: words.slice(i, i + n).join(' '), to: fc.c.display_name || fc.c.handle }); i += n - 1; matched = true; }
+        }
       }
     }
     if (matched) continue;
@@ -131,6 +181,7 @@ function understand(text, vocab) {
     if (TYPE_W.has(w)) { setOnce('type', TYPE_W.get(w), TYPE_W.get(w) === 'video' ? 'Videos' : 'Photos'); continue; }
     if (SORT_W.has(w)) { setOnce('sort', SORT_W.get(w), { recent: 'Newest', top: 'Top rated', trending: 'Trending', random: 'Shuffle', oldest: 'Oldest' }[SORT_W.get(w)]); continue; }
     if (SINCE_W.has(w) && (i > 0 && /^(this|past|last)$/.test(words[i - 1]) || w === 'today' || w === 'tonight' || w === 'weekend')) { const k = SINCE_W.get(w); setOnce('since', k, { day: 'Past day', week: 'Past week', month: 'Past month', year: 'Past year' }[k]); continue; }
+    if (PAID_W.has(w) && (!SHORT_PAID.has(w) || (i > 0 && words[i - 1] === 'on'))) { const k = PAID_W.get(w); setOnce('paid', k, `On ${PAID[k].label}`); continue; }
     if (PLAT_W.has(w)) { setOnce('platform', PLAT_W.get(w), `on ${w === 'twitter' || w === 'tweets' ? 'X' : w[0].toUpperCase() + w.slice(1)}`); continue; }
     if (STOP.has(w) || /^\d+$/.test(w)) continue;
     if (vocab.tagMap.has(w)) { addTag(w); continue; }
@@ -143,7 +194,9 @@ function understand(text, vocab) {
     if (c && core(w).length >= 4) { setOnce('creator', c, `by ${c.display_name || c.handle}`); continue; }
     const comm = vocab.communityMap.get(w);
     if (comm) { setOnce('community', comm.name, comm.name); continue; }
-    // typo correction against tags (prefer frequent tags; stricter for short words)
+    if (BUILD.has(w)) { setOnce('build', 'fit', 'Lean and athletic'); continue; }
+    // typo correction against tags (prefer frequent tags; stricter for short words) and creator
+    // names; the closer one wins, a tag on a tie
     if (w.length >= 4) {
       const max = w.length >= 8 ? 2 : 1;
       let best = null;
@@ -152,6 +205,8 @@ function understand(text, vocab) {
         const d = Math.min(distance(w, t.name, max), distance(s, t.name, max));
         if (d <= max && (!best || d < best.d || (d === best.d && t.count > best.count))) best = { name: t.name, d, count: t.count };
       }
+      const fc = out.creator ? null : fuzzyCreator(vocab, core(w));
+      if (fc && (!best || fc.d < best.d)) { setOnce('creator', fc.c, `by ${fc.c.display_name || fc.c.handle}`); out.corrections.push({ from: w, to: fc.c.display_name || fc.c.handle }); continue; }
       if (best) { addTag(best.name, w); continue; }
     }
     leftover.push(w);
@@ -161,4 +216,4 @@ function understand(text, vocab) {
   return out;
 }
 
-module.exports = { understand, buildVocabulary, distance, singular };
+module.exports = { understand, buildVocabulary, fuzzyCreator, distance, singular, PAID };

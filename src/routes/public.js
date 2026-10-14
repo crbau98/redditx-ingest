@@ -8,7 +8,8 @@ const registry = require('../sources');
 const events = require('../engine/events');
 const age = require('../middleware/age');
 const { publicAccounts } = require('../services/targets');
-const { understand, buildVocabulary } = require('../lib/query');
+const { understand, buildVocabulary, PAID } = require('../lib/query');
+const { search } = require('../engine/search');
 const { creatorOnlyFans } = require('../lib/onlyfans');
 
 const router = express.Router();
@@ -60,6 +61,9 @@ function mediaFilters(q) {
     sort, seed: q.seed,
     since: ['day', 'week', 'month', 'year'].includes(q.since) ? q.since : undefined,
     level: q.level === 'explicit' || q.level === 'suggestive' ? q.level : undefined,
+    // "on Fansly": creators with a page on that paid platform; "athletic": measured lean or athletic
+    paidHost: Object.prototype.hasOwnProperty.call(PAID, q.paid || '') ? PAID[q.paid].host : undefined,
+    build: q.build === 'fit' ? 'fit' : undefined,
     // Infinite scroll only needs the total once; later pages skip the COUNT(*).
     noCount: q.nocount === '1' && repo.clampInt(q.page, 0, 100000, 0) > 0,
     // "new since" for saved searches: an ISO timestamp, normalised so it compares correctly as text
@@ -152,7 +156,7 @@ router.post('/report', reportLimiter, (req, res) => {
 });
 
 /* -------------------------------------------------------- age-gated content */
-router.use(['/discover', '/stats', '/suggest', '/recommend', '/graph', '/understand', '/topics', '/media', '/creators', '/tags', '/communities', '/subreddits', '/platforms', '/stream'], age.requireAge);
+router.use(['/discover', '/stats', '/suggest', '/search', '/recommend', '/graph', '/understand', '/topics', '/media', '/creators', '/tags', '/communities', '/subreddits', '/platforms', '/stream'], age.requireAge);
 
 router.get('/discover', (req, res) => res.json(discoverCached()));
 router.get('/stats', (req, res) => res.json(repo.publicStats()));
@@ -211,6 +215,7 @@ router.get('/creators', (req, res) => {
     sort: ['media', 'score', 'recent', 'new', 'name'].includes(req.query.sort) ? req.query.sort : 'media',
     platform: /^[a-z]{2,20}$/.test(req.query.platform || '') ? req.query.platform : undefined,
     onlyfans: req.query.onlyfans === '1',
+    paidHost: Object.prototype.hasOwnProperty.call(PAID, req.query.paid || '') ? PAID[req.query.paid].host : undefined,
   });
   res.json({ ...r, items: r.items.map(publicCreator) });
 });
@@ -274,13 +279,29 @@ router.get('/understand', (req, res) => {
   const q = typeof req.query.q === 'string' ? req.query.q : '';
   const u = understand(q, vocabCached());
   const query = {
-    type: u.type, sort: u.sort, since: u.since, platform: u.platform, community: u.community,
+    type: u.type, sort: u.sort, since: u.since, platform: u.platform, community: u.community, paid: u.paid, build: u.build,
     tags: u.tags.length ? u.tags.join(',') : undefined, creator: u.creator ? u.creator.id : undefined, q: u.text || undefined,
   };
   res.json({
     understood: u.understood, query, chips: u.chips.map((c) => ({ key: c.key, value: c.key === 'creator' ? c.value.id : c.value, label: c.label })),
     creator: u.creator ? { id: u.creator.id, handle: u.creator.handle, display_name: u.creator.display_name } : null,
     text: u.text, corrections: u.corrections,
+  });
+});
+
+/** One search box: Creators, Posts and Tags for the understood query (see src/engine/search.js). */
+router.get('/search', (req, res) => {
+  const q = typeof req.query.q === 'string' ? req.query.q.slice(0, 200) : '';
+  if (!q.trim()) return res.json({ understood: false, query: {}, relaxed: false, chips: [], corrections: [], creators: [], tags: [], posts: { items: [], total: 0, page: 0, limit: 0 } });
+  const r = search(q, vocabCached(), {
+    page: repo.clampInt(req.query.page, 0, 1000, 0), limit: repo.clampInt(req.query.limit, 1, 60, 24),
+    type: req.query.type === 'image' || req.query.type === 'video' ? req.query.type : undefined,
+    sort: SORTS.has(req.query.sort) ? req.query.sort : undefined,
+  });
+  res.json({
+    ...r,
+    creators: r.creators.map((c) => ({ ...publicCreator(c), match: c.match })),
+    posts: { ...r.posts, items: r.posts.items.map(publicMedia) },
   });
 });
 

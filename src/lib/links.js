@@ -33,6 +33,8 @@ const EXTERNAL = {
   'justfor.fans': 'JustFor.Fans',
   'manyvids.com': 'ManyVids',
   'clips4sale.com': 'Clips4Sale',
+  'loyalfans.com': 'LoyalFans',
+  'fancentro.com': 'FanCentro',
   'pornhub.com': 'Pornhub',
   'cashapp.com': 'Cash App',
   'cash.app': 'Cash App',
