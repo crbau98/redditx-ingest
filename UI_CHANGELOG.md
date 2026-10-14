@@ -1,5 +1,11 @@
 # UI changelog
 
+## 2026-10-14 — v5 platform switcher, phase 2 of Features and usability
+
+| Change | Files |
+|---|---|
+| **Platform switcher** for a creator's page: a row of pills (All, then each platform PRISM has his posts from, busiest first, with counts) that filters his feed; arrow keys move and pick. Hidden when he only posts in one place. Below it, his paid pages (OnlyFans first, Fansly, JustFor.Fans and others) as link-out cards with a Free tier badge and the price when known; one swipeable row on phones. The creator page mounts it (Design thread) | `components/platform-switcher.js`, `components/elsewhere.js` (`paidPages`), `css/ux.css` |
+
 ## 2026-10-14 — v5 Following, phase 1 of Features and usability
 
 **Audit findings** (demo seed, Chromium at 390×844 touch and 1366×900): following a creator only fed a "Following" chip in Explore, capped at 100 creators because the ids went in the URL; Saved › Following fetched every followed creator one request at a time; nothing told you a followed creator had posted unless you opened his card. On phones the viewer's thumb dock was unusable: the media layer sat above the top bar's layer, so every tap on save, collect, share or details hit the media instead. Between 900 and 1280 px wide the top bar overflowed sideways and the search box shrank to an icon.
