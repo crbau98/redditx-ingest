@@ -4,6 +4,24 @@ import { prefs, history, bus } from '../store.js';
 import { createMasonry } from './masonry.js';
 import { mediaCard } from './card.js';
 import { openLightbox } from './lightbox.js';
+import { routeKey } from '../router.js';
+
+/* Feeds remember what they had loaded, per page, for a while after you leave. Coming back
+ * (Back from a creator, or from the viewer's links) rebuilds the grid synchronously from this,
+ * so the router can put you back at the same scroll position instead of at the top of a
+ * freshly fetched, possibly reshuffled list. */
+const STASH_MS = 15 * 60 * 1000;
+const STASH_MAX = 10;
+const stash = new Map();
+
+// the whole id list must count (a removed 41st save is a different list), but keys stay short
+const hashIds = (ids) => { let x = 0; for (const c of ids.join(',')) x = (Math.imul(x, 31) + c.charCodeAt(0)) | 0; return `${ids.length}:${x >>> 0}`; };
+
+/** Forget remembered feeds: all of them, or those of one page (a routeKey). */
+export function dropFeedStash(key) {
+  if (!key) { stash.clear(); return; }
+  for (const k of stash.keys()) if (k.startsWith(`${key}|`)) stash.delete(k);
+}
 
 /**
  * Infinite media feed. Owns the masonry, paging, empty/error states and the
@@ -24,15 +42,26 @@ export function createFeed({ query = {}, endpoint = '/api/media', pageSize, empt
   let errored = false;
   let hidden = 0;
   let fetched = 0; // raw items received (masonry may hold fewer when hiding seen ones)
-  const seed = Math.floor(Math.random() * 1e6);
-  const limit = pageSize || (prefs.density === 's' ? 48 : 36);
+  let seed = Math.floor(Math.random() * 1e6);
+  let limit = pageSize || (prefs.density === 's' ? 48 : 36);
+  // what makes two feeds "the same list": per-visit random seeds and exclusions don't count
+  const { seed: _s, exclude: _e, ...stable } = query;
+  const stashKey = `${routeKey()}|${endpoint}|${JSON.stringify(stable)}|${hideSeen ? 1 : 0}|${ids ? hashIds(ids) : ''}`;
 
   function openAt(item) {
     const idx = masonry.items.findIndex((m) => m.id === item.id);
     openLightbox(masonry.items, Math.max(0, idx), { loadMore: () => load().then(() => masonry.items) });
   }
 
-  async function load() {
+  // a caller arriving while a page is in flight (the viewer at the last item) waits for that page
+  let inflight = null;
+  function load() {
+    if (loading && inflight) return inflight;
+    inflight = loadPage();
+    return inflight;
+  }
+
+  async function loadPage() {
     if (loading || done || destroyed) return;
     loading = true; errored = false;
     sentinel.replaceChildren(h('div', { class: 'spinner' }));
@@ -77,9 +106,26 @@ export function createFeed({ query = {}, endpoint = '/api/media', pageSize, empt
     });
   }
 
+  const saved = stash.get(stashKey);
+  stash.delete(stashKey);
+  // "Hide seen" means what you have opened since, too (e.g. the item you left the page through)
+  const keep = saved ? (hideSeen ? saved.items.filter((it) => !history.has(it.id)) : saved.items) : [];
+  const restored = !!(saved && keep.length && Date.now() - saved.at < STASH_MS);
+  if (restored) {
+    ({ page, total, done, fetched, hidden, seed, limit } = saved); // its own page size: density may have changed since
+    hidden += saved.items.length - keep.length;
+    masonry.add(keep);
+    if (done) sentinel.replaceChildren(h('span', { class: 'muted' }, 'You’ve reached the end'));
+    queueMicrotask(() => {
+      if (destroyed) return;
+      if (onTotal) onTotal(total);
+      if (done && onDone) onDone(masonry.items.length); // fixed-id feeds reconcile missing items here
+    });
+  }
+
   const io = new IntersectionObserver((entries) => { if (entries[0].isIntersecting && !errored) load(); }, { rootMargin: '1100px 0px' });
   io.observe(sentinel);
-  setTimeout(load, 0); // first page does not depend on the observer's initial callback
+  if (restored) keepFilled(); else setTimeout(load, 0); // first page does not depend on the observer's initial callback
   const offDensity = bus.on('density', (d) => { if (!destroyed) masonry.setDensity(d); });
 
   return {
@@ -87,6 +133,12 @@ export function createFeed({ query = {}, endpoint = '/api/media', pageSize, empt
     get items() { return masonry.items; },
     get total() { return total; },
     load,
-    destroy() { destroyed = true; io.disconnect(); offDensity(); masonry.destroy(); },
+    destroy() {
+      if (!destroyed && masonry.items.length && !errored) {
+        stash.set(stashKey, { at: Date.now(), items: masonry.items, page, total, done, fetched, hidden, seed, limit });
+        while (stash.size > STASH_MAX) stash.delete(stash.keys().next().value);
+      }
+      destroyed = true; io.disconnect(); offDensity(); masonry.destroy();
+    },
   };
 }
