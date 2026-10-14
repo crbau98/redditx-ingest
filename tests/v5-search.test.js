@@ -119,6 +119,14 @@ describe('grouped search', () => {
     assert.ok(!p1.json.posts.items.some((x) => p0.json.posts.items.some((y) => y.id === x.id)));
   });
 
+  test('"random" with a leftover word still answers (the shuffle seed is bound for text matches too)', async () => {
+    const r = await pub(`/api/search?q=${encodeURIComponent('random gym zzqx')}`);
+    assert.equal(r.status, 200);
+    assert.equal(r.json.relaxed, true);
+    assert.ok(r.json.posts.items.length > 0);
+    assert.equal((await pub(`/api/search?q=${encodeURIComponent('random gym blond')}`)).status, 200);
+  });
+
   test('later pages carry posts only; empty queries are cheap', async () => {
     const r = await pub('/api/search?q=gym&page=1&limit=2');
     assert.deepEqual(r.json.creators, []); assert.deepEqual(r.json.tags, []);
