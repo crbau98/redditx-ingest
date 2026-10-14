@@ -1,5 +1,23 @@
 # UI changelog
 
+## 2026-10-14 — v5 "Motion", phase 1: one motion vocabulary, shared elements
+
+**Design direction**: nothing just appears or vanishes. Things that move between views keep their identity on the way, and every moving part in the app speaks the same three springs.
+
+| Change | Files |
+|---|---|
+| **Motion tokens**: three springs (`--spring-snap`, `--spring-glide`, `--spring-settle`, sampled from real damped springs into CSS `linear()`, cubic-bezier fallback) and three durations (`--dur-quick` 140 ms, `--dur-base` 260 ms, `--dur-slow` 440 ms). 70 hard-coded transitions and animations now use them; presses and chips snap, pages and fades glide, sheets, dialogs and toasts settle. `--ease`, `--spring`, `--ease-out` stay as aliases | `app.css` |
+| **Card → viewer**: the picture grows out of its card keeping the card's crop (a clip that opens as it grows) instead of stretching from a faded thumbnail; the media's shadow fades in at the end. Videos fly the card's poster to where the video will sit and crossfade once a frame is ready | `components/transitions.js` (new), `components/fx.js` |
+| **Viewer → card**: closing the viewer (Esc, ✕, back, drag down) flies the current picture or video frame back into its card if that card is on screen, while the backdrop fades. Following a link out of the viewer does not | `components/transitions.js`, `components/lightbox.js` (3-line hook, agreed with the usability thread) |
+| **Avatar → profile**: tapping a creator card, a card's creator line, a Reels creator or the viewer's creator row lifts the avatar; it hovers while the profile loads and lands in the header | `components/transitions.js`, `views/creator.js` |
+| Flights wait for the first painted frame, so a slow phone building the viewer no longer skips most of the animation | `components/transitions.js` |
+
+**Why ghosts, not the View Transitions API**: a creator page waits on a fetch before it has a header, and the viewer is an overlay, not a route. A view transition would freeze the page for the whole fetch; a ghost keeps it live and works in every browser.
+
+**Perf** (`scripts/perf-audit.js`, 2 + 2 runs each, old and new back to back): within noise. Home TBT 422/487 → 526/424 ms, Explore TBT 171/179 → 243/134 ms, feed fling 60 fps both, Reels swipe-to-play 366/369 → 375/360 ms. +6 KB script, +1 KB CSS. All flight animations are transform, opacity or a one-shot clip-path.
+
+**Verification**: `tests/v5-motion.test.js` (11 guards); open, close and avatar flights driven in Chromium at 390×844 touch and 1440×900, no console errors, no ghosts or hidden cards left behind. Before/after GIFs in the project's `design/v5-motion/`.
+
 ## 2026-10-14 — v5 Following, phase 1 of Features and usability
 
 **Audit findings** (demo seed, Chromium at 390×844 touch and 1366×900): following a creator only fed a "Following" chip in Explore, capped at 100 creators because the ids went in the URL; Saved › Following fetched every followed creator one request at a time; nothing told you a followed creator had posted unless you opened his card. On phones the viewer's thumb dock was unusable: the media layer sat above the top bar's layer, so every tap on save, collect, share or details hit the media instead. Between 900 and 1280 px wide the top bar overflowed sideways and the search box shrank to an icon.

@@ -7,6 +7,7 @@ import { attachVideo, releaseVideo, isM3u8 } from './video.js';
 import { openCollectionPicker } from './collections.js';
 import { playFlip, heartBurst, haptic } from './fx.js';
 import { makeZoomable } from './zoom.js';
+import { viewerExit } from './transitions.js';
 import { openElsewhere } from './elsewhere.js';
 
 let S = null; // the single active lightbox session
@@ -82,6 +83,7 @@ function destroy() {
   document.removeEventListener('keydown', onKey);
   clearSlide();
   S.offFav && S.offFav(); S.offFollow && S.offFollow(); S.offColl && S.offColl();
+  if (!S.silent) viewerExit(S.stage.querySelector(':scope > img, :scope > video'), cur() && cur().id); // fly back into its card
   teardownVideo();
   S.root.replaceChildren();
   S = null;
@@ -405,7 +407,7 @@ function creatorStrip(it) {
 }
 
 /** Navigating away from the viewer via a link inside it: drop the overlay without touching history. */
-function closeSilently() { if (S) { S.pushed = false; destroy(); } }
+function closeSilently() { if (S) { S.pushed = false; S.silent = true; destroy(); } }
 
 /* ---------------------------------------------------------------- input */
 function onKey(e) {
