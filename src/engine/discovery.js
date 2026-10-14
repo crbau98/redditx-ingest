@@ -854,7 +854,7 @@ async function run({ trigger = 'schedule' } = {}) {
     report.mentions = mineMentions();
     if (s.discoveryGraph) report.graph = await blueskyGraph({ aborted });
     if (websearch.configured() && (s.braveDailyBudget > 0 || websearch.PROVIDERS.searxng.configured())) {
-      // SearXNG costs nothing per query: search more per run when it is there (Brave keeps its daily budget either way).
+      // SearXNG costs nothing per query: search more per run when it is there (metered providers keep the daily budget either way).
       const free = websearch.PROVIDERS.searxng.configured();
       report.identity = await braveIdentity({ creators: free ? 5 : 3, budget: s.braveDailyBudget, aborted });
       report.topics = await braveTopics({ queries: free ? 3 : 1, budget: s.braveDailyBudget, aborted });

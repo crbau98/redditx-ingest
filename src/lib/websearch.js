@@ -35,7 +35,18 @@ const PROVIDERS = {
   searxng: {
     configured: () => !!searxngUrl(),
     async search(q, { count = 20 } = {}) {
-      const json = await http.json(`${searxngUrl()}/search?q=${encodeURIComponent(q)}&format=json&safesearch=0&language=all`, { allowInternal: true, timeout: /\.onion(?::|\/|$)/i.test(searxngUrl()) ? 70000 : 20000 }); // the only caller allowed to reach INTERNAL_HOSTS
+      if (/\.onion(?::|\/|$)/i.test(searxngUrl()) && !config.torProxy) {
+        throw Object.assign(new Error('SearXNG is an .onion address but TOR_PROXY is not set (TOR_PROXY=socks5h://host:9050)'), { skip: true });
+      }
+      let json;
+      try {
+        json = await http.json(`${searxngUrl()}/search?q=${encodeURIComponent(q)}&format=json&safesearch=0&language=all`, { allowInternal: true, timeout: /\.onion(?::|\/|$)/i.test(searxngUrl()) ? 70000 : 20000 }); // the only caller allowed to reach INTERNAL_HOSTS
+      } catch (e) {
+        if (/\.onion/i.test(searxngUrl()) && /proxy|tor|socks|epoxy/i.test(String(e.message || ''))) {
+          throw Object.assign(new Error(`SearXNG over Tor failed: ${e.message} (check TOR_PROXY and that the onion service is up)`), { status: e.status || 502 });
+        }
+        throw e;
+      }
       const results = (json.results || []).slice(0, count).map((r) => ({ url: r.url, title: strip(r.title), description: strip(r.content) })).filter((r) => r.url);
       // SearXNG answers 200 with nothing when its engines are blocked (CAPTCHA / rate limits on a datacenter IP). Say which,
       // instead of a silent empty list that reads as "nothing out there".
@@ -52,6 +63,8 @@ const health = Object.fromEntries(['keenable', 'brave', 'searxng'].map((p) => [p
 function note(name, results, err) {
   const h = health[name]; if (!h) return;
   h.lastAt = new Date().toISOString();
+  // Budget exhaustion is recorded too (as the visible lastError) so the admin
+  // sees "daily budget reached" instead of a silently stale healthy state.
   if (err) { h.failed++; h.lastError = String(err.message || err).slice(0, 300); h.lastResults = 0; return; }
   if (results.length) { h.ok++; h.lastError = null; } else h.empty++;
   h.lastResults = results.length;
@@ -78,17 +91,21 @@ function status() {
 async function search(q, { count = 20, budget = 40, fresh = false, site } = {}) {
   const key = `${count}|${site || ''}|${q}`;
   const hit = cache.get(key);
-  if (!fresh && hit && Date.now() - hit.at < CACHE_MS) return hit.results;
+  if (!fresh && hit && hit.results.length && Date.now() - hit.at < CACHE_MS) return hit.results;
   const providers = order().filter((p) => PROVIDERS[p].configured());
-  if (!providers.length) throw Object.assign(new Error('No web search configured: set BRAVE_API_KEY or SEARXNG_URL'), { skip: true });
+  if (!providers.length) throw Object.assign(new Error('No web search configured: set KEENABLE_API_KEY, BRAVE_API_KEY or SEARXNG_URL'), { skip: true });
   let lastErr;
   for (const name of providers) {
     try {
       // Keenable filters by site natively; the others get a site: operator in the query.
       let results;
-      try { results = await PROVIDERS[name].search(site && name !== 'keenable' ? `${q} site:${site}` : q, { count, budget, site }); } catch (e) { if (!e.budget) note(name, null, e); throw e; }
+      try { results = await PROVIDERS[name].search(site && name !== 'keenable' ? `${q} site:${site}` : q, { count, budget, site }); } catch (e) { note(name, null, e); throw e; }
       note(name, results);
-      if (!results.length && providers.length > 1 && name !== providers[providers.length - 1]) { lastErr = lastErr || new Error(`${name}: no results`); continue; }
+      if (!results.length) {
+        lastErr = lastErr || Object.assign(new Error(`${name}: no results`), { status: 502 });
+        if (name !== providers[providers.length - 1]) continue; // fall through to the next provider
+        throw lastErr; // every provider came back empty: do not cache the empty answer
+      }
       Object.defineProperty(results, 'provider', { value: name, enumerable: false });
       cache.set(key, { at: Date.now(), results });
       if (cache.size > 300) cache.delete(cache.keys().next().value);

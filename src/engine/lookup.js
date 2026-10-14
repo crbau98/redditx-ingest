@@ -262,7 +262,7 @@ async function searchWeb(q, pl, notes) {
         // OnlyFans & co: kept as profile links, never ingested
       }
       notes.push({ platform: 'web', step: `web search (${provider || '?'})`, ok: true });
-    } catch (e) { notes.push({ platform: 'web', step: 'web search', ok: false, note: e.message }); if (e.skip) break; }
+    } catch (e) { notes.push({ platform: 'web', step: 'web search', ok: false, note: e.message }); if (e.skip || e.budget) break; }
   }
   return provider;
 }
