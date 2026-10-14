@@ -28,7 +28,7 @@ export function dropFeedStash(key) {
  * lightbox "sequence" so next/prev walk the same list the user is looking at
  * (and keep loading more as they go).
  */
-export function createFeed({ query = {}, endpoint = '/api/media', pageSize, empty, onTotal, onDone, ids, hideSeen = false, why = null }) {
+export function createFeed({ query = {}, endpoint = '/api/media', fetchPage = null, pageSize, empty, onTotal, onDone, ids, hideSeen = false, why = null, quietEnd = false }) {
   const root = h('div', { class: 'feed' });
   const masonry = createMasonry({ density: prefs.density, render: (item, d) => mediaCard(item, { open: openAt, compact: d === 's', why: why ? why(item) : null }) });
   const sentinel = h('div', { class: 'loadmore' });
@@ -67,7 +67,9 @@ export function createFeed({ query = {}, endpoint = '/api/media', pageSize, empt
     sentinel.replaceChildren(h('div', { class: 'spinner' }));
     try {
       const idSlice = ids ? ids.slice(page * limit, (page + 1) * limit) : undefined;
-      const res = await get(endpoint, { ...query, page: ids ? 0 : page, limit, seed: query.sort === 'random' ? seed : query.seed, ids: idSlice ? idSlice.join(',') : undefined, nocount: !ids && page > 0 ? '1' : undefined });
+      const params = { ...query, page: ids ? 0 : page, limit, seed: query.sort === 'random' ? seed : query.seed, ids: idSlice ? idSlice.join(',') : undefined, nocount: !ids && page > 0 ? '1' : undefined };
+      // fetchPage: a feed whose request is not a plain GET (e.g. a follow list in a POST body)
+      const res = await (fetchPage ? fetchPage(params) : get(endpoint, params));
       if (destroyed) return;
       if (ids) res.items.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id)); // keep "most recently saved first"
       if (ids) total = ids.length; else if (res.total !== null && res.total !== undefined) total = res.total;
@@ -86,7 +88,8 @@ export function createFeed({ query = {}, endpoint = '/api/media', pageSize, empt
       } else if (!masonry.items.length) {
         sentinel.replaceChildren(h('div', { class: 'spinner' }));
       } else if (done) {
-        sentinel.replaceChildren(h('span', { class: 'muted' }, hidden ? `You’ve reached the end · ${hidden} seen item${hidden === 1 ? '' : 's'} hidden` : 'You’ve reached the end'));
+        // quietEnd: a feed with more below it (Following's "new" part) ends without an end note
+        sentinel.replaceChildren(quietEnd ? '' : h('span', { class: 'muted' }, hidden ? `You’ve reached the end · ${hidden} seen item${hidden === 1 ? '' : 's'} hidden` : 'You’ve reached the end'));
         if (onDone) onDone(masonry.items.length);
       } else sentinel.replaceChildren();
     } catch (e) {
@@ -115,7 +118,7 @@ export function createFeed({ query = {}, endpoint = '/api/media', pageSize, empt
     ({ page, total, done, fetched, hidden, seed, limit } = saved); // its own page size: density may have changed since
     hidden += saved.items.length - keep.length;
     masonry.add(keep);
-    if (done) sentinel.replaceChildren(h('span', { class: 'muted' }, 'You’ve reached the end'));
+    if (done && !quietEnd) sentinel.replaceChildren(h('span', { class: 'muted' }, 'You’ve reached the end'));
     queueMicrotask(() => {
       if (destroyed) return;
       if (onTotal) onTotal(total);
