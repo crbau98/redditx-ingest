@@ -136,3 +136,31 @@
   .nav .nav-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .nav a[aria-current='page'] .nav-label { position: static; width: auto; height: auto; clip-path: none; }
 }
+
+/* ---- Platform switcher (creator page): filter pills + paid page link-outs ---- */
+.ps { display: grid; gap: 10px; margin: 12px 0; min-width: 0; }
+.ps-pills { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding: 4px; margin: -4px; scroll-snap-type: x proximity; }
+.ps-pills::-webkit-scrollbar { display: none; }
+.ps-pill { flex: none; display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; scroll-snap-align: start; transition: background .15s, border-color .15s, color .15s; }
+.ps-pill:hover { border-color: var(--line-strong); background: var(--surface-2); }
+.ps-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ps-pill.on { background: var(--text); color: var(--bg); border-color: var(--text); }
+.ps-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c, #94a3b8); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c, #94a3b8) 25%, transparent); }
+.ps-n { font-variant-numeric: tabular-nums; opacity: .62; font-size: 12px; }
+.ps-pill.on .ps-n { opacity: .8; }
+.ps-paid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+@media (max-width: 640px) {
+  /* phones: one swipeable row instead of a stack that pushes his posts off screen */
+  .ps-paid { display: flex; overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity; padding: 4px; margin: -4px; }
+  .ps-paid::-webkit-scrollbar { display: none; }
+  .ps-card { flex: none; width: min(230px, 72vw); scroll-snap-align: start; }
+}
+.ps-card { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 12px; border-radius: 12px; border: 1px solid var(--line); background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 9%, var(--surface)), var(--surface)); color: var(--text); min-width: 0; }
+.ps-card:hover, .ps-card:focus-visible { border-color: var(--line-strong); }
+.ps-card-txt { display: grid; min-width: 0; }
+.ps-card-txt b, .ps-card-txt small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ps-card-txt small { color: var(--muted); }
+.ps-card-meta { margin-left: auto; display: flex; align-items: center; gap: 6px; flex: none; }
+.ps-price { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ps-card > svg { color: var(--muted); flex: none; }
+@media (prefers-reduced-motion: reduce) { .ps-pill { transition: none; } }

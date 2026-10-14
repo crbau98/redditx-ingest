@@ -12,6 +12,26 @@ const PAID = /onlyfans\.com|fansly\.com|justfor\.fans|manyvids\.com|clips4sale\.
 const PAID_NAMES = [['onlyfans.com', 'OnlyFans'], ['fansly.com', 'Fansly'], ['justfor.fans', 'JustFor.Fans'], ['manyvids.com', 'ManyVids'], ['clips4sale.com', 'Clips4Sale'], ['loyalfans.com', 'LoyalFans'], ['fancentro.com', 'FanCentro'], ['fanvue.com', 'Fanvue'], ['patreon.com', 'Patreon'], ['throne.com', 'Throne']];
 const paidName = (url) => (PAID_NAMES.find(([d]) => String(url).toLowerCase().includes(d)) || [])[1];
 const clean = (s) => String(s || '').replace(/^[@/]?(?:u\/)?/, '');
+/** The account name on a paid page: given, else the URL's first path segment, else a label that looks like one. */
+const pageHandle = (l) => {
+  if (l.handle) return clean(l.handle);
+  try { const seg = new URL(l.url).pathname.split('/').filter(Boolean)[0]; if (seg && /^[\w.-]{2,40}$/.test(seg)) return seg; } catch { /* not a URL */ }
+  const label = clean(l.label);
+  return /^[\w.-]{2,40}$/.test(label) ? label : '';
+};
+
+/** A creator's paid pages (OnlyFans first), as link-outs: [{ url, name, handle, free, price }]. */
+export function paidPages(c) {
+  const links = (c.links || []).filter((l) => l && l.url && PAID.test(l.url));
+  const pages = links.map((l) => ({ url: l.url, name: paidName(l.url) || l.service || 'Page', handle: pageHandle(l), free: !!l.free, price: l.price || null }));
+  const of = c.onlyfans;
+  if (of) {
+    const mine = pages.find((p) => /onlyfans\.com/i.test(p.url));
+    if (mine) { mine.free = mine.free || !!of.free; mine.handle = mine.handle || of.handle; } else pages.push({ url: of.url, name: 'OnlyFans', handle: of.handle, free: !!of.free, price: null });
+  }
+  const seen = new Set();
+  return pages.filter((p) => !seen.has(p.url) && seen.add(p.url)).sort((a, b) => (b.name === 'OnlyFans') - (a.name === 'OnlyFans'));
+}
 
 const out = (url, ...children) => h('a', { class: 'where-row', href: url, target: '_blank', rel: 'noopener noreferrer nofollow' }, ...children, icon('external', 'sm'));
 

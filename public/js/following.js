@@ -8,7 +8,8 @@ import { follows, followVisits, bus } from './store.js';
  */
 
 let last = null;   // { at, data }
-let inflight = null;
+let inflight = null; // { key, p }
+let asked = 0;      // newest request number: an older answer arriving late is not painted
 const MAX_AGE = 60000;
 
 const body = () => ({ follows: follows.list().map((c) => ({ id: c.id, seen: followVisits.seenFor(c) })) });
@@ -18,20 +19,29 @@ export function followSummary({ fresh = false } = {}) {
   if (!follows.count()) {
     // unfollowed the last one: clear whatever badge the previous count left
     const data = { creators: [], gone: [], total_new: 0 };
+    asked++; inflight = null;
     last = { at: Date.now(), data };
     paint(0);
     return Promise.resolve(data);
   }
   if (!fresh && last && Date.now() - last.at < MAX_AGE) return Promise.resolve(last.data);
-  if (inflight) return inflight;
-  inflight = query('/api/follow/summary', body(), { fresh: true })
+  const req = body();
+  const key = JSON.stringify(req);
+  // a request already out for this same follow list answers this one too; a changed list asks again
+  if (inflight && inflight.key === key) return inflight.p;
+  const n = ++asked;
+  const p = query('/api/follow/summary', req, { fresh: true })
     .then((data) => {
+      if (n !== asked) return data; // a newer follow list was asked for since; its answer paints
       last = { at: Date.now(), data };
       paint(data.total_new);
+      // creators removed or opted out on the server: stop following them, as Saved › Following does
+      if (data.gone && data.gone.length) follows.prune(data.gone);
       return data;
     })
-    .finally(() => { inflight = null; });
-  return inflight;
+    .finally(() => { if (inflight && inflight.p === p) inflight = null; });
+  inflight = { key, p };
+  return p;
 }
 
 /** Fill every [data-follow-badge] with the unread count (hidden at zero). */
