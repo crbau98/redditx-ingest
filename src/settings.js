@@ -51,7 +51,8 @@ const SCHEMA = {
       'gay porn star official links', 'gay amateur creator allmylinks', 'gay athlete creator beacons.ai', 'gay fitness creator beacons.ai', 'ゲイ 筋肉 クリエイター', 'ゲイ 細マッチョ リンク', 'gay cam model linktree', 'male nude model portfolio',
       // OnlyFans pages in search results become leads (their snippet is the public bio); fit / athletic first
       'site:onlyfans.com gay muscle', 'site:onlyfans.com male fitness model', 'site:onlyfans.com gay athlete', 'site:onlyfans.com gay jock', 'site:onlyfans.com free gay',
-      'free gay onlyfans telegram', 'gay onlyfans promo twitter muscle', 'male onlyfans creator redgifs fit'].join('\n'),
+      'free gay onlyfans telegram', 'gay onlyfans promo twitter muscle', 'male onlyfans creator redgifs fit',
+      'gay creator fansly linktree 18+', 'gay muscle creator justfor.fans links', 'gay fitness creator youtube channel', 'gay model pixelfed portfolio'].join('\n'),
   },
   // --- discovery reach (v4.6) ---
   discoveryCommunities: { type: 'bool', default: true, label: 'Search Reddit, Lemmy and Bluesky for communities and custom feeds', group: 'discovery' },

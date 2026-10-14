@@ -201,6 +201,19 @@ function parseProfile(input, hint = {}) {
     return { platform: 'external', kind: 'link', target: `https://onlyfans.com/${handle}`, ingestable: false, external: true, label: `OnlyFans · ${handle}`, service: 'OnlyFans', url: `https://onlyfans.com/${handle}`, handle };
   }
 
+  // YouTube: channels are ingestable via official RSS; single videos stay external link-outs.
+  if (matches(h, 'youtube.com')) {
+    if (parts[0] && parts[0].startsWith('@') && parts.length === 1 && /^@[A-Za-z0-9._-]{2,60}$/.test(parts[0])) {
+      return out('youtube', 'user', parts[0], { label: `${parts[0]} (YouTube)`, url: url.href });
+    }
+    if (parts[0] === 'channel' && parts[1] && /^UC[A-Za-z0-9_-]{10,40}$/.test(parts[1])) {
+      return out('youtube', 'channel', parts[1], { label: `YouTube channel ${parts[1].slice(0, 10)}…`, url: url.href });
+    }
+    if ((parts[0] === 'c' || parts[0] === 'user') && parts[1] && /^[A-Za-z0-9._-]{2,60}$/.test(parts[1])) {
+      return out('youtube', 'user', `@${parts[1]}`, { label: `@${parts[1]} (YouTube)`, url: url.href });
+    }
+  }
+
   for (const [dom, label] of Object.entries(EXTERNAL)) {
     if (matches(h, dom)) {
       return { platform: 'external', kind: 'link', target: url.href, ingestable: false, external: true, label: `${label}${parts[0] ? ` · ${parts[0].replace(/^@/, '')}` : ''}`, service: label, url: url.href };
@@ -285,6 +298,12 @@ function profileUrl(platform, kind, target) {
       return base(String(target));
     }
     case 'rss': case 'web': case 'linkinbio': return /^https?:/.test(target) ? target : null;
+    case 'youtube': {
+      const t = String(target || '');
+      if (/^UC[A-Za-z0-9_-]{10,40}$/.test(t)) return `https://www.youtube.com/channel/${t}`;
+      if (/^@/.test(t)) return `https://www.youtube.com/${t}`;
+      return null;
+    }
     default: return null;
   }
 }

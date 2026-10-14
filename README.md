@@ -51,7 +51,7 @@ cp .env.example .env        # optional
 npm start                   # http://localhost:3141
 ```
 
-First run seeds ~28 curated default feeds and migrates any v3 database in place. Open **Admin** (gear icon, or `#/admin`) → **Sync everything now**.
+First run seeds 55+ curated default feeds and migrates any v3 database in place. Open **Admin** (gear icon, or `#/admin`) → **Sync everything now**. Visitors can also pull a creator in directly at `#/find` (name, @handle, or any public link).
 
 ### Preview the UI offline (no network, no real content)
 
@@ -63,7 +63,7 @@ DEMO_ART=1 DB_PATH=./data/demo.db ADMIN_KEY=dev node server.js
 ### Tests
 
 ```bash
-npm test      # 422 tests: safety, SSRF, migration from a real v3 DB, adapters, engine resilience, HTTP API, proxy
+npm test      # full suite (safety, SSRF, migration from a real v3 DB, adapters, engine resilience, HTTP API, proxy)
 ```
 
 ---
@@ -131,6 +131,7 @@ No system can enumerate "the whole web". PRISM grows its coverage in layers:
 | X | user, search | `X_BEARER_TOKEN` (search); users work keyless best-effort | Official API when a token is present. |
 | Tumblr | user (blog), tag | – | Public RSS. Reblogs skipped (`TUMBLR_REBLOGS=true` to include), images upgraded to the largest size. |
 | PeerTube | user, channel, tag, search | – | Documented public API; keyword search through Sepia Search (`PEERTUBE_SEARCH_URL`), tags across `PEERTUBE_INSTANCES`. MP4 up to 1080p, else HLS. |
+| YouTube | user, channel | – | Official channel RSS only (no key). Paste `@handle`, channel URL, or `UC…` channel_id. Videos appear as thumbnail cards linking out to YouTube. No search feeds. |
 | Telegram | user (public channel) | – | Public web preview (`t.me/s/<channel>`); channels that disable it report an error. |
 | Telegram | channel (joined by your account) | `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, a one-time login (`scripts/telegram-login.js`), `MEDIA_STORE_*` | Every channel/group your account has joined, public or private (MTProto via GramJS): full history back-filled gradually, original photos and videos copied into your R2/B2 bucket (Telegram files cannot be hotlinked). Feeds are created and retired by the sync. |
 | RSS / Atom / JSON Feed | feed | – | Creator sites, Tumblr `/rss`, Mastodon `.rss`, Bluesky `/rss`, … Bulk import accepts **OPML** exported from any feed reader. |
@@ -171,9 +172,9 @@ It uses the real adapters and the real safety + male-only gates but writes nothi
 
 ## Finding a creator
 
-Admin → Creators → **Find a creator** (also *Find more accounts* inside a creator): type a **name, performer name, @handle or profile link**.
+`#/find` (also Admin → Creators → **Find a creator**, and *Find more accounts* inside a creator): type a **name, performer name, @handle or profile link**. The public route is age-gated and rate-limited (`POST /api/lookup`, `/lookup/follow`, `/lookup/auto`); admin keeps `POST /api/admin/lookup*`.
 
-1. the handle (and name-derived variants such as `jaxstone`, `jax_stone`) is probed on Reddit, RedGIFs, Bluesky, Mastodon, Misskey, X, Telegram and Tumblr through the real adapters, so “found” means *exists and has posts*;
+1. the handle (and name-derived variants such as `jaxstone`, `jax_stone`) is probed on Reddit, RedGIFs, Bluesky, Mastodon, Misskey, X, Telegram, Tumblr, YouTube, PeerTube and Lemmy through the real adapters, so “found” means *exists and has posts*;
 2. Bluesky people search, RedGIFs creator search and a web search of the name (Keenable, Brave and/or a SearXNG instance, tried in that order with fallback and caching — `KEENABLE_API_KEY`, `BRAVE_API_KEY`, `SEARXNG_URL`; site-restricted searches on linktr.ee, bsky.app and x.com find the profile pages themselves) add accounts the handle guess missed;
 3. bios and link-in-bio pages (Linktree, Beacons, AllMyLinks…) of what was found reveal the person's other accounts, which are verified the same way; paywalled links (OnlyFans, Throne…) are kept on the profile and never read;
 4. every candidate is scored (name similarity, exact handle, cross-links, independent sources, has content) and shown with its evidence; female / feminine candidates, minors and avatars showing a woman are hidden;

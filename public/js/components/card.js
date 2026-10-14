@@ -77,14 +77,17 @@ export function primeEager(n = 6) { eagerLeft = n; }
 export function mediaCard(item, { open, compact = false, why = null } = {}) {
   const ratio = item.width && item.height ? Math.min(Math.max(item.width / item.height, 0.55), 1.9) : 0.8;
   const isVideo = item.media_type === 'video';
-  const src = item.preview_url || item.thumbnail_url || (!isVideo ? item.media_url : null);
+  // Grids load the small thumbnail build when it exists (engine/thumbs.js, ~360px WebP),
+  // falling back to the platform preview. The full file only loads in the viewer.
+  const src = item.thumb_url || item.preview_url || item.thumbnail_url || (!isVideo ? item.media_url : null);
 
   const here = parse();
   const media = h('a', { class: 'card-media', href: href(here.path, { ...Object.fromEntries(here.query), m: item.id }), style: { aspectRatio: String(ratio) }, 'aria-label': item.title || 'Open media' });
   media._item = item;
   // Placeholder tinted per item, so a loading grid reads as colour rather than grey boxes.
+  // When the server measured a dominant colour (engine/thumbs.js), use it directly.
   let hue = 0; for (let i = 0; i < 8 && i < item.id.length; i++) hue = (hue * 31 + item.id.charCodeAt(i)) % 360;
-  const ph = h('div', { class: 'ph', style: { '--h': String(hue) } });
+  const ph = h('div', { class: 'ph', style: item.tint && /^#[0-9a-f]{6}$/i.test(item.tint) ? { background: item.tint } : { '--h': String(hue) } });
   media.appendChild(ph);
   if (src) {
     const eager = eagerLeft > 0 && eagerLeft--;

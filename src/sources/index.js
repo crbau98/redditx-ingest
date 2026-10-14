@@ -14,6 +14,7 @@ const adapters = [
   require('./tumblr'),
   require('./x'),
   require('./telegram'),
+  require('./youtube'),
   require('./rss'),
   webAdapter,
   linkInBioAdapter,
