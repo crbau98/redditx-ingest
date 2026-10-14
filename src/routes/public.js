@@ -123,7 +123,7 @@ router.get('/health', (req, res) => {
   const mb = (n) => Math.round(n / 1048576);
   const loop = { p99Ms: Math.round(loopDelay.percentile(99) / 1e6), maxMs: Math.round(loopDelay.max / 1e6) };
   loopDelay.reset();
-  res.status(dbOk ? 200 : 503).json({ status: dbOk ? 'ok' : 'degraded', version: config.version, uptime: Math.round(process.uptime()), db: dbOk, memMb: { rss: mb(mem.rss), heap: mb(mem.heapUsed), external: mb(mem.external) }, loop, timestamp: new Date().toISOString() });
+  res.status(dbOk ? 200 : 503).json({ status: dbOk ? 'ok' : 'degraded', version: config.version, uptime: Math.round(process.uptime()), db: dbOk, memMb: { rss: mb(mem.rss), heap: mb(mem.heapUsed), heapTotal: mb(mem.heapTotal), external: mb(mem.external), arrayBuffers: mb(mem.arrayBuffers) }, loop, timestamp: new Date().toISOString() });
 });
 
 router.get('/meta', (req, res) => {

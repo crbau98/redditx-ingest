@@ -32,6 +32,7 @@ health.start();
 maintenance.startImageSweep();
 require('./src/engine/visual').start(); // "More like this": embeds the library in the background
 require('./src/services/telegram-sync').start();
+require('./src/engine/memwatch').start({ onCritical: () => shutdown('memory') });
 require('./src/engine/thumbs').start(); // small thumbnails and a tint per picture, newest first
 
 function shutdown(signal) {
@@ -44,9 +45,11 @@ function shutdown(signal) {
   require('./src/engine/visual').stop();
   require('./src/services/telegram-sync').stop();
   require('./src/engine/thumbs').stop();
+  require('./src/engine/memwatch').stop();
   require('./src/lib/imagefilter').shutdown().catch(() => {});
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 8000).unref();
+  const code = signal === 'memory' ? 1 : 0; // a memory restart is not a clean stop: Docker brings PRISM straight back
+  server.close(() => process.exit(code));
+  setTimeout(() => process.exit(code), 8000).unref();
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
