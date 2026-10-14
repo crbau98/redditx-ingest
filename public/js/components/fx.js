@@ -1,6 +1,8 @@
 // Small, cheap effects that make the UI feel physical. Everything here respects
 // prefers-reduced-motion and only runs on devices where it makes sense.
 
+import { spring } from './transitions.js';
+
 const reduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /**
@@ -83,7 +85,7 @@ export function heartBurst(x, y, { count = 9 } = {}) {
       { transform: 'translate(0,0) scale(.4) rotate(0deg)', opacity: 1 },
       { transform: `translate(${Math.cos(ang) * dist}px, ${Math.sin(ang) * dist}px) scale(1) rotate(${(Math.random() - 0.5) * 60}deg)`, opacity: 1, offset: 0.6 },
       { transform: `translate(${Math.cos(ang) * dist * 1.2}px, ${Math.sin(ang) * dist * 1.2 + 30}px) scale(.8)`, opacity: 0 },
-    ], { duration: 700 + Math.random() * 300, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'forwards' });
+    ], { duration: 700 + Math.random() * 300, easing: spring('glide'), fill: 'forwards' });
   }
   setTimeout(() => layer.remove(), 1100);
 }
@@ -159,32 +161,10 @@ export function initRails(root = document.body) {
   }).observe(root, { childList: true, subtree: true });
 }
 
-/* --------------------------------------------- shared-element zoom (card → viewer) */
-let flipSource = null;
-/** Remember where a click came from, so the viewer can grow out of it. */
-export function rememberFlip(el) {
-  if (!el) return;
-  const img = el.querySelector('img');
-  flipSource = { rect: el.getBoundingClientRect(), src: img && img.currentSrc, at: performance.now() };
-}
-/** Animate `target` (the viewer's image/video) from the remembered rect. One-shot. */
-export function playFlip(target) {
-  const src = flipSource; flipSource = null;
-  if (!src || !target || reduced() || performance.now() - src.at > 900) return;
-  const run = () => {
-    const to = target.getBoundingClientRect();
-    if (!to.width || !to.height) return;
-    const scale = Math.max(src.rect.width / to.width, src.rect.height / to.height);
-    const dx = (src.rect.left + src.rect.width / 2) - (to.left + to.width / 2);
-    const dy = (src.rect.top + src.rect.height / 2) - (to.top + to.height / 2);
-    target.animate([
-      { transform: `translate(${dx}px, ${dy}px) scale(${scale})`, transformOrigin: '50% 50%', borderRadius: '18px', opacity: 0.6 },
-      { transform: 'none', transformOrigin: '50% 50%', borderRadius: '12px', opacity: 1 },
-    ], { duration: 420, easing: 'cubic-bezier(.2,.85,.25,1)' });
-  };
-  if (target.complete === false || (target.tagName === 'VIDEO' && !target.videoWidth && !target.poster)) target.addEventListener(target.tagName === 'VIDEO' ? 'loadedmetadata' : 'load', run, { once: true });
-  else requestAnimationFrame(run);
-}
+/* --------------------------------------------- shared-element zoom (card → viewer)
+ * Lives in transitions.js with the other shared-element moves; re-exported here for the callers
+ * that have always imported it from fx.js. */
+export { rememberFlip, playFlip } from './transitions.js';
 
 /* ---------------------------------------------------------------- haptics */
 /** A tiny tap on phones that support it (Android Chrome); silently nothing elsewhere. */
