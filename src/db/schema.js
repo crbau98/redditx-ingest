@@ -489,7 +489,9 @@ function v8(db) {
  *   identity_links   evidence that two creator rows are the same man, collected only from what the creators publish
  *                    about themselves (bio links, link-in-bio pages, a shared OnlyFans page) or set by the admin.
  *                    pending = waiting for the admin, merged = folded together, rejected = different people (never
- *                    suggested again). `a_id` < `b_id` so a pair is stored once.
+ *                    suggested again). `a_id` < `b_id` so a pair is stored once. No foreign keys: a merge deletes one of
+ *                    the two creators, and the decision (with the handles at the time, a_label / b_label, and the
+ *                    survivor, kept_id) is kept as history.
  */
 function v9(db) {
   db.exec(`
@@ -506,8 +508,11 @@ function v9(db) {
     CREATE INDEX IF NOT EXISTS ix_creator_aliases_norm ON creator_aliases(norm);
     CREATE TABLE IF NOT EXISTS identity_links (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      a_id TEXT NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
-      b_id TEXT NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
+      a_id TEXT NOT NULL,
+      b_id TEXT NOT NULL,
+      a_label TEXT,
+      b_label TEXT,
+      kept_id TEXT,
       evidence TEXT NOT NULL DEFAULT '[]',
       strength INTEGER NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','merged','rejected')),

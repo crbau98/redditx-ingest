@@ -41,7 +41,11 @@ const q = {
   nameNorms: db.prepare("SELECT norm FROM creator_aliases WHERE creator_id = ? AND source IN ('account','profile','admin','lookup','merge')"),
   link: db.prepare('SELECT * FROM identity_links WHERE a_id = ? AND b_id = ?'),
   linkById: db.prepare('SELECT * FROM identity_links WHERE id = ?'),
-  insLink: db.prepare('INSERT INTO identity_links (a_id, b_id, evidence, strength) VALUES (?, ?, ?, ?)'),
+  insLink: db.prepare('INSERT INTO identity_links (a_id, b_id, a_label, b_label, evidence, strength) VALUES (?, ?, ?, ?, ?, ?)'),
+  linksOf: db.prepare('SELECT * FROM identity_links WHERE a_id = ? OR b_id = ?'),
+  repair: db.prepare("UPDATE identity_links SET a_id = ?, b_id = ?, a_label = ?, b_label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?"),
+  delLink: db.prepare('DELETE FROM identity_links WHERE id = ?'),
+  kept: db.prepare('UPDATE identity_links SET kept_id = ? WHERE id = ?'),
   updLink: db.prepare("UPDATE identity_links SET evidence = ?, strength = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?"),
   decide: db.prepare("UPDATE identity_links SET status = ?, decided_by = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?"),
 };
@@ -114,7 +118,7 @@ function sameName(x, y) {
  * @param {{type: string, from?: string, detail?: string}} ev
  * @returns {{id, strength, status, merged?: boolean}|null}
  */
-function noteLink(x, y, ev) {
+function noteLink(x, y, ev, { autoMerge = true } = {}) {
   if (!x || !y || x === y || !WEIGHTS[ev.type]) return null;
   const [a, b] = pair(x, y);
   if (!repo.creators.get(a) || !repo.creators.get(b)) return null;
@@ -122,7 +126,7 @@ function noteLink(x, y, ev) {
   const item = { type: ev.type, from: ev.from || null, detail: ev.detail ? String(ev.detail).slice(0, 160) : null };
   if (!row) {
     const evidence = [item];
-    const id = q.insLink.run(a, b, JSON.stringify(evidence), strengthOf(evidence)).lastInsertRowid;
+    const id = q.insLink.run(a, b, repo.creators.get(a).handle, repo.creators.get(b).handle, JSON.stringify(evidence), strengthOf(evidence)).lastInsertRowid;
     row = q.linkById.get(id);
     events.log('INFO', `Possible same creator: ${repo.creators.get(a).handle} ↔ ${repo.creators.get(b).handle} (${ev.type})`);
   } else {
@@ -134,12 +138,29 @@ function noteLink(x, y, ev) {
       row = q.linkById.get(row.id);
     }
   }
-  const auto = settingsStore.get().identityAutoMerge !== false;
-  if (auto && row.strength >= AUTO_STRENGTH && sameName(a, b)) {
+  if (autoMerge && mergeable(row)) {
     const kept = merge(row.id, { actor: 'identity' });
     if (kept) return { id: row.id, strength: row.strength, status: 'merged', merged: true, creatorId: kept.id };
   }
   return { id: row.id, strength: row.strength, status: row.status };
+}
+
+const mergeable = (row) => settingsStore.get().identityAutoMerge !== false && row.status === 'pending' && row.strength >= AUTO_STRENGTH && sameName(row.a_id, row.b_id);
+
+/**
+ * Apply any auto-merge now due for this creator (applyProfile notes its evidence first with autoMerge off, so the
+ * profile is never half-applied to a creator that was just merged away). Returns the id that survives.
+ */
+function settle(creatorId) {
+  let id = creatorId;
+  for (let i = 0; i < 5 && id; i++) {
+    const row = q.linksOf.all(id, id).find(mergeable);
+    if (!row) break;
+    const kept = merge(row.id, { actor: 'identity' });
+    if (!kept) break;
+    id = kept.id;
+  }
+  return id;
 }
 
 /** Fold two linked creators into one: the one with more posts stays. */
@@ -150,15 +171,35 @@ function merge(linkId, { keepId = null, actor = 'admin' } = {}) {
   if (!A || !B) return null;
   const keep = keepId === B.id || (!keepId && (B.media_count || 0) > (A.media_count || 0)) ? B : A;
   const gone = keep === A ? B : A;
-  q.decide.run('merged', actor, row.id); // the row goes with the merged-away creator (cascade); the audit log keeps it
-  const out = mergeCreators(keep.id, gone.id, { actor, reason: `identity link #${row.id}` });
+  const out = mergeCreators(keep.id, gone.id, { actor, reason: `identity link #${row.id}`, linkId: row.id });
   return out;
 }
 
 /** Merge creator `goneId` into `keepId`, keeping both men's names as aliases. Used by the queue and the admin's Merge button. */
-function mergeCreators(keepId, goneId, { actor = 'admin', reason = 'merge' } = {}) {
+function mergeCreators(keepId, goneId, { actor = 'admin', reason = 'merge', linkId = null } = {}) {
   const keep = repo.creators.get(keepId); const gone = repo.creators.get(goneId);
   if (!keep || !gone || keepId === goneId) return null;
+  // Record the decision (a direct admin merge gets a row of its own), then move gone's other open links over to keep.
+  let row = linkId ? q.linkById.get(linkId) : q.link.get(...pair(keepId, goneId));
+  if (!row) {
+    const [a, b] = pair(keepId, goneId);
+    row = q.linkById.get(q.insLink.run(a, b, repo.creators.get(a).handle, repo.creators.get(b).handle, JSON.stringify([{ type: 'admin', from: null, detail: null }]), WEIGHTS.admin).lastInsertRowid);
+  }
+  q.decide.run('merged', actor, row.id);
+  q.kept.run(keepId, row.id);
+  for (const r of q.linksOf.all(goneId, goneId)) {
+    if (r.id === row.id || r.status === 'merged') continue; // history stays as it was
+    const other = r.a_id === goneId ? r.b_id : r.a_id;
+    if (other === keepId) { q.delLink.run(r.id); continue; }
+    const [a, b] = pair(keepId, other);
+    const clash = q.link.get(a, b);
+    if (clash) {
+      if (r.status === 'rejected' && clash.status === 'pending') q.decide.run('rejected', r.decided_by || actor, clash.id); // "different people" carries over
+      q.delLink.run(r.id);
+      continue;
+    }
+    q.repair.run(a, b, repo.creators.get(a).handle, repo.creators.get(b) ? repo.creators.get(b).handle : null, r.id);
+  }
   addAlias(keepId, gone.handle, { kind: 'handle', source: 'merge' });
   if (gone.display_name) addAlias(keepId, gone.display_name, { kind: 'name', source: 'merge' });
   const out = repo.creators.merge(keepId, goneId);
@@ -193,7 +234,7 @@ function noteProfile(creatorId, feed, profile) {
     if (addAlias(creatorId, h, { platform: feed && feed.platform, source: 'bio' })) out.aliases++;
     if (!feed || feed.kind !== 'user') continue;
     const owner = repo.creators.byAccount(feed.platform, h);
-    if (owner && owner.id !== creatorId) noteLink(creatorId, owner.id, { type: 'bio-alias', from: creatorId, detail: `${feed.platform}:@${h}` });
+    if (owner && owner.id !== creatorId) noteLink(creatorId, owner.id, { type: 'bio-alias', from: creatorId, detail: `${feed.platform}:@${h}` }, { autoMerge: false });
     else if (!owner) out.accounts.push({ platform: feed.platform, kind: 'user', target: h, ingestable: true });
   }
   return out;
@@ -253,17 +294,19 @@ function scan() {
 function parseLink(row) {
   if (!row) return null;
   let evidence = []; try { evidence = JSON.parse(row.evidence || '[]'); } catch { evidence = []; }
-  const card = (id) => {
+  const card = (id, label) => {
     const c = repo.creators.get(id);
-    return c && { id: c.id, handle: c.handle, display_name: c.display_name, avatar_url: c.avatar_url, media_count: c.media_count, status: c.status, aliases: aliasesOf(id).map((a) => a.alias).slice(0, 12) };
+    if (!c) return { id, handle: label || id, display_name: null, avatar_url: null, media_count: 0, status: 'merged', gone: true, aliases: [] }; // merged away
+    return { id: c.id, handle: c.handle, display_name: c.display_name, avatar_url: c.avatar_url, media_count: c.media_count, status: c.status, aliases: aliasesOf(id).map((a) => a.alias).slice(0, 12) };
   };
-  return { id: row.id, status: row.status, strength: row.strength, evidence, created_at: row.created_at, updated_at: row.updated_at, a: card(row.a_id), b: card(row.b_id), sameName: sameName(row.a_id, row.b_id) };
+  return { id: row.id, status: row.status, strength: row.strength, evidence, created_at: row.created_at, updated_at: row.updated_at, decided_by: row.decided_by, kept_id: row.kept_id,
+    a: card(row.a_id, row.a_label), b: card(row.b_id, row.b_label), sameName: row.status === 'merged' ? true : sameName(row.a_id, row.b_id) };
 }
 
 function queue({ status = 'pending', page = 0, limit = 50 } = {}) {
   const st = ['pending', 'merged', 'rejected'].includes(status) ? status : 'pending';
   const total = db.prepare('SELECT COUNT(*) AS n FROM identity_links WHERE status = ?').get(st).n;
-  const items = db.prepare('SELECT * FROM identity_links WHERE status = ? ORDER BY strength DESC, updated_at DESC LIMIT ? OFFSET ?').all(st, limit, page * limit).map(parseLink);
+  const items = db.prepare(`SELECT * FROM identity_links WHERE status = ? ORDER BY ${st === 'pending' ? 'strength DESC, updated_at DESC' : 'updated_at DESC'} LIMIT ? OFFSET ?`).all(st, limit, page * limit).map(parseLink);
   return { items, total, page, limit };
 }
 
@@ -274,4 +317,4 @@ function counts() {
   return o;
 }
 
-module.exports = { addAlias, aliasesOf, removeAlias, findByAlias, bioAliases, noteLink, noteProfile, merge, mergeCreators, reject, scan, queue, counts, pageKey, WEIGHTS, AUTO_STRENGTH };
+module.exports = { addAlias, aliasesOf, removeAlias, findByAlias, bioAliases, noteLink, noteProfile, settle, merge, mergeCreators, reject, scan, queue, counts, pageKey, WEIGHTS, AUTO_STRENGTH };

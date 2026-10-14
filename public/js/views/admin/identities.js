@@ -24,7 +24,7 @@ export async function render(root) {
   h('div', { class: 'row wrap', style: { justifyContent: 'space-between' } }, tabs, counts), host);
 
   const card = (c, other, link) => h('div', { class: 'panel grow', style: { minWidth: '220px' } },
-    h('div', { class: 'row' }, avatar(c, 40), h('div', { class: 'grow' }, h('b', null, c.display_name || c.handle), h('div', { class: 'muted', style: { fontSize: '13px' } }, `@${c.handle} · ${fmt.int(c.media_count || 0)} posts`))),
+    h('div', { class: 'row' }, avatar(c, 40), h('div', { class: 'grow' }, h('b', null, c.display_name || c.handle), h('div', { class: 'muted', style: { fontSize: '13px' } }, c.gone ? `@${c.handle} · merged in` : `@${c.handle} · ${fmt.int(c.media_count || 0)} posts`)), link.kept_id === c.id ? h('span', { class: 'badge good' }, 'kept') : null),
     c.aliases && c.aliases.length ? h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '8px' } }, 'Goes by: ', c.aliases.join(', ')) : null,
     link.status === 'pending' ? h('button', { class: 'btn sm primary', style: { marginTop: '10px' }, onclick: async (e) => {
       if (!(await confirmDialog(`Merge ${other.handle} into ${c.handle}? Media, accounts and names move across. This cannot be undone.`, { confirmLabel: 'Merge', danger: true }))) return;

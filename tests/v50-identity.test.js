@@ -68,6 +68,40 @@ describe('creator identity', () => {
     assert.ok(repo.db.prepare('SELECT COUNT(*) AS n FROM media WHERE creator_id = ?').get(kept).n >= 1);
   });
 
+  test('a merge triggered mid-profile finishes the profile first, then keeps the decision as history', () => {
+    const a = person('kai_strong', 'x');
+    const b = person('kai_strong.bsky.social', 'bluesky');
+    for (const k of ['k1', 'k2']) repo.media.insert({ creator_id: b.c.id, feed_id: b.f.id, platform: 'bluesky', source_id: k, source_key: `bluesky:${k}:0`, post_key: `bluesky:${k}`, source_url: 'https://bsky.app/x', title: 'lift', media_type: 'image', media_url: `https://cdn.bsky.app/${k}.jpg`, hash: `h-${k}`, publish_state: 'published' });
+    repo.creators.refreshStats(b.c.id);
+    applyProfile(b.f, { displayName: 'Kai', bio: 'gym', links: [{ platform: 'x', kind: 'user', target: 'kai_strong', ingestable: true }] }, settings());
+    // A has fewer posts, so A is the one merged away, in the middle of his own profile: a link that tips the merge,
+    // then another account and an OnlyFans page that must still land on the creator who survives.
+    let r;
+    assert.doesNotThrow(() => { r = applyProfile(a.f, { displayName: 'Kai', bio: 'gym', links: [
+      { platform: 'bluesky', kind: 'user', target: 'kai_strong.bsky.social', ingestable: true },
+      { platform: 'redgifs', kind: 'user', target: 'kaistrongclips', ingestable: true },
+      { external: true, service: 'OnlyFans', handle: 'kaistrongfree', url: 'https://onlyfans.com/kaistrongfree' },
+    ] }, settings()); });
+    assert.equal(r.mergedInto, b.c.id);
+    assert.equal(repo.creators.get(a.c.id), null);
+    assert.equal(repo.feeds.find('redgifs', 'user', 'kaistrongclips').creator_id, b.c.id);
+    assert.ok(repo.creators.get(b.c.id).links.some((l) => l.handle === 'kaistrongfree'));
+    assert.equal(repo.onlyfans.get('kaistrongfree').creator_id, b.c.id);
+    const done = identity.queue({ status: 'merged' }).items.find((l) => l.kept_id === b.c.id);
+    assert.ok(done, 'decision kept as history');
+    const gone = [done.a, done.b].find((c) => c.id === a.c.id);
+    assert.equal(gone.gone, true); assert.equal(gone.handle, 'kai_strong');
+  });
+
+  test('an admin merge from the Creators tab is recorded too, and moves open suggestions to the survivor', () => {
+    const a = person('noah_keep'); const b = person('noah_gone'); const c = person('noahthird');
+    identity.noteLink(b.c.id, c.c.id, { type: 'bio-link', from: b.c.id, detail: 'x:noahthird' });
+    identity.mergeCreators(a.c.id, b.c.id);
+    assert.ok(identity.queue({ status: 'merged' }).items.some((l) => l.kept_id === a.c.id && l.evidence.some((e) => e.type === 'admin')));
+    const moved = identity.queue().items.find((l) => [l.a.id, l.b.id].includes(c.c.id));
+    assert.ok(moved && [moved.a.id, moved.b.id].includes(a.c.id), 'suggestion now points at the survivor');
+  });
+
   test('a couple who link each other but use different names wait for the admin', () => {
     const a = person('ryan_and_co', 'x');
     const b = person('lukepump', 'x');
