@@ -95,7 +95,9 @@ export function mediaCard(item, { open, compact = false, why = null } = {}) {
     img.addEventListener('error', () => { img.remove(); ph.classList.add('done'); reportBroken(item.id); });
     media.appendChild(img);
   } else ph.classList.add('done');
-  if (why) media.appendChild(h('span', { class: 'card-why', title: 'Why you are seeing this' }, icon('sparkle', 'sm'), why));
+  // On full cards the "why" chip rides in the caption over the image; compact cards keep it on the media.
+  const whyChip = why ? h('span', { class: 'card-why', title: 'Why you are seeing this' }, icon('sparkle', 'sm'), why) : null;
+  if (whyChip && compact) media.appendChild(whyChip);
   media.appendChild(h('div', { class: 'card-badges' },
     isVideo ? h('span', { class: 'pill' }, icon('play', 'fill'), item.duration ? fmt.duration(item.duration) : 'Video') : null,
     item.nsfw_level === 'suggestive' ? h('span', { class: 'pill' }, 'Suggestive') : null,
@@ -122,6 +124,7 @@ export function mediaCard(item, { open, compact = false, why = null } = {}) {
   const card = h('article', { class: `card${compact ? ' compact' : ''}`, dataset: { id: item.id } }, media, fav);
   if (!compact) {
     card.appendChild(h('div', { class: 'card-foot' },
+      whyChip,
       item.title ? h('div', { class: 'card-title' }, item.title) : null,
       h('div', { class: 'card-meta' },
         item.creator_id ? h('a', { href: href(`/creator/${item.creator_id}`), class: 'row', style: { gap: '6px', minWidth: 0 }, onclick: (e) => e.stopPropagation() }, avatar(item, 20), h('span', { class: 'truncate' }, item.creator_name || item.creator_handle || item.author)) : h('span', { class: 'truncate' }, item.author || ''),
