@@ -85,3 +85,37 @@ describe('v5 shared-element transitions', () => {
     assert.match(css, /\.fx-scrim \{[^}]*pointer-events: none/);
   });
 });
+
+describe('v5 creator stage (phase 2)', () => {
+  const cr = js('views/creator.js');
+
+  test('the stage shows his best picture (highest-scored preview first) and tints from the same one', () => {
+    assert.match(cr, /const art = \(c\.previews && c\.previews\[0\]\) \|\| c\.banner_url;/);
+    assert.match(cr, /const tintFrom = art \|\| c\.avatar_url;/);
+  });
+
+  test('the wash is drawn above the colour tint, so the stage always ends on plain background', () => {
+    assert.ok(cr.indexOf("class: 'stage-tint'") < cr.indexOf("class: 'stage-wash'"));
+  });
+
+  test('the scroll drift is compositor-only, scroll-driven, and off for reduced motion', () => {
+    const kf = css.match(/@keyframes stage-drift \{([^}]*)\}/)[1];
+    assert.doesNotMatch(kf.replace(/transform/g, ''), /[a-z-]+\s*:/);
+    assert.match(css, /@supports \(animation-timeline: scroll\(\)\) \{\s*@media \(prefers-reduced-motion: no-preference\) \{\s*\.stage-img \{ animation: stage-drift/);
+  });
+
+  test('the tint arrives as an opacity fade, never an animated gradient', () => {
+    assert.match(css, /\.stage-tint \{ opacity: 0; transition: opacity var\(--dur-slow\)/);
+  });
+
+  test('stats count up once per creator per visit, and Free on lists his free accounts', () => {
+    assert.match(cr, /if \(!counted\.has\(c\.id\)\) countUp\(/);
+    assert.match(cr, /class: 'free-on'/);
+    assert.match(cr, /c\.onlyfans && c\.onlyfans\.free\) freeOn\.unshift/);
+  });
+
+  test('no :has() in the stage styles (it made feed style work ~45% worse in v4.16)', () => {
+    const v5 = css.slice(css.indexOf('the creator stage'));
+    assert.doesNotMatch(v5, /:has\(/);
+  });
+});

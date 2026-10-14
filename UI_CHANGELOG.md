@@ -1,5 +1,17 @@
 # UI changelog
 
+## 2026-10-14 — v5 "Motion", phase 2: the creator stage
+
+| Change | Files |
+|---|---|
+| **Stage header**: his best picture (highest-scored post, banner as fallback) full-bleed behind the name, washed into the page with a colour taken from that same picture; the wash fades in (opacity only) once the colour is known. Name set larger, with an "Also goes by" line when identity has aliases for him | `views/creator.js`, `app.css` |
+| **Scroll drift**: the stage picture moves a little slower than the page and eases in by 6% as you scroll, with CSS scroll-driven animation (no JS on scroll, transform only, off for reduced motion and in browsers without it) | `app.css` |
+| **"Free on" row**: every account where his posts are free, his free OnlyFans first, as lit pills in each platform's colour (one swipeable row on phones). Other links stay as dashed chips below | `views/creator.js`, `app.css` |
+| **Stats count up** the first time you open a creator in a visit; coming back shows them settled | `views/creator.js` |
+| **Platform switcher mounted** above the feed tabs; the creator feed and `setQ` carry `platform`. The component ships in the usability thread's PR, so it is loaded on demand and the page works with or without it | `views/creator.js` |
+
+**Verification**: 6 new guards in `tests/v5-motion.test.js`; stage checked at 390×844 and 1440×900 in dark and light, and the switcher checked against the usability branch's component (pills render, a pill filters the feed and updates the URL, no console errors).
+
 ## 2026-10-14 — v5 "Motion", phase 1: one motion vocabulary, shared elements
 
 **Design direction**: nothing just appears or vanishes. Things that move between views keep their identity on the way, and every moving part in the app speaks the same three springs.

@@ -4,7 +4,7 @@ import { navigate, href } from '../router.js';
 import { follows, platformColor, platformLabel, bus } from '../store.js';
 import { createFeed } from '../components/feed.js';
 import { creatorCard } from '../components/creator-card.js';
-import { dominantColor } from '../components/fx.js';
+import { dominantColor, countUp } from '../components/fx.js';
 import { landAvatar } from '../components/transitions.js';
 import { openReport } from '../components/report.js';
 
@@ -49,6 +49,8 @@ function activityPanel(a) {
       h('div', { class: 'chart-axis', style: { display: 'flex', justifyContent: 'space-between', color: 'var(--muted)', fontSize: '11.5px', marginTop: '6px' } }, h('span', null, fmtHour(0)), h('b', { style: { color: 'var(--text)' } }, `peak ${fmtHour(peak)}`), h('span', null, fmtHour(23)))));
 }
 
+const counted = new Set(); // creators whose stats already counted up this visit
+
 export async function creator(root, { params, query }) {
   root.replaceChildren(h('div', { class: 'skeleton', style: { height: '260px' } }));
   let c;
@@ -59,9 +61,12 @@ export async function creator(root, { params, query }) {
   document.title = `${c.display_name || c.handle} — PRISM`;
   const type = query.get('type') || '';
   const sort = query.get('sort') || 'recent';
-  const setQ = (patch) => navigate(`/creator/${c.id}`, { type, sort, ...patch }, { replace: true });
+  const platform = /^[a-z]{2,20}$/.test(query.get('platform') || '') ? query.get('platform') : '';
+  const setQ = (patch) => navigate(`/creator/${c.id}`, { type, sort, platform, ...patch }, { replace: true });
 
-  const banner = h('div', { class: 'profile-banner' }, c.banner_url ? h('div', { class: 'bg', style: { backgroundImage: `url("${proxied(c.banner_url)}")` } }) : (c.previews && c.previews[0] ? h('div', { class: 'bg', style: { backgroundImage: `url("${proxied(c.previews[0])}")` } }) : null));
+  // The stage: his best picture (previews come highest-scored first), full-bleed behind the header,
+  // washed into the page with a colour taken from it. A banner is the fallback, then a plain wash.
+  const art = (c.previews && c.previews[0]) || c.banner_url;
 
   const followBtn = h('button', { class: 'btn' });
   const paintFollow = () => {
@@ -74,16 +79,21 @@ export async function creator(root, { params, query }) {
   const off = bus.on('follow', () => { if (followBtn.isConnected) paintFollow(); else off(); });
   if (follows.has(c.id)) follows.markSeen(c.id);
 
-  const accounts = (c.accounts || []).map((a) => h('a', { class: 'linkchip', href: a.url, target: '_blank', rel: 'noopener noreferrer nofollow', style: { '--c': platformColor(a.platform) } }, h('span', { class: 'dot' }), `${platformLabel(a.platform)} · ${String(a.label).replace(/^[@/]?(?:u\/)?/, '')}`, icon('external', 'sm')));
+  // "Free on": every account where his posts cost nothing, his free OnlyFans included, as lit pills.
+  const freeOn = (c.accounts || []).map((a) => h('a', { class: 'free-pill', href: a.url, target: '_blank', rel: 'noopener noreferrer nofollow', style: { '--c': platformColor(a.platform) } }, h('span', { class: 'dot' }), h('b', null, platformLabel(a.platform)), h('span', { class: 'h' }, String(a.label).replace(/^[@/]?(?:u\/)?/, ''))));
+  if (c.onlyfans && c.onlyfans.free) freeOn.unshift(h('a', { class: 'free-pill of', href: c.onlyfans.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), h('b', null, 'OnlyFans'), h('span', { class: 'h' }, 'free')));
   // The OnlyFans page gets its own button in the header; the other external links stay chips.
   const ext = (c.links || []).filter((l) => l.url && !(c.onlyfans && /onlyfans\.com/i.test(l.url))).map((l) => h('a', { class: 'linkchip ext', href: l.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, icon('link', 'sm'), l.label || l.service));
 
   // A glowing ring (like a "story") when they posted in the last two days.
+  // names and handles he uses elsewhere (creator identity), shown once each
+  const aka = [...new Set((c.aliases || []).map((a) => (typeof a === 'string' ? a : a && a.alias)).filter(Boolean))].slice(0, 4);
   const fresh = c.last_media_at && Date.now() - new Date(c.last_media_at).getTime() < 2 * 86400000;
   const headAvatar = avatar(c, 112);
   const head = h('div', { class: 'profile-head' },
     h('div', { class: `avatar-ring${fresh ? ' live' : ''}`, title: fresh ? `Posted ${fmt.ago(c.last_media_at)}` : null }, headAvatar),
-    h('div', { class: 'profile-info' }, h('h1', null, c.display_name || c.handle, c.verified ? icon('verified', 'fill') : null), h('div', { class: 'creator-handle' }, `@${c.handle}`)),
+    h('div', { class: 'profile-info' }, h('h1', null, c.display_name || c.handle, c.verified ? icon('verified', 'fill') : null), h('div', { class: 'creator-handle' }, `@${c.handle}`),
+      aka.length ? h('div', { class: 'aka' }, 'Also goes by ', aka.join(', ')) : null),
     h('div', { class: 'profile-actions' }, followBtn,
       c.onlyfans ? h('a', { class: `btn of-cta${c.onlyfans.free ? ' free' : ''}`, href: c.onlyfans.url, target: '_blank', rel: 'noopener noreferrer nofollow', title: `onlyfans.com/${c.onlyfans.handle}` },
         h('span', { class: 'of-mark', 'aria-hidden': 'true' }), c.onlyfans.free ? 'Free OnlyFans' : 'OnlyFans', icon('external', 'sm')) : null,
@@ -95,17 +105,34 @@ export async function creator(root, { params, query }) {
     h('button', { class: type === v ? 'on' : '', role: 'tab', 'aria-selected': String(type === v), onclick: () => setQ({ type: v }) }, `${l} `, h('span', { class: 'muted num' }, fmt.num(n)))));
   const sortSel = h('select', { class: 'select sm', style: { width: 'auto', marginLeft: 'auto', marginBottom: '8px' }, 'aria-label': 'Sort', onchange: (e) => setQ({ sort: e.target.value }) }, [['recent', 'Newest'], ['top', 'Top rated'], ['trending', 'Trending'], ['oldest', 'Oldest']].map(([v, l]) => h('option', { value: v, selected: sort === v }, l)));
 
-  const feed = createFeed({ endpoint: `/api/creators/${c.id}/media`, query: { type, sort }, empty: emptyState({ icon: 'image', title: 'Nothing here yet', text: 'No published posts match this tab.' }) });
+  const feed = createFeed({ endpoint: `/api/creators/${c.id}/media`, query: { type, sort, platform: platform || undefined }, empty: emptyState({ icon: 'image', title: 'Nothing here yet', text: 'No published posts match this tab.' }) });
 
-  root.replaceChildren(banner, head,
+  const stage = h('section', { class: `stage${art ? '' : ' bare'}` },
+    art ? h('div', { class: 'stage-media', 'aria-hidden': 'true' }, h('img', { class: 'stage-img', src: proxied(art), alt: '', decoding: 'async', fetchpriority: 'high' })) : null,
+    h('div', { class: 'stage-tint', 'aria-hidden': 'true' }), h('div', { class: 'stage-wash', 'aria-hidden': 'true' }), // the wash sits on top so the page edge is always plain background
+    head);
+  // Stats count up the first time you open a creator in a visit; coming back shows them settled.
+  const stat = (n, f = fmt.int) => { const b = h('b', { class: 'num' }, f(n)); if (!counted.has(c.id)) countUp(b, n, f); return b; };
+  const stats = h('div', { class: 'profile-stats' }, h('span', null, stat(c.media_count), 'posts'), h('span', null, stat(c.video_count), 'videos'), c.total_score ? h('span', null, stat(c.total_score, fmt.num), 'total score') : null, c.last_media_at ? h('span', null, `Active ${fmt.ago(c.last_media_at)}`) : null);
+  counted.add(c.id);
+
+  root.replaceChildren(stage,
     c.bio ? h('p', { class: 'profile-bio' }, c.bio) : null,
-    h('div', { class: 'profile-stats' }, h('span', null, h('b', { class: 'num' }, fmt.int(c.media_count)), 'posts'), h('span', null, h('b', { class: 'num' }, fmt.int(c.video_count)), 'videos'), c.total_score ? h('span', null, h('b', { class: 'num' }, fmt.num(c.total_score)), 'total score') : null, c.last_media_at ? h('span', null, `Active ${fmt.ago(c.last_media_at)}`) : null),
-    accounts.length || ext.length ? h('div', { class: 'linkrow' }, accounts, ext) : null,
+    stats,
+    freeOn.length ? h('div', { class: 'free-on' }, h('span', { class: 'free-on-label' }, 'Free on'), h('div', { class: 'free-on-row' }, freeOn)) : null,
+    ext.length ? h('div', { class: 'linkrow' }, ext) : null,
     c.topTags && c.topTags.length ? h('div', { class: 'row wrap', style: { marginTop: '14px', gap: '6px' } }, c.topTags.slice(0, 10).map((t) => h('a', { class: 'tag', href: href('/explore', { tag: t.name }) }, `#${t.name}`))) : null,
     h('div', { style: { height: '22px' } }),
     h('div', { class: 'row', style: { alignItems: 'flex-end' } }, h('div', { class: 'grow' }, tabs), sortSel),
     feed.el);
   landAvatar(headAvatar, c.id); // the avatar tapped on the way here flies into place
+  // The platform switcher (pills per platform, plus paid-page cards) belongs to the usability thread and
+  // is loaded on demand, so this page works whether or not that component has shipped yet.
+  import('../components/platform-switcher.js').then(({ platformSwitcher }) => {
+    const anchor = root.isConnected && root.querySelector('.tabs');
+    if (!anchor || typeof platformSwitcher !== 'function') return;
+    anchor.closest('.row').before(platformSwitcher(c, { value: platform, onChange: (p) => setQ({ platform: p }) }));
+  }).catch(() => {});
   // Activity and "Similar creators" load after the page is usable; a failure just means they are missing.
   get(`/api/creators/${c.id}/activity`).then((a) => {
     const panel = root.isConnected && activityPanel(a);
@@ -131,8 +158,8 @@ export async function creator(root, { params, query }) {
   }).catch(() => {});
   // Chameleon: the profile takes its accent colours from the creator's own artwork.
   const TINT_VARS = ['--accent', '--accent-2', '--accent-3', '--grad', '--grad-soft'];
-  const art = c.banner_url || (c.previews && c.previews[0]) || c.avatar_url;
-  dominantColor(art ? proxied(art) : null).then((col) => {
+  const tintFrom = art || c.avatar_url; // the same picture the stage shows, so the wash matches it
+  dominantColor(tintFrom ? proxied(tintFrom) : null).then((col) => {
     if (!col || !root.isConnected || !root.contains(head)) return;
     const hsl = (dh, ds = 0, dl = 0) => `hsl(${(col.h + dh + 360) % 360} ${Math.min(95, col.s + ds)}% ${Math.min(72, col.l + dl)}%)`;
     root.style.setProperty('--accent', hsl(0));
