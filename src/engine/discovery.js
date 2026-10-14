@@ -49,7 +49,7 @@ const WEIGHTS = { identity: 6, mention: 3, cofollow: 1.5, search: 2, similar: 2,
 const CAPS = { identity: 1, mention: 5, cofollow: 8, search: 3, similar: 4, hangout: 6, ofconfirmed: 1, onlyfans: 1 };
 const FOLLOWABLE_KINDS = new Set(['user', 'page']);
 // Communities and custom feeds mix many posters, so they are held to a stricter bar than people.
-const SHARED_KINDS = new Set(['community', 'feedgen', 'list']);
+const SHARED_KINDS = new Set(['community', 'feedgen', 'list', 'niche']);
 // CamelCase / snake_case names ("TeenBoysNSFW") are split so the safety gate can read their words.
 const splitCamel = (s) => String(s || '').replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ');
 /** Safety verdict over the raw texts and their split forms; the stricter of the two wins. */
@@ -94,6 +94,7 @@ function usable(spec) {
   if (!spec || spec.external || !spec.ingestable) return false;
   if (spec.platform === 'web' || spec.platform === 'rss') return false; // arbitrary sites are too noisy to auto-follow
   if (spec.kind === 'community' && (spec.platform === 'reddit' || spec.platform === 'lemmy')) return true;
+  if (spec.kind === 'niche' && spec.platform === 'redgifs') return true;
   if (spec.platform === 'bluesky' && (spec.kind === 'feedgen' || spec.kind === 'list')) return true;
   if (!FOLLOWABLE_KINDS.has(spec.kind)) return false;
   if (spec.kind === 'page' && spec.platform !== 'linkinbio') return false;
@@ -409,9 +410,12 @@ function creatorHangouts({ minCreators = 2 } = {}) {
     let spec = null;
     if (h.platform === 'reddit') spec = parseProfile(`r/${h.community}`);
     else if (h.platform === 'lemmy' && h.community.includes('@')) { const [name, host] = h.community.split('@'); spec = parseProfile(`https://${host}/c/${name}`); }
+    // the RedGIFs niches followed creators post in (an untrusted feed: every item still needs a male signal)
+    else if (h.platform === 'redgifs' && /^[a-z0-9-]{2,60}$/i.test(h.community)) spec = { platform: 'redgifs', kind: 'niche', target: h.community.toLowerCase(), label: h.community, ingestable: true };
     if (!spec) continue;
     let c = null;
-    for (const cid of h.ids.slice(0, CAPS.hangout)) c = consider(spec, 'hangout', cid, { displayName: h.platform === 'reddit' ? `r/${h.community}` : h.community }) || c;
+    const shown = h.platform === 'reddit' ? `r/${h.community}` : h.platform === 'redgifs' ? h.community.replace(/-/g, ' ') : h.community;
+    for (const cid of h.ids.slice(0, CAPS.hangout)) c = consider(spec, 'hangout', cid, { displayName: shown }) || c;
     if (c && c.status === 'pending' && c.scope !== 'excluded') found++;
   }
   return { found };
@@ -478,6 +482,24 @@ async function peopleSearch({ aborted = () => false } = {}) {
         if (c && c.status === 'pending' && c.scope !== 'excluded') { out.found++; out.redgifs++; }
       }
     } catch (e) { events.log('WARN', `Discovery: RedGIFs creator search "${kw}" — ${e.message}`); }
+  }
+  // Related creators: who posts the most in one of the RedGIFs niches PRISM follows (one niche per run, in rotation).
+  // A verified poster is a "similar" lead per niche; an unverified one needs several gifs there and counts as a search hit.
+  const niches = rg && rg.nicheCreators ? repo.feeds.list({ platform: 'redgifs', kind: 'niche', enabled: true, limit: 200 }).items.map((f) => f.target) : [];
+  if (niches.length && !aborted()) {
+    const n = parseInt(repo.discoveryState.get('people.niche', '0'), 10) || 0;
+    const niche = niches[n % niches.length];
+    repo.discoveryState.set('people.niche', String((n + 1) % niches.length));
+    out.niche = niche;
+    try {
+      out.searched++;
+      for (const u of (await rg.nicheCreators(niche)).slice(0, 30)) {
+        if (u.gifs < (u.verified ? 2 : 3)) continue;
+        const spec = parseProfile(`https://www.redgifs.com/users/${u.username}`);
+        const c = consider(spec, u.verified ? 'similar' : 'search', `redgifs-niche:${niche}`, { displayName: u.name || u.username, bio: [u.description, u.tags.join(' ')].filter(Boolean).join(' · ') || null, avatarUrl: u.avatar, popularity: u.followers });
+        if (c && c.status === 'pending' && c.scope !== 'excluded') { out.found++; out.redgifs++; }
+      }
+    } catch (e) { events.log('WARN', `Discovery: RedGIFs niche creators "${niche}" — ${e.message}`); }
   }
   return out;
 }

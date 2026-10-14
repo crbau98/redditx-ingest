@@ -73,7 +73,20 @@ function idFromUrl(url) {
  * `users` block with profile details; we tally how many top results each creator owns.
  */
 async function searchCreators(q, { order = 'trending', count = 80 } = {}) {
-  const json = await api(`/v2/gifs/search?search_text=${encodeURIComponent(q)}&order=${order}&count=${count}&page=1`);
+  return tallyCreators(await api(`/v2/gifs/search?search_text=${encodeURIComponent(q)}&order=${order}&count=${count}&page=1`));
+}
+
+/**
+ * Creators who post the most in one niche (the niche's top gifs, tallied by poster), verified ones first.
+ * Discovery follows these from the niches PRISM already reads: related creators of the same kind.
+ */
+async function nicheCreators(niche, { order = 'top', count = 80 } = {}) {
+  const list = tallyCreators(await api(`/v2/niches/${encodeURIComponent(niche)}/gifs?order=${order}&count=${count}&page=1`));
+  return list.sort((a, b) => (b.verified === true) - (a.verified === true) || b.gifs - a.gifs);
+}
+
+/** A gif list response -> its posters: { username, gifs, tags, name, description, followers, verified, avatar }, most gifs first. */
+function tallyCreators(json) {
   const byName = new Map();
   for (const g of json.gifs || []) {
     if (!g || !g.userName) continue;
@@ -111,6 +124,8 @@ async function lookupUser(username) {
 
 module.exports = {
   searchCreators,
+  nicheCreators,
+  tallyCreators,
   lookupUser,
   platform: 'redgifs',
   label: 'RedGIFs',

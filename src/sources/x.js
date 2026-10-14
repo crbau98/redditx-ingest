@@ -52,6 +52,18 @@ function bestMp4(variants) {
  * v2 API response -> items. A repost carries no media of its own: the original post's media is used and credited to
  * the original author (`repostOf`). A quote keeps its own media and adds the quoted post's.
  */
+/**
+ * Where a post's links really point. The text only shows t.co redirects; the destinations are in entities.urls
+ * (API v2 and legacy tweets) or in fxtwitter's raw_text facets. The leak gate (lib/leaks) checks every one.
+ */
+function expandedLinks(t) {
+  const urls = [
+    ...((t.entities && t.entities.urls) || []).map((u) => u && (u.unwound_url || u.expanded_url || u.url)),
+    ...(((t.raw_text && t.raw_text.facets) || []).map((f) => f && f.type === 'url' && (f.replacement || f.original))),
+  ];
+  return [...new Set(urls.filter((u) => typeof u === 'string' && /^https?:\/\//i.test(u)))];
+}
+
 function parseApi(json, query) {
   const users = {}; const media = {}; const refs = {};
   ((json.includes && json.includes.users) || []).forEach((u) => { users[u.id] = u; });
@@ -72,7 +84,7 @@ function parseApi(json, query) {
       if (!mediaUrl) return;
       items.push({
         sourceId: t.id, position: i,
-        title: clip(t.text || '', 300), text: clip(t.text || '', 400),
+        title: clip(t.text || '', 300), text: clip(t.text || '', 400), links: expandedLinks(t),
         author: user.username, authorName: user.name, authorAvatar: user.profile_image_url,
         score: ((t.public_metrics && t.public_metrics.like_count) || 0) + ((t.public_metrics && t.public_metrics.retweet_count) || 0) * 2,
         postedAt: toIso(t.created_at),
@@ -123,7 +135,7 @@ function parseLegacyTweet(t, via = null) {
     const o = m.original_info || {};
     return {
       sourceId: t.id_str || String(t.id), position: i,
-      title: clip(t.full_text || t.text || '', 300), text: clip(t.full_text || t.text || '', 400),
+      title: clip(t.full_text || t.text || '', 300), text: clip(t.full_text || t.text || '', 400), links: expandedLinks(t),
       author: user.screen_name, authorName: user.name, authorAvatar: user.profile_image_url_https,
       score: (t.favorite_count || 0) + (t.retweet_count || 0) * 2,
       postedAt: toIso(t.created_at),
@@ -198,7 +210,7 @@ async function fetchTweet(id) {
   return media.map((m, i) => {
     const isVideo = m.type === 'video' || m.type === 'gif';
     return {
-      sourceId: t.id, position: i, title: clip(t.text || '', 300), text: clip(t.text || '', 400),
+      sourceId: t.id, position: i, title: clip(t.text || '', 300), text: clip(t.text || '', 400), links: expandedLinks(t),
       author: t.author && t.author.screen_name, authorName: t.author && t.author.name, authorAvatar: t.author && t.author.avatar_url,
       score: (t.likes || 0) + (t.retweets || 0) * 2, postedAt: toIso(t.created_timestamp || t.created_at),
       permalink: t.url, mediaType: isVideo ? 'video' : 'image', mediaUrl: m.url, previewUrl: m.thumbnail_url || (isVideo ? null : m.url),
@@ -216,6 +228,7 @@ async function lookupUsers(usernames) {
 }
 
 module.exports = {
+  expandedLinks,
   lookupUsers,
   apiAvailable,
   platform: 'x',

@@ -537,7 +537,20 @@ function v9(db) {
   }
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9];
+/**
+ * v10 (PRISM v5 sources): small thumbnails and a tint per picture. `thumb_url` is a ~360px WebP of the picture (or a
+ * video's poster) kept in the object store, so grids load small files instead of full-size originals; `tint` is the
+ * picture's dominant colour ('#rrggbb') shown while it loads. Filled in the background by engine/thumbs.js, newest first;
+ * an empty `tint` means "tried, no picture to read".
+ */
+function v10(db) {
+  const cols = db.prepare('PRAGMA table_info(media)').all().map((c) => c.name);
+  if (!cols.includes('thumb_url')) db.exec('ALTER TABLE media ADD COLUMN thumb_url TEXT');
+  if (!cols.includes('tint')) db.exec('ALTER TABLE media ADD COLUMN tint TEXT');
+  db.exec("CREATE INDEX IF NOT EXISTS ix_media_tint_todo ON media(seq DESC) WHERE tint IS NULL AND publish_state = 'published'");
+}
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

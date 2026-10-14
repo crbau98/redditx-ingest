@@ -148,6 +148,41 @@ describe('creator identity', () => {
     assert.ok(identity.aliasesOf(a.c.id).some((x) => x.norm === 'bennyreds'));
   });
 
+  test('two links from the same man (after a merge) are not "mutual"', () => {
+    const k = person('finn_keep'); const g = person('finn_gone'); const t = person('finnthird');
+    identity.noteLink(k.c.id, t.c.id, { type: 'bio-link', from: k.c.id, detail: 'x:finnthird' }, { autoMerge: false });
+    identity.noteLink(g.c.id, t.c.id, { type: 'bio-link', from: g.c.id, detail: 'x:finnthird' }, { autoMerge: false });
+    identity.mergeCreators(k.c.id, g.c.id);
+    const l = identity.queue().items.find((x) => [x.a.id, x.b.id].includes(t.c.id) && [x.a.id, x.b.id].includes(k.c.id));
+    assert.equal(l.strength, 2, 'one-way only');
+    assert.ok(l.evidence.every((e) => e.from === k.c.id));
+    assert.ok(repo.creators.get(t.c.id), 'third man not merged');
+  });
+
+  test('a name only a bio claimed is promoted once his account or the admin confirms it', () => {
+    const { c } = person('reese_main');
+    identity.addAlias(c.id, 'reese_alt', { source: 'bio' });
+    assert.ok(!repo.creators.detail(c.id).aliases.some((a) => a.alias === 'reese_alt'));
+    identity.addAlias(c.id, 'reese_alt', { platform: 'x', source: 'account' });
+    assert.ok(repo.creators.detail(c.id).aliases.some((a) => a.alias === 'reese_alt'));
+    identity.addAlias(c.id, 'reese_alt', { source: 'bio' });
+    assert.equal(identity.aliasesOf(c.id).find((a) => a.norm === 'reesealt').source, 'account', 'never demoted');
+    const g = person('reese_two');
+    identity.addAlias(c.id, 'Reese Two', { kind: 'name', source: 'bio' });
+    identity.addAlias(g.c.id, 'Reese Two', { kind: 'name', source: 'profile' });
+    identity.mergeCreators(c.id, g.c.id);
+    assert.notEqual(identity.aliasesOf(c.id).find((a) => a.norm === 'reesetwo').source, 'bio', 'promoted by the merge');
+  });
+
+  test('a hidden creator is never auto-merged; the pair waits for the admin', () => {
+    const a = person('sam_lean', 'x'); const b = person('sam_lean.bsky.social', 'bluesky');
+    repo.creators.update(b.c.id, { status: 'hidden' });
+    applyProfile(a.f, { displayName: 'Sam', bio: '', links: [{ platform: 'bluesky', kind: 'user', target: 'sam_lean.bsky.social', ingestable: true }] }, settings());
+    identity.noteLink(b.c.id, a.c.id, { type: 'bio-link', from: b.c.id, detail: 'x:sam_lean' });
+    assert.ok(repo.creators.get(a.c.id) && repo.creators.get(b.c.id), 'both kept');
+    assert.ok(identity.queue().items.some((l) => [l.a.id, l.b.id].includes(b.c.id) && l.strength >= identity.AUTO_STRENGTH));
+  });
+
   test('the admin can add and remove an alias', () => {
     const { c } = person('quinnlift');
     identity.addAlias(c.id, 'Quinn Harper', { kind: 'name', source: 'admin' });

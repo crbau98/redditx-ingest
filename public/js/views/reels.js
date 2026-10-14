@@ -1,5 +1,5 @@
 import { h, icon, proxied, fmt, avatar, toast, copyText, emptyState, openModal } from '../dom.js';
-import { get, post, reportBroken } from '../api.js';
+import { get, post, query as postQuery, reportBroken } from '../api.js';
 import { navigate, href } from '../router.js';
 import { prefs, favorites, follows, history as viewHistory, tastes, collections, platformLabel, bus } from '../store.js';
 import { attachVideo, releaseVideo } from '../components/video.js';
@@ -230,7 +230,10 @@ export async function reels(root, { query }) {
     loading = true;
     try {
       const forYou = f.sort === 'foryou' && !f.creator && !f.tag && !f.tags && !f.anytags && !f.community && !f.q && !f.following && !f.platform && !f.after;
-      const res = forYou ? await get('/api/recommend', { ...(tasteQ = (page && tasteQ) || tastes.query({ exclude: viewHistory.list().slice(0, 100) })), type: f.type === 'all' ? undefined : f.type, seed, page, limit: PAGE }) : await get('/api/media', {
+      // newest from everyone followed: the POST feed carries up to 500 creators (a URL holds 100)
+      const followFeed = followIds && f.sort === 'recent' && !f.creator && !f.tag && !f.tags && !f.anytags && !f.community && !f.q && !f.platform && !f.since && !f.after;
+      const res = followFeed ? await postQuery('/api/follow/feed', { follows: follows.list().map((c) => ({ id: c.id })), part: 'all', type: f.type === 'all' ? undefined : f.type, page, limit: PAGE, nocount: page > 0 })
+        : forYou ? await get('/api/recommend', { ...(tasteQ = (page && tasteQ) || tastes.query({ exclude: viewHistory.list().slice(0, 100) })), type: f.type === 'all' ? undefined : f.type, seed, page, limit: PAGE }) : await get('/api/media', {
         type: f.type === 'all' ? undefined : f.type, sort: f.sort === 'foryou' ? 'trending' : f.sort, platform: f.platform, tag: f.tag, tags: f.tags || undefined, anytags: f.anytags || undefined, since: f.since || undefined, after: f.after || undefined, community: f.community, creator: f.creator, q: f.q,
         creators: followIds ? (followIds.length ? followIds.join(',') : '00000000-0000-0000-0000-000000000000') : undefined,
         seed: f.sort === 'random' ? seed : undefined, page, limit: PAGE,

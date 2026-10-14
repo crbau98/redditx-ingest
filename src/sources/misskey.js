@@ -13,7 +13,7 @@
  */
 const config = require('../config');
 const http = require('./http').forPlatform('misskey', 700);
-const { toIso, clip, originOf, errorDetail } = require('./util');
+const { toIso, clip, originOf, errorDetail, repostsOn } = require('./util');
 const { looksLikeDirectMedia, looksLikeVideo } = require('../lib/mediaurl');
 const { extractLinks } = require('../lib/links');
 
@@ -53,10 +53,20 @@ function reactionTotal(note) {
   return Object.values(note.reactions || {}).reduce((a, n) => a + (Number(n) || 0), 0);
 }
 
-/** One note -> media items. Pure renotes are skipped (the original author owns them). */
+/**
+ * One note -> media items. A pure renote (no text or files of its own) carries someone else's note: with reposts on it is
+ * kept, credited to the original author (`repostOf.via` = the renoter), and ordered by the renote time.
+ */
 function parseNote(note, host) {
   if (!note || !note.id) return [];
-  if (note.renote && !note.text && !(note.files || []).length) return [];
+  if (note.renote && !note.text && !(note.files || []).length) {
+    if (!repostsOn()) return [];
+    const r = note.user || {};
+    const via = r.username ? `${r.username}@${(r.host || host).toLowerCase()}` : null;
+    const items = parseNote(note.renote, host);
+    if (!items.length || !via || items[0].author === via) return [];
+    return items.map((it) => ({ ...it, repostOf: { platform: 'misskey', handle: it.author, via }, cursorAt: toIso(note.createdAt) || it.postedAt }));
+  }
   // Misskey reports a MIME type per file; very old/odd uploads say application/octet-stream, so fall back to the extension.
   const kindOfFile = (f) => {
     const t = String(f.type || '');
@@ -161,7 +171,7 @@ module.exports = {
       const { name, host } = splitTarget(feed.target);
       if (!name || !host) throw new Error('Misskey user target must look like name@instance.tld');
       const u = await showUser(host, name);
-      jobs.push({ host, endpoint: 'users/notes', body: { userId: u.id, withFiles: true, includeReplies: false, includeMyRenotes: false } });
+      jobs.push({ host, endpoint: 'users/notes', body: { userId: u.id, withFiles: true, includeReplies: false, includeMyRenotes: repostsOn() } });
       if (ctx.needProfile || !cursor.newestAt) profile = profileOf(u);
     } else {
       const { name, host } = splitTarget(feed.target);
@@ -179,8 +189,9 @@ module.exports = {
           let reachedKnown = false;
           for (const n of notes) {
             for (const it of parseNote(n, job.host)) {
-              if (it.postedAt && (!newest || it.postedAt > newest)) newest = it.postedAt;
-              if (cursor.newestAt && it.postedAt && it.postedAt <= cursor.newestAt && !ctx.force) { reachedKnown = true; continue; }
+              const at = it.cursorAt || it.postedAt; // a renote is new when it was renoted
+              if (at && (!newest || at > newest)) newest = at;
+              if (cursor.newestAt && at && at <= cursor.newestAt && !ctx.force) { reachedKnown = true; continue; }
               items.push({ ...it, query: feed.kind === 'tag' ? feed.target : null });
             }
           }

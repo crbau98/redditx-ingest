@@ -14,6 +14,13 @@ Fixes from the v4.16 review, rebuilt on current main (the original follow-up PR 
 
 **Verification**: 632 unit tests (3 new guards in `tests/v416-lumen.test.js`). In Chromium: rendered column gap equals the JS gap (12 px desktop, 8 px phone); Tab focus shows a 2 px outline on buttons; a forced worst-case wide card clips 0 px at 1280, 390 and 360 px wide; phone creator page shows the full OnlyFans button; no console errors.
 
+## 2026-10-14 — v5 platform switcher, phase 2 of Features and usability
+
+| Change | Files |
+|---|---|
+| **Platform switcher** for a creator's page: a row of pills (All, then each platform PRISM has his posts from, busiest first, with counts) that filters his feed; arrow keys move and pick. Hidden when he only posts in one place. Below it, his paid pages (OnlyFans first, Fansly, JustFor.Fans and others) as link-out cards with a Free tier badge and the price when known; one swipeable row on phones. The creator page mounts it (Design thread) | `components/platform-switcher.js`, `components/elsewhere.js` (`paidPages`), `css/ux.css` |
+| **Following fixes**: "Play as Reels" from Following now covers all followed creators (up to 500, was 100); badges recount when the follow list changes mid-request; creators removed from PRISM are unfollowed quietly | `views/reels.js`, `following.js` |
+
 ## 2026-10-14 — v5 "Motion", phase 1: one motion vocabulary, shared elements
 
 **Design direction**: nothing just appears or vanishes. Things that move between views keep their identity on the way, and every moving part in the app speaks the same three springs.
