@@ -48,7 +48,8 @@ const RESERVED = new Set(['login', 'signup', 'register', 'auth', 'about', 'help'
   'models', 'creators', 'categories', 'tags', 'new', 'trending', 'popular', 'store', 'merch', 'gift', 'wallet', 'payouts']);
 const HANDLE = /^[A-Za-z0-9][A-Za-z0-9_.-]{1,40}$/;
 const NOT_HANDLES = new Set(['link', 'links', 'in', 'is', 'bio', 'below', 'above', 'free', 'now', 'here', 'the', 'my', 'and', 'on', 'at', 'for',
-  'sale', 'off', 'promo', 'subscribe', 'sub', 'dm', 'dms', 'open', 'only', 'fansly', 'fans', 'check', 'new', 'page', 'account', 'vip',
+  'sale', 'off', 'promo', 'subscribe', 'sub', 'dm', 'dms', 'open', 'only', 'fansly', 'fansly.com', 'fans', 'justfor', 'justforfans', 'justfor.fans', 'jff',
+  'onlyfans', 'onlyfans.com', 'check', 'new', 'page', 'account', 'vip',
   'click', 'tap', 'see', 'join', 'com']);
 
 function normal(h) {

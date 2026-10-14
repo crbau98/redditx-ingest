@@ -19,7 +19,7 @@ const RESERVED = new Set(['my', 'action', 'api', 'api2', 'files', 'terms', 'priv
 const HANDLE = /^[A-Za-z0-9][A-Za-z0-9_.-]{1,40}$/;
 // Words that follow "OnlyFans:" in prose but are not usernames.
 const NOT_HANDLES = new Set(['link', 'links', 'in', 'is', 'bio', 'below', 'above', 'free', 'now', 'here', 'the', 'my', 'and', 'on', 'at', 'for', 'sale', 'off',
-  'promo', 'subscribe', 'sub', 'dm', 'dms', 'open', 'only', 'onlyfans', 'of', 'check', 'new', 'page', 'account', 'vip', 'click', 'tap', 'see', 'join', 'com']);
+  'promo', 'subscribe', 'sub', 'dm', 'dms', 'open', 'only', 'onlyfans', 'onlyfans.com', 'of', 'check', 'new', 'page', 'account', 'vip', 'click', 'tap', 'see', 'join', 'com']);
 
 function normal(h) {
   const s = String(h || '').replace(/^@/, '').replace(/[.\-_]+$/, '').toLowerCase();
