@@ -15,7 +15,13 @@ const body = () => ({ follows: follows.list().map((c) => ({ id: c.id, seen: foll
 
 /** { creators: [{ ...card, new_count }], total_new } for the current follow list. */
 export function followSummary({ fresh = false } = {}) {
-  if (!follows.count()) return Promise.resolve({ creators: [], gone: [], total_new: 0 });
+  if (!follows.count()) {
+    // unfollowed the last one: clear whatever badge the previous count left
+    const data = { creators: [], gone: [], total_new: 0 };
+    last = { at: Date.now(), data };
+    paint(0);
+    return Promise.resolve(data);
+  }
   if (!fresh && last && Date.now() - last.at < MAX_AGE) return Promise.resolve(last.data);
   if (inflight) return inflight;
   inflight = query('/api/follow/summary', body(), { fresh: true })

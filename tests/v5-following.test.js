@@ -96,6 +96,17 @@ describe('follow endpoints', () => {
     assert.ok(item.creator_handle && !('hash' in item) && !('publish_state' in item));
   });
 
+  test('opted-out creators drop out of the feed, and a big backlog reads as more than 99', async () => {
+    const out = repo.creators.create({ handle: 'fw_optout', displayName: 'Opted out' });
+    addMedia(out, { posted: '2026-10-11T00:00:00.000Z', ingested: '2026-10-11T00:00:00.000Z' });
+    repo.db.prepare("UPDATE creators SET scope = 'excluded' WHERE id = ?").run(out.id);
+    assert.equal((await post('/api/follow/feed', { follows: [{ id: out.id }], part: 'all' })).json.total, 0);
+    const busy = repo.creators.create({ handle: 'fw_busy', displayName: 'Busy' });
+    for (let i = 0; i < 101; i++) addMedia(busy, { posted: '2026-10-11T00:00:00.000Z', ingested: '2026-10-11T00:00:00.000Z' });
+    const r = await post('/api/follow/summary', { follows: [{ id: busy.id, seen: T0 }] });
+    assert.equal(r.json.creators[0].new_count, 100, 'capped one past 99 so the badge can show 99+');
+  });
+
   test('feed paging and input limits', async () => {
     const follows = [{ id: a.id }];
     const p0 = await post('/api/follow/feed', { follows, limit: 2, page: 0 });
