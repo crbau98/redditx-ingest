@@ -19,18 +19,21 @@ export async function creators(root, { query }) {
   const count = h('div', { class: 'sub' }, ' ');
   const search = h('input', { class: 'input sm', type: 'search', placeholder: 'Search creators…', value: f.q, style: { maxWidth: '260px' }, 'aria-label': 'Search creators' });
   search.addEventListener('input', debounce(() => set({ q: search.value.trim() }), 350));
-  const sortSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Sort', onchange: (e) => set({ sort: e.target.value }) }, SORTS.map(([v, l]) => h('option', { value: v, selected: f.sort === v }, l)));
-  const platSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Platform', onchange: (e) => set({ platform: e.target.value }) }, h('option', { value: '' }, 'All sources'));
-  const paidSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Paid pages', title: 'Creators with a paid page (link-outs, never fetched)', onchange: (e) => set({ paid: e.target.value }) },
+  const sortSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Sort creators', onchange: (e) => set({ sort: e.target.value }) }, SORTS.map(([v, l]) => h('option', { value: v, selected: f.sort === v }, l)));
+  const platSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Filter by free source', onchange: (e) => set({ platform: e.target.value }) }, h('option', { value: '' }, 'All sources'));
+  const paidSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Filter by paid page (link-outs, never fetched)', title: 'Creators with a paid page (link-outs, never fetched)', onchange: (e) => set({ paid: e.target.value }) },
     PAID_OPTS.map(([v, l]) => h('option', { value: v, selected: (f.paid || '') === v }, l)));
+  const field = (label, el) => h('label', { class: 'filter-field' }, h('span', { class: 'filter-label' }, label), el);
+  const filtersActive = Boolean(f.q || f.sort !== 'media' || f.platform || f.paid);
+  const clearBtn = filtersActive ? h('button', { class: 'chip clear-all', onclick: () => { search.value = ''; navigate('/creators', {}, { replace: true }); }, 'aria-label': 'Clear all creator filters' }, 'Clear all') : null;
   const grid = h('div', { class: 'creator-grid' });
   const more = h('div', { class: 'loadmore' });
   root.replaceChildren(
-    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Creators'), count),
+    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Creators'), count, h('div', { class: 'sub' }, 'Everyone with posts in the library — or pull someone new in below.')),
       h('div', { class: 'row wrap' },
         h('a', { class: 'btn primary sm', href: href('/find') }, icon('search', 'sm'), 'Find a creator'),
         h('a', { class: 'btn galaxy-cta sm', href: href('/galaxy') }, icon('sparkle', 'sm'), 'Explore as a 3D galaxy'))),
-    h('div', { class: 'row wrap', style: { marginBottom: '18px' } }, search, sortSel, platSel, paidSel),
+    h('div', { class: 'row wrap creator-filters', style: { marginBottom: '18px' } }, search, field('Sort', sortSel), field('Source', platSel), field('Paid page', paidSel), clearBtn),
     grid, more);
 
   get('/api/platforms').then((list) => { for (const p of list) platSel.appendChild(h('option', { value: p.platform, selected: f.platform === p.platform }, platformLabel(p.platform))); }).catch(() => {});
@@ -49,7 +52,7 @@ export async function creators(root, { query }) {
       grid.append(...r.items.map((c) => creatorCard(c)));
       page++;
       done = grid.children.length >= total;
-      if (!grid.children.length) more.replaceChildren(emptyState({ icon: 'users', title: 'No creators found', text: f.q ? 'Try a different name.' : f.paid ? 'No creators with that paid page yet. Discovery adds them as it traces the pages creators promote.' : 'Creators appear here once their content has been ingested.' }));
+      if (!grid.children.length) more.replaceChildren(emptyState({ icon: 'users', title: 'No creators found', text: f.q ? `Nothing matches “${f.q}” with these filters. Try fewer filters — or pull him in directly.` : f.paid ? 'No creators with that paid page yet. Discovery adds them as it traces the pages creators promote.' : 'Creators appear here once their content has been ingested.', actions: [h('a', { class: 'btn primary', href: href('/find') }, icon('search', 'sm'), 'Find a creator'), filtersActive ? h('button', { class: 'btn', onclick: () => navigate('/creators', {}, { replace: true }) }, 'Clear filters') : null].filter(Boolean) }));
       else more.replaceChildren(done ? h('span', { class: 'muted' }, 'That’s everyone') : h('button', { class: 'btn', onclick: load }, 'Load more'));
     } catch (e) { more.replaceChildren(h('span', { class: 'muted' }, e.message), h('button', { class: 'btn sm', onclick: load }, 'Retry')); }
     finally { loading = false; }

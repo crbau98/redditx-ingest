@@ -47,7 +47,7 @@ export async function explore(root, { query }) {
     h('button', { class: f.type === v ? 'on' : '', onclick: () => set({ type: v }), 'aria-pressed': String(f.type === v) }, icon(ic, 'sm'), l)));
   const sortSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Sort', onchange: (e) => set({ sort: e.target.value }) }, sortOptions.map(([v, l]) => h('option', { value: v, selected: f.sort === v }, l)));
   const sinceSel = ['top', 'trending'].includes(f.sort) || f.since ? h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Time range', onchange: (e) => set({ since: e.target.value }) }, SINCE.map(([v, l]) => h('option', { value: v, selected: f.since === v }, l))) : null;
-  const platSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Source', onchange: (e) => set({ platform: e.target.value }) }, h('option', { value: '' }, 'All sources'));
+  const platSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Filter by free source', title: 'Free sources PRISM ingests (paid pages stay link-outs)', onchange: (e) => set({ platform: e.target.value }) }, h('option', { value: '' }, 'All sources'));
   const density = h('div', { class: 'seg hide-mobile', role: 'group', 'aria-label': 'Density' }, [['s', 'Dense'], ['m', 'Cozy'], ['l', 'Large']].map(([v, l]) =>
     h('button', { class: prefs.density === v ? 'on' : '', onclick: (e) => { prefs.density = v; density.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === e.currentTarget)); } }, l)));
 
@@ -112,8 +112,8 @@ export async function explore(root, { query }) {
   const seenChip = h('button', { class: `chip${prefs.hideSeen ? ' on' : ''}`, 'aria-pressed': String(prefs.hideSeen), title: 'Hide items you have already opened', onclick: () => { prefs.hideSeen = !prefs.hideSeen; } }, icon('eye', 'sm'), 'Hide seen');
   const reelsBtn = h('a', { class: 'btn sm', href: href('/reels', { type: f.type || 'all', sort: f.sort === 'relevance' || f.sort === 'oldest' ? 'recent' : f.sort, platform: f.platform, community: f.community, tag: f.tag, tags: f.tags, anytags: f.anytags, label: f.anytags ? f.label : '', creator: f.creator, since: f.since, after: f.after, q: f.q, following: f.following }), title: 'Play these results full screen' }, icon('film', 'sm'), 'Play as Reels');
 
-  const followChip = h('button', { class: `chip${f.following ? ' on' : ''}`, 'aria-pressed': String(!!f.following), onclick: () => set({ following: f.following ? '' : '1' }) }, icon('heart', 'sm'), 'Following');
-  const bar = h('div', { class: 'filterbar' }, h('div', { class: 'filter-scroll' }, typeSeg, followChip, seenChip, sortSel, sinceSel, platSel), h('span', { class: 'spacer' }), density, active.length ? h('div', { class: 'active-filters' }, active) : null);
+  const followChip = h('button', { class: `chip${f.following ? ' on' : ''}`, 'aria-pressed': String(!!f.following), title: 'Only posts from creators you follow on this device', 'aria-label': f.following ? 'Show everything (turn off Followed filter)' : 'Show only creators you follow on this device', onclick: () => set({ following: f.following ? '' : '1' }) }, icon('heart', 'sm'), f.following ? 'Followed only' : 'Followed');
+  const bar = h('div', { class: 'filterbar', role: 'toolbar', 'aria-label': 'Explore filters' }, h('div', { class: 'filter-scroll' }, typeSeg, followChip, seenChip, sortSel, sinceSel, platSel), h('span', { class: 'spacer' }), density, active.length ? h('div', { class: 'active-filters' }, active) : null);
 
   // Tag rail: with tags in play, show tags that go with them (click narrows); otherwise the most used tags.
   // Required tags (tags= / tag=) are what a refinement narrows, so suggestions are measured against

@@ -164,3 +164,13 @@
 .ps-price { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .ps-card > svg { color: var(--muted); flex: none; }
 @media (prefers-reduced-motion: reduce) { .ps-pill { transition: none; } }
+
+/* ---- Viewer dock labels (phones): icon + word under the thumb ---- */
+.lb-lab { display: none; }
+.lb-dl { display: contents; }
+@media (max-width: 900px) {
+  .lb-actions .btn.icon { flex: 1 1 0; flex-direction: column; gap: 3px; width: auto; height: auto; min-height: 52px; padding: 7px 4px 6px; border: 0; background: none; border-radius: 14px; }
+  .lb-actions .btn.icon:hover, .lb-actions .btn.icon:focus-visible { background: rgba(255, 255, 255, .08); }
+  .lb-lab { display: block; font-size: 10.5px; font-weight: 600; letter-spacing: .02em; color: rgba(255, 255, 255, .75); }
+  .lb-actions .btn.icon.on .lb-lab { color: var(--accent); }
+}
