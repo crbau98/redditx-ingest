@@ -62,9 +62,23 @@ class Pool {
         if (m.error) p.reject(new Error(m.error)); else p.resolve(m.result);
       });
       w.on('error', (e) => { reject(e); this.failAll(slot, e); });
-      w.on('exit', () => { this.workers = this.workers.filter((x) => x !== slot); this.failAll(slot, new Error('image worker exited')); });
+      w.on('exit', (code) => {
+        this.workers = this.workers.filter((x) => x !== slot); this.failAll(slot, new Error('image worker exited'));
+        // A worker that dies after starting (out of memory in the model, a wasm abort) is replaced, so the pool does not
+        // quietly shrink to nothing and leave every later picture failing with "no image workers".
+        if (slot.ready && !this.closing) this.respawn(code);
+      });
       slot.sync(); // AFTER the listeners: attaching a 'message' listener re-references the worker
     });
+  }
+
+  respawn(code) {
+    const now = Date.now();
+    this.deaths = (this.deaths || []).filter((t) => now - t < 10 * 60000).concat(now);
+    const wait = Math.min(5 * 60000, 2000 * 2 ** (this.deaths.length - 1)); // 2 s, 4 s, 8 s … at most 5 min while it keeps dying
+    events.log('WARN', `Image worker stopped (exit code ${code}); starting a new one in ${Math.round(wait / 1000)} s`);
+    const t = setTimeout(() => { if (!this.closing) this.spawn().catch((e) => events.log('WARN', `Image worker could not restart: ${e.message}`)); }, wait);
+    t.unref();
   }
 
   failAll(slot, err) { for (const [id, p] of this.pending) if (p.slot === slot) { this.pending.delete(id); p.reject(err); } }
@@ -85,7 +99,7 @@ class Pool {
     });
   }
 
-  async shutdown() { await Promise.all(this.workers.map((s) => s.w.terminate())); this.workers = []; }
+  async shutdown() { this.closing = true; await Promise.all(this.workers.map((s) => s.w.terminate())); this.workers = []; }
 }
 
 let pool = null;

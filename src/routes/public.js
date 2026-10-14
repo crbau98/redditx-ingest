@@ -113,10 +113,17 @@ const tagsCached = ttl(60000, () => repo.media.tags(120, 1));
 const communitiesCached = ttl(60000, () => repo.media.communities(100));
 
 /* ------------------------------------------------------------------- open */
+// Event-loop delay: when the server stalls (a long synchronous job), pages time out even though nothing crashed.
+const loopDelay = require('perf_hooks').monitorEventLoopDelay({ resolution: 50 });
+loopDelay.enable();
 router.get('/health', (req, res) => {
   let dbOk = true;
   try { repo.db.prepare('SELECT 1').get(); } catch { dbOk = false; }
-  res.status(dbOk ? 200 : 503).json({ status: dbOk ? 'ok' : 'degraded', version: config.version, uptime: Math.round(process.uptime()), db: dbOk, timestamp: new Date().toISOString() });
+  const mem = process.memoryUsage();
+  const mb = (n) => Math.round(n / 1048576);
+  const loop = { p99Ms: Math.round(loopDelay.percentile(99) / 1e6), maxMs: Math.round(loopDelay.max / 1e6) };
+  loopDelay.reset();
+  res.status(dbOk ? 200 : 503).json({ status: dbOk ? 'ok' : 'degraded', version: config.version, uptime: Math.round(process.uptime()), db: dbOk, memMb: { rss: mb(mem.rss), heap: mb(mem.heapUsed), external: mb(mem.external) }, loop, timestamp: new Date().toISOString() });
 });
 
 router.get('/meta', (req, res) => {

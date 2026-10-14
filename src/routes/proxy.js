@@ -63,7 +63,10 @@ router.get('/proxy', async (req, res) => {
     const hit = cache.get(t.url);
     if (hit) {
       res.set({ 'Content-Type': hit.type, 'Content-Length': hit.size, 'Cache-Control': 'public, max-age=604800', 'Cross-Origin-Resource-Policy': 'same-origin', 'X-Cache': 'HIT' });
-      return require('fs').createReadStream(hit.file).pipe(res);
+      // the file can be evicted between the lookup and the open: an unhandled stream error would crash the server
+      const file = require('fs').createReadStream(hit.file);
+      file.on('error', () => { if (!res.headersSent) sendError(res, [404, 'Gone']); else res.destroy(); });
+      return file.pipe(res);
     }
   }
 
