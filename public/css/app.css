@@ -1104,6 +1104,10 @@ body.reels-mode .view-enter, body.galaxy-mode .view-enter { animation: none; }
   .card-foot { transition: transform .45s var(--ease-out); }
   .card:hover .card-foot { transform: translateY(-2px); }
 }
+/* wide media in the masonry is short: one line of caption, and the "why" chip stands in for the title */
+.masonry .card.wide .card-foot { padding-top: 20px; gap: 4px; }
+.masonry .card.wide .card-title { -webkit-line-clamp: 1; }
+.masonry .card.wide .card-why ~ .card-title { display: none; }
 /* dense grid cards are compact (no caption); keep these gaps in step with GAP / GAP_PHONE in components/masonry.js */
 .masonry { --gap: 12px; }
 .density-s { --gap: 6px; }

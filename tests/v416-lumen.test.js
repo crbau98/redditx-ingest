@@ -75,6 +75,11 @@ describe('v4.16 review fixes', () => {
     assert.deepEqual(map('GAP'), d);
     assert.deepEqual(map('GAP_PHONE'), p);
   });
+  test('wide media gets the slim caption so it never overflows a short image', () => {
+    assert.match(read('js', 'components', 'card.js'), /ratio > 1\.3 \? ' wide' : ''/);
+    assert.match(lumen, /\.masonry \.card\.wide \.card-title \{ -webkit-line-clamp: 1; \}/);
+    assert.match(lumen, /\.masonry \.card\.wide \.card-why ~ \.card-title \{ display: none; \}/);
+  });
   test('the keyboard focus ring is an outline, so component shadows cannot hide it', () => {
     assert.match(lumen, /^:focus-visible \{ outline: 2px solid var\(--accent\);/m);
     assert.doesNotMatch(lumen, /^:focus-visible \{[^}]*outline: none/m);
