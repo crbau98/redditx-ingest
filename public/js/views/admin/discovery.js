@@ -76,8 +76,23 @@ export async function render(root) {
       kpi({ value: fmt.int(d.counts.pending), label: 'Waiting for a decision', detail: `auto-follow at score ${d.threshold}` }),
       kpi({ value: fmt.int(d.counts.followed), label: 'Creators followed', detail: `${fmt.int(d.counts.followedToday)} in the last 24h` }),
       kpi({ value: fmt.int(d.counts.linked), label: 'Accounts linked', detail: 'other accounts of known creators' }),
-      kpi({ value: d.brave.configured ? `${d.brave.usage.count}/${d.brave.budget}` : '—', label: 'Web searches today', detail: d.brave.configured ? `${fmt.int(d.brave.usage.total)} all time (Brave)` : 'set BRAVE_API_KEY' }),
+      webKpi(d),
       kpi({ value: d.running ? 'Running…' : d.auto ? 'On' : 'Manual', label: 'Discovery', detail: `last run ${lastLine}` }));
+  }
+
+  // Web search can be configured and still find nothing (SearXNG engines blocked by CAPTCHAs): show what really happened.
+  function webKpi(d) {
+    const w = d.websearch || { configured: false, providers: [] };
+    if (!w.configured) return kpi({ value: '—', label: 'Web search', detail: 'not set up: SEARXNG_URL or BRAVE_API_KEY' });
+    const used = w.providers.filter((p) => p.configured);
+    const tried = used.filter((p) => p.lastAt);
+    const bad = tried.find((p) => p.lastError);
+    const engines = used.flatMap((p) => p.engines || []);
+    const detail = bad ? `${bad.name}: ${bad.lastError}`
+      : tried.length ? `${tried.map((p) => `${p.name} ${fmt.int(p.ok)} ok · ${fmt.int(p.empty)} empty · ${fmt.int(p.failed)} failed`).join(' / ')}${engines.length ? ` · failing engines: ${engines.join(', ')}` : ''}`
+        : `${used.map((p) => p.name).join(', ')} · not used since the server started`;
+    const value = w.working ? 'Working' : bad ? 'Failing' : tried.length ? 'No results' : 'Idle';
+    return kpi({ value: d.brave.configured && w.working ? `${d.brave.usage.count}/${d.brave.budget}` : value, label: d.brave.configured && w.working ? 'Brave searches today' : 'Web search', detail });
   }
 
   function paintTune(d, settings) {
@@ -91,6 +106,7 @@ export async function render(root) {
       h('summary', null, h('b', null, 'Tune discovery'), h('span', { class: 'muted', style: { marginLeft: '10px', fontSize: '13px' } }, 'signals, thresholds, search topics')),
       h('div', { class: 'row wrap', style: { gap: '8px', margin: '12px 0' } },
         keyBadge(d.brave.configured, 'Brave search', 'BRAVE_API_KEY — web search for profiles and identity matching'),
+        keyBadge(!!(d.websearch && d.websearch.providers.some((p) => p.name === 'searxng' && p.configured)), 'SearXNG', 'SEARXNG_URL — free web search (bundled in deploy/); also finds X posts when there is no X_BEARER_TOKEN'),
         keyBadge(d.xApi, 'X API', 'X_BEARER_TOKEN — reliable X timelines and searches'),
         keyBadge(d.telegramBot, 'Telegram bot', 'TELEGRAM_API_KEY — channel checks and full descriptions'),
         keyBadge(true, 'Bluesky graph', 'Public, no key needed'), keyBadge(true, 'Mentions', 'Read from posts already ingested'),

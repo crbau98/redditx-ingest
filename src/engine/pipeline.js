@@ -22,6 +22,7 @@ const vault = require('../lib/vault');
 
 const SKIP_AUTHORS = new Set(['[deleted]', 'deleted', 'automoderator', 'web', 'null', 'undefined', '']);
 const REDGIFS_PAGE = /redgifs\.com\/(?:watch|ifr)\//i;
+const X_POST = /^https?:\/\/(?:www\.|mobile\.)?(?:x|twitter|fxtwitter|vxtwitter|fixupx)\.com\/[A-Za-z0-9_]{1,15}\/status\/\d+/i;
 const md5 = (s) => crypto.createHash('md5').update(s).digest('hex');
 
 const cleanHandle = (a) => String(a || '').replace(/^[@/]+/, '').replace(/^u\//i, '').trim().slice(0, 80);
@@ -161,6 +162,18 @@ async function processItemInner(rawItem, feed, adapter, settings) {
       mediaUrl: resolved.mediaUrl, previewUrl: resolved.previewUrl || item.previewUrl, mediaType: resolved.mediaType,
       hasAudio: resolved.hasAudio, width: resolved.width || item.width, height: resolved.height || item.height,
       duration: resolved.duration || item.duration, trusted: true,
+    });
+    item.tags.push(...(resolved.tags || []));
+  }
+
+  // A link to one X post (a Reddit link post, a Telegram message...): read its media keylessly (fxtwitter / X embed API).
+  if (item.resolve === 'x' || X_POST.test(item.mediaUrl)) {
+    let resolved = null;
+    try { resolved = await registry.get('x').resolve(item.mediaUrl.replace(/\/\/(?:www\.|mobile\.)?(?:fxtwitter|vxtwitter|fixupx|twitter)\.com\//i, '//x.com/')); } catch { /* handled below */ }
+    if (!resolved) return { outcome: 'skipped', reason: 'unresolved X link' };
+    Object.assign(item, {
+      mediaUrl: resolved.mediaUrl, previewUrl: resolved.previewUrl || item.previewUrl, mediaType: resolved.mediaType,
+      hasAudio: resolved.hasAudio, width: resolved.width || item.width, height: resolved.height || item.height, trusted: true,
     });
     item.tags.push(...(resolved.tags || []));
   }

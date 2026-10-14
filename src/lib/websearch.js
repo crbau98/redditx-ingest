@@ -36,10 +36,26 @@ const PROVIDERS = {
     configured: () => !!searxngUrl(),
     async search(q, { count = 20 } = {}) {
       const json = await http.json(`${searxngUrl()}/search?q=${encodeURIComponent(q)}&format=json&safesearch=0&language=all`, { allowInternal: true, timeout: /\.onion(?::|\/|$)/i.test(searxngUrl()) ? 70000 : 20000 }); // the only caller allowed to reach INTERNAL_HOSTS
-      return (json.results || []).slice(0, count).map((r) => ({ url: r.url, title: strip(r.title), description: strip(r.content) })).filter((r) => r.url);
+      const results = (json.results || []).slice(0, count).map((r) => ({ url: r.url, title: strip(r.title), description: strip(r.content) })).filter((r) => r.url);
+      // SearXNG answers 200 with nothing when its engines are blocked (CAPTCHA / rate limits on a datacenter IP). Say which,
+      // instead of a silent empty list that reads as "nothing out there".
+      const failing = (json.unresponsive_engines || []).map((e) => (Array.isArray(e) ? `${e[0]} (${e[1]})` : String(e)));
+      health.searxng.engines = failing;
+      if (!results.length && failing.length) throw new Error(`SearXNG found nothing: its engines are failing: ${failing.join(', ')}`);
+      return results;
     },
   },
 };
+
+/** Last outcome per provider, for the admin console: a search backend that quietly returns nothing looks like it works. */
+const health = Object.fromEntries(['keenable', 'brave', 'searxng'].map((p) => [p, { ok: 0, empty: 0, failed: 0, lastAt: null, lastError: null, lastResults: null, engines: [] }]));
+function note(name, results, err) {
+  const h = health[name]; if (!h) return;
+  h.lastAt = new Date().toISOString();
+  if (err) { h.failed++; h.lastError = String(err.message || err).slice(0, 300); h.lastResults = 0; return; }
+  if (results.length) { h.ok++; h.lastError = null; } else h.empty++;
+  h.lastResults = results.length;
+}
 
 const order = () => (config.searchProviders || ['keenable', 'brave', 'searxng']).filter((p) => PROVIDERS[p]);
 const configured = () => order().some((p) => PROVIDERS[p].configured());
@@ -47,7 +63,8 @@ const configured = () => order().some((p) => PROVIDERS[p].configured());
 function status() {
   return {
     configured: configured(),
-    providers: order().map((p) => ({ name: p, configured: PROVIDERS[p].configured() })),
+    providers: order().map((p) => ({ name: p, configured: PROVIDERS[p].configured(), ...health[p] })),
+    working: order().some((p) => PROVIDERS[p].configured() && health[p].ok > 0 && !health[p].lastError),
     brave: { configured: brave.configured(), usage: brave.usage() },
     keenable: { configured: keenable.configured(), usage: keenable.usage() },
   };
@@ -68,7 +85,9 @@ async function search(q, { count = 20, budget = 40, fresh = false, site } = {}) 
   for (const name of providers) {
     try {
       // Keenable filters by site natively; the others get a site: operator in the query.
-      const results = await PROVIDERS[name].search(site && name !== 'keenable' ? `${q} site:${site}` : q, { count, budget, site });
+      let results;
+      try { results = await PROVIDERS[name].search(site && name !== 'keenable' ? `${q} site:${site}` : q, { count, budget, site }); } catch (e) { if (!e.budget) note(name, null, e); throw e; }
+      note(name, results);
       if (!results.length && providers.length > 1 && name !== providers[providers.length - 1]) { lastErr = lastErr || new Error(`${name}: no results`); continue; }
       Object.defineProperty(results, 'provider', { value: name, enumerable: false });
       cache.set(key, { at: Date.now(), results });
@@ -79,6 +98,6 @@ async function search(q, { count = 20, budget = 40, fresh = false, site } = {}) 
   throw lastErr || new Error('web search failed');
 }
 
-function _clear() { cache.clear(); }
+function _clear() { cache.clear(); for (const h of Object.values(health)) Object.assign(h, { ok: 0, empty: 0, failed: 0, lastAt: null, lastError: null, lastResults: null, engines: [] }); }
 
 module.exports = { search, configured, status, PROVIDERS, _clear };
