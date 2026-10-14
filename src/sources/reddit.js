@@ -26,6 +26,8 @@ const oldBase = base.includes('www.reddit.com') ? base.replace('www.reddit.com',
 // watch / ifr / embed / legacy gifs/detail pages on www., v3. or bare redgifs.com.
 const REDGIFS_LINK = /redgifs\.com\/(?:watch|ifr|embed|gifs\/detail)\/[a-z0-9]+/i;
 const VREDDIT = /^https?:\/\/v\.redd\.it\/([a-z0-9]+)\/?$/i;
+// A link post to one X post: the pipeline reads its media keylessly (see pipeline.js step 1).
+const X_STATUS = /^https?:\/\/(?:www\.|mobile\.)?(?:x|twitter|fxtwitter|vxtwitter|fixupx)\.com\/[A-Za-z0-9_]{1,15}\/status\/\d+/i;
 
 /* ----------------------------------------------------------------- OAuth */
 let token = null;
@@ -153,6 +155,10 @@ function parsePost(post) {
     return [{ ...base, position: 0, mediaType: 'video', mediaUrl: url, previewUrl: null, resolve: 'redgifs', width: prev.width, height: prev.height }];
   }
 
+  if (X_STATUS.test(url)) {
+    return [{ ...base, position: 0, mediaType: 'image', mediaUrl: url, previewUrl: prev.previewUrl, resolve: 'x', width: prev.width, height: prev.height }];
+  }
+
   if (host && hostBlocked(host) && !hostMatches(host, 'redd.it')) return [];
 
   const isGifLike = /\.(gif|gifv)(\?|$)/i.test(url);
@@ -187,6 +193,8 @@ function fromRssEntry(entry) {
   const redgifsLink = links.find((u) => REDGIFS_LINK.test(u));
   const redgifs = redgifsLink ? { url: redgifsLink, type: 'video' } : entry.media.find((m) => REDGIFS_LINK.test(m.url));
   if (redgifs) return [{ ...common, mediaType: 'video', mediaUrl: redgifs.url.replace(/&amp;/g, '&'), resolve: 'redgifs' }];
+  const xLink = links.find((u) => X_STATUS.test(u));
+  if (xLink) return [{ ...common, mediaType: 'image', mediaUrl: xLink.replace(/&amp;/g, '&'), resolve: 'x' }];
 
   // v.redd.it/<id> carries no file extension in the feed; its HLS playlist (video + audio) is at a fixed path.
   const vlink = links.concat(entry.media.map((m) => m.url)).find((u) => VREDDIT.test(u));

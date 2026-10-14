@@ -25,6 +25,7 @@ const SCHEMA = {
   backupKeep: { type: 'int', default: 3, min: 1, max: 30, label: 'Backups to keep' },
   keepRunHistoryDays: { type: 'int', default: 30, min: 1, max: 365, label: 'Run history retention (days)' },
   xMonthlyReadBudget: { type: 'int', default: 10000, min: 0, max: 10000000, label: 'X API: max posts read per month (match your plan)' },
+  xKeylessSearchesPerDay: { type: 'int', default: 150, min: 0, max: 5000, label: 'X without a token: web searches per day used to find X posts (keeps the search engines from blocking this server)' },
   // --- image filter (v4.10) ---
   imageFilter: { type: 'bool', default: true, label: 'Image filter: exclude pictures that show a woman (on-device face + gender model)', group: 'safety' },
   imageFilterThreshold: { type: 'int', default: 50, min: 25, max: 95, label: 'Image filter: confidence (%) needed to call a face female — lower = stricter', group: 'safety' },

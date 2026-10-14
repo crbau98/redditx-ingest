@@ -114,6 +114,8 @@ module.exports = {
     x: env.X_BASE_URL || 'https://api.x.com',
     fxtwitter: env.FXTWITTER_BASE_URL || 'https://api.fxtwitter.com',
     xSyndication: env.X_SYNDICATION_URL || 'https://syndication.twitter.com',
+    // X's own embed API for single posts (keyless): the fallback when fxtwitter cannot read a post.
+    xEmbed: env.X_EMBED_URL || 'https://cdn.syndication.twimg.com',
     brave: env.BRAVE_BASE_URL || 'https://api.search.brave.com',
     telegramBot: env.TELEGRAM_BOT_BASE_URL || 'https://api.telegram.org',
     keenable: env.KEENABLE_BASE_URL || 'https://api.keenable.ai/mcp',

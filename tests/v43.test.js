@@ -229,8 +229,11 @@ describe('X API budget', () => {
     assert.ok(x.usage().posts >= 150, String(x.usage().posts));
     const r2 = await x.fetch({ kind: 'user', target: 'budgetguy' }, { cursor: {}, aborted: () => false });
     assert.equal(r2.via, 'syndication'); assert.equal(r2.items[0].mediaUrl, 'https://pbs.twimg.com/media/s1.jpg?name=orig');
-    await assert.rejects(x.fetch({ kind: 'search', target: 'gay' }, { cursor: {}, aborted: () => false }), /budget/);
-    assert.equal(x.isConfigured('search').ok, false);
+    // searches past the budget never touch the API again: they go keyless through web search when one is configured
+    const before = x.usage().posts;
+    try { const r3 = await x.fetch({ kind: 'search', target: 'gay' }, { cursor: {}, aborted: () => false }); assert.match(r3.via, /^websearch/); } catch (e) { assert.ok(e.skip, e.message); }
+    assert.equal(x.usage().posts, before);
+    assert.equal(x.isConfigured('search').ok, require('../src/lib/websearch').configured());
   });
 });
 
