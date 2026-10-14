@@ -371,7 +371,6 @@ router.post('/lookup/follow', lookupFollowLimiter, (req, res) => {
       selections: Array.isArray(b.selections) ? b.selections.slice(0, 20) : [],
       externalLinks: Array.isArray(b.externalLinks) ? b.externalLinks.slice(0, 20) : [],
       bio: typeof b.bio === 'string' ? b.bio.slice(0, 2000) : undefined,
-      creatorId: typeof b.creatorId === 'string' ? b.creatorId : null,
     });
     if (!out.error) repo.logAction('creator', out.creator && out.creator.id, 'lookup-follow', `${(out.feeds || []).length} accounts`, 'visitor');
     res.status(out.error ? 400 : 200).json(out);

@@ -69,10 +69,10 @@ function parseQuery(input) {
   const out = { raw, name: null, handles: [], spec: null };
   if (!raw) return out;
   const spec = registry.parseInput(raw);
-  if (spec && !spec.external && spec.kind === 'user' && spec.platform !== 'rss') {
+  if (spec && !spec.external && (spec.kind === 'user' || (spec.kind === 'channel' && spec.platform === 'youtube')) && spec.platform !== 'rss') {
     out.spec = spec;
-    const h = String(spec.target).split('@')[0].replace(/\.bsky\.social$/, '');
-    out.handles.push(h);
+    const h = String(spec.target).split('@')[0].replace(/\.bsky\.social$/, '') || String(spec.target).replace(/^@/, '');
+    if (spec.kind === 'user') out.handles.push(h);
     out.name = h;
     return out;
   }
@@ -115,7 +115,7 @@ class Pool {
   constructor() { this.map = new Map(); }
   add(spec, { source, evidence, displayName, bio, avatarUrl, followers, handleExact } = {}) {
     if (!spec || spec.external || !spec.ingestable) return null;
-    if (!['user', 'page'].includes(spec.kind)) return null; // a person's accounts, not communities / searches
+    if (!['user', 'page'].includes(spec.kind) && !(spec.kind === 'channel' && spec.platform === 'youtube')) return null; // a person's accounts, not communities / searches
     if (spec.platform === 'web' || spec.platform === 'rss') return null;
     if (spec.platform === 'linkinbio' && spec.kind !== 'page') return null;
     const k = keyOf(spec);
@@ -401,7 +401,7 @@ function follow({ name, selections, externalLinks = [], bio, creatorId = null } 
     if (!s || !s.platform || !s.target) continue;
     const adapter = registry.get(s.platform);
     const kind = s.kind || 'user';
-    if (!adapter || !adapter.kinds.includes(kind) || !['user', 'page'].includes(kind)) { rejected.push({ ...s, reason: 'unsupported' }); continue; } // a person's accounts, not communities
+    if (!adapter || !adapter.kinds.includes(kind) || (!['user', 'page'].includes(kind) && !(kind === 'channel' && s.platform === 'youtube'))) { rejected.push({ ...s, reason: 'unsupported' }); continue; } // a person's accounts, not communities
     if (femaleCheck(s.target, s.label).level === 'hard') { rejected.push({ ...s, reason: 'not male-focused' }); continue; }
     if (checkText(s.target, s.label).level === 'block') { rejected.push({ ...s, reason: 'safety' }); continue; }
     if (repo.blocklist.has('creator', `${s.platform}:${String(s.target).toLowerCase()}`)) { rejected.push({ ...s, reason: 'blocklisted' }); continue; }
@@ -444,7 +444,7 @@ function follow({ name, selections, externalLinks = [], bio, creatorId = null } 
 async function findAndFollow(input, { minConfidence = 0.7 } = {}) {
   const found = await lookup(input);
   if (found.error) return found;
-  const picks = found.candidates.filter((c) => c.status === 'new' && c.confidence >= minConfidence && c.kind === 'user');
+  const picks = found.candidates.filter((c) => c.status === 'new' && c.confidence >= minConfidence && (c.kind === 'user' || (c.kind === 'channel' && c.platform === 'youtube')));
   if (!picks.length) return { ...found, followed: null, note: 'No strong new match to follow automatically — review the candidates and pick the right accounts.' };
   const followed = follow({ name: found.name || input, selections: picks, externalLinks: found.externalLinks });
   return { ...found, followed };

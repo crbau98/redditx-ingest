@@ -37,8 +37,9 @@ export async function find(root, { query }) {
     state.following = true;
     paint();
     try {
-      const selections = cands.filter((c) => c.verified).map((c) => ({ platform: c.platform, kind: c.kind, target: c.target }));
-      const r = await post('/api/lookup/follow', { name: input.value.trim(), selections });
+      const selections = cands.map((c) => ({ platform: c.platform, kind: c.kind, target: c.target }));
+      const externalLinks = (state.result && state.result.externalLinks) || [];
+      const r = await post('/api/lookup/follow', { name: input.value.trim(), selections, externalLinks });
       state.following = false;
       state.followed = true;
       paint();
@@ -50,7 +51,7 @@ export async function find(root, { query }) {
     const ev = (c.evidence || []).slice(0, 3);
     return h('div', { class: 'card find-cand' },
       h('div', { class: 'row', style: { gap: '10px', alignItems: 'center' } },
-        avatar(c.avatarUrl, c.displayName || c.target, 'md'),
+        avatar({ avatar_url: c.avatarUrl, display_name: c.displayName || c.target }, 40),
         h('div', { style: { minWidth: 0 } },
           h('div', { class: 'find-cand-name' }, c.displayName || c.target, ' ', h('span', { class: 'badge good' }, icon('check', 'sm'), 'Verified')),
           h('div', { class: 'muted sm truncate' }, `${c.platform} · ${c.target}`))),
@@ -88,7 +89,7 @@ export async function find(root, { query }) {
           actions: [h('button', { class: 'btn primary', onclick: run }, icon('refresh', 'sm'), 'Try again')],
         }));
     } else if (state.result) {
-      const cands = (state.result.candidates || []).filter((c) => c.verified);
+      const cands = state.result.candidates || [];
       if (!cands.length) {
         out.append(emptyState({
           icon: 'users',
