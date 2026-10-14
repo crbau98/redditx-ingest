@@ -1032,8 +1032,9 @@ p, .lead, .sub, .profile-bio { text-wrap: pretty; }
 .section-head h2 { font-size: clamp(19px, 1.9vw, 23px); letter-spacing: -.02em; }
 .hero h1, .hero.hero-split .hero-copy h1 { letter-spacing: -.035em; }
 .hero-stats b, .profile-stats b, .since-tile b, .browse-tile .count { font-variant-numeric: tabular-nums; letter-spacing: -.03em; }
-:focus-visible { outline: none; box-shadow: var(--ring); }
-.input:focus-visible, .select:focus-visible, .textarea:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent); }
+/* an outline, not a shadow: component box-shadows (.btn, .chip, cards) would override a shadow ring */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.input:focus-visible, .select:focus-visible, .textarea:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent); }
 ::selection { background: color-mix(in srgb, var(--accent) 34%, transparent); color: var(--text); }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--text) 16%, transparent); border: 3px solid transparent; background-clip: padding-box; }
@@ -1122,15 +1123,11 @@ body.reels-mode .view-enter, body.galaxy-mode .view-enter { animation: none; }
   .card-foot { transition: transform var(--dur-slow) var(--ease-out); }
   .card:hover .card-foot { transform: translateY(-2px); }
 }
-/* dense grid: picture only; the caption shows on hover (desktop) */
-.density-s .card-foot { padding: 26px 9px 8px; }
-.density-s .card-title { display: none; }
-.density-s .card-meta { font-size: 11px; }
-.density-s .card-foot .badge.plat { display: none; }
-@media (hover: hover) {
-  .density-s .card-foot { opacity: 0; transition: opacity var(--dur-base) var(--ease-out), transform var(--dur-slow) var(--ease-out); }
-  .density-s .card:hover .card-foot, .density-s .card:focus-within .card-foot { opacity: 1; }
-}
+/* wide media in the masonry is short: one line of caption, and the "why" chip stands in for the title */
+.masonry .card.wide .card-foot { padding-top: 20px; gap: 4px; }
+.masonry .card.wide .card-title { -webkit-line-clamp: 1; }
+.masonry .card.wide .card-why ~ .card-title { display: none; }
+/* dense grid cards are compact (no caption); keep these gaps in step with GAP / GAP_PHONE in components/masonry.js */
 .masonry { --gap: 12px; }
 .density-s { --gap: 6px; }
 .density-l { --gap: 18px; }
@@ -1203,7 +1200,7 @@ body.reels-mode .view-enter, body.galaxy-mode .view-enter { animation: none; }
 .lb-nav:active { transform: translateY(-50%) scale(.92); }
 .lb-info { box-shadow: inset 1px 0 0 rgba(255, 255, 255, .04); }
 /* keyboard focus on a card: the ring is drawn inside the media (the card clips anything outside it) */
-.card-media:focus-visible { box-shadow: none; }
+.card-media:focus-visible { outline: none; }
 .card-media:focus-visible::after { content: ''; position: absolute; inset: 0; z-index: 5; opacity: 1; border-radius: inherit; background: none; box-shadow: inset 0 0 0 2px var(--accent), inset 0 0 0 4px color-mix(in srgb, var(--bg) 70%, transparent); }
 
 /* ---------- phones: profile header in two rows, link and tag rows scroll sideways ---------- */
@@ -1213,7 +1210,8 @@ body.reels-mode .view-enter, body.galaxy-mode .view-enter { animation: none; }
   .profile-info { min-width: 0; flex: 1 1 0; padding-bottom: 4px; }
   .profile-info h1 { font-size: 26px; }
   .profile-actions { width: 100%; padding-bottom: 0; }
-  .profile-actions .btn:not(.icon) { flex: 1 1 0; }
+  .profile-actions { flex-wrap: wrap; }
+  .profile-actions .btn:not(.icon) { flex: 1 1 auto; } /* 1 1 0 squeezed the OnlyFans button until its label clipped */
   .profile-bio { margin-top: 16px; font-size: 14.5px; }
   .profile-stats { gap: 6px 16px; font-size: 13.5px; }
   .profile-stats b { font-size: 16px; }
@@ -1241,3 +1239,9 @@ body.reels-mode .view-enter, body.galaxy-mode .view-enter { animation: none; }
 .fx-ghost { display: block; object-fit: fill; background: #000; }
 .fx-ghost-avatar { box-shadow: 0 10px 30px rgba(0, 0, 0, .45); }
 .fx-scrim { position: fixed; inset: 0; z-index: 159; pointer-events: none; background: rgba(4, 4, 7, .96); }
+
+/* ---------- OnlyFans (v4.14) in the Lumen language ---------------------------------- */
+.btn.of-cta { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .3), inset 0 -1px 0 rgba(0, 0, 0, .12), 0 8px 26px -8px color-mix(in srgb, var(--of) 70%, transparent); text-shadow: 0 1px 1px rgba(0, 0, 0, .15); }
+.btn.of-cta:hover { filter: brightness(1.07) saturate(1.05); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .32), inset 0 -1px 0 rgba(0, 0, 0, .12), 0 12px 34px -8px color-mix(in srgb, var(--of) 80%, transparent); }
+.badge.of { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--of) 30%, transparent); }
+.chip.of-chip.on { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .25), 0 6px 20px -8px color-mix(in srgb, var(--of) 80%, transparent); }

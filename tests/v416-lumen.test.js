@@ -60,3 +60,28 @@ describe('v4.16 image-first cards stay cheap', () => {
     }
   });
 });
+
+describe('v4.16 review fixes', () => {
+  test('masonry gap maps match the rendered --gap values', () => {
+    const css = read('css', 'app.css');
+    const js = read('js', 'components', 'masonry.js');
+    const map = (name) => Object.fromEntries([...js.match(new RegExp(`const ${name} = \\{([^}]*)\\}`))[1].matchAll(/(\w): (\d+)/g)].map((m) => [m[1], +m[2]]));
+    const last = (src, sel) => { const all = [...src.matchAll(new RegExp(`^\\s*\\${sel} \\{ --gap: (\\d+)px; \\}`, 'gm'))]; return all.length ? +all.at(-1)[1] : null; };
+    const at = css.indexOf('@media (max-width: 639px) {\n  .masonry { --gap:');
+    assert.ok(at > 0, 'phone gap block');
+    const desk = css.slice(0, at), phone = css.slice(at, css.indexOf('\n}', at));
+    const d = { m: last(desk, '.masonry'), s: last(desk, '.density-s'), l: last(desk, '.density-l') };
+    const p = { m: last(phone, '.masonry') ?? d.m, s: last(phone, '.density-s') ?? d.s, l: last(phone, '.density-l') ?? last(phone, '.masonry') };
+    assert.deepEqual(map('GAP'), d);
+    assert.deepEqual(map('GAP_PHONE'), p);
+  });
+  test('wide media gets the slim caption so it never overflows a short image', () => {
+    assert.match(read('js', 'components', 'card.js'), /ratio > 1\.3 \? ' wide' : ''/);
+    assert.match(lumen, /\.masonry \.card\.wide \.card-title \{ -webkit-line-clamp: 1; \}/);
+    assert.match(lumen, /\.masonry \.card\.wide \.card-why ~ \.card-title \{ display: none; \}/);
+  });
+  test('the keyboard focus ring is an outline, so component shadows cannot hide it', () => {
+    assert.match(lumen, /^:focus-visible \{ outline: 2px solid var\(--accent\);/m);
+    assert.doesNotMatch(lumen, /^:focus-visible \{[^}]*outline: none/m);
+  });
+});

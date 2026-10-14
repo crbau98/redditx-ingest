@@ -1,5 +1,19 @@
 # UI changelog
 
+## 2026-10-14 — v4.16.1 Lumen fixes
+
+Fixes from the v4.16 review, rebuilt on current main (the original follow-up PR #33 was closed).
+
+| Fix | Files |
+|---|---|
+| **Keyboard focus ring** is an outline again; the lit box-shadows on `.btn`, `.chip` and cards overrode the shadow ring, so keyboard users saw no focus | `app.css` |
+| **Masonry gaps match the CSS**: `GAP` 6 / 12 / 18 and `GAP_PHONE` 4 / 8 / 8 px, picked with the same `(max-width: 639px)` query, so column widths, intrinsic sizes and shortest-column placement match what renders | `components/masonry.js` |
+| **Wide cards get a one-line caption** (wider than 1.3:1; the "why" chip stands in for the title) so a 1.9:1 card in a phone column no longer clips its caption by 4–11 px | `components/card.js`, `app.css` |
+| Removed the dense-grid hover-caption rules: dense cards are compact and have no caption, so they never applied | `app.css` |
+| **OnlyFans** button, badge and chip get the lit edge and glow; phone creator-header buttons wrap so the OnlyFans button is never clipped | `app.css` |
+
+**Verification**: 632 unit tests (3 new guards in `tests/v416-lumen.test.js`). In Chromium: rendered column gap equals the JS gap (12 px desktop, 8 px phone); Tab focus shows a 2 px outline on buttons; a forced worst-case wide card clips 0 px at 1280, 390 and 360 px wide; phone creator page shows the full OnlyFans button; no console errors.
+
 ## 2026-10-14 — v5 "Motion", phase 1: one motion vocabulary, shared elements
 
 **Design direction**: nothing just appears or vanishes. Things that move between views keep their identity on the way, and every moving part in the app speaks the same three springs.
@@ -62,7 +76,7 @@
 |---|---|---|
 | **Fonts self-hosted** and subset: Inter variable 400–700 and Space Grotesk variable 500–700, Latin-1 + common punctuation, preloaded from the shell; Google Fonts dropped from the CSP | `public/fonts/*` (OFL licence included), `index.html`, `theme-init.js`, `src/app.js`, `app.css` | fonts 70.4 → 44.7 KB, two fewer origins; Explore LCP 2.76–3.08 → 2.24–2.28 s; Reels LCP 2.23–2.29 → 2.12–2.15 s |
 | **admin.css loads with the console only** (resolved from the admin module's own versioned URL, awaited before the console renders); `.chart-axis`, the one rule a public page shared, moved to app.css | `views/admin/index.js`, `index.html`, `sw.js`, `app.css`, `admin.css` | stylesheet bytes on every public page 25.8 → 23.8 KB, one request fewer |
-| **Image-first cards**: no frame, caption over the image on a static scrim (no blur), a ring of light drawn above the image, platform as a tinted tag; dense grid shows the picture only (caption on hover on desktop); tighter gutters on phones | `app.css`, `components/card.js` ("why" chip moves into the caption), `components/masonry.js` (a card's height is now exactly its media) | feed fling 27.4–27.5 → 28.3–29.7 fps, long tasks 2.1–2.3 → 1.0–1.7 s; the same 158 cards take 24% less scrolling |
+| **Image-first cards**: no frame, caption over the image on a static scrim (no blur), a ring of light drawn above the image, platform as a tinted tag; dense grid stays picture-only; tighter gutters on phones | `app.css`, `components/card.js` ("why" chip moves into the caption), `components/masonry.js` (a card's height is now exactly its media) | feed fling 27.4–27.5 → 28.3–29.7 fps, long tasks 2.1–2.3 → 1.0–1.7 s; the same 158 cards take 24% less scrolling |
 | Lit controls: buttons, chips, segmented controls, inputs, nav pill, link chips, tabs, modals, toasts, empty states | `app.css` | |
 | New tokens: `--hi`, `--raise`, `--ring`, `--scrim`; deeper neutrals; softer two-layer shadows; light theme retuned to match | `app.css` | |
 | Phones: creator header in two rows (80 px avatar beside the name, actions full width), account links and tags in one sideways-scrolling row each; a shorter home hero | `app.css` | |

@@ -2,7 +2,11 @@ import { h } from '../dom.js';
 
 const MIN_COL = { s: 150, m: 215, l: 310 };
 const MIN_COL_PHONE = { s: 100, m: 155, l: 330 }; // phones: dense/cozy = 3/2 columns, large = 1
-const GAP = { s: 8, m: 14, l: 16 };
+// must match the --gap values in app.css (tests/v416-lumen.test.js checks)
+const GAP = { s: 6, m: 12, l: 18 };
+const GAP_PHONE = { s: 4, m: 8, l: 8 };
+const phone = window.matchMedia('(max-width: 639px)'); // the same query app.css uses for the phone gaps
+const gapFor = (d) => (phone.matches ? GAP_PHONE : GAP)[d];
 
 /**
  * Shortest-column masonry driven by known aspect ratios, so appending a page
@@ -20,7 +24,7 @@ export function createMasonry({ density = 'm', render }) {
 
   const count = () => {
     const w = el.clientWidth || el.parentElement?.clientWidth || window.innerWidth;
-    const gap = GAP[cur];
+    const gap = gapFor(cur);
     const min = (w < 640 ? MIN_COL_PHONE : MIN_COL)[cur];
     return Math.max(1, Math.min(8, Math.floor((w + gap) / (min + gap))));
   };
@@ -34,7 +38,7 @@ export function createMasonry({ density = 'm', render }) {
     el.textContent = '';
     colCount = count();
     const w = el.clientWidth || window.innerWidth;
-    colWidth = (w - (colCount - 1) * GAP[cur]) / colCount;
+    colWidth = (w - (colCount - 1) * gapFor(cur)) / colCount;
     cols = Array.from({ length: colCount }, () => h('div', { class: 'masonry-col' }));
     heights = new Array(colCount).fill(0);
     el.append(...cols);
@@ -49,7 +53,7 @@ export function createMasonry({ density = 'm', render }) {
       // the size a card stands in for while the browser skips rendering it off-screen (see app.css)
       card.style.containIntrinsicSize = `auto ${Math.round(est)}px`;
       cols[target].appendChild(card);
-      heights[target] += est + GAP[cur];
+      heights[target] += est + gapFor(cur);
     }
   }
 

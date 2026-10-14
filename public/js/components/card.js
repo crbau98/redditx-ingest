@@ -121,7 +121,8 @@ export function mediaCard(item, { open, compact = false, why = null } = {}) {
       if (favorites.toggle(item.id, item)) { const r = e.currentTarget.getBoundingClientRect(); heartBurst(r.left + r.width / 2, r.top + r.height / 2); }
     } }, icon('heart'));
 
-  const card = h('article', { class: `card${compact ? ' compact' : ''}`, dataset: { id: item.id } }, media, fav);
+  // Wide media (shorter than ~3/4 of its width) gets a slimmer caption so it never overflows the image.
+  const card = h('article', { class: `card${compact ? ' compact' : ''}${ratio > 1.3 ? ' wide' : ''}`, dataset: { id: item.id } }, media, fav);
   if (!compact) {
     card.appendChild(h('div', { class: 'card-foot' },
       whyChip,
