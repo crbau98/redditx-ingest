@@ -61,6 +61,8 @@ router.get('/sources', (req, res) => {
   const score = Object.fromEntries(repo.runs.scoreboard(7).map((r) => [r.platform, r]));
   res.json(registry.describe().map((s) => ({ ...s, feeds: counts[s.platform] || { total: 0, enabled: 0, failing: 0 }, breaker: breakers[s.platform] || { state: 'closed', failures: 0 }, score: score[s.platform] || null })));
 });
+/** Feed-level health: failing, stale, dead (ran often, added nothing in a month) and top feeds. */
+router.get('/sources/health', (req, res) => res.json({ ...require('../engine/sourcehealth').report(), thumbnails: require('../engine/thumbs').progress() }));
 
 /* ------------------------------------------------------------------- feeds */
 router.get('/feeds', (req, res) => {

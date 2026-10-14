@@ -82,11 +82,15 @@ function noteWaysIn(raw, r, feed, w) {
     }
   }
   if (raw.crosspostFrom && feed.platform === 'reddit' && feed.trusted) w.hangouts.add(String(raw.crosspostFrom).toLowerCase());
+  // a Telegram post forwarded from another public channel: that channel is a lead (one signal per channel that forwards it)
+  const fwd = raw.forwardFrom && raw.forwardFrom.handle && String(raw.forwardFrom.handle);
+  if (fwd && feed.platform === 'telegram' && fwd.toLowerCase() !== String(feed.target).replace(/^@/, '').toLowerCase()
+      && fwd.toLowerCase() !== String(raw.author || '').toLowerCase()) w.forwards.add(fwd);
 }
 
-const REPOSTER_KIND = { x: 'user', bluesky: 'user', tumblr: 'user', reddit: 'user' };
+const REPOSTER_KIND = { x: 'user', bluesky: 'user', tumblr: 'user', reddit: 'user', mastodon: 'user', misskey: 'user' };
 function followWaysIn(w, feed) {
-  if (!w.reposters.size && !w.hangouts.size) return;
+  if (!w.reposters.size && !w.hangouts.size && !w.forwards.size) return;
   let discovery;
   try { discovery = require('./discovery'); } catch { return; }
   for (const [via, originals] of w.reposters) {
@@ -95,6 +99,11 @@ function followWaysIn(w, feed) {
     for (const handle of originals) {
       try { discovery.consider({ platform: feed.platform, kind, target: via, label: via, ingestable: true }, 'mention', `reposts ${handle}`); } catch { /* best effort */ }
     }
+  }
+  for (const handle of w.forwards) {
+    // a channel the logged-in account already joined is read through MTProto: not a lead
+    if (repo.feeds.find('telegram', 'channel', handle) || repo.feeds.find('telegram', 'channel', `@${handle}`)) continue;
+    try { discovery.consider({ platform: 'telegram', kind: 'user', target: handle, label: `@${handle}`, ingestable: true }, 'mention', `forwarded in ${feed.label || feed.target}`); } catch { /* best effort */ }
   }
   for (const sub of w.hangouts) {
     try { discovery.consider({ platform: 'reddit', kind: 'community', target: sub, label: `r/${sub}`, ingestable: true }, 'hangout', `crosspost in ${feed.label || feed.target}`); } catch { /* best effort */ }
@@ -165,7 +174,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     // Items are processed a few at a time: most of the wait is network (probing unknown hosts, resolving RedGIFs
     // links, downloading a picture for the image filter), and the database steps between awaits are synchronous
     // and idempotent (a duplicate hash simply loses the insert), so overlapping them is safe and much faster.
-    const waysIn = { originals: new Set(), reposters: new Map(), hangouts: new Set() };
+    const waysIn = { originals: new Set(), reposters: new Map(), hangouts: new Set(), forwards: new Set() };
     let next = 0;
     const worker = async () => {
       for (;;) {
@@ -353,4 +362,4 @@ function shutdown() {
   state.timer = null; state.hotTimer = null; state.stopRequested = true;
 }
 
-module.exports = { start, shutdown, tick, runFeed, enqueue, enqueuePlatforms, stopAll, pause, resume, status, seedDefaults, computeNextRun, tempo, _state: state };
+module.exports = { start, shutdown, tick, runFeed, enqueue, enqueuePlatforms, stopAll, pause, resume, status, seedDefaults, computeNextRun, tempo, _state: state, _waysIn: { noteWaysIn, followWaysIn } };

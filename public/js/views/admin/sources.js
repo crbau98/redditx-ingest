@@ -1,7 +1,7 @@
 import { h, icon, toast, fmt } from '../../dom.js';
-import { adminGet, adminPost } from '../../api.js';
+import { adminGet, adminPost, adminPatch } from '../../api.js';
 import { href } from '../../router.js';
-import { pageHead, act } from './ui.js';
+import { pageHead, act, platBadge } from './ui.js';
 
 const ENV_HELP = {
   reddit: ['REDDIT_CLIENT_ID', 'REDDIT_CLIENT_SECRET'],
@@ -15,8 +15,8 @@ const BLURB = {
   reddit: 'Communities and individual redditors. Falls back through OAuth → public JSON → old.reddit → RSS → archive, so it keeps working when Reddit blocks servers.',
   redgifs: 'Creator pages, niches and searches via the public RedGIFs API. Reddit posts linking to RedGIFs are resolved automatically.',
   bluesky: 'Creator timelines (media posts only) through the public AppView. Video plays via HLS. Search needs an app password.',
-  mastodon: 'Creators and hashtags on any Mastodon-compatible server. Public API; some servers require sign-in for public timelines.',
-  tumblr: 'Blogs and tags through Tumblr’s public RSS. Reblogs are skipped (they carry someone else’s media); images are upgraded to the largest size.',
+  mastodon: 'Creators and hashtags on any Mastodon-compatible server. Public API; some servers require sign-in for public timelines. Boosts are kept and credited to the original poster.',
+  tumblr: 'Blogs and tags through Tumblr’s public RSS. Reblogs are kept and credited to the original blog; images are upgraded to the largest size.',
   peertube: 'PeerTube accounts, channels, tags and keyword search across the federation (Sepia Search). Videos play as MP4 or HLS.',
   lemmy: 'Communities and users on Lemmy instances (API v3 with v4 fallback).',
   x: 'Creator timelines and searches. The official API (bearer token) is reliable; without it only a best-effort keyless route is available.',
@@ -26,14 +26,50 @@ const BLURB = {
   linkinbio: 'Linktree-style hubs. Not content: PRISM reads them to discover a creator’s other public accounts.',
 };
 
+const ago = (iso) => {
+  if (!iso) return 'never';
+  const m = Math.round((Date.now() - new Date(iso)) / 60000);
+  return m < 60 ? `${m} min ago` : m < 2880 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`;
+};
+
+/** One feed line of the health panel: platform, name (links to the feed list), why it is listed, and a pause button. */
+function healthRow(f, why, reload) {
+  return h('div', { class: 'row wrap', style: { gap: '8px', padding: '6px 0', borderTop: '1px solid var(--line, rgba(127,127,127,.15))' } },
+    platBadge(f.platform),
+    h('a', { href: href('/admin/feeds', { platform: f.platform, q: f.target }), style: { fontWeight: 600 } }, f.label),
+    h('span', { class: 'muted', style: { fontSize: '12.5px' } }, why),
+    h('span', { class: 'grow' }),
+    h('button', { class: 'btn sm ghost', title: 'Stop reading this feed (it can be switched back on under Feeds)', onclick: (e) => act(e.currentTarget, async () => { await adminPatch(`/feeds/${f.id}`, { enabled: false }); await reload(); }, 'Feed paused') }, 'Pause'));
+}
+
+function healthPanel(r, reload) {
+  const section = (title, tone, rows, why, hint) => (rows.length ? h('details', { open: tone === 'bad' },
+    h('summary', { style: { cursor: 'pointer', fontWeight: 600, padding: '6px 0' } }, `${title} `, h('span', { class: `badge ${tone}` }, String(rows.length))),
+    hint ? h('p', { class: 'muted', style: { fontSize: '12.5px', margin: '2px 0 6px' } }, hint) : null,
+    rows.map((f) => healthRow(f, why(f), reload))) : null);
+  const t = r.totals;
+  return h('div', { class: 'panel' },
+    h('h3', null, icon('trend', 'sm'), 'Feed health'),
+    h('p', { class: 'muted', style: { fontSize: '13.5px' } }, `${fmt.int(t.enabled)} of ${fmt.int(t.feeds)} feeds on${t.neverRun ? ` · ${fmt.int(t.neverRun)} not run yet` : ''} · ${t.failing} failing · ${t.stale} stale · ${t.dead} not adding anything`),
+    !t.failing && !t.stale && !t.dead ? h('p', { class: 'muted', style: { fontSize: '13.5px' } }, 'Every active feed is working and adding posts.') : null,
+    section('Failing', 'bad', r.failing, (f) => `${f.failures} failed runs in a row${f.lastError ? ` · ${f.lastError.slice(0, 140)}` : ''}`),
+    section('Stale', 'warn', r.stale, (f) => `last good run ${ago(f.lastSuccessAt)}`, `No good run for ${r.rules.staleDays}+ days (resting after errors, or its platform is paused).`),
+    section('Not adding anything', 'warn', r.dead, (f) => `${f.runs} runs in ${r.rules.deadDays} days, 0 added · ${f.why}`, 'Pausing these frees their slot for feeds that bring new posts.'),
+    r.top.length ? h('details', null, h('summary', { style: { cursor: 'pointer', fontWeight: 600, padding: '6px 0' } }, 'Best feeds this week'),
+      r.top.map((f) => h('div', { class: 'row wrap', style: { gap: '8px', padding: '4px 0' } }, platBadge(f.platform),
+        h('a', { href: href('/admin/feeds', { platform: f.platform, q: f.target }) }, f.label), h('span', { class: 'muted', style: { fontSize: '12.5px' } }, `${fmt.int(f.added)} added in ${f.runs} runs`)))) : null);
+}
+
 export async function render(root) {
   const grid = h('div', { class: 'source-grid' });
+  const health = h('div');
   root.append(pageHead('Sources', 'The platforms PRISM can pull from, and how healthy each connection is.',
-    h('button', { class: 'btn sm', onclick: (e) => act(e.currentTarget, async () => { await adminPost('/engine/breakers/reset'); await load(); }, 'Circuit breakers reset') }, icon('refresh', 'sm'), 'Reset circuit breakers')), grid,
+    h('button', { class: 'btn sm', onclick: (e) => act(e.currentTarget, async () => { await adminPost('/engine/breakers/reset'); await load(); }, 'Circuit breakers reset') }, icon('refresh', 'sm'), 'Reset circuit breakers')), grid, health,
   h('div', { class: 'panel' }, h('h3', null, icon('shield', 'sm'), 'What PRISM will not do'),
     h('p', { class: 'muted', style: { fontSize: '14px' } }, 'PRISM only reads content that is public without logging in. It does not scrape paywalled or subscription platforms (OnlyFans, Fansly, Patreon…) — those links are kept on a creator’s profile so fans can support them directly. Everything passes a safety gate (anything suggesting a person may be under 18 is dropped) and every item can be reported and permanently blocklisted.')));
 
   async function load() {
+    adminGet('/sources/health').then((r) => health.replaceChildren(healthPanel(r, load))).catch(() => {});
     const sources = await adminGet('/sources');
     grid.replaceChildren(...sources.map((s) => {
       const confs = Object.entries(s.config);

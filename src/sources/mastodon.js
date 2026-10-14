@@ -11,7 +11,7 @@
  */
 const config = require('../config');
 const http = require('./http').forPlatform('mastodon', 600);
-const { toIso, htmlToText, clip, originOf, errorDetail } = require('./util');
+const { toIso, htmlToText, clip, originOf, errorDetail, repostsOn } = require('./util');
 const { extractLinks } = require('../lib/links');
 
 const accountCache = new Map();
@@ -41,9 +41,22 @@ function explain(e, host) {
   return err;
 }
 
+const acctOf = (account, host) => account && account.acct && (account.acct.includes('@') ? account.acct : `${account.acct}@${host}`);
+
+/**
+ * One status -> media items. A boost (reblog) carries someone else's post: with reposts on it is kept, credited to the
+ * original author (`repostOf.via` = the booster, so the booster can become a discovery lead), and ordered by the boost time.
+ */
 function parseStatus(status, host) {
-  if (!status || status.reblog) return [];
-  const acct = status.account && (status.account.acct.includes('@') ? status.account.acct : `${status.account.acct}@${host}`);
+  if (!status) return [];
+  if (status.reblog) {
+    if (!repostsOn()) return [];
+    const via = acctOf(status.account, host);
+    const items = parseStatus(status.reblog, host);
+    if (!items.length || !via || items[0].author === via) return []; // a self-boost adds nothing
+    return items.map((it) => ({ ...it, repostOf: { platform: 'mastodon', handle: it.author, via }, cursorAt: toIso(status.created_at) || it.postedAt }));
+  }
+  const acct = acctOf(status.account, host);
   const text = htmlToText(status.content, 500);
   // every link in the post (anchor text can hide where it points): the leak gate checks them (lib/leaks)
   const links = [...new Set([...String(status.content || '').matchAll(/href="(https?:\/\/[^"]+)"/gi)].map((m) => m[1].replace(/&amp;/g, '&')))];
@@ -129,7 +142,7 @@ module.exports = {
         if (x.authWall) x.skip = true; // can never work without a token: rest the feed instead of failing the platform
         throw x;
       }
-      targets.push({ host, path: `/api/v1/accounts/${acct.id}/statuses?only_media=true&exclude_reblogs=true&exclude_replies=true` });
+      targets.push({ host, path: `/api/v1/accounts/${acct.id}/statuses?only_media=true&exclude_replies=true${repostsOn() ? '' : '&exclude_reblogs=true'}` });
       if (ctx.needProfile || !cursor.newestAt) {
         const note = htmlToText(acct.note || '', 500);
         const fieldLinks = (acct.fields || []).flatMap((f) => extractLinks(`${htmlToText(f.value || '', 300)} ${(String(f.value).match(/href="([^"]+)"/g) || []).join(' ').replace(/href="|"/g, ' ')}`));
@@ -161,8 +174,9 @@ module.exports = {
           let reachedKnown = false;
           for (const s of statuses) {
             for (const it of parseStatus(s, t.host)) {
-              if (it.postedAt && (!newest || it.postedAt > newest)) newest = it.postedAt;
-              if (cursor.newestAt && it.postedAt && it.postedAt <= cursor.newestAt && !ctx.force) { reachedKnown = true; continue; }
+              const at = it.cursorAt || it.postedAt; // a boost is new when it was boosted, however old the post
+              if (at && (!newest || at > newest)) newest = at;
+              if (cursor.newestAt && at && at <= cursor.newestAt && !ctx.force) { reachedKnown = true; continue; }
               items.push({ ...it, query: feed.kind === 'tag' ? feed.target : null });
             }
           }

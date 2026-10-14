@@ -32,6 +32,7 @@ health.start();
 maintenance.startImageSweep();
 require('./src/engine/visual').start(); // "More like this": embeds the library in the background
 require('./src/services/telegram-sync').start();
+require('./src/engine/thumbs').start(); // small thumbnails and a tint per picture, newest first
 
 function shutdown(signal) {
   console.log(`\n[${signal}] shutting down…`);
@@ -42,6 +43,7 @@ function shutdown(signal) {
   maintenance.stopImageSweep();
   require('./src/engine/visual').stop();
   require('./src/services/telegram-sync').stop();
+  require('./src/engine/thumbs').stop();
   require('./src/lib/imagefilter').shutdown().catch(() => {});
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 8000).unref();

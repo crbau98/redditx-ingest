@@ -600,11 +600,21 @@ const feeds = {
   },
 
   remove(id) { return feedQ.del.run(id).changes > 0; },
-  /** Enabled feeds whose time has come, skipping platforms whose breaker is open. */
+  /**
+   * Enabled feeds whose time has come, skipping platforms whose breaker is open. When more are due than can run (one
+   * feed per platform at a time), the most overdue goes first, where an hour late counts double for a followed creator's
+   * own account and half for a feed that has been failing. New and "run now" feeds (no next_run_at) go before all of them.
+   * Weighting lateness, not sorting by kind, means nothing waits forever: an open feed late long enough still wins.
+   */
   due(limit = 20, excludePlatforms = []) {
     const ex = excludePlatforms.length ? `AND platform NOT IN (${excludePlatforms.map(() => '?').join(',')})` : '';
+    const now = nowIso();
     return db.prepare(`SELECT * FROM feeds WHERE enabled = 1 AND (next_run_at IS NULL OR next_run_at <= ?) ${ex}
-                       ORDER BY priority DESC, COALESCE(next_run_at, '') ASC LIMIT ?`).all(nowIso(), ...excludePlatforms, limit);
+                       ORDER BY priority DESC,
+                         CASE WHEN next_run_at IS NULL THEN 1e9 ELSE (julianday(?) - julianday(next_run_at))
+                           * (CASE WHEN creator_id IS NOT NULL AND kind IN ('user', 'channel', 'page', 'feed') THEN 2.0 ELSE 1.0 END)
+                           * (CASE WHEN consecutive_failures > 0 THEN 0.5 ELSE 1.0 END) END DESC,
+                         COALESCE(next_run_at, '') ASC LIMIT ?`).all(now, ...excludePlatforms, now, limit);
   },
 
   finishRun(id, { status, error = null, cursor, nextRunAt, addedItems = 0, failures }) {
@@ -1431,9 +1441,9 @@ function mentionSource(afterIso, limit = 2000) {
 function communityHangouts({ minCreators = 2, limit = 60 } = {}) {
   return db.prepare(`SELECT m.platform, m.community, COUNT(DISTINCT m.creator_id) AS creators, group_concat(DISTINCT m.creator_id) AS ids
     FROM media m JOIN creators c ON c.id = m.creator_id
-    WHERE m.community IS NOT NULL AND m.community != '' AND m.platform IN ('reddit', 'lemmy')
+    WHERE m.community IS NOT NULL AND m.community != '' AND m.platform IN ('reddit', 'lemmy', 'redgifs')
       AND m.publish_state = 'published' AND m.scope != 'excluded' AND c.status = 'active' AND c.scope != 'excluded'
-      AND NOT EXISTS (SELECT 1 FROM feeds f WHERE f.platform = m.platform AND f.kind = 'community' AND f.target = m.community COLLATE NOCASE)
+      AND NOT EXISTS (SELECT 1 FROM feeds f WHERE f.platform = m.platform AND f.kind IN ('community', 'niche') AND f.target = m.community COLLATE NOCASE)
     GROUP BY m.platform, m.community COLLATE NOCASE HAVING creators >= ? ORDER BY creators DESC LIMIT ?`).all(minCreators, limit)
     .map((r) => ({ ...r, ids: String(r.ids || '').split(',').filter(Boolean) }));
 }
