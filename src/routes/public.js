@@ -11,6 +11,7 @@ const { publicAccounts } = require('../services/targets');
 const { understand, buildVocabulary, PAID } = require('../lib/query');
 const { search } = require('../engine/search');
 const { creatorOnlyFans } = require('../lib/onlyfans');
+const { normAlias } = require('../lib/alias');
 
 const router = express.Router();
 
@@ -230,8 +231,21 @@ router.get('/creators', (req, res) => {
 router.get('/creators/:id', (req, res) => {
   const c = repo.creators.detail(req.params.id);
   if (!c || c.status !== 'active' || c.scope === 'excluded') return res.status(404).json({ error: 'Not found' });
-  res.json({ ...publicCreator(c), accounts: publicAccounts(c.id), topTags: c.topTags });
+  res.json({ ...publicCreator(c), accounts: publicAccounts(c.id), topTags: c.topTags, aliases: otherNames(c) });
 });
+
+/** Names he goes by elsewhere, for "Also goes by": plain strings, minus the name and handle already on the page.
+ *  detail() has already left out names only claimed in a bio. */
+function otherNames(c) {
+  const shown = new Set([normAlias(c.handle || ''), normAlias(c.display_name || '')]);
+  const seen = new Set();
+  return (c.aliases || []).map((a) => a.alias).filter((a) => {
+    const k = normAlias(a || '');
+    if (!k || shown.has(k) || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
 
 router.get('/creators/:id/media', (req, res) => {
   const c = repo.creators.get(req.params.id);

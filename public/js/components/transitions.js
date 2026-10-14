@@ -59,8 +59,10 @@ const radiusOf = (el, fallback) => { const r = parseFloat(getComputedStyle(el).b
  */
 function morph(el, full, box, cardRadius, endRadius, { reverse = false, easing = spring('settle'), fill = 'none', shadow = false } = {}) {
   const c = cropTo(full, box);
-  const moveA = { transform: `translate(${c.dx}px, ${c.dy}px) scale(${c.s})` };
-  const moveB = { transform: 'translate(0px, 0px) scale(1)' };
+  // cropTo() measures centre to centre, so scale about the centre whatever origin the element has
+  // (the viewer's image keeps a 0 0 origin for pinch-zoom)
+  const moveA = { transform: `translate(${c.dx}px, ${c.dy}px) scale(${c.s})`, transformOrigin: '50% 50%' };
+  const moveB = { transform: 'translate(0px, 0px) scale(1)', transformOrigin: '50% 50%' };
   const clipA = { clipPath: inset(c.ix, c.iy, cardRadius / c.s) };
   const clipB = { clipPath: inset(0, 0, endRadius) };
   const duration = dur('slow');
