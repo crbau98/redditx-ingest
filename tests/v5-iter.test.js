@@ -1,0 +1,32 @@
+'use strict';
+/**
+ * v5 Horizon iteration run: sequenced concrete upgrades, one section per item.
+ * Lawful bounds hold throughout: paid hosts are parsed as strings, never fetched
+ * (see item 1); no new scrapers, no face-match, no whole-web enumeration.
+ */
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+/* ------------------------------------------------- item 1: paid parsing parity */
+test('iter1: paid.js parses Fansly/JFF handles and finds every paid page a text names', () => {
+  const paid = require('../src/lib/paid');
+  assert.equal(paid.fanslyHandle('https://fansly.com/JakeFit/posts'), 'jakefit');
+  assert.equal(paid.fanslyHandle('fansly.com/login'), null); // site page, not a person
+  assert.equal(paid.jffHandle('https://justfor.fans/Jake_Fit'), 'jake_fit');
+  assert.equal(paid.jffHandle('https://justfor.fans/search'), null);
+  assert.equal(paid.serviceOf('https://manyvids.com/Profile/123/x'), 'ManyVids');
+  assert.equal(paid.serviceOf('https://fansly.com/x'), 'Fansly');
+  assert.equal(paid.serviceOf('https://bsky.app/profile/x'), null);
+  const found = paid.findPaidHandles('My OnlyFans: @jakefit onlyfans.com/jakefit · Fansly: @jakefit2 fansly.com/jakefit2 · jff: justfor.fans/jakefit3');
+  assert.deepEqual(found.map((f) => `${f.service}:${f.handle}`), ['OnlyFans:jakefit', 'Fansly:jakefit2', 'JustFor.Fans:jakefit3']);
+  assert.equal(paid.paidLink('Fansly', 'jakefit2').url, 'https://fansly.com/jakefit2');
+  assert.equal(paid.paidLink('Fansly', 'jakefit2', { free: true }).free, true);
+});
+
+test('iter1: extractLinks catches bare paid URLs for every paid host', () => {
+  const { extractLinks } = require('../src/lib/links');
+  for (const [bare, service] of [['manyvids.com/Profile/1/x', 'ManyVids'], ['loyalfans.com/jake', 'LoyalFans'], ['fanvue.com/jake', 'Fanvue']]) {
+    const got = extractLinks(`see my page ${bare} ok`).filter((p) => p.external);
+    assert.ok(got.some((p) => p.service === service), `${bare} parses as ${service}`);
+  }
+});

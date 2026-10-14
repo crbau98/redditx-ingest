@@ -261,7 +261,7 @@ function extractLinks(text) {
   const found = [];
   const seen = new Set();
   // Full URLs, plus the bare "onlyfans.com/name" / "linktr.ee/name" people type into bios.
-  const urlRe = /(?:https?:\/\/|www\.)[^\s<>"')\]]+|(?<![\w./@-])(?:onlyfans\.com|fansly\.com|justfor\.fans|linktr\.ee|allmylinks\.com|beacons\.ai)\/[^\s<>"')\]]+/gi;
+  const urlRe = /(?:https?:\/\/|www\.)[^\s<>"')\]]+|(?<![\w./@-])(?:onlyfans\.com|fansly\.com|justfor\.fans|manyvids\.com|loyalfans\.com|fanvue\.com|fancentro\.com|clips4sale\.com|linktr\.ee|allmylinks\.com|beacons\.ai)\/[^\s<>"')\]]+/gi;
   for (const u of String(text || '').match(urlRe) || []) {
     const p = parseProfile(u);
     if (!p) continue;
