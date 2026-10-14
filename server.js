@@ -30,6 +30,7 @@ backup.start();
 discovery.start();
 health.start();
 maintenance.startImageSweep();
+require('./src/engine/visual').start(); // "More like this": embeds the library in the background
 require('./src/services/telegram-sync').start();
 
 function shutdown(signal) {
@@ -39,6 +40,7 @@ function shutdown(signal) {
   discovery.stop();
   health.stop();
   maintenance.stopImageSweep();
+  require('./src/engine/visual').stop();
   require('./src/services/telegram-sync').stop();
   require('./src/lib/imagefilter').shutdown().catch(() => {});
   server.close(() => process.exit(0));

@@ -26,6 +26,7 @@ function publicMedia(m) {
     tags: m.tags || (m.tags_text ? m.tags_text.split(' ').filter(Boolean).slice(0, 10) : []),
     position: m.position, post_key: m.post_key,
     ...(m.reason ? { reason: m.reason } : {}),
+    ...(m.similarity !== undefined ? { similarity: m.similarity } : {}),
   };
 }
 
@@ -174,6 +175,19 @@ router.get('/media/:id/related', (req, res) => {
   const m = repo.media.get(req.params.id);
   if (!m || m.publish_state !== 'published') return res.status(404).json({ error: 'Not found' });
   res.json(repo.media.related(req.params.id, repo.clampInt(req.query.limit, 1, 40, 12)).map(publicMedia));
+});
+
+/**
+ * "More like this" by look: visually similar posts from every source (src/engine/visual.js). Until this item has a
+ * vector (new posts are embedded within minutes) the answer comes from shared tags and creators instead; `basis` says which.
+ */
+router.get('/media/:id/similar', (req, res) => {
+  const m = repo.media.get(req.params.id);
+  if (!m || m.publish_state !== 'published') return res.status(404).json({ error: 'Not found' });
+  const limit = repo.clampInt(req.query.limit, 1, 40, 12);
+  const look = require('../engine/visual').similar(m.id, limit);
+  if (look && look.length) return res.json({ basis: 'look', items: look.map(publicMedia) });
+  res.json({ basis: 'tags', items: repo.media.related(m.id, limit).map(publicMedia) });
 });
 
 const engagementLimiter = rateLimit({ windowMs: 60 * 1000, max: 90, standardHeaders: true, legacyHeaders: false, message: { error: 'Slow down' } });

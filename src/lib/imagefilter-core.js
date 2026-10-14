@@ -105,7 +105,18 @@ async function createModel() {
       return { faces, body: measured };
     } finally { human.tf.dispose(tensor); }
   }
-  return { detect, canMeasure, info: `${human.tf.getBackend()} backend, models: ${loaded.join(', ')}` };
+  /** Visual embedding for "More like this" (lib/embeddings): loaded on first use, so workers that never embed pay nothing. */
+  let backbone = null;
+  async function embed(buffer) {
+    const embeddings = require('./embeddings');
+    if (!backbone) backbone = embeddings.loadBackbone(human.tf);
+    const features = await backbone;
+    const { data, info } = await sharp(buffer, { failOn: 'none', limitInputPixels: 60e6 })
+      .rotate().removeAlpha().resize({ width: 224, height: 224, fit: 'fill' }).raw().toBuffer({ resolveWithObject: true });
+    const tensor = human.tf.tensor3d(new Uint8Array(data), [info.height, info.width, 3], 'int32');
+    try { return embeddings.pack(embeddings.project(await features(tensor))); } finally { human.tf.dispose(tensor); }
+  }
+  return { detect, embed, canMeasure, info: `${human.tf.getBackend()} backend, models: ${loaded.join(', ')}` };
 }
 
 module.exports = { createModel };
