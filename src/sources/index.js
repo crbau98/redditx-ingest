@@ -36,28 +36,34 @@ const SEED_VERSION = 6;
 const seeds = (platform, kind, targets, extra) => targets.map((target) => ({ platform, kind, target, ...extra }));
 const SEEDS = [
   ...seeds('reddit', 'community', ['gaybrosgonewild', 'vlinesabsanddick', 'gaynsfw', 'twinks', 'massivecocks', 'gaymuscle',
-    'broslikeus', 'malepubes', 'cock', 'bulges', 'jockstraps', 'gayporn', 'mangonewild', 'otters', 'bearsgonewild', 'gaybrosgonemild', 'ratemycock'],
+    'broslikeus', 'malepubes', 'cock', 'bulges', 'jockstraps', 'gayporn', 'mangonewild', 'otters', 'gaybrosgonemild', 'ratemycock'],
   { trusted: true, intervalMin: 90 }),
   // RedGIFs: curated niches, not free-text search. Measured live: a text search for "gay" returned ~75% female-tagged
   // results, while these niches are mostly men (and carry the Gay tag, which is what an untrusted feed needs).
   ...seeds('redgifs', 'niche', ['gay-muscle', 'gay-blowjobs', 'gay-couples', 'male-pissing', 'interracial-gay', 'gay-cock-milking', 'gay-creampie', 'male-sex-toys', 'gay-cumming'],
     { trusted: false, intervalMin: 120 }),
   ...seeds('x', 'search', ['gay muscle', 'gay jock', 'gaymuscle'], { trusted: false, intervalMin: 240 }),
-  ...seeds('mastodon', 'tag', ['gay', 'gaymuscle', 'gaybear', 'gayotter', 'gaydaddy', 'gaynsfw', 'malenude', 'gaycock'], { trusted: false, intervalMin: 180 }),
-  ...seeds('misskey', 'tag', ['ゲイ', 'ガチムチ', '筋肉', 'gay', 'gaymuscle'], { trusted: false, intervalMin: 180 }),
+  ...seeds('mastodon', 'tag', ['gay', 'gaymuscle', 'gayotter', 'gayjock', 'gaynsfw', 'malenude', 'gaycock'], { trusted: false, intervalMin: 180 }),
+  ...seeds('misskey', 'tag', ['ゲイ', '筋肉', 'gay', 'gaymuscle'], { trusted: false, intervalMin: 180 }),
   // Lemmy communities verified live on lemmynsfw.com (names, activity and the posts API). The directory community
   // "nsfwgaycommunities" and the daily NSFW community listing in discovery find more by themselves.
   ...seeds('lemmy', 'community', ['gayporn@lemmynsfw.com', 'gaybrosgonewild@lemmynsfw.com', 'gayporngifs@lemmynsfw.com'], { trusted: true, intervalMin: 120 }),
   ...seeds('lemmy', 'community', ['bulge@lemmynsfw.com', 'cocks@lemmynsfw.com', 'iwanttosuckcock@lemmynsfw.com'], { trusted: false, intervalMin: 120 }),
-  ...seeds('peertube', 'search', ['gay', 'gay muscle', 'gay amateur', 'gay bear'], { trusted: false, intervalMin: 240 }),
+  ...seeds('peertube', 'search', ['gay', 'gay muscle', 'gay amateur', 'gay jock'], { trusted: false, intervalMin: 240 }),
   ...seeds('peertube', 'tag', ['gay'], { trusted: false, intervalMin: 240 }),
-  ...seeds('bluesky', 'search', ['gaymuscle', 'gaybear', 'gaydaddy', 'gayotter', 'gaynsfw', 'malenude'], { trusted: false, intervalMin: 180 }),
+  ...seeds('bluesky', 'search', ['gaymuscle', 'gayjock', 'gayotter', 'gaynsfw', 'malenude'], { trusted: false, intervalMin: 180 }),
 ];
 
 /** Seeds from earlier versions that are not clearly male-only. Existing databases switch them off (origin 'seed' only). */
 const RETIRED_SEEDS = [
   { platform: 'reddit', kind: 'community', target: 'hardbodies' },   // mixed / women-heavy fitness community
   { platform: 'reddit', kind: 'community', target: 'boyswithabs' },
+  // bear / stocky communities: only fit, athletic men are wanted (v5 body filter)
+  { platform: 'reddit', kind: 'community', target: 'bearsgonewild' },
+  { platform: 'mastodon', kind: 'tag', target: 'gaybear' },
+  { platform: 'misskey', kind: 'tag', target: 'ガチムチ' },
+  { platform: 'peertube', kind: 'search', target: 'gay bear' },
+  { platform: 'bluesky', kind: 'search', target: 'gaybear' },
   { platform: 'tumblr', kind: 'tag', target: 'gay' },   // Tumblr removed site-wide tag feeds (404)
   { platform: 'tumblr', kind: 'tag', target: 'gay muscle' },   // Tumblr removed site-wide tag feeds (404)
   { platform: 'tumblr', kind: 'tag', target: 'gay bear' },   // Tumblr removed site-wide tag feeds (404)

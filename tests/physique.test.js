@@ -30,17 +30,17 @@ function body({ belly = 32, chest = 44, arms = null, w = 200, h = 300, cx = 100,
 describe('measuring a body (pure geometry)', () => {
   test('a V-shaped torso scores lean, a belly as wide as the shoulders scores heavy', () => {
     const lean = measure(...body({ belly: 30 }));
-    assert.equal(lean.decided, true); assert.ok(lean.score <= 10, JSON.stringify(lean));
+    assert.equal(lean.decided, true); assert.ok(lean.score <= 25, JSON.stringify(lean)); // well under the default line (45)
     const heavy = measure(...body({ belly: 56, chest: 52 }));
     assert.equal(heavy.decided, true); assert.ok(heavy.score >= 80, JSON.stringify(heavy));
-    const middle = measure(...body({ belly: 42 }));
+    const middle = measure(...body({ belly: 36 }));
     assert.ok(middle.score > lean.score && middle.score < heavy.score, JSON.stringify(middle));
   });
   test('arms hanging against the belly never make a lean body look wide', () => {
     const both = measure(...body({ belly: 30, arms: ['left', 'right'] }));
-    assert.ok(!both.decided || both.score <= 10, `both arms down: ${JSON.stringify(both)}`);
+    assert.ok(!both.decided || both.score <= 25, `both arms down: ${JSON.stringify(both)}`);
     const one = measure(...body({ belly: 30, arms: ['left'] })); // the other arm is up (a mirror selfie)
-    assert.equal(one.decided, true); assert.ok(one.score <= 10, `measured from the free side: ${JSON.stringify(one)}`);
+    assert.equal(one.decided, true); assert.ok(one.score <= 25, `measured from the free side: ${JSON.stringify(one)}`);
   });
   test('no verdict without a frontal torso in view', () => {
     assert.equal(measure(...body({ sideways: true })).decided, false);
@@ -55,8 +55,16 @@ describe('physique words', () => {
     for (const t of ['Chubby bear next door', 'superchub_sam', 'GainerGuy', 'my dad bod', 'Chub daddy', 'bbm worship', 'fat guy jerking', 'Chubchasers united', 'beer belly rub', 'r/chubbyguys'])
       assert.equal(textCheck(t).heavy, true, t);
   });
+  test('bears, cubs and stocky builds are not the fit / athletic look either', () => {
+    for (const t of ['gym bear', 'muscle bear daddy', 'r/bearsgonewild', 'GayBearSam', 'cute cub', 'stocky guy', 'burly trucker', 'big guys only', 'ガチムチ', '#gaybear', 'polarbear_dad'])
+      assert.equal(textCheck(t).heavy, true, t);
+  });
+  test('beards, otters and muscle words are fine', () => {
+    for (const t of ['bearded jock', 'Beard and abs', 'gaybeard', 'otter swimmer', 'thick muscle jock', 'big cock', 'big dick energy', 'huge fat dick'])
+      assert.equal(textCheck(t).heavy, false, t);
+  });
   test('"fat" as porn slang for thick, and lean / muscle words, are not', () => {
-    for (const t of ['fat cock', 'huge fat dick', 'fat load on abs', 'that fat ass', 'thick muscle jock', 'gym bear', 'muscle bear daddy', 'fit twink', 'athletic swimmer'])
+    for (const t of ['fat cock', 'huge fat dick', 'fat load on abs', 'that fat ass', 'thick muscle jock', 'fit twink', 'athletic swimmer'])
       assert.equal(textCheck(t).heavy, false, t);
   });
 });
@@ -84,6 +92,8 @@ before(async () => {
     routes['/avatar.jpg'] = () => ({ headers: { 'content-type': 'image/jpeg' }, body: fs.readFileSync(assets('screenshot-vrm.jpg')) });
     const wide = await widen(assets('screenshot-vrm.jpg'), 0.35);
     routes['/avatar-wide.jpg'] = () => ({ headers: { 'content-type': 'image/jpeg' }, body: wide });
+    const midBody = await widen(assets('screenshot-vrm.jpg'), 0.2);
+    routes['/avatar-mid.jpg'] = () => ({ headers: { 'content-type': 'image/jpeg' }, body: midBody });
   }
   mock = await start(routes);
   prepareEnv();
@@ -112,6 +122,11 @@ describe('the real pose + silhouette models (on-device, no network)', { skip: !h
     const wide = await imagefilter.analyze(`${mock.url}/avatar-wide.jpg`, { body: true });
     assert.equal(wide.body.decided, true, JSON.stringify(wide.body));
     assert.ok(wide.body.score >= slim.body.score + 30, `wide: ${JSON.stringify(wide.body)} vs slim ${JSON.stringify(slim.body)}`);
+  });
+  test('a belly only ~20% wider than the slim figure is already over the default line (v4.14 let it through at 50)', async () => {
+    const mid = await imagefilter.analyze(`${mock.url}/avatar-mid.jpg`, { body: true });
+    assert.equal(mid.body.decided, true, JSON.stringify(mid.body));
+    assert.ok(mid.body.score >= physique.DEFAULT_THRESHOLD, JSON.stringify(mid.body));
   });
 });
 
@@ -389,5 +404,18 @@ describe('body filter policy (model replaced by a fake)', () => {
     physique.reapply({ ...settings, physiqueFilter: false });
     assert.equal(repo.media.get(id).publish_state, 'published');
     assert.equal(repo.feeds.get(chubFeed.id).enabled, 1);
+  });
+});
+
+describe('stricter v5 defaults', () => {
+  test('an install still on the old defaults moves to the new ones once; a value an admin chose is kept', () => {
+    repo.settings.set('physique_defaults_version', '');
+    repo.settings.set('physiqueThreshold', '60'); repo.settings.set('physiqueCreatorShare', '70');
+    assert.equal(physique.migrateDefaults(), true);
+    assert.equal(repo.settings.get('physiqueThreshold'), String(physique.DEFAULT_THRESHOLD));
+    assert.equal(repo.settings.get('physiqueCreatorShare'), '70', 'chosen by an admin');
+    repo.settings.set('physiqueThreshold', '60');
+    assert.equal(physique.migrateDefaults(), false, 'only once');
+    assert.equal(repo.settings.get('physiqueThreshold'), '60');
   });
 });

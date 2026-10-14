@@ -100,7 +100,7 @@ async function imageSweep({ limit = 12, settings } = {}) {
 }
 
 /* ------------------------------------------------------------- physique sweep */
-const PHYSIQUE_SWEEP_VERSION = '1'; // bump to re-measure the whole library (e.g. after better anchors or a better model)
+const PHYSIQUE_SWEEP_VERSION = '2'; // 2: stricter anchors (v5). bump to re-measure the whole library (e.g. after better anchors or a better model)
 
 /**
  * Measure the build in stored pictures that have no physique score yet (oldest first, cursor `physique_sweep_seq`), hide the
@@ -231,7 +231,10 @@ function stopImageSweep() { if (sweepTimer) clearInterval(sweepTimer); sweepTime
 
 /** Run the safety sweep once per rule-set version, in the background after boot. */
 function startupSweepIfNeeded() {
-  setTimeout(() => { physique.textSweep(settingsStore.get()).catch((e) => events.log('WARN', `Body filter: ${e.message}`)); }, 3000).unref();
+  setTimeout(() => {
+    try { physique.migrateDefaults(); physique.reapply(settingsStore.get()); } catch (e) { events.log('WARN', `Body filter: ${e.message}`); }
+    physique.textSweep(settingsStore.get()).catch((e) => events.log('WARN', `Body filter: ${e.message}`));
+  }, 3000).unref();
   if (repo.settings.get('safety_sweep_version') === SAFETY_SWEEP_VERSION) return;
   setTimeout(async () => {
     try { await sweep(); repo.settings.set('safety_sweep_version', SAFETY_SWEEP_VERSION); }

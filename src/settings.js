@@ -34,8 +34,8 @@ const SCHEMA = {
   imageSweepPerTick: { type: 'int', default: 12, min: 0, max: 200, label: 'Items re-checked per minute by the image sweep', group: 'safety' },
   // --- body filter (v4.14) ---
   physiqueFilter: { type: 'bool', default: true, label: 'Body filter: show only fit / athletic bodies — hides heavy or very large builds (on-device pose + silhouette, and words like "chubby", "gainer", "dad bod")', group: 'safety' },
-  physiqueThreshold: { type: 'int', default: 60, min: 20, max: 95, label: 'Body filter: heaviness score (0 = lean … 100 = very large) at which a picture is hidden — lower = stricter. Hidden, not deleted: moving it re-applies to the whole library', group: 'safety' },
-  physiqueCreatorShare: { type: 'int', default: 50, min: 0, max: 100, label: 'Body filter: hide a creator (and pause their feeds) when this % of their measured pictures are hidden (at least 4 measured; 0 = never)', group: 'safety' },
+  physiqueThreshold: { type: 'int', default: 45, min: 20, max: 95, label: 'Body filter: heaviness score (0 = lean … 100 = very large) at which a picture is hidden — lower = stricter. Hidden, not deleted: moving it re-applies to the whole library', group: 'safety' },
+  physiqueCreatorShare: { type: 'int', default: 30, min: 0, max: 100, label: 'Body filter: hide a creator (and pause their feeds) when this % of their measured pictures are hidden (at least 3 measured; 0 = never)', group: 'safety' },
   // --- discovery (v4.3) ---
   autoDiscover: { type: 'bool', default: true, label: 'Discover new creators automatically (mentions, follow graphs, web search)', group: 'discovery' },
   discoveryIntervalMin: { type: 'int', default: 60, min: 15, max: 1440, label: 'Discovery runs every (minutes)', group: 'discovery' },
@@ -47,7 +47,7 @@ const SCHEMA = {
     type: 'text', group: 'discovery', label: 'Web-search topics (one per line; rotated, one per run)',
     default: ['gay male model bluesky', 'male fitness model onlyfans x.com', 'gay creator linktree 18+', 'muscle model telegram channel', 'gay twink creator redgifs', 'muscle daddy creator onlyfans bluesky', 'gay amateur couple onlyfans twitter', 'male model throne wishlist',
       'gay bodybuilder creator linktree', 'hairy gay creator onlyfans', 'gay jock creator link in bio', 'gay otter creator bluesky 18+', 'gay daddy creator mastodon nsfw', 'gay content creator tumblr nsfw', 'gay muscle videos peertube',
-      'gay porn star official links', 'gay amateur creator allmylinks', 'gay athlete creator beacons.ai', 'gay bear creator beacons.ai', 'ゲイ 筋肉 クリエイター', 'ガチムチ 投稿者 リンク', 'gay cam model linktree', 'male nude model portfolio',
+      'gay porn star official links', 'gay amateur creator allmylinks', 'gay athlete creator beacons.ai', 'gay fitness creator beacons.ai', 'ゲイ 筋肉 クリエイター', 'ゲイ 細マッチョ リンク', 'gay cam model linktree', 'male nude model portfolio',
       // OnlyFans pages in search results become leads (their snippet is the public bio); fit / athletic first
       'site:onlyfans.com gay muscle', 'site:onlyfans.com male fitness model', 'site:onlyfans.com gay athlete', 'site:onlyfans.com gay jock', 'site:onlyfans.com free gay',
       'free gay onlyfans telegram', 'gay onlyfans promo twitter muscle', 'male onlyfans creator redgifs fit'].join('\n'),
@@ -74,8 +74,8 @@ const SCHEMA = {
   leakDomains: { type: 'text', default: '', label: 'Extra leak domains to block (one per line). GayForFans, its sister sites, OnlyFans leak mirrors and file lockers are always blocked', group: 'sources' },
   discoveryKeywords: {
     type: 'text', group: 'discovery', label: 'Community keywords (one per line; two are searched per run, in rotation)',
-    default: ['gay', 'gaybros', 'gay muscle', 'muscle bears', 'twinks', 'gay daddy', 'jocks', 'bulge', 'gay amateur', 'hairy men', 'male nude', 'gay nsfw',
-      'gay otters', 'gay jock', 'gay athletes', 'gay couples', 'gay gifs', 'gay videos', 'gay outdoors', 'gay selfies', 'gay big cock', 'jockstrap', 'gay hunks', 'bearded men', 'gay bodybuilder', 'ゲイ', 'ガチムチ'].join('\n'),
+    default: ['gay', 'gaybros', 'gay muscle', 'fit gay', 'twinks', 'gay swimmers', 'jocks', 'bulge', 'gay amateur', 'hairy men', 'male nude', 'gay nsfw',
+      'gay otters', 'gay jock', 'gay athletes', 'gay couples', 'gay gifs', 'gay videos', 'gay outdoors', 'gay selfies', 'gay big cock', 'jockstrap', 'gay hunks', 'gay runners', 'gay bodybuilder', 'ゲイ', 'ゲイ 筋肉'].join('\n'),
   },
 };
 
