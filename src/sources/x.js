@@ -33,10 +33,23 @@ function spend(posts) {
   repo.settings.set('x.usage', JSON.stringify({ month: u.month, posts: u.posts + (posts || 0), calls: u.calls + 1 }));
 }
 function budget() { try { return require('../settings').get().xMonthlyReadBudget; } catch { return 10000; } }
-const apiAvailable = () => !!config.creds.xBearer && usage().posts < budget();
+/* A token X refuses (401 bad token, 402 no paid plan / credits left, 403 endpoint not in the plan) would fail every
+ * call: park the API for a few hours and use the keyless routes, instead of erroring on every feed. */
+const API_PARK_MS = 6 * 3600 * 1000;
+const apiState = { parkedUntil: 0, reason: null };
+const apiParked = () => Date.now() < apiState.parkedUntil;
+const apiAvailable = () => !!config.creds.xBearer && usage().posts < budget() && !apiParked();
 async function apiGet(url) {
   if (usage().posts >= budget()) throw Object.assign(new Error(`X API monthly read budget reached (${budget()} posts) — using the keyless route until next month`), { budget: true });
-  const json = await http.json(url, { headers: bearer() });
+  let json;
+  try { json = await http.json(url, { headers: bearer() }); } catch (e) {
+    if (e.status === 401 || e.status === 402 || e.status === 403) {
+      apiState.parkedUntil = Date.now() + API_PARK_MS;
+      apiState.reason = e.status === 402 ? 'X says the token has no paid plan or credits (402)' : e.status === 401 ? 'X rejected the token (401)' : 'this endpoint is not in the token\'s X plan (403)';
+      e.apiOff = true;
+    }
+    throw e;
+  }
   spend((json.meta && json.meta.result_count) || (Array.isArray(json.data) ? json.data.length : json.data ? 1 : 0));
   return json;
 }
@@ -364,8 +377,13 @@ module.exports = {
   color: '#a1a1aa',
   kinds: ['user', 'search'],
   intervalMin: { user: 240, search: 180 },
-  parseApi, parseLegacyTweet, parseSyndication, parseEmbedTweet, postsInResults, embedToken, fetchTweet, usage, webUsage,
+  apiState, parseApi, parseLegacyTweet, parseSyndication, parseEmbedTweet, postsInResults, embedToken, fetchTweet, usage, webUsage,
   isConfigured(kind) {
+    if (config.creds.xBearer && apiParked()) {
+      const web = require('../lib/websearch').configured();
+      if (kind === 'search' && !web) return { ok: false, note: `${apiState.reason} — search needs a working token or web search` };
+      return { ok: true, note: `${apiState.reason} — using the keyless route` };
+    }
     if (config.creds.xBearer) {
       const u = usage();
       if (u.posts >= budget()) {
@@ -392,7 +410,7 @@ module.exports = {
         return { items: r.items, cursor: { newestId: r.newestId || cursor.newestId, newestAt }, profile: r.profile, via: 'api' };
       } catch (e) {
         // Out of budget, or the plan does not include this endpoint (403): fall through to the keyless routes.
-        if (!(e.budget || e.status === 403 || e.status === 429)) throw e;
+        if (!(e.budget || e.apiOff || e.status === 429)) throw e;
       }
     }
     if (feed.kind === 'search') return viaWebSearch(feed, ctx, cursor);
