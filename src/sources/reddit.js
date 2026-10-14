@@ -18,7 +18,7 @@ const http = require('./http').forPlatform('reddit', 1100);
 const net = require('../lib/net');
 const rss = require('./rss');
 const events = require('../engine/events');
-const { toIso, decodeHtml, pickWidth, clip } = require('./util');
+const { toIso, decodeHtml, pickWidth, clip, repostsOn } = require('./util');
 const { hostOf, hostBlocked, hostMatches, normalizeMediaUrl, looksLikeDirectMedia } = require('../lib/mediaurl');
 
 const base = config.baseUrls.reddit;
@@ -96,7 +96,8 @@ function parsePost(post) {
   const host = hostOf(url);
 
   // A crosspost of somebody else's post is credited to the original poster; his own crossposts stay his.
-  const original = cp && !ownMedia && cp.author && cp.author !== '[deleted]' && String(cp.author).toLowerCase() !== String(d.author || '').toLowerCase() ? cp.author : null;
+  // (Setting "reposts" off: crossposts stay credited to the crossposter, as before.)
+  const original = cp && repostsOn() && cp.author && cp.author !== '[deleted]' && String(cp.author).toLowerCase() !== String(d.author || '').toLowerCase() ? cp.author : null;
   const base = {
     sourceId: d.id,
     title: clip(d.title || '', 300),

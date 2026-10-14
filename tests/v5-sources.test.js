@@ -138,6 +138,17 @@ test('Reddit: a crosspost of somebody else\'s post is credited to him; the sourc
   assert.equal(cross.crosspostFrom, 'gaymuscle');
   const [own] = reddit.parsePost({ data: { id: 'c2', author: 'jockone', subreddit: 'gaybrosgonewild', title: 'me again', crosspost_parent_list: [parent], url: 'https://i.redd.it/abc.jpg', permalink: '/r/x/c2' } });
   assert.equal(own.author, 'jockone'); assert.equal(own.repostOf, undefined);
+  // a video crosspost carries is_video on the wrapper too: still the parent author's
+  const vparent = { ...parent, is_video: true, media: { reddit_video: { fallback_url: 'https://v.redd.it/abc/DASH_720.mp4' } } };
+  const [vid] = reddit.parsePost({ data: { id: 'c3', author: 'curator', subreddit: 'gaybrosgonewild', title: 'clip', is_video: true, crosspost_parent_list: [vparent], media: vparent.media, permalink: '/r/x/c3' } });
+  assert.equal(vid.author, 'jockone'); assert.equal(vid.repostOf.via, 'curator');
+  // reposts switched off: crossposts stay with the crossposter
+  const settingsStore = require('../src/settings');
+  settingsStore.update({ reposts: false });
+  try {
+    const [off] = reddit.parsePost({ data: { id: 'c4', author: 'curator', subreddit: 'gaybrosgonewild', title: 'look', crosspost_parent_list: [parent], url: 'https://i.redd.it/abc.jpg', permalink: '/r/x/c4' } });
+    assert.equal(off.author, 'curator'); assert.equal(off.repostOf, undefined);
+  } finally { settingsStore.update({ reposts: true }); }
 });
 
 test('a repost read from a creator\'s own feed is credited to the original creator, not the feed owner', async () => {

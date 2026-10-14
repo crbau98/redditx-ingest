@@ -150,7 +150,7 @@ async function viaApi(feed, ctx, cursor) {
     const q = `${feed.target} has:media -is:retweet -is:reply`;
     let newestId = null; let next = null;
     for (let page = 0; page < (cursor.newestId && !ctx.force ? 1 : 2); page++) {
-      const json = await apiGet(`${base}/2/tweets/search/recent?query=${encodeURIComponent(q)}&max_results=100&expansions=attachments.media_keys,author_id&${MEDIA_FIELDS}&${TWEET_FIELDS}&user.fields=username,name,profile_image_url${since}${next ? `&next_token=${encodeURIComponent(next)}` : ''}`);
+      const json = await apiGet(`${base}/2/tweets/search/recent?query=${encodeURIComponent(q)}&max_results=100&expansions=attachments.media_keys,author_id,${REF_EXPANSIONS}&${MEDIA_FIELDS}&${TWEET_FIELDS}&user.fields=username,name,profile_image_url${since}${next ? `&next_token=${encodeURIComponent(next)}` : ''}`);
       if (!newestId && json.meta) newestId = json.meta.newest_id;
       items.push(...parseApi(json, feed.target));
       next = json.meta && json.meta.next_token;
