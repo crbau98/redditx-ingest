@@ -25,9 +25,11 @@ const ROWS = 13;
 const MIN_ROWS = 4;
 
 // Anthropometric anchors for the two ratios (belly width measured on the silhouette, shoulders and torso from keypoints).
-// Lean / athletic men sit near the low anchor, clearly heavy bodies past the high one.
-const WS = [0.9, 1.2];   // belly width / shoulder span
-const WL = [0.66, 0.95]; // belly width / torso length
+// Lean / athletic men sit at or below the low anchor, clearly heavy bodies past the high one. Shoulder keypoints sit on the
+// joints (~35 cm apart on a man), the torso keypoints ~50 cm apart: a lean waist (~29 cm wide) gives ~0.83 / ~0.58, an
+// overweight belly (~35 cm) ~1.0 / ~0.70. v4.14 used 0.9..1.2 / 0.66..0.95, which let overweight and stocky builds through.
+const WS = [0.86, 1.05]; // belly width / shoulder span
+const WL = [0.58, 0.74]; // belly width / torso length
 
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -107,7 +109,10 @@ function measure(keypoints, mask, w, h) {
   widths.sort((a, b) => a - b);
   const W = widths[Math.floor(widths.length / 2)]; // median: one bad row (a hand, a shadow) does not decide
   const ws = W / S; const wl = W / L;
-  const score = Math.round(100 * (clamp01((ws - WS[0]) / (WS[1] - WS[0])) + clamp01((wl - WL[0]) / (WL[1] - WL[0]))) / 2);
+  // Either ratio clearly heavy is enough: a plain average let a belly as wide as the shoulders pass whenever the torso looked
+  // long (camera below, a stretched pose). The other ratio still pulls a borderline reading down a little.
+  const a = clamp01((ws - WS[0]) / (WS[1] - WS[0])); const b = clamp01((wl - WL[0]) / (WL[1] - WL[0]));
+  const score = Math.round(100 * (0.75 * Math.max(a, b) + 0.25 * Math.min(a, b)));
   return { decided: true, score, ws: Math.round(ws * 100) / 100, wl: Math.round(wl * 100) / 100, rows: widths.length };
 }
 
@@ -115,9 +120,15 @@ function measure(keypoints, mask, w, h) {
 // Matched anywhere (safe inside glued handles: "chubbybear", "SuperchubSam", "gainerguy").
 const HEAVY_SUBSTR = ['chubby', 'chubbies', 'chubbie', 'superchub', 'chubchaser', 'chub chaser', 'chubster', 'chubbear', 'chubdaddy', 'chubboy', 'chubguy', 'chubbyguy',
   'gainer', 'feedee', 'obese', 'ssbhm', 'dadbod', 'dad bod', 'beerbelly', 'beer belly', 'bigbelly', 'big belly', 'belly play', 'bellyplay', 'plus size', 'plussize',
-  'heavyset', 'fatboy', 'fat boy', 'fatguy', 'fat guy', 'fatman', 'fat man', 'fat men', 'fatbear', 'fat bear', 'fat daddy', 'fatdaddy'].map(normalize);
+  'heavyset', 'dad body', 'ガチムチ', 'がちむち', 'デブ', 'ぽっちゃり', 'gachimuchi', 'bigguy', 'bigmen', 'stockyguy', 'stockymen',
+  'fatboy', 'fat boy', 'fatguy', 'fat guy', 'fatman', 'fat man', 'fat men', 'fatbear', 'fat bear', 'fat daddy', 'fatdaddy'].map(normalize);
 // Whole words. "fat" alone is also porn slang for "thick" ("fat cock", "fat ass", "fat load"), so those uses do not count.
-const HEAVY_WORDS = /\b(?:chub|chubs|chubz|chunky bear|husky|portly|pudgy|tubby|rotund|bbm|bhm|feeder|feeders|feederism|fattie|fatty|fatties|fatso|ssbbm)\b|\bfat\b(?!\s*(?:cocks?|dicks?|ass|asses|butts?|booty|bulges?|loads?|cum|meat|heads?|tips?|balls|nuts|ones?|uncut|cut|pipes?|rods?|shafts?|knobs?|pp|wood|bwc|bbc))/;
+// Bears / cubs / stocky builds too: only fit, athletic men are wanted, and "bear" is the big-guy category on every platform.
+// "bearded" / "beard" are not bears. Japanese: ガチムチ (stocky-muscular), デブ (fat), ぽっちゃり (chubby).
+const HEAVY_WORDS = /\b(?:chub|chubs|chubz|chunky|chunk|husky|portly|pudgy|tubby|rotund|stocky|burly|bbm|bhm|feeder|feeders|feederism|fattie|fatty|fatties|fatso|ssbbm|bears?|cubs?|big (?:guys?|men|man|boys? bod)|thick bod(?:y|ied)?)\b|\bfat\b(?!\s*(?:cocks?|dicks?|ass|asses|butts?|booty|bulges?|loads?|cum|meat|heads?|tips?|balls|nuts|ones?|uncut|cut|pipes?|rods?|shafts?|knobs?|pp|wood|bwc|bbc))/;
+
+// Bears glued into handles and community names ("gaybear", "bearsgonewild", "musclebearsam"), never "beard".
+const GLUED_BEAR = /(?:gay|muscle|polar|chub|teddy|fat|big|daddy|hairy)bears?(?!d)|bears?(?:gonewild|cubs?|chasers?|week|daddy|daddies|ofinstagram)|cubbears?|bearcubs?/;
 
 /**
  * Does the text describe a heavy body / a chub community? Use it for titles, tags, handles, bios and channel names.
@@ -129,6 +140,8 @@ function textCheck(...texts) {
   for (const t of variants) {
     if (!t) continue;
     for (const w of HEAVY_SUBSTR) if (t.includes(w)) return { heavy: true, rule: `physique:${w.trim()}` };
+    const g = t.match(GLUED_BEAR);
+    if (g) return { heavy: true, rule: `physique:${g[0]}` };
     const m = t.match(HEAVY_WORDS);
     if (m) return { heavy: true, rule: `physique:${m[0]}` };
   }

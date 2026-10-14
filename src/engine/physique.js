@@ -17,13 +17,15 @@ const repo = require('../db/repo');
 const events = require('./events');
 const { textCheck } = require('../lib/physique');
 
-const MIN_MEASURED = 4;
+const MIN_MEASURED = 3;
 const TEXT_SCORE = 101; // stored on items hidden for their words: above any measured score, and never counted as a measured picture
 const APPROVED = -1;    // stored when an admin approves an item the body filter hid: no sweep or setting hides it again
 const REASON = 'physique:';
 
 const enabled = (s) => !!s && s.physiqueFilter === true;
-const threshold = (s) => (s && Number.isFinite(s.physiqueThreshold) ? s.physiqueThreshold : 60);
+const DEFAULT_THRESHOLD = 45;
+const DEFAULT_SHARE = 30;
+const threshold = (s) => (s && Number.isFinite(s.physiqueThreshold) ? s.physiqueThreshold : DEFAULT_THRESHOLD);
 
 /**
  * The body filter's own settings as they are now, for a caller holding a snapshot (`liveBody: true`, e.g. a feed run that
@@ -75,7 +77,7 @@ function unhideCreator(creator) {
 function reviewCreator(creatorId, settings) {
   const c = creatorId && repo.creators.get(creatorId);
   if (!c) return null;
-  const share = settings ? settings.physiqueCreatorShare : 50;
+  const share = settings && Number.isFinite(settings.physiqueCreatorShare) ? settings.physiqueCreatorShare : DEFAULT_SHARE;
   const r = repo.db.prepare(`SELECT COUNT(*) AS measured, SUM(CASE WHEN physique >= ? THEN 1 ELSE 0 END) AS heavy FROM media
     WHERE creator_id = ? AND physique BETWEEN 0 AND 100 AND publish_state IN ('published','hidden','review')`).get(threshold(settings), c.id);
   const text = textCheck(c.handle, c.display_name, c.bio);
@@ -147,7 +149,7 @@ function publish(id, settings) {
   return repo.media.get(id).publish_state;
 }
 
-const TEXT_SWEEP_VERSION = '1'; // bump when the word list grows: stored items, creators and feeds are re-read once
+const TEXT_SWEEP_VERSION = '2'; // 2: bears, cubs, stocky, burly, ガチムチ ... // bump when the word list grows: stored items, creators and feeds are re-read once
 
 /**
  * Read stored items, creators and feeds against the physique word list. Items are hidden with TEXT_SCORE (so `reapply` can
@@ -198,6 +200,24 @@ async function textSweep(settings, { force = false } = {}) {
   return res;
 }
 
+const DEFAULTS_VERSION = '2';
+/**
+ * v5 made the body filter stricter (heaviness 60 -> 45, creator share 50% -> 30%). The admin console stores every setting
+ * when it is saved, so an install still on the old defaults is moved to the new ones once; a value an admin chose
+ * themselves (anything but the old default) is kept. Returns true when something changed (the caller re-applies).
+ */
+function migrateDefaults() {
+  if (repo.settings.get('physique_defaults_version') === DEFAULTS_VERSION) return false;
+  let changed = false;
+  for (const [key, from, to] of [['physiqueThreshold', '60', DEFAULT_THRESHOLD], ['physiqueCreatorShare', '50', DEFAULT_SHARE]]) {
+    const v = repo.settings.get(key);
+    if (v === from) { repo.settings.set(key, String(to)); changed = true; }
+  }
+  repo.settings.set('physique_defaults_version', DEFAULTS_VERSION);
+  if (changed) events.log('INFO', `Body filter: stricter defaults (heaviness ${DEFAULT_THRESHOLD}, creator share ${DEFAULT_SHARE}%)`);
+  return changed;
+}
+
 /** Library numbers for the admin console. */
 function stats(settings) {
   const thr = threshold(settings);
@@ -209,4 +229,4 @@ function stats(settings) {
   return { enabled: enabled(settings), threshold: thr, creatorShare: settings ? settings.physiqueCreatorShare : null, measured: r.measured || 0, overThreshold: r.overThreshold || 0, hidden: r.hidden || 0, creatorsHidden: creators, histogram: buckets };
 }
 
-module.exports = { live, screenFeed, publish, stateFor, reviewCreator, reapply, textSweep, stats, hideCreator, textCheck, enabled, threshold, REASON, MIN_MEASURED, APPROVED };
+module.exports = { migrateDefaults, DEFAULT_THRESHOLD, DEFAULT_SHARE, live, screenFeed, publish, stateFor, reviewCreator, reapply, textSweep, stats, hideCreator, textCheck, enabled, threshold, REASON, MIN_MEASURED, APPROVED };
