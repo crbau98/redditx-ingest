@@ -32,8 +32,10 @@ const WEIGHTS = {
 const AUTO_STRENGTH = 4;
 
 const q = {
+  // A name only his bio claimed ('bio') is promoted when an account, profile, merge or the admin confirms it.
   addAlias: db.prepare(`INSERT INTO creator_aliases (creator_id, norm, alias, kind, platform, source) VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT (creator_id, norm) DO NOTHING`),
+    ON CONFLICT (creator_id, norm) DO UPDATE SET alias = excluded.alias, kind = excluded.kind, platform = COALESCE(excluded.platform, platform), source = excluded.source
+    WHERE creator_aliases.source = 'bio' AND excluded.source != 'bio'`),
   aliasesOf: db.prepare('SELECT alias, norm, kind, platform, source, created_at FROM creator_aliases WHERE creator_id = ? ORDER BY kind, created_at'),
   delAlias: db.prepare('DELETE FROM creator_aliases WHERE creator_id = ? AND norm = ?'),
   byNorm: db.prepare(`SELECT DISTINCT a.creator_id FROM creator_aliases a JOIN creators c ON c.id = a.creator_id
@@ -97,14 +99,24 @@ function bioAliases(bio) {
 
 /* ------------------------------------------------------------------ links */
 
-function strengthOf(evidence) {
+function strengthOf(evidence, a, b) {
   const kinds = new Set(evidence.map((e) => e.type));
   let s = 0;
   for (const k of kinds) s += WEIGHTS[k] || 0;
-  // a bio link each way is mutual
+  // mutual = a bio link from each of the pair's two creators (not two links from the same side)
   const dirs = new Set(evidence.filter((e) => e.type === 'bio-link').map((e) => e.from));
-  if (dirs.size >= 2) s += WEIGHTS.mutual;
+  if (dirs.has(a) && dirs.has(b)) s += WEIGHTS.mutual;
   return s;
+}
+
+/** Evidence moved from a merged-away creator speaks for the survivor now: rewrite `from`, then drop duplicates. */
+function remapEvidence(list, goneId, keepId) {
+  const out = [];
+  for (const e of list) {
+    const x = e.from === goneId ? { ...e, from: keepId } : e;
+    if (!out.some((y) => y.type === x.type && y.from === x.from && y.detail === x.detail)) out.push(x);
+  }
+  return out.slice(-20);
 }
 
 /** Same name: the two share a usable handle / display-name key that they use themselves (not one from the other's bio). */
@@ -126,7 +138,7 @@ function noteLink(x, y, ev, { autoMerge = true } = {}) {
   const item = { type: ev.type, from: ev.from || null, detail: ev.detail ? String(ev.detail).slice(0, 160) : null };
   if (!row) {
     const evidence = [item];
-    const id = q.insLink.run(a, b, repo.creators.get(a).handle, repo.creators.get(b).handle, JSON.stringify(evidence), strengthOf(evidence)).lastInsertRowid;
+    const id = q.insLink.run(a, b, repo.creators.get(a).handle, repo.creators.get(b).handle, JSON.stringify(evidence), strengthOf(evidence, a, b)).lastInsertRowid;
     row = q.linkById.get(id);
     events.log('INFO', `Possible same creator: ${repo.creators.get(a).handle} ↔ ${repo.creators.get(b).handle} (${ev.type})`);
   } else {
@@ -134,7 +146,7 @@ function noteLink(x, y, ev, { autoMerge = true } = {}) {
     let evidence = []; try { evidence = JSON.parse(row.evidence || '[]'); } catch { evidence = []; }
     if (!evidence.some((e) => e.type === item.type && e.from === item.from && e.detail === item.detail)) {
       evidence = evidence.concat(item).slice(-20);
-      q.updLink.run(JSON.stringify(evidence), strengthOf(evidence), row.id);
+      q.updLink.run(JSON.stringify(evidence), strengthOf(evidence, a, b), row.id);
       row = q.linkById.get(row.id);
     }
   }
@@ -145,7 +157,11 @@ function noteLink(x, y, ev, { autoMerge = true } = {}) {
   return { id: row.id, strength: row.strength, status: row.status };
 }
 
-const mergeable = (row) => settingsStore.get().identityAutoMerge !== false && row.status === 'pending' && row.strength >= AUTO_STRENGTH && sameName(row.a_id, row.b_id);
+// Only two live creators merge on their own: folding a hidden (body filter, admin) creator into an active one would
+// republish what was hidden, and the reverse would pull a live creator off the site. Those pairs wait for the admin.
+const live = (id) => { const c = repo.creators.get(id); return !!c && c.status === 'active'; };
+const mergeable = (row) => settingsStore.get().identityAutoMerge !== false && row.status === 'pending' && row.strength >= AUTO_STRENGTH
+  && live(row.a_id) && live(row.b_id) && sameName(row.a_id, row.b_id);
 
 /**
  * Apply any auto-merge now due for this creator (applyProfile notes its evidence first with autoMerge off, so the
@@ -198,14 +214,18 @@ function mergeCreators(keepId, goneId, { actor = 'admin', reason = 'merge', link
       else if (r.status === 'pending' && clash.status === 'pending') { // both suggested the same third man: pool the evidence
         let ev = []; try { ev = JSON.parse(clash.evidence || '[]'); } catch { ev = []; }
         let more = []; try { more = JSON.parse(r.evidence || '[]'); } catch { more = []; }
-        for (const e of more) if (!ev.some((x) => x.type === e.type && x.from === e.from && x.detail === e.detail)) ev.push(e);
-        ev = ev.slice(-20);
-        q.updLink.run(JSON.stringify(ev), strengthOf(ev), clash.id);
+        ev = remapEvidence(ev.concat(more), goneId, keepId);
+        q.updLink.run(JSON.stringify(ev), strengthOf(ev, a, b), clash.id);
       }
       q.delLink.run(r.id);
       continue;
     }
     q.repair.run(a, b, repo.creators.get(a).handle, repo.creators.get(b) ? repo.creators.get(b).handle : null, r.id);
+    if (r.status === 'pending') {
+      let ev = []; try { ev = JSON.parse(r.evidence || '[]'); } catch { ev = []; }
+      ev = remapEvidence(ev, goneId, keepId);
+      q.updLink.run(JSON.stringify(ev), strengthOf(ev, a, b), r.id);
+    }
   }
   addAlias(keepId, gone.handle, { kind: 'handle', source: 'merge' });
   if (gone.display_name) addAlias(keepId, gone.display_name, { kind: 'name', source: 'merge' });

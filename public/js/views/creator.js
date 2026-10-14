@@ -7,6 +7,7 @@ import { creatorCard } from '../components/creator-card.js';
 import { dominantColor, countUp } from '../components/fx.js';
 import { landAvatar } from '../components/transitions.js';
 import { openReport } from '../components/report.js';
+import { platformSwitcher } from '../components/platform-switcher.js';
 
 /** Year-long posting heatmap, source split and usual posting hours (UTC → local). */
 function activityPanel(a) {
@@ -85,9 +86,9 @@ export async function creator(root, { params, query }) {
   // The OnlyFans page gets its own button in the header; the other external links stay chips.
   const ext = (c.links || []).filter((l) => l.url && !(c.onlyfans && /onlyfans\.com/i.test(l.url))).map((l) => h('a', { class: 'linkchip ext', href: l.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, icon('link', 'sm'), l.label || l.service));
 
-  // A glowing ring (like a "story") when they posted in the last two days.
   // names and handles he uses elsewhere (creator identity), shown once each
   const aka = [...new Set((c.aliases || []).map((a) => (typeof a === 'string' ? a : a && a.alias)).filter(Boolean))].slice(0, 4);
+  // A glowing ring (like a "story") when they posted in the last two days.
   const fresh = c.last_media_at && Date.now() - new Date(c.last_media_at).getTime() < 2 * 86400000;
   const headAvatar = avatar(c, 112);
   const head = h('div', { class: 'profile-head' },
@@ -123,16 +124,10 @@ export async function creator(root, { params, query }) {
     ext.length ? h('div', { class: 'linkrow' }, ext) : null,
     c.topTags && c.topTags.length ? h('div', { class: 'row wrap', style: { marginTop: '14px', gap: '6px' } }, c.topTags.slice(0, 10).map((t) => h('a', { class: 'tag', href: href('/explore', { tag: t.name }) }, `#${t.name}`))) : null,
     h('div', { style: { height: '22px' } }),
+    platformSwitcher(c, { value: platform, onChange: (p) => setQ({ platform: p }) }), // pills per platform, plus his paid-page cards
     h('div', { class: 'row', style: { alignItems: 'flex-end' } }, h('div', { class: 'grow' }, tabs), sortSel),
     feed.el);
   landAvatar(headAvatar, c.id); // the avatar tapped on the way here flies into place
-  // The platform switcher (pills per platform, plus paid-page cards) belongs to the usability thread and
-  // is loaded on demand, so this page works whether or not that component has shipped yet.
-  import('../components/platform-switcher.js').then(({ platformSwitcher }) => {
-    const anchor = root.isConnected && root.querySelector('.tabs');
-    if (!anchor || typeof platformSwitcher !== 'function') return;
-    anchor.closest('.row').before(platformSwitcher(c, { value: platform, onChange: (p) => setQ({ platform: p }) }));
-  }).catch(() => {});
   // Activity and "Similar creators" load after the page is usable; a failure just means they are missing.
   get(`/api/creators/${c.id}/activity`).then((a) => {
     const panel = root.isConnected && activityPanel(a);

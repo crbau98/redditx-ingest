@@ -140,6 +140,14 @@ describe('front end wiring', () => {
     assert.doesNotMatch(view, /creators: .*join\(','\)/);
   });
 
+  test('Reels from Following keeps every followed creator, and badge counts track the current follow list', () => {
+    assert.match(read('js', 'views', 'reels.js'), /postQuery\('\/api\/follow\/feed'/);
+    const f = read('js', 'following.js');
+    assert.match(f, /inflight\.key === key/);
+    assert.match(f, /n !== asked/);
+    assert.match(f, /follows\.prune\(data\.gone\)/);
+  });
+
   test('viewer shows more from the creator and where else he posts', () => {
     const lb = read('js', 'components', 'lightbox.js');
     assert.match(lb, /function creatorStrip/);

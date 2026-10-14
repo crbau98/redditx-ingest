@@ -29,6 +29,23 @@ function parseCount(text) {
   return Math.round(parseFloat(m[1]) * ({ k: 1e3, m: 1e6 }[m[2].toLowerCase()] || 1));
 }
 
+/** Public channel username from a t.me link (https://t.me/name/123), or null for private / user links. */
+function forwardHandle(href) {
+  const m = /^https?:\/\/(?:www\.)?(?:t|telegram)\.me\/(?!c\/|s\/|joinchat|\+)([A-Za-z][A-Za-z0-9_]{3,31})(?:\/\d+)?\/?(?:\?.*)?$/i.exec(String(href || ''));
+  return m ? m[1] : null;
+}
+
+/** Where a joined-channel (MTProto) message was forwarded from: { handle, name } or null. */
+function mtForward(msg) {
+  const f = msg && msg.fwdFrom;
+  if (!f) return null;
+  let chat = null;
+  try { chat = (msg.forward && (msg.forward.chat || msg.forward.sender)) || null; } catch { chat = null; }
+  const handle = (chat && chat.username) || null;
+  const name = (chat && (chat.title || chat.firstName)) || f.fromName || null;
+  return handle || name ? { handle, name } : null;
+}
+
 /** HTML of one preview page -> {messages, profile}. Pure, so it is easy to test. */
 function parsePage(html, channel) {
   const $ = cheerio.load(html);
@@ -50,7 +67,11 @@ function parsePage(html, channel) {
       if (video) media.push({ type: 'video', url: video, preview: thumb, duration: dur ? dur.split(':').reduce((a, n) => a * 60 + Number(n), 0) : null });
     });
     if (!media.length) return;
+    // "Forwarded from <channel>": the channel the post came from is a lead for discovery (engine followWaysIn)
+    const fwd = m.find('.tgme_widget_message_forwarded_from_name').first();
+    const fwdHandle = forwardHandle(fwd.attr('href'));
     messages.push({
+      forwardFrom: fwd.length ? { handle: fwdHandle, name: fwd.text().trim() || null } : null,
       id, media,
       text: m.find('.tgme_widget_message_text').first().text().trim(),
       date: toIso(m.find('.tgme_widget_message_date time').attr('datetime')),
@@ -86,6 +107,7 @@ function toItems(msg, channel) {
     duration: m.duration || null,
     nsfw: 'explicit',
     trusted: true,
+    forwardFrom: msg.forwardFrom || null,
   }));
 }
 
@@ -130,6 +152,7 @@ function messageToItem(msg, d, ch) {
     trusted: !!ch.trusted,
     community: ch.username || ch.title || null,
     hasAudio: d.type === 'video',
+    forwardFrom: mtForward(msg),
   };
   // stage(): fetch only the picture the image filter needs (the photo, or a video's thumbnail) and keep it in memory, so a post
   // the filter or the duplicate check rejects never costs an upload, a delete, or (for a video) the video download at all.
@@ -240,7 +263,7 @@ module.exports = {
   color: '#26a5e4',
   kinds: ['user', 'channel'], // user: a public channel through its web preview; channel: a channel the logged-in account joined (MTProto)
   intervalMin: { user: 240, channel: 120 },
-  parsePage, toItems, parseCount, messageToItem, fetchChannel,
+  parsePage, toItems, parseCount, messageToItem, fetchChannel, forwardHandle, mtForward,
   isConfigured: (kind) => {
     if (kind === 'channel') {
       const c = mt.configured();

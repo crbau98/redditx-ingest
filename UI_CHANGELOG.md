@@ -8,9 +8,16 @@
 | **Scroll drift**: the stage picture moves a little slower than the page and eases in by 6% as you scroll, with CSS scroll-driven animation (no JS on scroll, transform only, off for reduced motion and in browsers without it) | `app.css` |
 | **"Free on" row**: every account where his posts are free, his free OnlyFans first, as lit pills in each platform's colour (one swipeable row on phones). Other links stay as dashed chips below | `views/creator.js`, `app.css` |
 | **Stats count up** the first time you open a creator in a visit; coming back shows them settled | `views/creator.js` |
-| **Platform switcher mounted** above the feed tabs; the creator feed and `setQ` carry `platform`. The component ships in the usability thread's PR, so it is loaded on demand and the page works with or without it | `views/creator.js` |
+| **Platform switcher mounted** above the feed tabs; the creator feed and `setQ` carry `platform`. The component comes from the usability thread's PR #47 | `views/creator.js` |
 
 **Verification**: 6 new guards in `tests/v5-motion.test.js`; stage checked at 390×844 and 1440×900 in dark and light, and the switcher checked against the usability branch's component (pills render, a pill filters the feed and updates the URL, no console errors).
+
+## 2026-10-14 — v5 platform switcher, phase 2 of Features and usability
+
+| Change | Files |
+|---|---|
+| **Platform switcher** for a creator's page: a row of pills (All, then each platform PRISM has his posts from, busiest first, with counts) that filters his feed; arrow keys move and pick. Hidden when he only posts in one place. Below it, his paid pages (OnlyFans first, Fansly, JustFor.Fans and others) as link-out cards with a Free tier badge and the price when known; one swipeable row on phones. The creator page mounts it (Design thread) | `components/platform-switcher.js`, `components/elsewhere.js` (`paidPages`), `css/ux.css` |
+| **Following fixes**: "Play as Reels" from Following now covers all followed creators (up to 500, was 100); badges recount when the follow list changes mid-request; creators removed from PRISM are unfollowed quietly | `views/reels.js`, `following.js` |
 
 ## 2026-10-14 — v5 "Motion", phase 1: one motion vocabulary, shared elements
 
