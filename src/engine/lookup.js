@@ -184,6 +184,17 @@ function directSpecs(q) {
       const bsky = handle.replace(/_/g, '-'); // Bluesky handles are domain names: no underscores
       specs.push({ platform: 'bluesky', kind: 'user', target: bsky.includes('.') ? bsky : `${bsky}.bsky.social`, label: bsky, ingestable: true });
       if (/^[A-Za-z0-9-]{3,32}$/.test(handle)) specs.push({ platform: 'tumblr', kind: 'user', target: handle.toLowerCase(), label: `${handle} (Tumblr)`, ingestable: true });
+      if (/^[A-Za-z0-9_.-]{3,40}$/.test(handle)) specs.push({ platform: 'youtube', kind: 'user', target: `@${handle.toLowerCase()}`, label: `@${handle} (YouTube)`, ingestable: true });
+    }
+    // Federated user probes: PeerTube + Lemmy join the direct handle sweep.
+    if (/^[A-Za-z0-9_.-]{3,40}$/.test(handle)) {
+      for (const inst of (config.peertubeInstances || []).slice(0, 2)) {
+        specs.push({ platform: 'peertube', kind: 'user', target: `${handle.toLowerCase()}@${inst}`, label: `${handle}@${inst} (PeerTube)`, ingestable: true });
+      }
+      const lemmyInst = (config.lemmyInstances || [])[0];
+      if (lemmyInst && /^[A-Za-z0-9_]{3,30}$/.test(handle)) {
+        specs.push({ platform: 'lemmy', kind: 'user', target: `${handle}@${lemmyInst}`, label: `${handle}@${lemmyInst} (Lemmy)`, ingestable: true });
+      }
     }
   }
   const seen = new Set();

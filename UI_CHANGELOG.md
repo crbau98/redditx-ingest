@@ -1,5 +1,17 @@
 # UI changelog
 
+## Unreleased — v5 Horizon: pull anyone in
+
+| Change | Files |
+|---|---|
+| **Public Find** (`#/find`): name/handle/link → verified public accounts with evidence → follow as one creator; age-gated + rate-limited public API wrapping the admin lookup engine; widened probes (YouTube, PeerTube, Lemmy) | `views/find.js`, `main.js`, `components/palette.js`, `views/creators.js`, `routes/public.js`, `engine/lookup.js` |
+| **YouTube via official RSS**: `youtube` adapter (`user`/`channel`), channel/@handle/UC parsing, thumbnail cards linking out to watch pages; pipeline allows YouTube image hosts | `sources/youtube.js`, `sources/index.js`, `lib/links.js`, `engine/pipeline.js` |
+| **Reach**: Pixelfed hosts in Mastodon instances, Fansly/JFF/YouTube/Pixelfed discovery topics, paid-page filter (OF/Fansly/JFF/ManyVids/LoyalFans) on Creators | `config.js`, `settings.js`, `views/creators.js`, `routes/public.js` |
+| **Perf**: grids prefer `thumb_url` with `tint` placeholders; Home WebGL prism + orbit mount after first paint; `thumb_url`/`tint` exposed on the public media DTO | `routes/public.js`, `components/card.js`, `views/home.js` |
+| **Docs**: `PRODUCT.md` + `DESIGN.md` capture the Lumen/Motion world and the lawful aggregation boundary | `PRODUCT.md`, `DESIGN.md`, `README.md` |
+
+**Kept deliberately**: paywalled/subscription platforms and leak hosts are never fetched; no unofficial Instagram/TikTok scrapers; no face-match identity; no whole-web enumeration.
+
 ## 2026-10-14 — v5 "Motion", phase 2: the creator stage
 
 | Change | Files |

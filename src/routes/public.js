@@ -21,6 +21,7 @@ function publicMedia(m) {
   return {
     id: m.id, title: m.title, description: m.description, media_type: m.media_type,
     media_url: m.media_url, preview_url: m.preview_url, thumbnail_url: m.thumbnail_url,
+    thumb_url: m.thumb_url || null, tint: m.tint || null,
     hls_url: m.hls_url, has_audio: m.has_audio, width: m.width, height: m.height, duration: m.duration,
     platform: m.platform, community: m.community, author: m.author, source_url: m.source_url,
     score: m.score, likes: m.likes, views: m.views, nsfw_level: m.nsfw_level, posted_at: m.posted_at,
@@ -164,7 +165,7 @@ router.post('/report', reportLimiter, (req, res) => {
 });
 
 /* -------------------------------------------------------- age-gated content */
-router.use(['/discover', '/stats', '/suggest', '/search', '/recommend', '/graph', '/understand', '/topics', '/media', '/creators', '/tags', '/communities', '/subreddits', '/platforms', '/stream'], age.requireAge);
+router.use(['/discover', '/stats', '/suggest', '/search', '/recommend', '/graph', '/understand', '/topics', '/media', '/creators', '/tags', '/communities', '/subreddits', '/platforms', '/stream', '/lookup'], age.requireAge);
 
 router.get('/discover', (req, res) => res.json(discoverCached()));
 router.get('/stats', (req, res) => res.json(repo.publicStats()));
@@ -345,6 +346,47 @@ router.get('/subreddits', (req, res) => res.json(communitiesCached().filter((c) 
 router.get('/platforms', (req, res) => res.json(repo.media.platforms()));
 
 router.get('/stream', (req, res) => events.subscribe('public', req, res));
+
+/* -------------------------------------------------------- public lookup */
+// Visitor Find-a-creator: same verified engine as Admin → Creators, behind the
+// age gate and tightly rate-limited. Writes go through lookup.follow(), which
+// re-applies every safety / scope / image gate. Actor is logged as visitor.
+const lookupLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many lookups from this address, try again later' } });
+const lookupFollowLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many follows from this address, try again later' } });
+
+router.post('/lookup', lookupLimiter, async (req, res) => {
+  try {
+    const q = String((req.body && (req.body.query || req.body.q)) || '').trim().slice(0, 200);
+    if (!q) return res.status(400).json({ error: 'Type a name, a handle or a profile link' });
+    const out = await require('../engine/lookup').lookup(q);
+    res.status(out.error ? 400 : 200).json(out);
+  } catch (e) { res.status(500).json({ error: String((e && e.message) || e).slice(0, 200) }); }
+});
+
+router.post('/lookup/follow', lookupFollowLimiter, (req, res) => {
+  try {
+    const b = req.body || {};
+    const out = require('../engine/lookup').follow({
+      name: typeof b.name === 'string' ? b.name.slice(0, 200) : '',
+      selections: Array.isArray(b.selections) ? b.selections.slice(0, 20) : [],
+      externalLinks: Array.isArray(b.externalLinks) ? b.externalLinks.slice(0, 20) : [],
+      bio: typeof b.bio === 'string' ? b.bio.slice(0, 2000) : undefined,
+      creatorId: typeof b.creatorId === 'string' ? b.creatorId : null,
+    });
+    if (!out.error) repo.logAction('creator', out.creator && out.creator.id, 'lookup-follow', `${(out.feeds || []).length} accounts`, 'visitor');
+    res.status(out.error ? 400 : 200).json(out);
+  } catch (e) { res.status(500).json({ error: String((e && e.message) || e).slice(0, 200) }); }
+});
+
+router.post('/lookup/auto', lookupFollowLimiter, async (req, res) => {
+  try {
+    const q = String((req.body && (req.body.query || req.body.q)) || '').trim().slice(0, 200);
+    if (!q) return res.status(400).json({ error: 'Type a name, a handle or a profile link' });
+    const out = await require('../engine/lookup').findAndFollow(q, { minConfidence: 0.7 });
+    if (!out.error && out.creator) repo.logAction('creator', out.creator.id, 'lookup-follow', 'auto', 'visitor');
+    res.status(out.error ? 400 : 200).json(out);
+  } catch (e) { res.status(500).json({ error: String((e && e.message) || e).slice(0, 200) }); }
+});
 
 module.exports = router;
 module.exports.publicMedia = publicMedia;

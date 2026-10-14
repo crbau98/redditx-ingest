@@ -89,6 +89,7 @@ module.exports = {
   // Only well-established servers are listed; an unreachable one is reported in the feed's notes, never fatal.
   mastodonInstances: list(env.MASTODON_INSTANCES, [
     'mastodon.social', 'pawoo.net', 'mstdn.jp', 'fedibird.com', 'mastodon.online', 'mas.to', 'mastodon.world',
+    'pixelfed.social', 'pixelfed.de',
   ]),
   lemmyInstances: list(env.LEMMY_INSTANCES, [
     'lemmynsfw.com', 'lemmy.world', 'sh.itjust.works', 'lemmy.ml', 'lemm.ee', 'lemmy.dbzer0.com', 'reddthat.com',

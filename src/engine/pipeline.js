@@ -223,7 +223,9 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   // ---- 5. media sanity ---------------------------------------------------------
   if (isJunkTitle(item.title)) return { outcome: 'skipped', reason: 'junk title' };
   const mediaHost = hostOf(item.mediaUrl);
-  if (hostBlocked(mediaHost)) return { outcome: 'skipped', reason: `blocked host ${mediaHost}` };
+  // YouTube is thumbnail-only via official RSS: allow its image hosts (watch pages are never media URLs here).
+  const isYouTubeThumb = platform === 'youtube' && /^(i\.ytimg\.com|yt3\.ggpht\.com|youtube\.com|youtu\.be)$/i.test(mediaHost || '');
+  if (!isYouTubeThumb && hostBlocked(mediaHost)) return { outcome: 'skipped', reason: `blocked host ${mediaHost}` };
   const isHls = /\.m3u8(\?|$)/i.test(item.mediaUrl);
   if (!item.trusted && !hostTrusted(mediaHost) && !looksLikeDirectMedia(item.mediaUrl)) return { outcome: 'skipped', reason: `unknown host ${mediaHost}` };
   if (settings.probeUnknownHosts && !isHls && (item.probe || (!item.trusted && !hostTrusted(mediaHost)))) {

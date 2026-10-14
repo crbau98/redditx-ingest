@@ -8,22 +8,29 @@ const SORTS = [['media', 'Most posts'], ['score', 'Top rated'], ['recent', 'Rece
 
 export async function creators(root, { query }) {
   document.title = 'Creators — PRISM';
-  const f = { q: query.get('q') || '', sort: query.get('sort') || 'media', platform: query.get('platform') || '', onlyfans: query.get('onlyfans') === '1' ? '1' : '' };
-  const set = (patch) => navigate('/creators', { ...f, ...patch }, { replace: true });
+  const PAID_OPTS = [['', 'All creators'], ['onlyfans', 'OnlyFans'], ['fansly', 'Fansly'], ['justforfans', 'JustFor.Fans'], ['manyvids', 'ManyVids'], ['loyalfans', 'LoyalFans']];
+  const f = { q: query.get('q') || '', sort: query.get('sort') || 'media', platform: query.get('platform') || '', paid: query.get('paid') || (query.get('onlyfans') === '1' ? 'onlyfans' : '') };
+  const set = (patch) => {
+    const next = { ...f, ...patch };
+    delete next.onlyfans;
+    navigate('/creators', next, { replace: true });
+  };
 
   const count = h('div', { class: 'sub' }, ' ');
   const search = h('input', { class: 'input sm', type: 'search', placeholder: 'Search creators…', value: f.q, style: { maxWidth: '260px' }, 'aria-label': 'Search creators' });
   search.addEventListener('input', debounce(() => set({ q: search.value.trim() }), 350));
   const sortSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Sort', onchange: (e) => set({ sort: e.target.value }) }, SORTS.map(([v, l]) => h('option', { value: v, selected: f.sort === v }, l)));
   const platSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Platform', onchange: (e) => set({ platform: e.target.value }) }, h('option', { value: '' }, 'All sources'));
-  const ofChip = h('button', { class: `chip of-chip${f.onlyfans ? ' on' : ''}`, 'aria-pressed': String(!!f.onlyfans), title: 'Only creators with an OnlyFans page', onclick: () => set({ onlyfans: f.onlyfans ? '' : '1' }) },
-    h('span', { class: 'of-mark', 'aria-hidden': 'true' }), 'OnlyFans');
+  const paidSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Paid pages', title: 'Creators with a paid page (link-outs, never fetched)', onchange: (e) => set({ paid: e.target.value }) },
+    PAID_OPTS.map(([v, l]) => h('option', { value: v, selected: (f.paid || '') === v }, l)));
   const grid = h('div', { class: 'creator-grid' });
   const more = h('div', { class: 'loadmore' });
   root.replaceChildren(
     h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Creators'), count),
-      h('a', { class: 'btn galaxy-cta', href: href('/galaxy') }, icon('sparkle', 'sm'), 'Explore as a 3D galaxy')),
-    h('div', { class: 'row wrap', style: { marginBottom: '18px' } }, search, sortSel, platSel, ofChip),
+      h('div', { class: 'row wrap' },
+        h('a', { class: 'btn primary sm', href: href('/find') }, icon('search', 'sm'), 'Find a creator'),
+        h('a', { class: 'btn galaxy-cta sm', href: href('/galaxy') }, icon('sparkle', 'sm'), 'Explore as a 3D galaxy'))),
+    h('div', { class: 'row wrap', style: { marginBottom: '18px' } }, search, sortSel, platSel, paidSel),
     grid, more);
 
   get('/api/platforms').then((list) => { for (const p of list) platSel.appendChild(h('option', { value: p.platform, selected: f.platform === p.platform }, platformLabel(p.platform))); }).catch(() => {});
@@ -34,13 +41,15 @@ export async function creators(root, { query }) {
     loading = true;
     more.replaceChildren(h('div', { class: 'spinner' }));
     try {
-      const r = await get('/api/creators', { ...f, page, limit: 36 });
+      const params = { ...f, page, limit: 36 };
+      if (params.paid) params.onlyfans = params.paid === 'onlyfans' ? '1' : undefined;
+      const r = await get('/api/creators', params);
       if (destroyed) return;
       total = r.total; count.textContent = `${fmt.int(total)} ${total === 1 ? 'creator' : 'creators'}`;
       grid.append(...r.items.map((c) => creatorCard(c)));
       page++;
       done = grid.children.length >= total;
-      if (!grid.children.length) more.replaceChildren(emptyState({ icon: 'users', title: 'No creators found', text: f.q ? 'Try a different name.' : f.onlyfans ? 'No OnlyFans creators yet. Discovery adds them as it traces the pages creators promote.' : 'Creators appear here once their content has been ingested.' }));
+      if (!grid.children.length) more.replaceChildren(emptyState({ icon: 'users', title: 'No creators found', text: f.q ? 'Try a different name.' : f.paid ? 'No creators with that paid page yet. Discovery adds them as it traces the pages creators promote.' : 'Creators appear here once their content has been ingested.' }));
       else more.replaceChildren(done ? h('span', { class: 'muted' }, 'That’s everyone') : h('button', { class: 'btn', onclick: load }, 'Load more'));
     } catch (e) { more.replaceChildren(h('span', { class: 'muted' }, e.message), h('button', { class: 'btn sm', onclick: load }, 'Retry')); }
     finally { loading = false; }

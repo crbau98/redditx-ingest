@@ -20,6 +20,7 @@ import { saved } from './views/saved.js';
 import { browse } from './views/browse.js';
 import { reels } from './views/reels.js';
 import { following } from './views/following.js';
+import { find } from './views/find.js';
 import { wireFollowBadges, followNewContent } from './following.js';
 
 const routes = [
@@ -29,6 +30,7 @@ const routes = [
   { pattern: '/reels', view: reels, nav: 'reels' },
   { pattern: '/browse', view: browse, nav: 'browse' },
   { pattern: '/creators', view: creators, nav: 'creators' },
+  { pattern: '/find', view: find, nav: 'creators' },
   // loaded on first visit: the 3D map is the heaviest view and most sessions never open it
   { pattern: '/galaxy', view: (...a) => import('./views/galaxy.js').then((m) => m.galaxy(...a)), nav: 'creators' },
   { pattern: '/creator/:id', view: creator, nav: 'creators' },
