@@ -58,7 +58,7 @@ async function sinceSection() {
   ]);
   const newCreators = fresh ? fresh.items.filter((c) => c.added_at && c.added_at > since).length : 0;
   const tiles = [];
-  if (mine && mine.total) tiles.push(h('a', { class: 'since-tile hot', href: href('/explore', { following: '1', after: since, sort: 'recent' }) }, h('b', { class: 'num' }, fmt.num(mine.total)), h('span', null, 'new from creators you follow')));
+  if (mine && mine.total) tiles.push(h('a', { class: 'since-tile hot', href: href('/following') }, h('b', { class: 'num' }, fmt.num(mine.total)), h('span', null, 'new from creators you follow')));
   if (all && all.total) tiles.push(h('a', { class: 'since-tile', href: href('/explore', { after: since, sort: 'trending' }) }, h('b', { class: 'num' }, fmt.num(all.total)), h('span', null, `new post${all.total === 1 ? '' : 's'} in the library`)));
   if (newCreators) tiles.push(h('a', { class: 'since-tile', href: href('/creators', { sort: 'new' }) }, h('b', { class: 'num' }, `${newCreators}${newCreators === 48 ? '+' : ''}`), h('span', null, `new creator${newCreators === 1 ? '' : 's'} discovered`)));
   if (!tiles.length) return null;
@@ -203,7 +203,7 @@ export async function home(root) {
   if (smart) parts.push(smart);
 
   if (fromFollowed.length) {
-    parts.push(h('section', { class: 'section' }, sectionHead('heart', 'From creators you follow', 'Latest from the people you follow on this device', { href: href('/explore', { following: '1' }), label: 'See all' }), rail(fromFollowed, { open: open(fromFollowed) })));
+    parts.push(h('section', { class: 'section' }, sectionHead('heart', 'From creators you follow', 'Latest from the people you follow on this device', { href: href('/following'), label: 'See all' }), rail(fromFollowed, { open: open(fromFollowed) })));
   }
   parts.push(...await becauseP);
   if (data.trending.length) {

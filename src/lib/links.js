@@ -10,10 +10,13 @@
  *   external    - paywalled / closed platforms. We keep the link so it can be
  *                 shown on the creator page (and send fans to the creator's
  *                 own pages) but never scrape them.
+ *   (leak sites, tube-rips and file lockers parse to nothing at all: never
+ *    followed, never shown as a creator's link. See lib/leaks.js.)
  */
 
 const config = require('../config');
 const { ofHandle } = require('./onlyfans');
+const { isLeakHost } = require('./leaks');
 
 const EXTERNAL = {
   'onlyfans.com': 'OnlyFans',
@@ -30,6 +33,8 @@ const EXTERNAL = {
   'justfor.fans': 'JustFor.Fans',
   'manyvids.com': 'ManyVids',
   'clips4sale.com': 'Clips4Sale',
+  'loyalfans.com': 'LoyalFans',
+  'fancentro.com': 'FanCentro',
   'pornhub.com': 'Pornhub',
   'cashapp.com': 'Cash App',
   'cash.app': 'Cash App',
@@ -133,6 +138,7 @@ function parseProfile(input, hint = {}) {
   if (!/^https?:$/.test(url.protocol)) return null;
   const h = host(url.hostname);
   if (!h.includes('.')) return null;
+  if (isLeakHost(h)) return null;
   const parts = url.pathname.split('/').filter(Boolean);
 
   if (matches(h, 'reddit.com') || h === 'redd.it') {

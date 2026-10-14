@@ -18,6 +18,22 @@
 
 **Verification**: `tests/v5-motion.test.js` (11 guards); open, close and avatar flights driven in Chromium at 390×844 touch and 1440×900, no console errors, no ghosts or hidden cards left behind. Before/after GIFs in the project's `design/v5-motion/`.
 
+## 2026-10-14 — v5 Following, phase 1 of Features and usability
+
+**Audit findings** (demo seed, Chromium at 390×844 touch and 1366×900): following a creator only fed a "Following" chip in Explore, capped at 100 creators because the ids went in the URL; Saved › Following fetched every followed creator one request at a time; nothing told you a followed creator had posted unless you opened his card. On phones the viewer's thumb dock was unusable: the media layer sat above the top bar's layer, so every tap on save, collect, share or details hit the media instead. Between 900 and 1280 px wide the top bar overflowed sideways and the search box shrank to an icon.
+
+| Change | Files |
+|---|---|
+| **Following page** (`#/following`, desktop nav, phone More menu, palette, `G` then `F`): a rail of followed creators with a count of what is new for each, then everything they posted, newest first, split at "New since you were last here" / "Earlier"; Photos / Videos switch; up to 500 follows travel in POST bodies | `views/following.js`, `src/routes/follow.js`, `api.js`, `components/feed.js` |
+| **New-post badges**: a count on the Following tab and the phone menu, a dot on the phone More button; refreshed on follow, on live "new" pings and when the tab returns; opening Following clears them | `following.js`, `store.js`, `main.js`, `components/menu.js` |
+| **Viewer**: "More from him" strip of his latest posts, a "Where else he posts" sheet (free accounts, paid pages as link-outs, other links), and "Search this image" (Google Lens, Bing, TinEye in a new tab) | `components/lightbox.js`, `components/elsewhere.js` |
+| **Recent searches** under an empty search box, removable one by one; cleared with History | `components/suggest.js`, `smart.js`, `store.js`, `views/saved.js` |
+| Saved › Following loads every followed creator in one request | `views/saved.js` |
+| Phone viewer dock and the details sheet sit above the media again | `css/ux.css` |
+| Top bar between 900 and 1280 px: icons only (current page keeps its label) | `main.js`, `css/ux.css` |
+
+**Verification**: `tests/v5-following.test.js` (9 tests: age gate, per-creator new counts, hidden creators, split feed never overlaps, paging, input caps, front-end wiring); flows driven in Chromium on phone and desktop with no console errors.
+
 ## 2026-10-13 — "Intuitive": phone flows, gestures, getting back
 
 **Audit findings** (demo seed, Chromium at 390×844 touch and 1440×900): on a phone the viewer's top bar held seven buttons in 390 px, squeezing the title to one letter and running the counter over the meta line; swipes only acted on release with no feedback, and a vertical drag was usually claimed by the browser (`touch-action: pan-y`) so drag-to-close rarely fired; the details sheet was laid out as a squeezed grid column instead of a sheet. Browse, the galaxy map, display settings, report and admin were reachable on a phone only from the footer, which an endless feed never lets you reach. Back from a creator put Explore at the top of a freshly fetched list. Explore's filters took ~360 px of a phone screen before the first card. Reels on a phone lost its type switch, repeated the order as its title ("Trending" next to a "Trending" select), and kept the app bar over the video.

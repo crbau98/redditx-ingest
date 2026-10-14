@@ -1,6 +1,7 @@
 import { h, icon, fmt } from './dom.js';
 import { get } from './api.js';
 import { navigate, href } from './router.js';
+import { recentSearches } from './store.js';
 
 /**
  * Smart search: what people type ("hairy beard guys at the beach, videos this week") is read by
@@ -29,6 +30,7 @@ export async function smartQuery(text) {
 }
 
 export async function smartSearch(text) {
+  recentSearches.add(text);
   navigate('/explore', await smartQuery(text));
 }
 

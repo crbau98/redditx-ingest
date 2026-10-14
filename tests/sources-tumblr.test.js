@@ -27,12 +27,16 @@ after(async () => { await mock.close(); });
 
 const ctx = (o = {}) => ({ cursor: {}, limit: 40, aborted: () => false, ...o });
 
-test('blog feed: images upgraded to the largest size, reblogs and text posts skipped, creator = blog', async () => {
+test('blog feed: images upgraded to the largest size, text posts skipped, reblogs credited to the original blog, creator = blog', async () => {
   const r = await tumblr.fetch({ kind: 'user', target: host }, ctx());
-  const urls = r.items.map((i) => i.mediaUrl);
-  assert.deepEqual(urls.sort(), ['https://64.media.tumblr.com/abc/def-12/s1280x1920/ghi.jpg', 'https://66.media.tumblr.com/xyz/tumblr_abc_1280.jpg']);
+  const own = r.items.filter((i) => !i.repostOf);
+  assert.deepEqual(own.map((i) => i.mediaUrl).sort(), ['https://64.media.tumblr.com/abc/def-12/s1280x1920/ghi.jpg', 'https://66.media.tumblr.com/xyz/tumblr_abc_1280.jpg']);
   assert.ok(r.items.every((i) => i.mediaType === 'image' && i.nsfw === 'explicit'));
-  assert.equal(r.items[0].author, host);
+  assert.equal(own[0].author, host);
+  const reblog = r.items.find((i) => i.repostOf);
+  assert.equal(reblog.mediaUrl, 'https://64.media.tumblr.com/r/r/s1280x1920/r.jpg');
+  assert.equal(reblog.author, 'other', 'a reblog belongs to the blog it was reblogged from');
+  assert.deepEqual(reblog.repostOf, { platform: 'tumblr', handle: 'other', via: host });
   assert.equal(r.cursor.etag, '"v1"');
   assert.equal(r.profile.displayName, 'gymbro');
 });

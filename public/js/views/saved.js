@@ -1,7 +1,7 @@
 import { h, icon, fmt, toast, confirmDialog, promptDialog, emptyState, proxied } from '../dom.js';
-import { get } from '../api.js';
+import { get, query as postQuery } from '../api.js';
 import { navigate, href } from '../router.js';
-import { favorites, follows, collections, searches, history, prefs, platformLabel } from '../store.js';
+import { favorites, follows, collections, searches, history, prefs, platformLabel, recentSearches } from '../store.js';
 import { createFeed } from '../components/feed.js';
 import { creatorCard } from '../components/creator-card.js';
 import { openLightbox } from '../components/lightbox.js';
@@ -118,12 +118,14 @@ export async function saved(root, { query }) {
       const grid = h('div', { class: 'creator-grid' }, list.map(() => h('div', { class: 'skeleton', style: { height: '260px' } })));
       body.replaceChildren(h('div', { class: 'row wrap', style: { marginBottom: '14px' } },
         h('a', { class: 'btn sm primary', href: href('/reels', { following: '1', sort: 'recent', type: 'all' }) }, icon('film', 'sm'), 'Watch as Reels'),
-        h('a', { class: 'btn sm', href: href('/explore', { following: '1', sort: 'recent' }) }, icon('compass', 'sm'), 'Latest posts')), grid);
-      const results = await Promise.all(list.map((f) => get(`/api/creators/${f.id}`).then((c) => c).catch((e) => (e.status === 404 ? null : undefined))));
-      const cards = [];
-      results.forEach((c, i) => { if (c === null) follows.toggle({ id: list[i].id }); else if (c) cards.push(c); });
-      cards.sort((a, b) => String(b.last_media_at || '').localeCompare(String(a.last_media_at || '')));
-      grid.replaceChildren(...cards.map((c) => creatorCard(c)));
+        h('a', { class: 'btn sm', href: href('/following') }, icon('rss', 'sm'), 'Latest posts')), grid);
+      // one request for every followed creator; ones the server no longer shows are dropped
+      try {
+        const d = await postQuery('/api/follow/summary', { follows: list.map((c) => ({ id: c.id, seen: c.seen })), cards: true });
+        if (d.gone.length) follows.prune(d.gone);
+        d.creators.sort((a, b) => String(b.last_media_at || '').localeCompare(String(a.last_media_at || '')));
+        grid.replaceChildren(...d.creators.map((c) => creatorCard(c)));
+      } catch (e) { grid.replaceChildren(h('p', { class: 'muted' }, e.message)); }
     }
   }
 
@@ -156,7 +158,7 @@ export async function saved(root, { query }) {
     const pause = h('label', { class: 'row', style: { gap: '8px', fontSize: '13.5px' } }, h('input', { type: 'checkbox', checked: prefs.historyOff, onchange: (e) => { prefs.historyOff = e.target.checked; toast(e.target.checked ? 'History paused on this device' : 'History is on'); } }), 'Pause history');
     const hide = h('label', { class: 'row', style: { gap: '8px', fontSize: '13.5px' } }, h('input', { type: 'checkbox', checked: prefs.hideSeen, onchange: (e) => { prefs.hideSeen = e.target.checked; } }), 'Hide seen items in Explore');
     const bar = h('div', { class: 'row wrap', style: { marginBottom: '14px', gap: '16px' } }, pause, hide, h('span', { class: 'grow' }),
-      ids.length ? h('button', { class: 'btn sm danger', onclick: async () => { if (await confirmDialog('Forget everything this device has opened.', { title: 'Clear history?', confirmLabel: 'Clear', danger: true })) { history.clear(); go('history'); } } }, icon('trash', 'sm'), 'Clear history') : null);
+      ids.length ? h('button', { class: 'btn sm danger', onclick: async () => { if (await confirmDialog('Forget everything this device has opened, and its recent searches.', { title: 'Clear history?', confirmLabel: 'Clear', danger: true })) { history.clear(); recentSearches.clear(); go('history'); } } }, icon('trash', 'sm'), 'Clear history') : null);
     if (!ids.length) body.replaceChildren(bar, emptyState({ icon: 'history', title: prefs.historyOff ? 'History is paused' : 'Nothing watched yet', text: 'Everything you open in the viewer or Reels shows up here, newest first. It never leaves this device.' }));
     else { const f = idFeed(ids); body.replaceChildren(bar, f.el); cleanup = f.destroy; }
   }

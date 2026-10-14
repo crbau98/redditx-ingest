@@ -3,6 +3,7 @@ import { href } from '../router.js';
 import { openPalette, surpriseMe } from './palette.js';
 import { openDisplaySettings } from './display.js';
 import { openTakedownForm } from './report.js';
+import { repaintFollowBadges } from '../following.js';
 
 /**
  * Phone "more" sheet. The tab bar has room for five destinations; everything else
@@ -12,11 +13,12 @@ import { openTakedownForm } from './report.js';
 export function openMenu() {
   let m;
   const run = (fn) => () => { m.close(); fn(); };
-  const link = (ic, label, sub, to) => h('a', { class: 'menu-item', href: to, onclick: () => m.close() }, h('span', { class: 'menu-ico' }, icon(ic)), h('span', { class: 'menu-txt' }, h('b', null, label), sub ? h('small', null, sub) : null));
+  const link = (ic, label, sub, to) => h('a', { class: 'menu-item', href: to, onclick: () => m.close() }, h('span', { class: 'menu-ico' }, icon(ic), to === href('/following') ? h('span', { class: 'badge follow-badge', hidden: true, dataset: { followBadge: 'count' } }) : null), h('span', { class: 'menu-txt' }, h('b', null, label), sub ? h('small', null, sub) : null));
   const action = (ic, label, sub, fn) => h('button', { class: 'menu-item', onclick: run(fn) }, h('span', { class: 'menu-ico' }, icon(ic)), h('span', { class: 'menu-txt' }, h('b', null, label), sub ? h('small', null, sub) : null));
   m = openModal({
     title: 'More',
     body: h('div', { class: 'menu-grid' },
+      link('rss', 'Following', 'New from creators you follow', href('/following')),
       link('layers', 'Browse', 'Tags, sources, communities', href('/browse')),
       link('sparkle', 'Creator galaxy', 'Map of who posts alike', href('/galaxy')),
       link('folder', 'Collections', null, href('/saved', { tab: 'collections' })),
@@ -27,5 +29,6 @@ export function openMenu() {
       action('flag', 'Report content', 'Takedown request', openTakedownForm),
       link('sliders', 'Admin', null, href('/admin'))),
   });
+  repaintFollowBadges();
   return m;
 }

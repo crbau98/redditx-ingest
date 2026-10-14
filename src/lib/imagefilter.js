@@ -29,6 +29,7 @@ const CACHE_MAX = 2000;
 let initPromise = null;
 let initError = null;
 let analyzer = null;   // test hook: async (url) => result
+let embedder = null;   // test hook: async (url) => {status, vec}
 const cache = new Map();
 const counters = { analyzed: 0, female: 0, errors: 0, cached: 0, totalMs: 0, hashed: 0, measured: 0, heavy: 0 };
 
@@ -68,7 +69,11 @@ class Pool {
 
   failAll(slot, err) { for (const [id, p] of this.pending) if (p.slot === slot) { this.pending.delete(id); p.reject(err); } }
 
-  detect(buffer, opts = {}) {
+  detect(buffer, opts = {}) { return this.send('detect', buffer, { body: !!opts.body }); }
+
+  embed(buffer) { return this.send('embed', buffer).then((u8) => Buffer.from(u8.buffer, u8.byteOffset, u8.byteLength)); }
+
+  send(type, buffer, extra = {}) {
     const slot = this.workers.reduce((a, b) => (!a || b.busy < a.busy ? b : a), null);
     if (!slot) return Promise.reject(new Error('no image workers'));
     const id = this.nextId++;
@@ -76,7 +81,7 @@ class Pool {
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject, slot });
       const copy = new Uint8Array(buffer); // the cached download stays usable: the copy is transferred
-      slot.w.postMessage({ type: 'detect', id, buffer: copy.buffer, body: !!opts.body }, [copy.buffer]);
+      slot.w.postMessage({ type, id, buffer: copy.buffer, ...extra }, [copy.buffer]);
     });
   }
 
@@ -175,6 +180,26 @@ function analyze(url, { referer, timeout = 12000, faces = true, hash = true, bod
   })();
 }
 
+/**
+ * Visual embedding of the picture at `url` for "More like this" (lib/embeddings `pack` format), fetched on its own: these
+ * run in a slow background backfill, so they do not take room in the analysis cache. Never throws.
+ * @returns {Promise<{status: 'ok'|'error'|'unavailable', vec?: Buffer, reason?: string}>}
+ */
+async function embedUrl(url, { referer, timeout = 12000 } = {}) {
+  if (embedder) return embedder(url);
+  try { await init(); } catch (e) { return { status: 'unavailable', reason: e.message }; }
+  let got;
+  try {
+    const headers = { accept: 'image/avif,image/webp,image/*;q=0.8,*/*;q=0.5' };
+    if (referer) headers.referer = referer;
+    got = await net.fetchBuffer(url, { headers, timeout, maxBytes: MAX_BYTES, retries: 0 });
+    if (got.status >= 400) throw new Error(`http ${got.status}`);
+    if (/^(text|application\/json)/i.test(got.contentType)) throw new Error(`not an image (${got.contentType.split(';')[0]})`);
+  } catch (e) { return { status: 'error', reason: String(e.message || e).slice(0, 160) }; }
+  try { return { status: 'ok', vec: pool ? await pool.embed(got.buffer) : await inProcess.embed(got.buffer) }; }
+  catch (e) { return { status: 'error', reason: String(e.message || e).slice(0, 160) }; }
+}
+
 /** Turn a face list into a verdict. `threshold` is the minimum gender score (0..1) for a "female" label. */
 function judge(result, threshold = 0.5) {
   if (!result || result.status !== 'ok') return { female: false, faces: 0, females: 0, males: 0, decided: false, status: result ? result.status : 'error', reason: result && result.reason };
@@ -242,6 +267,8 @@ async function shutdown() { if (pool) { await pool.shutdown(); pool = null; } in
 
 /** Test hook: replace the whole fetch+detect step with `fn(url, {faces, hash, body}) -> {status:'ok', faces:[{gender, score, confidence}], body?: {decided, score}, phash?}`. */
 function _setAnalyzer(fn) { analyzer = fn; }
-function _reset() { cache.clear(); analyzer = null; }
+/** Test hook: replace fetch+embed with `fn(url) -> {status:'ok', vec}`. */
+function _setEmbedder(fn) { embedder = fn; }
+function _reset() { cache.clear(); analyzer = null; embedder = null; }
 
-module.exports = { analyze, judge, checkItem, imageUrlOf, available, status, init, shutdown, noteHeavy, _setAnalyzer, _reset };
+module.exports = { analyze, judge, checkItem, imageUrlOf, embedUrl, available, status, init, shutdown, noteHeavy, _setAnalyzer, _setEmbedder, _reset };

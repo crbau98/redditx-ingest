@@ -16,6 +16,7 @@ const SCHEMA = {
   autoTrack: { type: 'bool', default: true, label: 'Auto-follow creators discovered in communities' },
   autoTrackMinItems: { type: 'int', default: 2, min: 1, max: 20, label: 'Posts before a creator is auto-followed' },
   autoLinkProfiles: { type: 'bool', default: true, label: 'Follow creators’ other public accounts found in their bios' },
+  identityAutoMerge: { type: 'bool', default: true, label: 'Merge a creator’s accounts on their own when his profiles link to each other (or to the same OnlyFans / link page) and he uses the same name on both. Anything less certain waits in Creators → Same person?' },
   adaptiveScheduling: { type: 'bool', default: true, label: 'Adaptive scheduling: check busy feeds sooner, quiet ones less often' },
   maxFeeds: { type: 'int', default: 600, min: 10, max: 5000, label: 'Cap on enabled feeds' },
   hostReachability: { type: 'bool', default: true, label: 'Skip items from media hosts that refuse this server (Cloudflare challenge, hotlink blocks)' },
@@ -64,6 +65,11 @@ const SCHEMA = {
   discoveryOnlyFans: { type: 'bool', default: true, label: 'Trace OnlyFans creators: find the free public accounts (RedGIFs, Bluesky, X, Telegram, link pages) behind OnlyFans pages that creators promote. onlyfans.com itself is never read', group: 'discovery' },
   discoveryExpand: { type: 'bool', default: true, label: 'Find lookalike creators (Bluesky) and search Bluesky and RedGIFs for new people', group: 'discovery' },
   discoveryAutoCommunities: { type: 'bool', default: true, label: 'Auto-follow strong communities and feeds (their posts are still checked one by one)', group: 'discovery' },
+  // --- sources and playback (v5) ---
+  keepVideos: { type: 'enum', values: ['expiring', 'all', 'off'], default: 'expiring', label: 'Keep a copy of videos in the media store: expiring = only videos whose links expire and cannot be refreshed, all = every direct video, off = never', group: 'sources' },
+  keepVideoMaxMb: { type: 'int', default: 80, min: 5, max: 1024, label: 'Largest video copied into the media store (MB)', group: 'sources' },
+  reposts: { type: 'bool', default: true, label: 'Keep reposts (Tumblr reblogs, X reposts and quotes, Bluesky reposts, Reddit crossposts), credited to the original poster', group: 'sources' },
+  leakDomains: { type: 'text', default: '', label: 'Extra leak domains to block (one per line). GayForFans, its sister sites, OnlyFans leak mirrors and file lockers are always blocked', group: 'sources' },
   discoveryKeywords: {
     type: 'text', group: 'discovery', label: 'Community keywords (one per line; two are searched per run, in rotation)',
     default: ['gay', 'gaybros', 'gay muscle', 'muscle bears', 'twinks', 'gay daddy', 'jocks', 'bulge', 'gay amateur', 'hairy men', 'male nude', 'gay nsfw',

@@ -8,10 +8,12 @@ import { openCollectionPicker } from './collections.js';
 import { playFlip, heartBurst, haptic } from './fx.js';
 import { makeZoomable } from './zoom.js';
 import { viewerExit } from './transitions.js';
+import { openElsewhere } from './elsewhere.js';
 
 let S = null; // the single active lightbox session
 const viewed = new Set();
 const relCache = new Map(); // media id -> related items
+const byCreator = new Map(); // creator id -> { at, items } his latest posts
 
 /* ------------------------------------------------------------------ public */
 export function openLightbox(items, index, { loadMore } = {}) {
@@ -307,12 +309,14 @@ function paintInfo() {
   if (!S || !it) return;
   const box = S.info$;
   const rel = h('div', { class: 'lb-related' });
+  const moreFrom = it.creator_id ? creatorStrip(it) : null;
   box.replaceChildren(
     it.creator_id ? h('div', { class: 'lb-creator' },
       // the name link beside it carries the label; this one is a larger pointer target only
       h('a', { href: href(`/creator/${it.creator_id}`), tabindex: '-1', 'aria-hidden': 'true', onclick: () => closeSilently() }, avatar(it, 44)),
       h('div', { class: 'grow' }, h('a', { href: href(`/creator/${it.creator_id}`), class: 'creator-name', onclick: () => closeSilently() }, it.creator_name || it.creator_handle), h('div', { class: 'creator-handle' }, `@${it.creator_handle || it.author}`)),
       h('button', { class: `btn sm${follows.has(it.creator_id) ? '' : ' primary'}`, onclick: () => { const on = follows.toggle({ id: it.creator_id, handle: it.creator_handle, display_name: it.creator_name }); toast(on ? 'Following' : 'Unfollowed'); } }, follows.has(it.creator_id) ? 'Following' : 'Follow')) : null,
+    it.creator_id ? moreFrom : null,
     it.title ? h('h3', null, it.title) : null,
     it.description ? h('p', { class: 'muted', style: { whiteSpace: 'pre-line', fontSize: '14px' } }, it.description.slice(0, 400)) : null,
     h('dl', { class: 'kv' },
@@ -327,6 +331,7 @@ function paintInfo() {
     h('div', { class: 'row wrap' },
       it.source_url ? h('a', { class: 'btn sm', href: it.source_url, target: '_blank', rel: 'noopener noreferrer nofollow' }, icon('external', 'sm'), 'View original') : null,
       h('button', { class: 'btn sm ghost', title: 'Recommend less from this creator and these tags', onclick: (e) => { tastes.dislike(it); e.currentTarget.disabled = true; toast('Got it. “For you” will show less like this'); } }, icon('x', 'sm'), 'Not interested'),
+      imageUrl(it) ? h('button', { class: 'btn sm ghost', title: 'Find this picture elsewhere on the web', onclick: () => openImageSearch(it) }, icon('search', 'sm'), 'Search this image') : null,
       h('button', { class: 'btn sm ghost', onclick: () => openReport({ mediaId: it.id }) }, icon('flag', 'sm'), 'Report')),
     h('div', null, h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase', margin: '4px 0 10px' } }, 'More like this'), rel));
   const paintRelated = (items) => {
@@ -335,11 +340,70 @@ function paintInfo() {
     rel.replaceChildren(...items.map((r) => h('a', {
       href: href(parse().path, { ...Object.fromEntries(parse().query), m: r.id }),
       style: { backgroundImage: `url("${proxied(r.preview_url || r.thumbnail_url || (r.media_type === 'image' ? r.media_url : ''))}")` }, 'aria-label': r.title || 'Related',
-      onclick: (e) => { e.preventDefault(); const idx = S.items.findIndex((x) => x.id === r.id); if (idx >= 0) show(idx); else { S.items.splice(S.index + 1, 0, r); show(S.index + 1); } },
+      onclick: (e) => { e.preventDefault(); jumpTo(r); },
     }, r.media_type === 'video' ? h('span', { class: 'pill', style: { position: 'absolute', left: '6px', top: '6px' } }, icon('play', 'fill')) : null)));
   };
   if (relCache.has(it.id)) paintRelated(relCache.get(it.id));
   else get(`/api/media/${it.id}/related`, { limit: 9 }).then((items) => { relCache.set(it.id, items); paintRelated(items); }).catch(() => {});
+}
+
+/** The picture's own public address (never our proxy): reverse image search engines fetch it themselves. */
+const imageUrl = (it) => {
+  const u = it.preview_url || it.thumbnail_url || (it.media_type === 'image' ? it.media_url : null);
+  return u && /^https?:\/\//i.test(u) ? u : null;
+};
+
+/** "Search this image": the same picture on Google Lens, Bing and TinEye, each in a new tab. */
+function openImageSearch(it) {
+  const u = encodeURIComponent(imageUrl(it));
+  const engines = [
+    ['Google Lens', 'Faces, products and pages with this picture', `https://lens.google.com/uploadbyurl?url=${u}`],
+    ['Bing Visual Search', 'Similar images and where they appear', `https://www.bing.com/images/search?view=detailv2&iss=sbi&q=imgurl:${u}`],
+    ['TinEye', 'Exact copies, oldest first', `https://tineye.com/search?url=${u}`],
+  ];
+  const m = openModal({ title: 'Search this image', sub: 'Opens in a new tab. The search engine fetches the picture from its source.',
+    body: h('div', { class: 'where-body' }, engines.map(([name, sub, url]) => h('a', { class: 'where-row', href: url, target: '_blank', rel: 'noopener noreferrer nofollow', onclick: () => m.close() },
+      h('span', { class: 'where-dot link' }, icon('search', 'sm')), h('span', { class: 'where-txt' }, h('b', null, name), h('small', null, sub)), icon('external', 'sm')))) });
+}
+
+/** Open an item from a side list (related, more from him): step to it if it is in the sequence, else slot it in next. */
+function jumpTo(r) {
+  if (!S) return;
+  const idx = S.items.findIndex((x) => x.id === r.id);
+  if (idx >= 0) show(idx); else { S.items.splice(S.index + 1, 0, r); S.dir = 1; show(S.index + 1); }
+}
+
+/** "More from him": his latest posts as a strip, plus every other place he posts. */
+function creatorStrip(it) {
+  const name = it.creator_name || it.creator_handle || 'him';
+  const strip = h('div', { class: 'lb-more-strip', role: 'list' });
+  const el = h('section', { class: 'lb-more', 'aria-label': `More from ${name}` },
+    h('div', { class: 'lb-more-head' },
+      h('span', { class: 'lb-more-title' }, `More from ${name}`),
+      h('button', { class: 'btn sm ghost', title: 'His other accounts and pages', onclick: () => openElsewhere(it.creator_id, { name, onNavigate: closeSilently }) }, icon('link', 'sm'), 'Where else he posts')),
+    strip);
+  const paint = (items) => {
+    if (!S || cur() !== it) return;
+    const list = items.filter((x) => x.id !== it.id).slice(0, 8);
+    if (!list.length) { strip.remove(); return; }
+    strip.replaceChildren(...list.map((r) => {
+      const src = r.preview_url || r.thumbnail_url || (r.media_type === 'image' ? r.media_url : '');
+      return h('a', { class: 'lb-more-thumb', role: 'listitem', href: href(parse().path, { ...Object.fromEntries(parse().query), m: r.id }), 'aria-label': r.title || `Post by ${name}`,
+        style: src ? { backgroundImage: `url("${proxied(src)}")` } : null, onclick: (e) => { e.preventDefault(); jumpTo(r); } },
+      r.media_type === 'video' ? h('span', { class: 'pill' }, icon('play', 'fill')) : null);
+    }));
+  };
+  const hit = byCreator.get(it.creator_id);
+  if (hit && Date.now() - hit.at < 120000) paint(hit.items);
+  else {
+    strip.append(...Array.from({ length: 4 }, () => h('span', { class: 'lb-more-thumb skeleton' })));
+    get(`/api/creators/${it.creator_id}/media`, { sort: 'recent', limit: 9 }).then((r) => {
+      byCreator.set(it.creator_id, { at: Date.now(), items: r.items });
+      if (byCreator.size > 40) byCreator.delete(byCreator.keys().next().value);
+      paint(r.items);
+    }).catch(() => strip.remove());
+  }
+  return el;
 }
 
 /** Navigating away from the viewer via a link inside it: drop the overlay without touching history. */

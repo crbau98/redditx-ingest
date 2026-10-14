@@ -47,6 +47,10 @@ function applyProfile(feed, profile, settings) {
   }
   if (profile.verified && !creator.verified) repo.creators.update(creator.id, { verified: true });
 
+  // His handles and names, and "backup / new account: @x" handles his bio names (engine/identity).
+  const named = require('./identity').noteProfile(creator.id, feed, profile);
+  if (settings.autoLinkProfiles) for (const a of named.accounts) require('./discovery').consider(a, 'identity', creator.id, { creatorId: creator.id });
+
   const externals = [];
   const free = freeHint(profile.bio);
   for (const l of profile.links || []) {
@@ -58,8 +62,8 @@ function applyProfile(feed, profile, settings) {
     if (repo.blocklist.has('creator', `${l.platform}:${String(l.target).toLowerCase()}`)) continue;
     if (repo.feeds.list({ creatorId: creator.id, limit: 1 }).total >= MAX_LINKED_FEEDS_PER_CREATOR) break;
     const owner = l.kind === 'user' ? repo.creators.byAccount(l.platform, l.target) : null;
-    if (owner && owner.id !== creator.id) {
-      events.log('INFO', `Possible duplicate creator: ${creator.handle} ↔ ${owner.handle} (${l.platform}) — merge from the Creators tab if it is the same person`);
+    if (owner && owner.id !== creator.id) { // his bio links to an account filed under someone else: maybe the same man (engine/identity)
+      require('./identity').noteLink(creator.id, owner.id, { type: 'bio-link', from: creator.id, detail: `${l.platform}:${l.target}` }, { autoMerge: false }); // merged below, once the profile is applied
       continue;
     }
     const r = repo.feeds.upsert({
@@ -73,6 +77,12 @@ function applyProfile(feed, profile, settings) {
   for (const handle of findOnlyFans(profile.bio)) if (!externals.some((e) => e.handle === handle)) externals.push(ofLink(handle, { free }));
   if (externals.length) repo.creators.enrich(creator.id, { links: externals });
   for (const e of externals) if (e.handle) repo.onlyfans.claim(e.handle, creator.id);
+  // Last, now nothing else will touch creator.id: merge him with any account the evidence says is the same man.
+  const kept = require('./identity').settle(creator.id);
+  if (kept !== creator.id) {
+    out.mergedInto = kept;
+    for (const e of externals) if (e.handle) repo.onlyfans.claim(e.handle, kept);
+  }
   return out;
 }
 

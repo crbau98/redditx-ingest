@@ -5,6 +5,7 @@
 const crypto = require('crypto');
 const { v4: uuid } = require('uuid');
 const { db } = require('./index');
+const { normAlias } = require('../lib/alias');
 
 const nowIso = () => new Date().toISOString();
 const clampInt = (v, min, max, d) => {
@@ -192,16 +193,20 @@ const creators = {
 
   refreshStats(id) { if (id) creatorQ.stats.run({ id }); },
 
-  list({ page = 0, limit = 48, q: query, sort = 'media', platform, admin = false, minMedia, onlyfans: ofOnly = false } = {}) {
+  list({ page = 0, limit = 48, q: query, sort = 'media', platform, admin = false, minMedia, onlyfans: ofOnly = false, paidHost } = {}) {
     const where = []; const params = [];
     if (ofOnly) where.push("c.links GLOB '*onlyfans.com/[A-Za-z0-9]*'");
+    if (paidHost) { where.push("c.links LIKE ? ESCAPE '\\'"); params.push(`%${String(paidHost).replace(/[\\%_]/g, (x) => `\\${x}`)}/%`); }
     if (!admin) { where.push("c.status = 'active'", "c.scope != 'excluded'"); }
     const min = minMedia !== undefined ? minMedia : (admin ? 0 : 1);
     if (min > 0) { where.push('c.media_count >= ?'); params.push(min); }
     if (query) {
-      where.push('(c.handle LIKE ? ESCAPE \'\\\' OR c.display_name LIKE ? ESCAPE \'\\\')');
+      // also any name or handle he goes by elsewhere (creator_aliases, engine/identity)
+      const norm = normAlias(query);
+      where.push(`(c.handle LIKE ? ESCAPE '\\' OR c.display_name LIKE ? ESCAPE '\\'${norm.length >= 3 ? ' OR EXISTS (SELECT 1 FROM creator_aliases a WHERE a.creator_id = c.id AND a.norm LIKE ?)' : ''})`);
       const like = `%${String(query).replace(/[\\%_]/g, (m) => '\\' + m)}%`;
       params.push(like, like);
+      if (norm.length >= 3) params.push(`${norm}%`);
     }
     if (platform) {
       where.push('EXISTS (SELECT 1 FROM media m WHERE m.creator_id = c.id AND m.platform = ? AND m.publish_state = \'published\')');
@@ -230,6 +235,8 @@ const creators = {
       enabled: !!f.enabled, last_success_at: f.last_success_at, last_status: f.last_status,
     }));
     out.topTags = creatorQ.topTags.all(id);
+    out.aliases = db.prepare("SELECT alias, kind, platform FROM creator_aliases WHERE creator_id = ? AND source != 'bio' ORDER BY kind DESC, created_at LIMIT 24").all(id)
+      .filter((a) => a.alias.toLowerCase() !== String(c.handle).toLowerCase());
     return out;
   },
 
@@ -240,6 +247,9 @@ const creators = {
     db.transaction(() => {
       db.prepare('UPDATE media SET creator_id = ? WHERE creator_id = ?').run(keepId, mergeId);
       db.prepare('UPDATE feeds SET creator_id = ? WHERE creator_id = ?').run(keepId, mergeId);
+      db.prepare('UPDATE onlyfans_leads SET creator_id = ? WHERE creator_id = ?').run(keepId, mergeId);
+      db.prepare(`INSERT OR IGNORE INTO creator_aliases (creator_id, norm, alias, kind, platform, source, created_at)
+        SELECT ?, norm, alias, kind, platform, source, created_at FROM creator_aliases WHERE creator_id = ?`).run(keepId, mergeId);
       creators.enrich(keepId, { displayName: gone.display_name, bio: gone.bio, avatarUrl: gone.avatar_url, bannerUrl: gone.banner_url, links: JSON.parse(gone.links || '[]') });
       db.prepare('DELETE FROM creators WHERE id = ?').run(mergeId);
       creatorQ.stats.run({ id: keepId });
@@ -746,6 +756,10 @@ function buildMediaWhere(f) {
   if (f.platform) { where.push('m.platform = ?'); params.push(f.platform); }
   if (f.community) { where.push('m.community = ? COLLATE NOCASE'); params.push(f.community); }
   if (f.creator) { where.push('m.creator_id = ?'); params.push(f.creator); }
+  // creators with a page on a paid platform ("on Fansly"): their free posts, from any source
+  if (f.paidHost) { where.push("m.creator_id IN (SELECT id FROM creators WHERE links LIKE ? ESCAPE '\\')"); params.push(`%${String(f.paidHost).replace(/[\\%_]/g, (x) => `\\${x}`)}/%`); }
+  // pictures the physique model measured as lean or athletic (0..100 heaviness; -1 and 101 are markers)
+  if (f.build === 'fit') where.push('m.physique BETWEEN 0 AND 30');
   if (Array.isArray(f.creators)) {
     if (!f.creators.length) where.push('0=1');
     else { where.push(`m.creator_id IN (${f.creators.map(() => '?').join(',')})`); params.push(...f.creators); }
@@ -805,7 +819,7 @@ function tagRows(name) {
 function sortIndexFor(f, sort, where) {
   const idx = SORT_INDEX[sort || 'recent'];
   if (!idx || !where.includes("m.publish_state = 'published'")) return null; // partial indexes cover published rows only
-  if (f.creator || (Array.isArray(f.ids) && f.ids.length) || f.community || f.minScore) return null;
+  if (f.creator || (Array.isArray(f.ids) && f.ids.length) || f.community || f.minScore || f.paidHost) return null;
   const all = [...(f.tag ? [f.tag] : []), ...(Array.isArray(f.tagsAll) ? f.tagsAll : [])].map(cleanTag);
   if (all.length && Math.min(...all.map(tagRows)) < BROAD_TAG_MIN) return null;
   if (Array.isArray(f.tagsAny) && f.tagsAny.length && f.tagsAny.map(cleanTag).reduce((a, t) => a + tagRows(t), 0) < BROAD_TAG_MIN) return null;

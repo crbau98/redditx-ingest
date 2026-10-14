@@ -97,7 +97,45 @@ export const follows = {
   seen(id) { const c = followsList.find((x) => x.id === id); return c ? c.seen : null; },
   markSeen(id) {
     const c = followsList.find((x) => x.id === id);
-    if (c) { c.seen = new Date().toISOString(); write('prism.follows', followsList); }
+    if (c) { c.seen = new Date().toISOString(); write('prism.follows', followsList); bus.emit('followSeen', id); }
+  },
+  /** Creators the server no longer shows (removed, opted out): stop following them quietly. */
+  prune(ids) {
+    const gone = new Set(ids || []);
+    if (!gone.size || !followsList.some((c) => gone.has(c.id))) return;
+    followsList = followsList.filter((c) => !gone.has(c.id));
+    for (const id of gone) followSet.delete(id);
+    write('prism.follows', followsList);
+    bus.emit('follow', {});
+  },
+};
+
+/* ------------------------------------------------------ following visits */
+// When this device last opened the Following page. Opening it marks everything up to now as
+// seen (badges clear); `since` is the visit before, which places the "new since you were last
+// here" divider. Reopening within 30 minutes keeps the same divider, so Back never loses it.
+const FOLLOW_VISIT_KEY = 'prism.followVisit';
+let followVisit = read(FOLLOW_VISIT_KEY, { at: null, prev: null });
+export const followVisits = {
+  open() {
+    const now = Date.now();
+    const at = followVisit.at ? Date.parse(followVisit.at) : 0;
+    if (!at || now - at > 30 * 60000) followVisit.prev = followVisit.at;
+    followVisit.at = new Date(now).toISOString();
+    write(FOLLOW_VISIT_KEY, followVisit);
+    bus.emit('followSeen', null);
+    return followVisit.prev;
+  },
+  get since() { return followVisit.prev; },
+  /** What counts as "new" for one followed creator: after the later of its own seen mark and the last page visit. */
+  seenFor(c) {
+    const a = c && c.seen ? c.seen : null; const b = followVisit.at;
+    return !a ? b : !b ? a : (a > b ? a : b);
+  },
+  /** Same, for this visit's divider: after the previous page visit, or the creator's own seen mark if later. */
+  sinceFor(c) {
+    const a = c && c.seen ? c.seen : null; const b = followVisit.prev;
+    return !a ? b : !b ? a : (a > b ? a : b);
   },
 };
 
@@ -189,6 +227,23 @@ export const searches = {
   remove(id) { searchList = searchList.filter((x) => x.id !== id); saveSearches(); },
   rename(id, name) { const s = searchList.find((x) => x.id === id); if (s && name) { s.name = String(name).slice(0, 60); saveSearches(); } },
   markSeen(id) { const s = searchList.find((x) => x.id === id); if (s) { s.seen = new Date().toISOString(); saveSearches(); } },
+};
+
+/* ------------------------------------------------------ recent searches */
+// What was typed into search on this device, newest first, offered again when the box is empty.
+const RECENT_KEY = 'prism.recentSearches';
+const MAX_RECENT = 8;
+let recent = read(RECENT_KEY, []).filter((x) => typeof x === 'string');
+export const recentSearches = {
+  list: () => [...recent],
+  add(text) {
+    const q = String(text || '').trim().slice(0, 100);
+    if (!q || prefs.historyOff) return;
+    recent = [q, ...recent.filter((x) => x.toLowerCase() !== q.toLowerCase())].slice(0, MAX_RECENT);
+    write(RECENT_KEY, recent);
+  },
+  remove(text) { recent = recent.filter((x) => x !== text); write(RECENT_KEY, recent); },
+  clear() { recent = []; write(RECENT_KEY, recent); },
 };
 
 /* ---------------------------------------------------------------- taste */

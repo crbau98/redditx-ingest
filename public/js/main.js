@@ -19,9 +19,12 @@ import { creator } from './views/creator.js';
 import { saved } from './views/saved.js';
 import { browse } from './views/browse.js';
 import { reels } from './views/reels.js';
+import { following } from './views/following.js';
+import { wireFollowBadges, followNewContent } from './following.js';
 
 const routes = [
   { pattern: '/', view: home, nav: 'home' },
+  { pattern: '/following', view: following, nav: 'following' },
   { pattern: '/explore', view: explore, nav: 'explore' },
   { pattern: '/reels', view: reels, nav: 'reels' },
   { pattern: '/browse', view: browse, nav: 'browse' },
@@ -64,11 +67,11 @@ onAgeRequired(ensureAgeGate);
 
 /* ------------------------------------------------------------------ shell */
 // 5th field: desktop-only (the phone tab bar keeps five entries)
-const NAV = [['home', '/', 'Home', 'home'], ['explore', '/explore', 'Explore', 'compass'], ['reels', '/reels', 'Reels', 'film'], ['browse', '/browse', 'Browse', 'layers', true], ['creators', '/creators', 'Creators', 'users'], ['saved', '/saved', 'Saved', 'heart']];
+const NAV = [['home', '/', 'Home', 'home'], ['following', '/following', 'Following', 'rss', true], ['explore', '/explore', 'Explore', 'compass'], ['reels', '/reels', 'Reels', 'film'], ['browse', '/browse', 'Browse', 'layers', true], ['creators', '/creators', 'Creators', 'users'], ['saved', '/saved', 'Saved', 'heart']];
 
 /* --------------------------------------------------------- global shortcuts */
 function showShortcuts() {
-  const rows = [['Ctrl / ⌘ + K', 'Command palette — jump anywhere, run actions'], ['/', 'Search'], ['?', 'This help'], ['G then H / E / R / C / S / M', 'Go to Home, Explore, Reels, Creators, Saved, Galaxy map'], ['X', 'Surprise me (open something random)'],
+  const rows = [['Ctrl / ⌘ + K', 'Command palette — jump anywhere, run actions'], ['/', 'Search'], ['?', 'This help'], ['G then H / F / E / R / C / S / M', 'Go to Home, Following, Explore, Reels, Creators, Saved, Galaxy map'], ['X', 'Surprise me (open something random)'],
     ['In the viewer', ''], ['← / →  (J / K)', 'Previous / next'], ['F · C', 'Save · add to collection'], ['S · I · M', 'Slideshow · details · mute'],
     ['In Reels', ''], ['↑ / ↓  (K / J)', 'Previous / next'], ['Space · M', 'Pause · sound'], ['F · C · Enter', 'Save · collect · open details'], ['Double-tap', 'Save']];
   const m = openModal({ title: 'Keyboard shortcuts', wide: true, body: h('dl', { class: 'kv', style: { gridTemplateColumns: 'auto 1fr' } }, rows.map(([k, d]) => (d
@@ -82,7 +85,7 @@ function wireShortcuts() {
     if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openPalette(); return; }
     if (e.metaKey || e.ctrlKey || e.altKey || isOpen() || paletteOpen() || $('#modal-root').children.length || e.target.closest('input, textarea, select, [contenteditable]')) return;
     if (Date.now() - g < 1200) {
-      const dest = { h: '/', e: '/explore', r: '/reels', c: '/creators', s: '/saved', b: '/browse', a: '/admin', m: '/galaxy' }[e.key.toLowerCase()];
+      const dest = { h: '/', f: '/following', e: '/explore', r: '/reels', c: '/creators', s: '/saved', b: '/browse', a: '/admin', m: '/galaxy' }[e.key.toLowerCase()];
       g = 0;
       if (dest) { e.preventDefault(); navigate(dest); }
       return;
@@ -122,10 +125,10 @@ function buildShell() {
 
   const header = h('header', { class: 'appbar' }, h('div', { class: 'scroll-progress', 'aria-hidden': 'true' }),
     h('a', { class: 'brand', href: href('/'), 'aria-label': 'PRISM home' }, icon('logo'), h('span', null, 'PRISM')),
-    h('nav', { class: 'nav', 'aria-label': 'Primary' }, NAV.map(([key, path, label, ic]) => h('a', { href: href(path), dataset: { nav: key } }, icon(ic, 'sm'), label, key === 'saved' ? savedBadge : null))),
+    h('nav', { class: 'nav', 'aria-label': 'Primary' }, NAV.map(([key, path, label, ic]) => h('a', { href: href(path), dataset: { nav: key }, title: label }, icon(ic, 'sm'), h('span', { class: 'nav-label' }, label), key === 'saved' ? savedBadge : key === 'following' ? h('span', { class: 'badge follow-badge', hidden: true, dataset: { followBadge: 'count' } }) : null))),
     h('div', { class: 'search' }, icon('search'), searchInput, h('span', { class: 'kbd hide-mobile' }, '/')),
     h('div', { class: 'appbar-actions' }, h('button', { class: 'btn icon ghost hide-mobile', 'aria-label': 'Command palette', title: 'Command palette (Ctrl/⌘ K)', onclick: openPalette }, icon('command')), themeBtn, h('button', { class: 'btn icon ghost', 'aria-label': 'Display settings', title: 'Display settings', onclick: openDisplaySettings }, icon('palette')), h('a', { class: 'btn icon ghost hide-mobile', href: href('/admin'), 'aria-label': 'Admin', title: 'Admin' }, icon('sliders')),
-      h('button', { class: 'btn icon ghost only-mobile', 'aria-label': 'More', title: 'More', 'aria-haspopup': 'dialog', onclick: openMenu }, icon('more'))));
+      h('button', { class: 'btn icon ghost only-mobile more-btn', 'aria-label': 'More', title: 'More', 'aria-haspopup': 'dialog', onclick: openMenu }, icon('more'), h('span', { class: 'nav-dot', hidden: true, dataset: { followBadge: 'dot' } }))));
 
   const main = h('main', { id: 'main', tabindex: '-1' });
   const footer = h('footer', { class: 'footer' },
@@ -217,6 +220,7 @@ function wireLiveUpdates(shell) {
   streamPublic((evt) => {
     if (evt.type !== 'new') return;
     clearApiCache(); // new content: the next request must not come from the cache
+    followNewContent();
     const p = parse().path;
     if (p !== '/' && p !== '/explore') return;
     pending += evt.count || 1;
@@ -260,6 +264,7 @@ async function boot() {
   document.addEventListener('touchstart', warmCreator, { passive: true });
   window.addEventListener('hashchange', () => render(shell));
   await render(shell);
+  wireFollowBadges();
   wireLiveUpdates(shell);
   registerServiceWorker();
 }

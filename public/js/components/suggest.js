@@ -1,7 +1,7 @@
 import { h, icon, fmt, avatar, debounce, proxied } from '../dom.js';
 import { get } from '../api.js';
 import { navigate, href } from '../router.js';
-import { platformLabel } from '../store.js';
+import { platformLabel, recentSearches } from '../store.js';
 import { understand, understoodChips, smartSearch } from '../smart.js';
 
 /**
@@ -80,9 +80,28 @@ export function attachSuggest(input, { id = 'suggest-box' } = {}) {
     idx = -1;
   }
 
+  // Empty box: what you searched for before, one tap (or ↓ ↵) to run again.
+  function renderRecent() {
+    rows = [];
+    const list = recentSearches.list();
+    if (!list.length) { hide(); return; }
+    const clearBtn = h('button', { class: 'suggest-clear', type: 'button' }, 'Clear');
+    clearBtn.addEventListener('mousedown', (e) => { e.preventDefault(); recentSearches.clear(); hide(); });
+    box.replaceChildren(h('div', { class: 'suggest-label suggest-recent-head' }, 'Recent searches', clearBtn), ...list.map((q) => {
+      const x = h('button', { class: 'suggest-x', type: 'button', 'aria-label': `Remove “${q}” from recent searches`, tabindex: '-1' }, icon('x', 'sm'));
+      const el = row([icon('history', 'sm'), h('span', { class: 'truncate grow' }, q), x], () => { input.value = q; smartSearch(q); });
+      // the remove button sits inside the row: claim its press before the row's handler sees it
+      x.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); recentSearches.remove(q); renderRecent(); }, true);
+      return el;
+    }));
+    if (!box.parentElement && input.parentElement) input.parentElement.appendChild(box);
+    box.hidden = false; input.setAttribute('aria-expanded', 'true');
+    idx = -1;
+  }
+
   const query = debounce(async () => {
     const q = input.value.trim();
-    if (!q) { hide(); return; }
+    if (!q) { token++; renderRecent(); return; }
     const mine = ++token;
     try {
       const [d, u] = await Promise.all([get('/api/suggest', { q }), q.includes(' ') || q.length >= 4 ? understand(q) : null]);
@@ -99,7 +118,7 @@ export function attachSuggest(input, { id = 'suggest-box' } = {}) {
   }, 150);
 
   input.addEventListener('input', query);
-  input.addEventListener('focus', () => { if (input.value.trim() && rows.length) box.hidden = false; });
+  input.addEventListener('focus', () => { if (!input.value.trim()) renderRecent(); else if (rows.length) box.hidden = false; });
   input.addEventListener('blur', () => setTimeout(hide, 120));
   input.addEventListener('keydown', (e) => {
     if (box.hidden || !rows.length) return;
