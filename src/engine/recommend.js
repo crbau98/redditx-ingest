@@ -428,7 +428,7 @@ function tasteFromQuery(q, { clampInt }) {
   return {
     tags: parseWeighted(q.tags, TAG_RE, 24, cleanTag),
     creators: parseWeighted(q.creators, UUID, 40),
-    platforms: parseWeighted(q.platforms, /^[a-z]{2,20}$/, 8),
+    platforms: parseWeighted(q.platforms, /^[a-z]{1,20}$/, 8),
     avoidTags: new Set([...set(q.avoid_tags, TAG_RE, 30)].map(cleanTag)),
     avoidCreators: set(q.avoid_creators, UUID, 100),
     exclude: set(q.exclude, UUID, 200),

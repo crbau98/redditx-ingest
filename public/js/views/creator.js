@@ -62,7 +62,7 @@ export async function creator(root, { params, query }) {
   document.title = `${c.display_name || c.handle} — PRISM`;
   const type = query.get('type') || '';
   const sort = query.get('sort') || 'recent';
-  const platform = /^[a-z]{2,20}$/.test(query.get('platform') || '') ? query.get('platform') : '';
+  const platform = /^[a-z]{1,20}$/.test(query.get('platform') || '') ? query.get('platform') : '';
   const setQ = (patch) => navigate(`/creator/${c.id}`, { type, sort, platform, ...patch }, { replace: true });
 
   // The stage: his best picture (previews come highest-scored first), full-bleed behind the header,
