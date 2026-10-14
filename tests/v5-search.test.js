@@ -105,6 +105,20 @@ describe('grouped search', () => {
     assert.ok(r.json.posts.items.length > 0);
   });
 
+  test('a tag only one creator uses still lists him', async () => {
+    const r = await pub('/api/search?q=shirtless');
+    assert.deepEqual(r.json.creators.map((c) => [c.id, c.match]), [[w.hogue.id, 'tag']]);
+  });
+
+  test('a relaxed search stays relaxed on later pages', async () => {
+    const q = encodeURIComponent('gym zzqx');
+    const p0 = await pub(`/api/search?q=${q}&limit=2`);
+    const p1 = await pub(`/api/search?q=${q}&limit=2&page=1`);
+    assert.equal(p0.json.relaxed, true); assert.equal(p1.json.relaxed, true);
+    assert.equal(p1.json.posts.items.length, 2, 'page 2 continues the relaxed results');
+    assert.ok(!p1.json.posts.items.some((x) => p0.json.posts.items.some((y) => y.id === x.id)));
+  });
+
   test('later pages carry posts only; empty queries are cheap', async () => {
     const r = await pub('/api/search?q=gym&page=1&limit=2');
     assert.deepEqual(r.json.creators, []); assert.deepEqual(r.json.tags, []);

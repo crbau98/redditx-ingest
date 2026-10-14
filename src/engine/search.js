@@ -5,7 +5,8 @@
  * The text is read by lib/query.js first ("athletic blond gym on fansly" → build, tags, paid
  * platform), so every group answers the same understood query:
  *   creators  the named creator (exact or a typo away), then name matches, then creators whose
- *             style matches the tags (tf-idf profiles from the library snapshot), then, for a bare
+ *             style matches the tags (tf-idf profiles from the library snapshot), then creators who post
+ *             all of the tags (a tag only one creator uses has no style to compare), then, for a bare
  *             "on Fansly", the most recently active creators with a page there;
  *   posts     the media listing with every understood filter (Best match when there is free text);
  *             if free text sinks an otherwise good query to nothing, it is retried without the text;
@@ -28,14 +29,35 @@ function cards(ids, paidHost) {
   return ids.map((id) => byId.get(id)).filter(Boolean);
 }
 
+/** Ids of creators with a page on the paid platform at `host` (one indexed-free scan of a small table). */
+function paidCreators(host) {
+  return new Set(db.prepare("SELECT id FROM creators WHERE links LIKE ? ESCAPE '\\'").all(`%${host.replace(/[\\%_]/g, (x) => `\\${x}`)}/%`).map((r) => r.id));
+}
+
 function creatorsFor(u, paidHost, limit) {
   const out = []; const seen = new Set();
   const add = (list, match) => { for (const c of list) if (out.length < limit && !seen.has(c.id)) { seen.add(c.id); out.push({ ...c, match }); } };
   if (u.creator) add(cards([u.creator.id], paidHost), 'name');
   if (u.text) add(repo.creators.list({ q: u.text, limit, paidHost }).items, 'name');
   if (u.tags.length) {
+    const lib = library();
     const weights = new Map(u.tags.map((t) => [t, 1]));
-    add(cards(sim.creatorsForTags(library(), GENERIC_TAGS, weights, limit * 3).map(([id]) => id), paidHost), 'style');
+    // With a paid platform, narrow the style matches to its creators before taking the top few.
+    const paid = paidHost ? paidCreators(paidHost) : null;
+    let ids = sim.creatorsForTags(lib, GENERIC_TAGS, weights, paid ? Infinity : limit * 3).map(([id]) => id);
+    if (paid) ids = ids.filter((id) => paid.has(id)).slice(0, limit * 3);
+    add(cards(ids, paidHost), 'style');
+    // A tag only one creator uses is not in the similarity index (it compares nobody), but he owns it: list who posts
+    // every one of these tags, most posts first.
+    if (out.length < limit) {
+      const owners = [];
+      for (const [cid, tags] of lib.creatorTags) {
+        let n = Infinity;
+        for (const t of u.tags) { const k = tags.get(t) || 0; if (k < n) n = k; if (!n) break; }
+        if (n && n !== Infinity && !seen.has(cid) && (!paid || paid.has(cid))) owners.push([cid, n]);
+      }
+      add(cards(owners.sort((a, b) => b[1] - a[1]).slice(0, limit * 2).map(([id]) => id), paidHost), 'tag');
+    }
   }
   if (paidHost && !u.creator && !u.text && !u.tags.length) add(repo.creators.list({ paidHost, sort: 'recent', limit }).items, 'platform');
   return out;
@@ -67,16 +89,17 @@ function search(text, vocab, { page = 0, limit = 24, type, sort } = {}) {
     creator: u.creator ? u.creator.id : undefined, tagsAll: u.tags.length ? u.tags : undefined,
     q: u.text || undefined, paidHost, build: u.build, page, limit, noCount: page > 0,
   };
-  let posts = repo.media.list(f);
+  // "gym blond xyzzy": the filters were right, the leftover word matched nothing. Decided on the query as a whole (does
+  // the text match anything at all?), so every page of a relaxed search is relaxed too.
   let relaxed = false;
-  // "gym blond xyzzy": the filters were right, the leftover word matched nothing.
-  if (f.q && u.understood && page === 0 && !posts.items.length) {
-    const retry = repo.media.list({ ...f, q: undefined });
-    if (retry.items.length) { posts = retry; relaxed = true; }
+  if (f.q && u.understood && !repo.media.list({ ...f, page: 0, limit: 1, noCount: true }).items.length
+    && repo.media.list({ ...f, q: undefined, page: 0, limit: 1, noCount: true }).items.length) {
+    relaxed = true; f.q = undefined;
   }
+  const posts = repo.media.list(f);
   const query = {
     type: f.type, sort: f.sort, since: f.since, platform: f.platform, community: f.community, paid: u.paid, build: u.build,
-    tags: u.tags.length ? u.tags.join(',') : undefined, creator: f.creator, q: relaxed ? undefined : f.q,
+    tags: u.tags.length ? u.tags.join(',') : undefined, creator: f.creator, q: f.q,
   };
   return {
     understood: u.understood, query, relaxed,
