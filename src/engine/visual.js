@@ -10,7 +10,8 @@
  *             appended to as the backfill runs. Similarity is cosine after centring on the library mean, which removes the
  *             "every photo is a photo" direction that would otherwise make everything look alike; the centring is folded
  *             into per-item constants, so a query stays one int8 dot product per item.
- *   query     `similar(id)`: the nearest items, at most two per creator, never the same post, only what is visible now.
+ *   query     `similar(id)`: the nearest items, at most two per creator, never the same post, only what is visible now;
+ *             `similarCreators(id)`: creators whose pictures, on average, look like his.
  *
  * Search by look only: no face or identity model takes part.
  */
@@ -151,6 +152,55 @@ function similar(id, limit = 12) {
   return out;
 }
 
+/**
+ * Each creator's look: the centred mean of his pictures' vectors, unit length. Rebuilt from the index at most every
+ * PROFILE_MS (a few hundred ms per 100k items); creators with fewer than MIN_PICS pictures have no profile.
+ */
+const PROFILE_MS = 10 * 60000; const MIN_PICS = 3;
+let profiles = null;
+function creatorProfiles(x) {
+  if (profiles && profiles.ix === x && Date.now() - profiles.at < PROFILE_MS) return profiles;
+  const sums = new Map(); const counts = new Map();
+  for (let i = 0; i < x.n; i++) {
+    const c = x.creators[i];
+    if (!c) continue;
+    let s = sums.get(c);
+    if (!s) { s = new Float32Array(DIM); sums.set(c, s); counts.set(c, 0); }
+    const sc = x.scale[i]; const o = i * DIM;
+    for (let j = 0; j < DIM; j++) s[j] += sc * x.q[o + j] - x.mean[j];
+    counts.set(c, counts.get(c) + 1);
+  }
+  const vecs = new Map();
+  for (const [c, s] of sums) {
+    if (counts.get(c) < MIN_PICS) continue;
+    let ss = 0; for (let j = 0; j < DIM; j++) ss += s[j] * s[j];
+    const n = Math.sqrt(ss); if (!n) continue;
+    for (let j = 0; j < DIM; j++) s[j] /= n;
+    vecs.set(c, s);
+  }
+  profiles = { ix: x, at: Date.now(), vecs };
+  return profiles;
+}
+
+/**
+ * Creators whose pictures look like this creator's (setting, framing, build, style), as [[creatorId, similarity], …]
+ * strongest first; null when he has no look profile yet. The caller fetches and filters the creator cards.
+ */
+function similarCreators(id, k = 24) {
+  const x = index();
+  if (x.n < MIN_INDEX) return null;
+  const { vecs } = creatorProfiles(x);
+  const me = vecs.get(id);
+  if (!me) return null;
+  const out = [];
+  for (const [c, v] of vecs) {
+    if (c === id) continue;
+    let d = 0; for (let j = 0; j < DIM; j++) d += me[j] * v[j];
+    out.push([c, d]);
+  }
+  return out.sort((a, b) => b[1] - a[1]).slice(0, k);
+}
+
 /* ---------------------------------------------------------------- backfill */
 function pending(limit) {
   ensureTable();
@@ -208,6 +258,6 @@ function status() {
 }
 
 /** Tests: forget the in-memory index and cached answers. */
-function _reset() { ix = null; cache.clear(); }
+function _reset() { ix = null; profiles = null; cache.clear(); }
 
-module.exports = { similar, backfill, start, stop, status, ensureTable, _reset, _nearest: nearest, _index: index };
+module.exports = { similar, similarCreators, backfill, start, stop, status, ensureTable, _reset, _nearest: nearest, _index: index };

@@ -136,3 +136,31 @@ describe('similar posts by look', () => {
     assert.equal((await pub('/api/media/00000000-0000-0000-0000-000000000000/similar')).status, 404);
   });
 });
+
+describe('creators with a similar look', () => {
+  test('a creator whose pictures look like his ranks first; without a profile it falls back to tags', async () => {
+    const mk = (h) => repo.creators.create({ handle: h });
+    const [p, q, r] = [mk('look_p'), mk('look_q'), mk('look_r')];
+    const vec = (k, s) => { const v = Array.from({ length: emb.DIM }, (_, i) => (i % 5 === k ? 1 : 0) + 0.1 * Math.sin(s * 3.3 + i)); const n = Math.hypot(...v); return v.map((x) => x / n); };
+    const urls = new Map();
+    let s = 0;
+    for (const [c, k] of [[p, 3], [q, 3], [r, 4]]) {
+      for (let i = 0; i < 4; i++) {
+        const id = repo.media.insert({ creator_id: c.id, platform: 'x', source_id: `lk${++s}`, source_key: `x:lk${s}:0`, post_key: `x:lk${s}`, author: c.handle, title: 't', media_type: 'image', media_url: `https://pbs.twimg.com/lk${s}.jpg`, hash: `lkh${s}` }, ['gym']);
+        repo.creators.refreshStats(c.id);
+        urls.set(`https://pbs.twimg.com/lk${s}.jpg`, vec(k, s));
+        void id;
+      }
+    }
+    imagefilter._setEmbedder(async (url) => (urls.has(url) ? { status: 'ok', vec: emb.pack(Float32Array.from(urls.get(url))) } : { status: 'error' }));
+    visual._reset();
+    await visual.backfill(200);
+    const res = await pub(`/api/creators/${p.id}/similar?by=look&limit=5`);
+    assert.equal(res.status, 200);
+    assert.equal(res.json[0].id, q.id, JSON.stringify(res.json.map((c) => c.handle)));
+    assert.ok(res.json[0].similarity > (res.json.find((c) => c.id === r.id) || { similarity: -1 }).similarity);
+    const fresh = mk('look_new');
+    const fb = await pub(`/api/creators/${fresh.id}/similar?by=look`);
+    assert.equal(fb.status, 200); assert.ok(Array.isArray(fb.json));
+  });
+});

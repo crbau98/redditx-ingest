@@ -233,6 +233,18 @@ router.get('/suggest', (req, res) => res.json(repo.suggest(typeof req.query.q ==
 router.get('/creators/:id/similar', (req, res) => {
   const c = repo.creators.get(req.params.id);
   if (!c || c.status !== 'active') return res.status(404).json({ error: 'Not found' });
+  // "Guys with a similar look": by what his pictures look like (src/engine/visual.js), falling back to posting style (tags)
+  if (req.query.by === 'look' && req.query.onlyfans !== '1') {
+    const limit = repo.clampInt(req.query.limit, 1, 24, 12);
+    const near = require('../engine/visual').similarCreators(c.id, limit * 2);
+    if (near && near.length) {
+      const score = new Map(near);
+      const ids = near.map(([id]) => id);
+      const cards = repo.db.prepare(`${repo.SELECT_CREATOR_CARD} WHERE c.id IN (${ids.map(() => '?').join(',')}) AND c.status = 'active' AND c.scope != 'excluded' AND c.media_count > 0`)
+        .all(...ids).map(repo.serializeCreator).sort((a, b) => score.get(b.id) - score.get(a.id));
+      if (cards.length) return res.json(cards.slice(0, limit).map((x) => ({ ...publicCreator(x), similarity: Math.round(Math.max(0, score.get(x.id)) * 1000) / 1000 })));
+    }
+  }
   res.json(repo.creators.similar(c.id, repo.clampInt(req.query.limit, 1, 24, 12), { onlyfans: req.query.onlyfans === '1' }).map(publicCreator));
 });
 
