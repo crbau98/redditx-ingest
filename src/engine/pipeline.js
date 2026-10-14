@@ -3,8 +3,8 @@
  * The per-item pipeline. Every raw item from every adapter goes through the
  * same ordered gates, so rules are enforced in exactly one place:
  *
- *   resolve -> safety -> blocklist -> scope -> physique (text) -> media checks -> dedupe
- *           -> image (faces, physique, perceptual hash) -> creator -> insert -> tags
+ *   resolve -> safety -> leaks -> blocklist -> scope -> physique (text) -> media checks -> dedupe
+ *           -> image (faces, physique, perceptual hash) -> keep (unstable video to the store) -> creator -> insert -> tags
  */
 const crypto = require('crypto');
 const repo = require('../db/repo');
@@ -17,6 +17,8 @@ const imagefilter = require('../lib/imagefilter');
 const physique = require('./physique');
 const dedupe = require('../services/dedupe');
 const events = require('./events');
+const leaks = require('../lib/leaks');
+const vault = require('../lib/vault');
 
 const SKIP_AUTHORS = new Set(['[deleted]', 'deleted', 'automoderator', 'web', 'null', 'undefined', '']);
 const REDGIFS_PAGE = /redgifs\.com\/(?:watch|ifr)\//i;
@@ -66,7 +68,7 @@ function noteImageStrike(item, feed) {
   const strikes = repo.db.prepare("SELECT COUNT(*) AS n FROM moderation_actions WHERE target_type = 'account' AND target_id = ? AND action = 'image-female'").get(key).n;
   if (strikes < IMAGE_STRIKES_TO_BLOCK) return;
   const reason = `image filter: ${strikes} pictures with women`;
-  const creator = (feed.creator_id && ['user', 'feed', 'page'].includes(feed.kind) ? repo.creators.get(feed.creator_id) : null) || repo.creators.byAccount(feed.platform, handle);
+  const creator = (ownedByFeed(item, feed) ? repo.creators.get(feed.creator_id) : null) || repo.creators.byAccount(feed.platform, handle);
   if (creator && creator.status === 'active') { repo.creators.block(creator.id, reason, 'system'); events.log('WARN', `Creator ${creator.handle} blocked: ${reason}`); }
   else repo.blocklist.add('creator', key, reason);
 }
@@ -77,7 +79,7 @@ function blockFemaleCreator(item, feed, rule) {
   const key = handle && `${feed.platform}:${handle.toLowerCase()}`;
   const reason = `scope: ${rule || 'female'} (profile)`;
   let creator = null;
-  if (feed.creator_id && ['user', 'feed', 'page'].includes(feed.kind)) creator = repo.creators.get(feed.creator_id);
+  if (ownedByFeed(item, feed)) creator = repo.creators.get(feed.creator_id);
   else if (handle) creator = repo.creators.byAccount(feed.platform, handle);
   if (creator && creator.status === 'active') {
     repo.creators.block(creator.id, reason, 'system');
@@ -87,9 +89,15 @@ function blockFemaleCreator(item, feed, rule) {
   }
 }
 
+/**
+ * A repost (Tumblr reblog, X retweet or quote, Bluesky repost, Reddit crosspost) carries somebody else's post. It belongs
+ * to the ORIGINAL poster, not to the account whose feed we read, so the feed's own creator is not used for it.
+ */
+const ownedByFeed = (item, feed) => !!feed.creator_id && ['user', 'feed', 'page'].includes(feed.kind) && !item.repostOf;
+
 /** The creator this item belongs to, if one is already known (never creates one). */
 function knownCreator(item, feed) {
-  if (feed.creator_id && ['user', 'feed', 'page'].includes(feed.kind)) return repo.creators.get(feed.creator_id);
+  if (ownedByFeed(item, feed)) return repo.creators.get(feed.creator_id);
   if (['rss', 'web', 'linkinbio'].includes(feed.platform)) return null;
   const handle = cleanHandle(item.author);
   if (!handle || SKIP_AUTHORS.has(handle.toLowerCase())) return null;
@@ -99,12 +107,12 @@ function knownCreator(item, feed) {
 /** Which creator does this item belong to? May create one. */
 function resolveCreator(item, feed, adapter) {
   // Feeds that belong to a specific creator (their profile, their RSS, their page).
-  if (feed.creator_id && ['user', 'feed', 'page'].includes(feed.kind)) {
+  if (ownedByFeed(item, feed)) {
     const c = repo.creators.get(feed.creator_id);
     if (c) return c.status === 'active' ? c : { blocked: true };
   }
   const platform = feed.platform;
-  if (['rss', 'web', 'linkinbio'].includes(platform)) {
+  if (['rss', 'web', 'linkinbio'].includes(platform) && !item.repostOf) {
     // A site/feed with no creator yet becomes its own creator, owned by the feed.
     const name = cleanHandle(feed.label || item.author || new URL(feed.target).hostname);
     const c = repo.creators.create({ handle: name, displayName: item.author || name, origin: 'ingest' });
@@ -160,6 +168,11 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   // ---- 2. safety (never bypassable) ---------------------------------------------
   const safety = checkItem(item);
   if (safety.level === 'block') return { outcome: 'blocked', reason: `safety:${safety.rule}` };
+
+  // ---- 2b. leaked paid content (never bypassable) -----------------------------------
+  // Reposts of public posts are fine from anywhere; leak sites, file lockers and posts that sell themselves as leaks are not.
+  const leak = leaks.checkItem(item);
+  if (leak) return { outcome: 'blocked', reason: leak.rule };
 
   // ---- 3. blocklist -----------------------------------------------------------
   const sourceKey = `${platform}:${item.sourceId}:${item.position || 0}`;
@@ -275,6 +288,14 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   const creator = resolveCreator(item, feed, adapter);
   if (creator && creator.blocked) return { outcome: 'blocked', reason: 'creator blocked' };
 
+  // ---- 7b. keep: a video whose link will expire (and that no source can refresh) is copied to the object store now, so it
+  // still plays inside PRISM next week. Best effort: when the copy fails or the file is too big, the original link is kept.
+  let keptKey = null;
+  if (vault.wanted(item, platform, settings)) {
+    const kept = await vault.keep(item, { sourceKey, maxMb: settings.keepVideoMaxMb });
+    if (kept) { item.mediaUrl = kept.url; item.hlsUrl = null; keptKey = kept.key; }
+  }
+
   // ---- 8. publish state --------------------------------------------------------------
   let state = 'published';
   let reviewReason = null;
@@ -319,7 +340,10 @@ async function processItemInner(rawItem, feed, adapter, settings) {
     phash,
     physique: physiqueScore,
   }, tags);
-  if (!mediaId) return { outcome: 'dupe' };
+  if (!mediaId) {
+    if (keptKey) require('../lib/objectstore').remove(keptKey).catch(() => {}); // the copy belongs to nobody
+    return { outcome: 'dupe' };
+  }
   if (phash && (state === 'published' || state === 'review' || bodyVerdict)) dedupe.remember(mediaId, phash, { mediaType: item.mediaType, width: item.width, height: item.height });
 
   if (physiqueScore != null && creator) physique.reviewCreator(creator.id, body); // consistently heavy creators drop out too

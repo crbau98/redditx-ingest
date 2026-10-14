@@ -33,6 +33,8 @@ const { checkItem } = require('../src/lib/safety');
 const { classify } = require('../src/lib/scope');
 const { hostOf, hostBlocked, hostTrusted, normalizeMediaUrl } = require('../src/lib/mediaurl');
 const { probeMedia } = require('../src/engine/probe');
+const leaks = require('../src/lib/leaks');
+const vault = require('../src/lib/vault');
 
 const LIMIT = parseInt(opt('limit'), 10) || 15;
 const TIMEOUT_MS = (parseInt(opt('timeout'), 10) || 60) * 1000;
@@ -79,7 +81,7 @@ async function withTimeout(promise, ms) {
 
 async function check(spec) {
   const adapter = registry.get(spec.platform);
-  const row = { platform: spec.platform, kind: spec.kind, target: spec.target, reachable: false, fetched: 0, usable: 0, would: { publish: 0, review: 0, excluded: 0, dropped: 0, blocked: 0, skipped: 0 }, skipReasons: {}, probe: null, error: null, hint: null, note: null, ms: 0 };
+  const row = { platform: spec.platform, kind: spec.kind, target: spec.target, reachable: false, fetched: 0, usable: 0, would: { publish: 0, review: 0, excluded: 0, dropped: 0, blocked: 0, leak: 0, skipped: 0 }, reposts: 0, videos: 0, skipReasons: {}, probe: null, error: null, hint: null, note: null, ms: 0 };
   if (!adapter) { row.error = 'unknown platform'; return row; }
   if (!spec.target) { row.note = 'no sample target: pass --target platform:kind:target'; row.skipped = true; return row; }
   const conf = adapter.isConfigured(spec.kind);
@@ -101,6 +103,8 @@ async function check(spec) {
       row.usable++;
       const safety = checkItem(it);
       if (safety.level === 'block') { row.would.blocked++; continue; }
+      if (leaks.checkItem(it)) { row.would.leak++; continue; }
+      if (it.repostOf) row.reposts++;
       // exactly what the pipeline does: the query is screened for female words but is never male evidence
       const sc = classify([it.title, it.text, it.altText, it.community, it.author, it.authorName, it.authorBio, it.tags, it.labels], { trusted: !!spec.trusted, screen: [it.query] });
       if (sc.scope === 'excluded') { row.would.excluded++; continue; }
@@ -110,6 +114,12 @@ async function check(spec) {
       if (hostBlocked(host)) { skip(`blocked host ${host}`); continue; }
       if (safety.level === 'review' || sc.femaleSoft || sc.scope === 'uncertain') { row.would.review++; continue; }
       row.would.publish++;
+      if (it.mediaType === 'video') {
+        row.videos++;
+        if (!row.playback) row.playback = /\.m3u8(\?|$)/i.test(it.hlsUrl || it.mediaUrl) ? 'HLS stream through /api/hls'
+          : vault.REFRESHABLE.has(spec.platform) || /redgifs\.com|twimg\.com/i.test(it.mediaUrl) ? 'direct file through /api/proxy (stale links refreshed at the source)'
+            : vault.expiring(it.mediaUrl) ? 'expiring link: a copy is kept in the media store at ingest' : 'direct file through /api/proxy';
+      }
       if (!firstOk && !it.resolve && !/redgifs\.com\/(?:watch|ifr)\//i.test(it.mediaUrl)) firstOk = it;
     }
     if (firstOk && !/\.m3u8(\?|$)/i.test(firstOk.mediaUrl)) {
@@ -149,7 +159,9 @@ async function check(spec) {
       if (r.hint) console.log(`        fix:   ${r.hint}`);
       if (r.note) console.log(`        note:  ${r.note}`);
       if (!r.skipped && !r.error) {
-        console.log(`        ${r.fetched} fetched · ${r.usable} with usable media · would publish ${r.would.publish}, review ${r.would.review}, excluded (not male-only) ${r.would.excluded}, dropped (no male wording) ${r.would.dropped}, blocked (safety) ${r.would.blocked}, skipped ${r.would.skipped}`);
+        console.log(`        ${r.fetched} fetched · ${r.usable} with usable media · would publish ${r.would.publish}, review ${r.would.review}, excluded (not male-only) ${r.would.excluded}, dropped (no male wording) ${r.would.dropped}, blocked (safety) ${r.would.blocked}, blocked (leaks) ${r.would.leak}, skipped ${r.would.skipped}`);
+        if (r.reposts) console.log(`        reposts kept (credited to the original poster): ${r.reposts}`);
+        if (r.videos) console.log(`        videos: ${r.videos} · playback: ${r.playback}`);
         const reasons = Object.entries(r.skipReasons).map(([k, v]) => `${k} ×${v}`).join(', ');
         if (reasons) console.log(`        skip reasons: ${reasons}`);
         if (r.probe) console.log(`        first media: ${r.probe}`);

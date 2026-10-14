@@ -82,4 +82,7 @@ function errorDetail(e) {
   } catch { return ''; }
 }
 
-module.exports = { toIso, decodeHtml, htmlToText, absUrl, clip, uniq, pickWidth, stripQuery, bestSrcset, originOf, errorDetail };
+/** Keep reposts (credited to the original poster)? Admin setting "reposts", on by default. */
+function repostsOn() { try { return require('../settings').get().reposts !== false; } catch { return true; } }
+
+module.exports = { repostsOn, toIso, decodeHtml, htmlToText, absUrl, clip, uniq, pickWidth, stripQuery, bestSrcset, originOf, errorDetail };

@@ -12,7 +12,7 @@
  */
 const config = require('../config');
 const http = require('./http').forPlatform('x', 1200);
-const { toIso, clip } = require('./util');
+const { toIso, clip, repostsOn } = require('./util');
 const { extractLinks } = require('../lib/links');
 
 const base = config.baseUrls.x;
@@ -40,21 +40,29 @@ async function apiGet(url) {
 }
 const bearer = () => ({ authorization: `Bearer ${config.creds.xBearer}` });
 const MEDIA_FIELDS = 'media.fields=url,preview_image_url,type,variants,width,height,duration_ms,alt_text';
-const TWEET_FIELDS = 'tweet.fields=created_at,public_metrics,possibly_sensitive,entities';
+const TWEET_FIELDS = 'tweet.fields=created_at,public_metrics,possibly_sensitive,entities,referenced_tweets,attachments,author_id';
+// Reposts and quotes: the original post, its author and its media come back in `includes`.
+const REF_EXPANSIONS = 'referenced_tweets.id,referenced_tweets.id.author_id,referenced_tweets.id.attachments.media_keys';
 
 function bestMp4(variants) {
   return (variants || []).filter((v) => v.content_type === 'video/mp4' || /\.mp4/.test(v.url || '')).sort((a, b) => (b.bit_rate || b.bitrate || 0) - (a.bit_rate || a.bitrate || 0))[0];
 }
 
-/** v2 API response -> items */
+/**
+ * v2 API response -> items. A repost carries no media of its own: the original post's media is used and credited to
+ * the original author (`repostOf`). A quote keeps its own media and adds the quoted post's.
+ */
 function parseApi(json, query) {
-  const users = {}; const media = {};
+  const users = {}; const media = {}; const refs = {};
   ((json.includes && json.includes.users) || []).forEach((u) => { users[u.id] = u; });
   ((json.includes && json.includes.media) || []).forEach((m) => { media[m.media_key] = m; });
+  ((json.includes && json.includes.tweets) || []).forEach((t) => { refs[t.id] = t; });
   const items = [];
-  for (const t of json.data || []) {
+  const reposts = repostsOn();
+  const emit = (t, via) => {
     const user = users[t.author_id] || {};
     const keys = (t.attachments && t.attachments.media_keys) || [];
+    const repostOf = via && user.username && via !== user.username ? { platform: 'x', handle: user.username, via } : null;
     keys.forEach((key, i) => {
       const m = media[key];
       if (!m) return;
@@ -77,17 +85,36 @@ function parseApi(json, query) {
         tags: ((t.entities && t.entities.hashtags) || []).map((h) => h.tag),
         nsfw: t.possibly_sensitive ? 'explicit' : 'suggestive',
         query: query || null, trusted: true,
+        ...(repostOf ? { repostOf } : {}),
       });
     });
+  };
+  for (const t of json.data || []) {
+    const by = (users[t.author_id] || {}).username;
+    const refList = t.referenced_tweets || [];
+    const rt = refList.find((r) => r.type === 'retweeted');
+    if (rt) { if (reposts && refs[rt.id]) emit(refs[rt.id], by); continue; }
+    emit(t, null);
+    const qt = refList.find((r) => r.type === 'quoted');
+    if (qt && reposts && refs[qt.id]) emit(refs[qt.id], by);
   }
   return items;
 }
 
-/** legacy "tweet" object (syndication) -> items */
-function parseLegacyTweet(t) {
-  if (!t || t.retweeted_status) return [];
+/** legacy "tweet" object (syndication) -> items. Reposts and quotes are credited to the original author. */
+function parseLegacyTweet(t, via = null) {
+  if (!t) return [];
+  if (typeof via !== 'string') via = null; // used directly as a flatMap callback: the 2nd argument is an index
+  if (t.retweeted_status) {
+    if (!repostsOn() || via) return [];
+    // a retweet is new when it was retweeted: the feed cursor follows the retweet's time, not the original's
+    const at = toIso(t.created_at);
+    return parseLegacyTweet(t.retweeted_status, (t.user && t.user.screen_name) || null).map((it) => (at ? { ...it, cursorAt: at } : it));
+  }
+  const quoted = t.quoted_status && repostsOn() && !via ? parseLegacyTweet(t.quoted_status, (t.user && t.user.screen_name) || null) : [];
   const mediaList = (t.extended_entities && t.extended_entities.media) || (t.entities && t.entities.media) || [];
   const user = t.user || {};
+  const repostOf = via && user.screen_name && via !== user.screen_name ? { platform: 'x', handle: user.screen_name, via } : null;
   return mediaList.map((m, i) => {
     const isVideo = m.type === 'video' || m.type === 'animated_gif';
     const mp4 = isVideo ? bestMp4(m.video_info && m.video_info.variants) : null;
@@ -107,8 +134,9 @@ function parseLegacyTweet(t) {
       hasAudio: m.type === 'video',
       tags: ((t.entities && t.entities.hashtags) || []).map((h) => h.text),
       nsfw: t.possibly_sensitive ? 'explicit' : 'suggestive', trusted: true,
+      ...(repostOf ? { repostOf } : {}),
     };
-  }).filter(Boolean);
+  }).filter(Boolean).concat(quoted);
 }
 
 function parseSyndication(html) {
@@ -127,7 +155,7 @@ async function viaApi(feed, ctx, cursor) {
     const q = `${feed.target} has:media -is:retweet -is:reply`;
     let newestId = null; let next = null;
     for (let page = 0; page < (cursor.newestId && !ctx.force ? 1 : 2); page++) {
-      const json = await apiGet(`${base}/2/tweets/search/recent?query=${encodeURIComponent(q)}&max_results=100&expansions=attachments.media_keys,author_id&${MEDIA_FIELDS}&${TWEET_FIELDS}&user.fields=username,name,profile_image_url${since}${next ? `&next_token=${encodeURIComponent(next)}` : ''}`);
+      const json = await apiGet(`${base}/2/tweets/search/recent?query=${encodeURIComponent(q)}&max_results=100&expansions=attachments.media_keys,author_id,${REF_EXPANSIONS}&${MEDIA_FIELDS}&${TWEET_FIELDS}&user.fields=username,name,profile_image_url${since}${next ? `&next_token=${encodeURIComponent(next)}` : ''}`);
       if (!newestId && json.meta) newestId = json.meta.newest_id;
       items.push(...parseApi(json, feed.target));
       next = json.meta && json.meta.next_token;
@@ -145,7 +173,8 @@ async function viaApi(feed, ctx, cursor) {
   const pages = (cursor.newestId && !ctx.force) || feed.origin === 'discovered' ? 1 : 2;
   for (let page = 0; page < pages; page++) {
     if (ctx.aborted && ctx.aborted()) break;
-    const json = await apiGet(`${base}/2/users/${u.data.id}/tweets?max_results=100&exclude=retweets,replies&expansions=attachments.media_keys,author_id&${MEDIA_FIELDS}&${TWEET_FIELDS}&user.fields=username,name,profile_image_url${since}${next ? `&pagination_token=${encodeURIComponent(next)}` : ''}`);
+    const exclude = repostsOn() ? 'replies' : 'retweets,replies';
+    const json = await apiGet(`${base}/2/users/${u.data.id}/tweets?max_results=100&exclude=${exclude}&expansions=attachments.media_keys,author_id,${REF_EXPANSIONS}&${MEDIA_FIELDS}&${TWEET_FIELDS}&user.fields=username,name,profile_image_url${since}${next ? `&pagination_token=${encodeURIComponent(next)}` : ''}`);
     if (!newestId && json.meta) newestId = json.meta.newest_id;
     items.push(...parseApi(json, null));
     next = json.meta && json.meta.next_token;
@@ -158,7 +187,7 @@ async function viaSyndication(feed) {
   const html = await http.text(`${config.baseUrls.xSyndication}/srv/timeline-profile/screen-name/${encodeURIComponent(feed.target)}?showReplies=false`, {
     headers: { accept: 'text/html', referer: 'https://publish.twitter.com/' },
   });
-  return parseSyndication(html).flatMap(parseLegacyTweet);
+  return parseSyndication(html).flatMap((t) => parseLegacyTweet(t));
 }
 
 async function fetchTweet(id) {
@@ -227,8 +256,9 @@ module.exports = {
     let newest = cursor.newestAt || null;
     const fresh = [];
     for (const it of items) {
-      if (it.postedAt && (!newest || it.postedAt > newest)) newest = it.postedAt;
-      if (cursor.newestAt && it.postedAt && it.postedAt <= cursor.newestAt && !ctx.force) continue;
+      const at = it.cursorAt || it.postedAt;
+      if (at && (!newest || at > newest)) newest = at;
+      if (cursor.newestAt && at && at <= cursor.newestAt && !ctx.force) continue;
       fresh.push(it);
     }
     return { items: fresh, cursor: newest ? { newestAt: newest } : undefined, via: 'syndication' };

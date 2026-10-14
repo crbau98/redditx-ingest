@@ -16,7 +16,7 @@
 const config = require('../config');
 const net = require('../lib/net');
 const http = require('./http').forPlatform('bluesky', 400);
-const { toIso, clip, errorDetail } = require('./util');
+const { toIso, clip, errorDetail, repostsOn } = require('./util');
 const { extractLinks } = require('../lib/links');
 
 const base = config.baseUrls.bsky;
@@ -98,11 +98,14 @@ function mediaOf(embed) {
   return [];
 }
 
-/** feed[] view entry -> items. Reposts are skipped (the original poster owns it). */
+/** feed[] view entry -> items. A repost is kept (setting "reposts") and credited to the original poster. */
 function parsePostView(entry) {
   const post = entry.post || entry;
   if (!post || !post.uri) return [];
-  if (entry.reason && /reasonRepost/.test(entry.reason.$type || '')) return [];
+  const reposted = entry.reason && /reasonRepost/.test(entry.reason.$type || '');
+  const via = reposted && entry.reason.by ? entry.reason.by.handle || null : null;
+  // Kept only when we know who reposted it and it is somebody else's post (a self-repost adds nothing).
+  if (reposted && (!repostsOn() || !via || via === (post.author && post.author.handle))) return [];
   const selfLabels = post.record && post.record.labels && Array.isArray(post.record.labels.values) ? post.record.labels.values : [];
   const labels = [...(post.labels || []), ...selfLabels, ...((post.author && post.author.labels) || [])].map((l) => l && l.val).filter(Boolean);
   if (labels.some((l) => LOGIN_REQUIRED.has(l))) return [];
@@ -135,6 +138,9 @@ function parsePostView(entry) {
     labels,
     nsfw,
     trusted: true,
+    ...(reposted && handle ? { repostOf: { platform: 'bluesky', handle, via } } : {}),
+    // a repost is new when it was reposted, not when the original was posted: the feed cursor follows the repost time
+    ...(reposted && entry.reason.indexedAt ? { cursorAt: toIso(entry.reason.indexedAt) } : {}),
   }));
 }
 
@@ -243,8 +249,9 @@ async function fetchFeed(feed, ctx) {
     let reachedKnown = false;
     for (const entry of json.feed || []) {
       for (const it of parsePostView(entry)) {
-        if (it.postedAt && (!newest || it.postedAt > newest)) newest = it.postedAt;
-        if (!ranked && cursor.newestAt && it.postedAt && it.postedAt <= cursor.newestAt && !ctx.force) { reachedKnown = true; continue; }
+        const at = it.cursorAt || it.postedAt;
+        if (at && (!newest || at > newest)) newest = at;
+        if (!ranked && cursor.newestAt && at && at <= cursor.newestAt && !ctx.force) { reachedKnown = true; continue; }
         items.push({ ...it, query: feed.kind === 'search' ? feed.target : null });
       }
     }
