@@ -12,7 +12,7 @@ Fixes from the v4.16 review, rebuilt on current main (the original follow-up PR 
 | Removed the dense-grid hover-caption rules: dense cards are compact and have no caption, so they never applied | `app.css` |
 | **OnlyFans** button, badge and chip get the lit edge and glow; phone creator-header buttons wrap so the OnlyFans button is never clipped | `app.css` |
 
-**Verification**: 632 unit tests (3 new guards in `tests/v416-lumen.test.js`). In Chromium: rendered column gap equals the JS gap (12 px desktop, 8 px phone); Tab focus shows a 2 px outline on buttons; a forced worst-case wide card clips 0 px at 1280, 390 and 360 px wide; phone creator page shows the full OnlyFans button; no console errors.
+**Verification**: 653 unit tests after merging main (3 new guards in `tests/v416-lumen.test.js`). In Chromium: rendered column gap equals the JS gap (12 px desktop, 8 px phone); Tab focus shows a 2 px outline on buttons; a forced worst-case wide card clips 0 px at 1280, 390 and 360 px wide; phone creator page shows the full OnlyFans button; no console errors.
 
 ## 2026-10-14 — v5 platform switcher, phase 2 of Features and usability
 
