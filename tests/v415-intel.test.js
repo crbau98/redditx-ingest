@@ -95,6 +95,64 @@ describe('recommendations v2', () => {
     assert.deepEqual(p0.filter((id) => p1.includes(id)), []);
   });
 
+  test('later pages continue the order the session started with, even after the library changes', async () => {
+    const q = `creators=${world.a.id}:6&tags=beach:2,waves:1&limit=4&seed=13`;
+    const p0 = (await pub(`/api/recommend?${q}&page=0`)).json.items.map((x) => x.id);
+    // New, fresh posts that would rank near the top of a rebuilt list.
+    const fresh = [post(world.a, ['beach', 'blond', 'waves']), post(world.b, ['beach', 'waves', 'blond'])];
+    try {
+      const later = [];
+      for (const page of [1, 2]) later.push(...(await pub(`/api/recommend?${q}&page=${page}`)).json.items.map((x) => x.id));
+      assert.ok(later.length > 0);
+      assert.deepEqual(p0.filter((id) => later.includes(id)), [], 'no item of page 0 comes back on a later page');
+      assert.equal(new Set(later).size, later.length);
+      assert.ok(!later.some((id) => fresh.includes(id)), 'items added mid-session wait for the next fresh first page');
+      assert.ok((await pub(`/api/recommend?${q}&page=0`)).json.items.length > 0);
+    } finally { for (const id of fresh) repo.media.setState(id, 'hidden', 'admin'); }
+  });
+
+  test('an item moderated after its page was served is replaced, so the page stays full', async () => {
+    recs.setCacheTtl(60000);
+    const q = `creators=${world.a.id}:6,${world.b.id}:4,${world.e.id}:3&tags=beach:2,waves:1&limit=3&seed=17`;
+    let victim;
+    try {
+      const p0 = (await pub(`/api/recommend?${q}&page=0`)).json.items.map((x) => x.id);
+      const p1 = (await pub(`/api/recommend?${q}&page=1`)).json.items.map((x) => x.id);
+      assert.equal(p1.length, 3);
+      victim = p1[1];
+      repo.media.setState(victim, 'hidden', 'admin');
+      // A retried (or shared) request for the same later page, after the moderation.
+      const again = (await pub(`/api/recommend?${q}&page=1`)).json.items.map((x) => x.id);
+      assert.equal(again.length, 3, 'a short page would end infinite scroll');
+      assert.ok(!again.includes(victim));
+      assert.deepEqual([again[0], again[2]], [p1[0], p1[2]], 'the rest of the page keeps its place');
+      assert.ok(!p0.includes(again[1]), 'the stand-in is something not shown before');
+      const p2 = (await pub(`/api/recommend?${q}&page=2`)).json.items.map((x) => x.id);
+      assert.deepEqual(p2.filter((id) => [...p0, ...again].includes(id)), []);
+    } finally { recs.setCacheTtl(0); if (victim) repo.media.setState(victim, 'published'); }
+  });
+
+  test('a deep page is cheap, and retries of a page never shrink the total', async () => {
+    recs.setCacheTtl(60000);
+    const q = `creators=${world.a.id}:6,${world.b.id}:4&tags=beach:2,waves:1&limit=1&seed=19`;
+    let victim;
+    try {
+      const first = (await pub(`/api/recommend?${q}&page=0`)).json;
+      const far = await pub(`/api/recommend?${q}&page=100000`);
+      assert.equal(far.status, 200); assert.deepEqual(far.json.items, []);
+      const t0 = Date.now(); await pub(`/api/recommend?${q}&page=${first.total - 1}`);
+      assert.ok(Date.now() - t0 < 2000);
+      const last = (await pub(`/api/recommend?${q}&page=${first.total - 1}`)).json;
+      victim = last.items[0] && last.items[0].id;
+      if (victim) {
+        repo.media.setState(victim, 'hidden', 'admin');
+        const totals = [];
+        for (let k = 0; k < 4; k++) totals.push((await pub(`/api/recommend?${q}&page=${first.total - 1}`)).json.total);
+        assert.ok(totals.every((x) => x === totals[0] && x >= 0), JSON.stringify(totals));
+      }
+    } finally { recs.setCacheTtl(0); if (victim) repo.media.setState(victim, 'published'); }
+  });
+
   test('a cached ranking still honours each request\'s exclusions and later moderation', async () => {
     recs.setCacheTtl(60000);
     try {
