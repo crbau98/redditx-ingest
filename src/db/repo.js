@@ -986,7 +986,7 @@ const media = {
       if (f.sort === 'random') { order = 'hash_seed(m.id, ?) ASC, m.seq'; }
       else order = SORTS[f.sort] || SORTS.recent;
     }
-    const orderParams = f.sort === 'random' && !match ? [clampInt(f.seed, 0, 2147483647, 1)] : [];
+    const orderParams = order.startsWith('hash_seed') ? [clampInt(f.seed, 0, 2147483647, 1)] : [];
     const whereSql = where.join(' AND ');
     const forced = !join && f.sort !== 'random' ? sortIndexFor(f, SORTS[f.sort] ? f.sort : 'recent', where) : null;
     // With a text match, CROSS JOIN pins the loop order: run the MATCH once, then look rows up by key.

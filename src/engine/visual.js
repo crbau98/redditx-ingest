@@ -120,6 +120,8 @@ function nearest(x, r, k) {
   return top.sort((a, b) => b[1] - a[1]);
 }
 
+// Caches only the index's answer (neighbour ids), never the rows: visibility is checked against the database on every
+// request, so a post hidden or a creator blocked after the first lookup drops out at once.
 const cache = new Map();
 /**
  * Visually similar posts to media `id`. Returns null when this item has no vector yet (or the index is too small), so
@@ -130,26 +132,28 @@ function similar(id, limit = 12) {
   const r = x.row.get(id);
   if (r === undefined || x.n < MIN_INDEX) return null;
   const key = `${id}|${limit}|${x.n}`;
-  if (cache.has(key)) return cache.get(key);
-  const cands = nearest(x, r, Math.min(x.n - 1, limit * 6 + 20));
-  const post = x.posts[r];
-  const picked = []; const per = new Map(); const posts = new Set(post ? [post] : []);
-  for (const [i, s] of cands) {
-    const c = x.creators[i]; const pk = x.posts[i];
-    if (pk && posts.has(pk)) continue;
-    if (c && (per.get(c) || 0) >= 2) continue;
-    picked.push([x.ids[i], s]);
-    if (pk) posts.add(pk);
-    if (c) per.set(c, (per.get(c) || 0) + 1);
-    if (picked.length >= limit * 2) break;
+  let picked = cache.get(key);
+  if (!picked) {
+    const cands = nearest(x, r, Math.min(x.n - 1, limit * 6 + 20));
+    const post = x.posts[r];
+    const per = new Map(); const posts = new Set(post ? [post] : []);
+    picked = [];
+    for (const [i, s] of cands) {
+      const c = x.creators[i]; const pk = x.posts[i];
+      if (pk && posts.has(pk)) continue;
+      if (c && (per.get(c) || 0) >= 2) continue;
+      picked.push([x.ids[i], s]);
+      if (pk) posts.add(pk);
+      if (c) per.set(c, (per.get(c) || 0) + 1);
+      if (picked.length >= limit * 2) break;
+    }
+    if (cache.size > 500) cache.clear();
+    cache.set(key, picked);
   }
   const ids = picked.map(([mid]) => mid);
   const rows = ids.length ? db.prepare(`SELECT ${COLS} FROM media m LEFT JOIN creators c ON c.id = m.creator_id WHERE m.id IN (SELECT value FROM json_each(?)) AND ${VISIBLE}`).all(JSON.stringify(ids)) : [];
   const byId = new Map(rows.map((m) => [m.id, m]));
-  const out = picked.filter(([mid]) => byId.has(mid)).slice(0, limit).map(([mid, s]) => ({ ...repo.serializeMedia(byId.get(mid)), similarity: Math.round(Math.max(0, s) * 1000) / 1000 }));
-  if (cache.size > 500) cache.clear();
-  cache.set(key, out);
-  return out;
+  return picked.filter(([mid]) => byId.has(mid)).slice(0, limit).map(([mid, s]) => ({ ...repo.serializeMedia(byId.get(mid)), similarity: Math.round(Math.max(0, s) * 1000) / 1000 }));
 }
 
 /**
