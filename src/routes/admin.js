@@ -273,7 +273,7 @@ router.get('/discovery', (req, res) => {
   const status = ['pending', 'followed', 'linked', 'rejected', 'all'].includes(req.query.status) ? req.query.status : 'pending';
   res.json({
     ...discovery.status(),
-    candidates: repo.candidates.list({ status, ...page(req, 200), q: typeof req.query.q === 'string' ? req.query.q.slice(0, 60) : undefined, platform: /^[a-z]{2,20}$/.test(req.query.platform || '') ? req.query.platform : undefined, sort: ['score', 'recent', 'new'].includes(req.query.sort) ? req.query.sort : 'score' }),
+    candidates: repo.candidates.list({ status, ...page(req, 200), q: typeof req.query.q === 'string' ? req.query.q.slice(0, 60) : undefined, platform: /^[a-z]{1,20}$/.test(req.query.platform || '') ? req.query.platform : undefined, sort: ['score', 'recent', 'new'].includes(req.query.sort) ? req.query.sort : 'score' }),
   });
 });
 router.post('/discovery/run', (req, res) => {
