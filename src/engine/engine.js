@@ -69,8 +69,11 @@ const ITEM_CONCURRENCY = 4;
  */
 function noteWaysIn(raw, r, feed, w) {
   const rp = raw.repostOf;
-  if (rp && r.creatorId) {
-    w.originals.add(r.creatorId);
+  // a duplicate (the original is already stored) carries no creator: find the original poster by his account
+  let creatorId = r.creatorId;
+  if (rp && !creatorId && rp.handle) { const c = repo.creators.byAccount(rp.platform, String(rp.handle)); if (c && c.status === 'active') creatorId = c.id; }
+  if (rp && creatorId) {
+    if (r.creatorId) w.originals.add(creatorId);
     const ownFeed = feed.kind === 'user' && String(feed.target).toLowerCase() === String(rp.via || '').toLowerCase();
     if (rp.via && !ownFeed) {
       const k = String(rp.via);

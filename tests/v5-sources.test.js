@@ -89,6 +89,18 @@ test('admins can add more leak domains in settings', () => {
   assert.equal(leaks.isLeakUrl('https://newleaks.example/x'), false);
 });
 
+test('a leak link hidden behind innocent anchor text is caught (RSS / Tumblr and Mastodon keep every link of the post)', async () => {
+  const rss = registry.get('rss');
+  const [it] = rss.entryToItems({ id: 'e1', link: 'https://blog.example/p/1', title: 'gym', text: 'download', published: '2026-10-10T00:00:00Z', categories: [],
+    links: ['https://mega.nz/file/abc'], media: [{ type: 'image', url: 'https://blog.example/img.jpg' }] }, { title: 'blog' });
+  assert.deepEqual(it.links, ['https://mega.nz/file/abc']);
+  const r = await pipeline.processItem({ ...it, sourceId: 'hidden-leak', title: 'Gym selfie, gay jock', trusted: true }, feed, null, settings);
+  assert.equal(r.outcome, 'blocked'); assert.match(r.reason, /leak-site:mega\.nz/);
+  const [m] = registry.get('mastodon').parseStatus({ id: '1', created_at: '2026-10-10T00:00:00Z', url: 'https://m.example/@a/1', account: { acct: 'a' },
+    content: '<p>new set <a href="https://gofile.io/d/xyz">here</a></p>', media_attachments: [{ type: 'image', url: 'https://m.example/a.jpg' }] }, 'm.example');
+  assert.ok(m.links.includes('https://gofile.io/d/xyz'));
+});
+
 /* ---------------------------------------------------------------- reposts */
 
 test('X: reposts and quotes are kept and credited to the original author (syndication and API)', () => {
@@ -100,6 +112,7 @@ test('X: reposts and quotes are kept and credited to the original author (syndic
   assert.equal(it.author, 'jockone');
   assert.deepEqual(it.repostOf, { platform: 'x', handle: 'jockone', via: 'fanacct' });
   assert.equal(x.parseLegacyTweet(original)[0].repostOf, undefined, 'his own post is not a repost');
+  assert.equal(x.parseLegacyTweet({ ...rt, created_at: 'Wed Oct 14 09:00:00 +0000 2026' })[0].cursorAt, '2026-10-14T09:00:00.000Z', 'the feed cursor follows the retweet time');
   // flatMap passes an index as the 2nd argument: it must not be read as a reposter
   assert.equal([original, original].flatMap(x.parseLegacyTweet)[1].repostOf, undefined);
 
@@ -125,6 +138,8 @@ test('Bluesky: a repost by somebody else is kept for the original poster; self-r
   const [it] = bsky.parsePostView({ post, reason: { $type: 'app.bsky.feed.defs#reasonRepost', by: { handle: 'fan.bsky.social' } } });
   assert.equal(it.author, 'jock.bsky.social');
   assert.deepEqual(it.repostOf, { platform: 'bluesky', handle: 'jock.bsky.social', via: 'fan.bsky.social' });
+  const [later] = bsky.parsePostView({ post, reason: { $type: 'app.bsky.feed.defs#reasonRepost', by: { handle: 'fan.bsky.social' }, indexedAt: '2026-10-14T08:00:00Z' } });
+  assert.equal(later.cursorAt, '2026-10-14T08:00:00.000Z', 'the feed cursor follows the repost time');
   assert.equal(bsky.parsePostView({ post, reason: { $type: 'app.bsky.feed.defs#reasonRepost', by: { handle: 'jock.bsky.social' } } }).length, 0);
   assert.equal(bsky.parsePostView({ post, reason: { $type: 'app.bsky.feed.defs#reasonRepost' } }).length, 0);
 });

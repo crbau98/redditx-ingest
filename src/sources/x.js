@@ -105,7 +105,12 @@ function parseApi(json, query) {
 function parseLegacyTweet(t, via = null) {
   if (!t) return [];
   if (typeof via !== 'string') via = null; // used directly as a flatMap callback: the 2nd argument is an index
-  if (t.retweeted_status) return repostsOn() && !via ? parseLegacyTweet(t.retweeted_status, (t.user && t.user.screen_name) || null) : [];
+  if (t.retweeted_status) {
+    if (!repostsOn() || via) return [];
+    // a retweet is new when it was retweeted: the feed cursor follows the retweet's time, not the original's
+    const at = toIso(t.created_at);
+    return parseLegacyTweet(t.retweeted_status, (t.user && t.user.screen_name) || null).map((it) => (at ? { ...it, cursorAt: at } : it));
+  }
   const quoted = t.quoted_status && repostsOn() && !via ? parseLegacyTweet(t.quoted_status, (t.user && t.user.screen_name) || null) : [];
   const mediaList = (t.extended_entities && t.extended_entities.media) || (t.entities && t.entities.media) || [];
   const user = t.user || {};
@@ -251,8 +256,9 @@ module.exports = {
     let newest = cursor.newestAt || null;
     const fresh = [];
     for (const it of items) {
-      if (it.postedAt && (!newest || it.postedAt > newest)) newest = it.postedAt;
-      if (cursor.newestAt && it.postedAt && it.postedAt <= cursor.newestAt && !ctx.force) continue;
+      const at = it.cursorAt || it.postedAt;
+      if (at && (!newest || at > newest)) newest = at;
+      if (cursor.newestAt && at && at <= cursor.newestAt && !ctx.force) continue;
       fresh.push(it);
     }
     return { items: fresh, cursor: newest ? { newestAt: newest } : undefined, via: 'syndication' };

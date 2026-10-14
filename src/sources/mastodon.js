@@ -45,6 +45,8 @@ function parseStatus(status, host) {
   if (!status || status.reblog) return [];
   const acct = status.account && (status.account.acct.includes('@') ? status.account.acct : `${status.account.acct}@${host}`);
   const text = htmlToText(status.content, 500);
+  // every link in the post (anchor text can hide where it points): the leak gate checks them (lib/leaks)
+  const links = [...new Set([...String(status.content || '').matchAll(/href="(https?:\/\/[^"]+)"/gi)].map((m) => m[1].replace(/&amp;/g, '&')))];
   const media = (status.media_attachments || []).filter((m) => ['image', 'video', 'gifv'].includes(m.type) && m.url);
   const nsfw = status.sensitive || status.spoiler_text ? 'explicit' : 'suggestive';
   return media.map((m, i) => {
@@ -52,6 +54,7 @@ function parseStatus(status, host) {
     return {
       sourceId: `${host}:${status.id}`,
       position: i,
+      links,
       title: clip(text || status.spoiler_text || '', 300),
       text,
       author: acct,

@@ -139,6 +139,8 @@ function parsePostView(entry) {
     nsfw,
     trusted: true,
     ...(reposted && handle ? { repostOf: { platform: 'bluesky', handle, via } } : {}),
+    // a repost is new when it was reposted, not when the original was posted: the feed cursor follows the repost time
+    ...(reposted && entry.reason.indexedAt ? { cursorAt: toIso(entry.reason.indexedAt) } : {}),
   }));
 }
 
@@ -247,8 +249,9 @@ async function fetchFeed(feed, ctx) {
     let reachedKnown = false;
     for (const entry of json.feed || []) {
       for (const it of parsePostView(entry)) {
-        if (it.postedAt && (!newest || it.postedAt > newest)) newest = it.postedAt;
-        if (!ranked && cursor.newestAt && it.postedAt && it.postedAt <= cursor.newestAt && !ctx.force) { reachedKnown = true; continue; }
+        const at = it.cursorAt || it.postedAt;
+        if (at && (!newest || at > newest)) newest = at;
+        if (!ranked && cursor.newestAt && at && at <= cursor.newestAt && !ctx.force) { reachedKnown = true; continue; }
         items.push({ ...it, query: feed.kind === 'search' ? feed.target : null });
       }
     }
