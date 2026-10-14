@@ -23,6 +23,14 @@ const REFRESHABLE = new Set(['redgifs', 'x']);
 const SIGNED_PARAM = /^(expires?|x-amz-expires|x-amz-signature|x-amz-credential|signature|sig|token|oe|oh|_nc_sid|hdnts|hdnea|validto|policy|key-pair-id|exp|e|st)$/i;
 const EXPIRING_HOSTS = ['fbcdn.net', 'cdninstagram.com', 'tiktokcdn.com', 'tiktokcdn-us.com', 'snapchat.com', 'discordapp.net', 'discordapp.com', 'cdn.discordapp.com'];
 const VIDEO_TYPE = /^video\/(mp4|webm|quicktime|x-m4v)$/i;
+// CDNs and S3 buckets often serve videos as a generic binary (or with no type at all): those are kept when the first bytes
+// are a video container (ISO-BMFF "ftyp" for mp4/mov/m4v, EBML for webm), and stored under the type the bytes show.
+const GENERIC_TYPE = /^(application\/octet-stream|binary\/octet-stream|application\/x-binary|)$/i;
+function sniff(buf) {
+  if (buf.length >= 12 && buf.toString('latin1', 4, 8) === 'ftyp') return /^qt/.test(buf.toString('latin1', 8, 10)) ? 'video/quicktime' : 'video/mp4';
+  if (buf.length >= 4 && buf.readUInt32BE(0) === 0x1a45dfa3) return 'video/webm';
+  return null;
+}
 const EXT = { 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov', 'video/x-m4v': 'm4v' };
 
 const hostMatches = (h, d) => h === d || h.endsWith(`.${d}`);
@@ -58,7 +66,8 @@ async function keep(item, { sourceKey, maxMb = 80, timeoutMs = 120000, open = ne
   const { res, req } = up;
   const type = String(res.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
   const declared = Number(res.headers['content-length'] || 0);
-  if (res.statusCode !== 200 || !VIDEO_TYPE.test(type) || declared > cap) { res.resume(); try { req.destroy(); } catch { /* ignore */ } return null; }
+  if (res.statusCode !== 200 || !(VIDEO_TYPE.test(type) || GENERIC_TYPE.test(type)) || declared > cap) { res.resume(); try { req.destroy(); } catch { /* ignore */ } return null; }
+  let stored = VIDEO_TYPE.test(type) ? type : null; // a generic type is decided by the first bytes
 
   const id = crypto.createHash('md5').update(String(sourceKey || item.mediaUrl)).digest('hex');
   const tmp = path.join(os.tmpdir(), `prism-keep-${process.pid}-${id}`);
@@ -67,17 +76,25 @@ async function keep(item, { sourceKey, maxMb = 80, timeoutMs = 120000, open = ne
     let bytes = 0; let done = false;
     const finish = (v) => { if (done) return; done = true; clearTimeout(timer); resolve(v); };
     const timer = setTimeout(() => { try { req.destroy(); } catch { /* ignore */ } out.destroy(); finish(false); }, timeoutMs);
-    res.on('data', (c) => { bytes += c.length; if (bytes > cap) { try { req.destroy(); } catch { /* ignore */ } out.destroy(); finish(false); } });
+    let head = Buffer.alloc(0);
+    res.on('data', (c) => {
+      bytes += c.length;
+      if (!stored && head.length < 16) {
+        head = Buffer.concat([head, c]);
+        if (head.length >= 16) { stored = sniff(head); if (!stored) { try { req.destroy(); } catch { /* ignore */ } out.destroy(); finish(false); return; } }
+      }
+      if (bytes > cap) { try { req.destroy(); } catch { /* ignore */ } out.destroy(); finish(false); }
+    });
     res.on('error', () => { out.destroy(); finish(false); });
     res.on('aborted', () => { out.destroy(); finish(false); });
     out.on('error', () => finish(false));
-    out.on('finish', () => finish(bytes > 0));
+    out.on('finish', () => { if (!stored) stored = sniff(head); finish(bytes > 0 && !!stored); });
     res.pipe(out);
   });
   try {
     if (!ok) return null;
-    return await store.put(`v/${id.slice(0, 2)}/${id}.${EXT[type] || 'mp4'}`, tmp, type);
+    return await store.put(`v/${id.slice(0, 2)}/${id}.${EXT[stored] || 'mp4'}`, tmp, stored);
   } catch { return null; } finally { fs.rm(tmp, { force: true }, () => {}); }
 }
 
-module.exports = { wanted, keep, expiring, REFRESHABLE };
+module.exports = { wanted, keep, expiring, sniff, REFRESHABLE };

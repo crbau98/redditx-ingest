@@ -69,6 +69,8 @@ const SCHEMA = {
   keepVideos: { type: 'enum', values: ['expiring', 'all', 'off'], default: 'expiring', label: 'Keep a copy of videos in the media store: expiring = only videos whose links expire and cannot be refreshed, all = every direct video, off = never', group: 'sources' },
   keepVideoMaxMb: { type: 'int', default: 80, min: 5, max: 1024, label: 'Largest video copied into the media store (MB)', group: 'sources' },
   reposts: { type: 'bool', default: true, label: 'Keep reposts (Tumblr reblogs, X reposts and quotes, Bluesky reposts, Reddit crossposts), credited to the original poster', group: 'sources' },
+  thumbnails: { type: 'bool', default: true, label: 'Make small thumbnails (kept in the media store) and a colour tint for every picture, so grids load fast', group: 'sources' },
+  thumbnailsPerMinute: { type: 'int', default: 30, min: 0, max: 600, label: 'Thumbnails made per minute in the background', group: 'sources' },
   leakDomains: { type: 'text', default: '', label: 'Extra leak domains to block (one per line). GayForFans, its sister sites, OnlyFans leak mirrors and file lockers are always blocked', group: 'sources' },
   discoveryKeywords: {
     type: 'text', group: 'discovery', label: 'Community keywords (one per line; two are searched per run, in rotation)',
