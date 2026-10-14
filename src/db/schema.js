@@ -550,7 +550,47 @@ function v10(db) {
   db.exec("CREATE INDEX IF NOT EXISTS ix_media_tint_todo ON media(seq DESC) WHERE tint IS NULL AND publish_state = 'published'");
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10];
+/**
+ * v11 (PRISM v5 iteration): paid leads go beyond OnlyFans. The leads table gains a `service`
+ * ('OnlyFans', 'Fansly', 'JustFor.Fans') so a Fansly or JFF page named in posts, bios and web
+ * search results is traced to the same man's free public accounts exactly like an OnlyFans page.
+ * The paid hosts themselves are still never read. Rebuilt with a composite key because one handle
+ * can exist on several services at once.
+ */
+function v11(db) {
+  const cols = db.prepare('PRAGMA table_info(onlyfans_leads)').all().map((c) => c.name);
+  if (cols.includes('service')) return;
+  db.exec(`
+  CREATE TABLE paid_leads_new (
+    service TEXT NOT NULL DEFAULT 'OnlyFans',
+    handle TEXT NOT NULL COLLATE NOCASE,
+    creator_id TEXT REFERENCES creators(id) ON DELETE SET NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','searching','found','claimed','rejected')),
+    mentions INTEGER NOT NULL DEFAULT 0,
+    sources TEXT NOT NULL DEFAULT '[]',
+    origin TEXT,
+    display_name TEXT,
+    bio TEXT,
+    free INTEGER NOT NULL DEFAULT 0,
+    accounts TEXT NOT NULL DEFAULT '[]',
+    reason TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    first_seen TEXT NOT NULL DEFAULT (${NOW}),
+    last_seen TEXT NOT NULL DEFAULT (${NOW}),
+    checked_at TEXT,
+    PRIMARY KEY (service, handle)
+  );
+  INSERT INTO paid_leads_new (service, handle, creator_id, status, mentions, sources, origin, display_name, bio, free, accounts, reason, attempts, first_seen, last_seen, checked_at)
+    SELECT 'OnlyFans', handle, creator_id, status, mentions, sources, origin, display_name, bio, free, accounts, reason, attempts, first_seen, last_seen, checked_at FROM onlyfans_leads;
+  DROP TABLE onlyfans_leads;
+  ALTER TABLE paid_leads_new RENAME TO onlyfans_leads;
+  CREATE INDEX IF NOT EXISTS ix_of_leads_queue ON onlyfans_leads(status, mentions DESC);
+  CREATE INDEX IF NOT EXISTS ix_of_leads_creator ON onlyfans_leads(creator_id);
+  CREATE INDEX IF NOT EXISTS ix_of_leads_service ON onlyfans_leads(service, status);
+  `);
+}
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

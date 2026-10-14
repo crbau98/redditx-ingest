@@ -432,7 +432,7 @@ function follow({ name, selections, externalLinks = [], bio, creatorId = null } 
     .map((l) => { const h = ofHandle(l.url); return h ? ofLink(h) : { platform: 'external', service: l.service, label: l.label, url: l.url }; });
   require('./identity').addAlias(res.creator.id, cleanName, { kind: 'name', source: 'lookup' }); // the name he was looked up by
   if (ext.length) repo.creators.enrich(res.creator.id, { links: ext });
-  for (const l of ext) if (l.handle) repo.onlyfans.claim(l.handle, res.creator.id); // their page: no need to trace it as a lead
+  for (const l of ext) if (l.handle) repo.onlyfans.claim(l.handle, res.creator.id, l.service || 'OnlyFans'); // their page: no need to trace it as a lead
   const feedIds = res.feeds.map((f) => f.id);
   let queued = 0;
   try { queued = require('./engine').enqueue(feedIds, { force: true, trigger: 'lookup', limit: 300 }); } catch { /* engine not running (tests) */ }

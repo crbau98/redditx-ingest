@@ -98,8 +98,8 @@ function addCreator({ name, inputs, bio }) {
     else if (r.feed) feeds.push(r.feed);
   }
   if (links.length) repo.creators.enrich(creator.id, { links });
-  // An OnlyFans page added by hand: discovery then looks for this person's free accounts elsewhere.
-  for (const l of links) if (l.handle) repo.onlyfans.claim(l.handle, creator.id);
+  // A paid page added by hand: discovery then looks for this person's free accounts elsewhere.
+  for (const l of links) if (l.handle) repo.onlyfans.claim(l.handle, creator.id, l.service || 'OnlyFans');
   return { creator: repo.creators.detail(creator.id), feeds, conflicts, skipped, links };
 }
 

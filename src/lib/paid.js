@@ -117,6 +117,18 @@ function findPaidHandles(text) {
 }
 
 const CANONICAL = { 'OnlyFans': (h) => `https://onlyfans.com/${h}`, 'Fansly': (h) => `https://fansly.com/${h}`, 'JustFor.Fans': (h) => `https://justfor.fans/${h}` };
+const PAID_HOSTS = { 'OnlyFans': 'onlyfans.com', 'Fansly': 'fansly.com', 'JustFor.Fans': 'justfor.fans' };
+/** Canonical page URL for a traced paid service, or null. */
+function pageUrl(service, handle) {
+  const host = PAID_HOSTS[service];
+  return host && handle ? `https://${host}/${String(handle).toLowerCase()}` : null;
+}
+/** Does this text link the exact paid page (the profile-link proof)? */
+function pageLinked(service, text, handle) {
+  if (service === 'OnlyFans') return findOnlyFans(text).includes(String(handle).toLowerCase());
+  const host = PAID_HOSTS[service];
+  return !!host && String(text || '').toLowerCase().includes(`${host}/${String(handle).toLowerCase()}`);
+}
 
 /** The external-link object stored on a creator for a paid page. */
 function paidLink(service, handle, { free = false, url = null } = {}) {
@@ -134,5 +146,5 @@ function creatorPaid(c) {
   return (Array.isArray(links) ? links : []).filter((l) => l && l.url && serviceOf(l.url) && l.service !== 'OnlyFans' && !/onlyfans\.com/i.test(l.url || ''));
 }
 
-module.exports = { SERVICES, serviceOf, fanslyHandle, jffHandle, paidHandle, findPaidHandles, paidLink, creatorPaid,
+module.exports = { SERVICES, serviceOf, fanslyHandle, jffHandle, paidHandle, findPaidHandles, paidLink, creatorPaid, pageUrl, pageLinked, PAID_HOSTS,
   ofHandle, findOnlyFans, freeHint, ofLink, creatorOnlyFans };

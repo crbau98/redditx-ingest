@@ -128,9 +128,12 @@ export async function render(root) {
   }
 
   const OF_STATUS = { pending: ['', 'not traced yet'], searching: ['warn', 'nothing found yet'], found: ['good', 'accounts found'], claimed: ['info', 'followed creator'], rejected: ['bad', 'rejected'] };
+  const OF_HOSTS = { 'OnlyFans': 'onlyfans.com', 'Fansly': 'fansly.com', 'JustFor.Fans': 'justfor.fans' };
+  const pageHref = (l) => `https://${OF_HOSTS[l.service] || 'onlyfans.com'}/${l.handle}`;
+  const leadAction = (l, action) => adminPost(`/discovery/onlyfans/${encodeURIComponent(l.handle)}`, { action, service: l.service || 'OnlyFans' });
   async function loadOnlyFans() {
     const r = await adminGet('/discovery/onlyfans', { limit: 15 });
-    const paste = h('textarea', { class: 'textarea', rows: 3, spellcheck: 'false', placeholder: 'onlyfans.com/name or just the handle, one per line' });
+    const paste = h('textarea', { class: 'textarea', rows: 3, spellcheck: 'false', placeholder: 'onlyfans.com/name, fansly.com/name or justfor.fans/name — or just the handle, one per line' });
     const add = h('button', { class: 'btn sm primary', onclick: (e) => act(e.currentTarget, async () => {
       const out = await adminPost('/discovery/onlyfans', { handles: paste.value });
       toast(`${out.added} added${out.claimed ? ` · ${out.claimed} already followed` : ''}${out.invalid.length ? ` · ${out.invalid.length} not recognised` : ''}`, 'ok');
@@ -150,19 +153,22 @@ export async function render(root) {
     ofHost.replaceChildren(h('details', { class: 'panel', style: { marginTop: '14px' } },
       h('summary', null, h('b', null, 'OnlyFans creators'), h('span', { class: 'muted', style: { marginLeft: '10px', fontSize: '13px' } },
         `${fmt.int(c.creators)} followed creators have a page · ${fmt.int(c.pending + c.searching)} pages being traced · ${fmt.int(c.found)} traced to free accounts`)),
-      h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Pages named in posts, bios and web searches. Each is traced to the creator’s free public accounts, which then appear in the queue above with their score.'),
+      h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Pages named in posts, bios and web searches (OnlyFans, Fansly, JustFor.Fans — the paid hosts themselves are never read). Each is traced to the creator’s free public accounts, which then appear in the queue above with their score.'),
       h('div', { class: 'field' }, h('label', null, 'Creators to find by name (one per line). Each is looked up across every platform PRISM reads, two per discovery run, and re-checked monthly'), seeds,
         h('button', { class: 'btn sm', style: { marginTop: '8px' }, onclick: (e) => act(e.currentTarget, async () => { await adminPut('/settings', { creatorSeeds: seeds.value }); seedsText = seeds.value; toast('Saved: the next discovery run looks them up', 'ok'); }) }, 'Save names')),
       seedRows.length ? h('div', { style: { margin: '6px 0 14px' } }, seedRows) : null,
-      h('div', { class: 'field' }, h('label', null, 'OnlyFans pages to trace'), paste, h('div', { style: { marginTop: '8px' } }, add)),
+      h('div', { class: 'field' }, h('label', null, 'Paid pages to trace'), paste, h('div', { style: { marginTop: '8px' } }, add)),
       table([
-        { label: 'Page', render: (l) => h('div', { class: 'cell-stack' }, h('a', { href: `https://onlyfans.com/${l.handle}`, target: '_blank', rel: 'noopener noreferrer nofollow', style: { fontWeight: 600 } }, l.display_name || l.handle), h('span', { class: 'sub truncate', style: { maxWidth: '300px' }, title: l.bio || '' }, l.bio ? l.bio.slice(0, 100) : `@${l.handle}`)) },
+        { label: 'Page', render: (l) => h('div', { class: 'cell-stack' }, h('span', { class: 'row', style: { gap: '6px', alignItems: 'center' } },
+          h('a', { href: pageHref(l), target: '_blank', rel: 'noopener noreferrer nofollow', style: { fontWeight: 600 } }, l.display_name || l.handle),
+          l.service && l.service !== 'OnlyFans' ? h('span', { class: 'badge info' }, l.service === 'JustFor.Fans' ? 'JFF' : l.service) : null),
+          h('span', { class: 'sub truncate', style: { maxWidth: '300px' }, title: l.bio || '' }, l.bio ? l.bio.slice(0, 100) : `@${l.handle}`)) },
         { label: 'Named by', render: (l) => h('span', { class: 'sub' }, l.origin === 'search' ? 'web search' : l.origin === 'admin' ? 'you' : `${l.mentions} source${l.mentions === 1 ? '' : 's'}`, l.free ? h('span', { class: 'badge good', style: { marginLeft: '6px' } }, 'free') : null) },
         { label: 'Status', render: (l) => h('div', { class: 'cell-stack' }, h('span', { class: `badge ${OF_STATUS[l.status][0]}` }, OF_STATUS[l.status][1]),
           l.creator_handle ? h('a', { class: 'sub', href: `#/creator/${l.creator_id}` }, `@${l.creator_handle}`) : l.accounts.length ? h('span', { class: 'sub' }, l.accounts.map((a) => `${a.platform}${a.proven ? ' ✓' : ''}`).join(' · ')) : l.reason ? h('span', { class: 'sub' }, l.reason) : null) },
         { label: '', render: (l) => h('div', { class: 'actions' }, l.status !== 'claimed' ? [
-          h('button', { class: 'btn sm ghost', onclick: (e) => act(e.currentTarget, async () => { await adminPost(`/discovery/onlyfans/${encodeURIComponent(l.handle)}`, { action: 'retry' }); loadOnlyFans(); }) }, 'Retrace'),
-          l.status !== 'rejected' ? h('button', { class: 'btn sm ghost', onclick: (e) => act(e.currentTarget, async () => { await adminPost(`/discovery/onlyfans/${encodeURIComponent(l.handle)}`, { action: 'reject' }); loadOnlyFans(); }) }, 'Reject') : null] : null) },
+          h('button', { class: 'btn sm ghost', onclick: (e) => act(e.currentTarget, async () => { await leadAction(l, 'retry'); loadOnlyFans(); }) }, 'Retrace'),
+          l.status !== 'rejected' ? h('button', { class: 'btn sm ghost', onclick: (e) => act(e.currentTarget, async () => { await leadAction(l, 'reject'); loadOnlyFans(); }) }, 'Reject') : null] : null) },
       ], r.items, { empty: 'No OnlyFans pages seen yet. They are picked up from posts and bios as feeds sync, or paste some above.' })));
   }
 
