@@ -380,8 +380,39 @@ async function searchSubreddits(q, limit = 25) {
   throw lastErr || new Error('Reddit search unavailable');
 }
 
+/**
+ * Public post search (discovery mentions). OAuth when configured, else www JSON.
+ * Returns plain post records; the caller still runs leak, takedown and safety checks.
+ */
+async function searchPosts(q, limit = 15) {
+  const n = Math.max(1, Math.min(25, limit || 15));
+  const qs = `q=${encodeURIComponent(q)}&include_over_18=on&limit=${n}&sort=new&type=link&raw_json=1`;
+  const t = await oauthToken().catch(() => null);
+  const tries = [];
+  if (t) tries.push(() => http.json(`${config.baseUrls.redditOauth}/search?${qs}`, { headers: { authorization: `Bearer ${t}`, 'user-agent': config.redditUserAgent } }));
+  tries.push(() => http.json(`${base}/search.json?${qs}`, { headers: { 'user-agent': config.redditUserAgent } }));
+  let lastErr;
+  for (const attempt of tries) {
+    try {
+      const json = await attempt();
+      return ((json.data && json.data.children) || []).map((c) => c.data).filter(Boolean).map((d) => ({
+        id: d.id,
+        author: d.author,
+        title: d.title || '',
+        selftext: d.selftext || '',
+        url: d.url || '',
+        subreddit: d.subreddit || '',
+        permalink: d.permalink || '',
+        over18: !!d.over_18,
+      })).filter((p) => p.author && p.author !== '[deleted]' && p.author !== 'AutoModerator');
+    } catch (e) { lastErr = e; if (e.status === 404) break; }
+  }
+  throw lastErr || new Error('Reddit post search unavailable');
+}
+
 module.exports = {
   searchSubreddits,
+  searchPosts,
   platform: 'reddit',
   label: 'Reddit',
   color: '#ff4500',

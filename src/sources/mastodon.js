@@ -110,6 +110,38 @@ async function pageTimeline(host, path, maxId) {
   return http.json(`${originOf(host)}${path}${sep}limit=40${maxId ? `&max_id=${encodeURIComponent(maxId)}` : ''}`, { headers: authHeaders(host) });
 }
 
+/**
+ * Account search on one server (the first configured instance, unless `hosts` is passed).
+ * `resolve=false` so a mention probe does not webfinger every guess.
+ */
+async function searchAccounts(q, { hosts, limit = 5 } = {}) {
+  const list = (hosts && hosts.length ? hosts : config.mastodonInstances).slice(0, 1);
+  const n = Math.max(1, Math.min(10, limit || 5));
+  const out = [];
+  for (const host of list) {
+    let json;
+    try {
+      json = await http.json(`${originOf(host)}/api/v2/search?q=${encodeURIComponent(q)}&type=accounts&limit=${n}&resolve=false`, { headers: authHeaders(host) });
+    } catch (e) {
+      const x = explain(e, host);
+      if (x.authWall) continue;
+      throw x;
+    }
+    for (const a of (json && json.accounts) || []) {
+      const acct = acctOf(a, host);
+      if (!acct) continue;
+      out.push({
+        acct,
+        displayName: a.display_name || a.username || null,
+        note: htmlToText(a.note || '', 300),
+        avatar: a.avatar || null,
+        followers: a.followers_count || 0,
+      });
+    }
+  }
+  return out;
+}
+
 module.exports = {
   platform: 'mastodon',
   label: 'Mastodon',
@@ -117,6 +149,7 @@ module.exports = {
   kinds: ['user', 'tag'],
   intervalMin: { user: 180, tag: 120 },
   parseStatus,
+  searchAccounts,
   isConfigured: () => ({ ok: true, note: `Instances: ${config.mastodonInstances.join(', ')}` }),
 
   async fetch(feed, ctx) {

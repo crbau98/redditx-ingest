@@ -12,6 +12,7 @@ Visitor mode: **Operate** (find, follow, watch). Admin mode: **Operate** (curate
 - Paid pages (OnlyFans, Fansly, JustFor.Fans, others) are link-outs only. Proof: creator profiles show paid cards; `onlyfans.com` and siblings are never fetched (`src/lib/leaks.js`, `src/lib/links.js` EXTERNAL).
 - YouTube channels join the library via official RSS. Proof: `src/sources/youtube.js` + `parseProfile('https://www.youtube.com/@x')` → `youtube|user`.
 - Grids stay fast because they load `thumb_url` (~360px WebP) with `tint` placeholders. Proof: `publicMedia` exposes both; `mediaCard` prefers them.
+- A creator homepage or link hub that advertises a public RSS/Atom/JSON feed becomes an RSS source (comment feeds, leak mirrors, takedowns and paywalled hosts do not). Proof: `web` / `linkinbio` return `discoveredFeeds`; `engine.adoptDiscoveredFeeds` upserts at most three.
 
 ## Scope and anti-goals
 

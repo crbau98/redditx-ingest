@@ -35,9 +35,11 @@ async function api(path) {
 
 function itemFromGif(gif, query) {
   if (!gif || !gif.urls) return null;
-  const mediaUrl = gif.urls.hd || gif.urls.sd || gif.urls.silent;
+  const isImage = gif.type === 2 || gif.type === 'image';
+  // Image posts sometimes ship only urls.gif / urls.poster. A video still needs a real file (hd/sd/silent);
+  // its poster is a still and must not be ingested as the clip.
+  const mediaUrl = gif.urls.hd || gif.urls.sd || gif.urls.silent || (isImage ? (gif.urls.gif || gif.urls.poster) : null);
   if (!mediaUrl) return null;
-  const isImage = gif.type === 2;
   const tags = (gif.tags || []).map(String);
   return {
     sourceId: `redgifs-${gif.id}`,
@@ -60,6 +62,28 @@ function itemFromGif(gif, query) {
     nsfw: 'explicit',
     query: query || null,
     trusted: true, // API-provided media URL (scope trust is decided per feed by the engine)
+  };
+}
+
+/** Profile block from a RedGIFs user object, including outbound links (paid pages stay link records, never fetches). */
+function profileFromUser(u) {
+  if (!u || !u.username) return null;
+  const bits = [];
+  if (typeof u.profileUrl === 'string') bits.push(u.profileUrl);
+  if (typeof u.description === 'string') bits.push(u.description);
+  for (const l of Array.isArray(u.links) ? u.links : []) {
+    if (typeof l === 'string') bits.push(l);
+    else if (l && typeof l.url === 'string') bits.push(l.url);
+  }
+  const social = u.socialMedia || u.social || {};
+  if (social && typeof social === 'object') for (const v of Object.values(social)) if (typeof v === 'string') bits.push(v);
+  const { extractLinks } = require('../lib/links');
+  return {
+    displayName: u.name || u.username,
+    bio: u.description || null,
+    avatarUrl: u.profileImageUrl || null,
+    verified: !!u.verified,
+    links: extractLinks(bits.join(' ')),
   };
 }
 
@@ -133,6 +157,7 @@ module.exports = {
   kinds: ['user', 'search', 'niche'],
   intervalMin: { user: 240, search: 180, niche: 180 },
   itemFromGif,
+  profileFromUser,
   isConfigured: () => ({ ok: true }),
 
   async resolve(url) {
@@ -166,7 +191,7 @@ module.exports = {
       }
       if (feed.kind === 'user' && !profile && json.users && json.users[0]) {
         const u = json.users[0];
-        profile = { displayName: u.name || u.username, bio: u.description || null, avatarUrl: u.profileImageUrl || null, verified: !!u.verified };
+        profile = profileFromUser(u);
       }
       if (page >= (json.pages || 1)) break;
     }

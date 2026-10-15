@@ -13,11 +13,72 @@
 const repo = require('../db/repo');
 const registry = require('../sources');
 const settingsStore = require('../settings');
+const config = require('../config');
 const breaker = require('./breaker');
 const events = require('./events');
 const { processItem } = require('./pipeline');
 const physique = require('./physique');
 const { applyProfile, autoTrack } = require('./creators');
+const leaks = require('../lib/leaks');
+const takedowns = require('../lib/takedowns');
+const { isPaywalledHost } = require('../lib/brave');
+
+const MAX_DISCOVERED_FEEDS = 3;
+
+function isCommentFeed(target) {
+  try {
+    const path = new URL(target).pathname.toLowerCase();
+    return /\/comments?(?:\/|$)/.test(path) || /(^|\/)comments?\.(xml|rss|atom|json)$/.test(path);
+  } catch { return true; }
+}
+
+/** Public RSS/Atom/JSON feeds a page advertised. Paywalled hosts, leak mirrors, takedowns and comment feeds stay out. */
+function discoveredFeedSpecs(result) {
+  const list = [];
+  if (result && Array.isArray(result.discoveredFeeds)) list.push(...result.discoveredFeeds);
+  if (result && result.discoveredFeed) list.push(result.discoveredFeed);
+  const seen = new Set();
+  const out = [];
+  for (const d of list) {
+    if (!d || d.platform !== 'rss' || d.kind !== 'feed' || !d.target) continue;
+    const target = String(d.target).trim();
+    if (!/^https?:\/\//i.test(target)) continue;
+    const key = target.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (isCommentFeed(target) || leaks.isLeakUrl(target) || isPaywalledHost(target) || takedowns.checkUrl(target)) continue;
+    out.push({ platform: 'rss', kind: 'feed', target });
+  }
+  return out.slice(0, MAX_DISCOVERED_FEEDS);
+}
+
+/**
+ * Turn rel=alternate feeds from a creator homepage or link hub into real RSS feeds.
+ * Linked to the creator only when auto-link is on; otherwise still ingested as untrusted.
+ * Returns the feeds newly created. The scheduler queue is pushed outside tests so a
+ * unit test does not immediately fetch them.
+ */
+function adoptDiscoveredFeeds(result, feed, cfg = settingsStore.get()) {
+  if (!result || result.optedOut) return { created: 0, ids: [] };
+  const linkCreator = !!(feed && feed.creator_id && cfg && cfg.autoLinkProfiles);
+  const ids = [];
+  let created = 0;
+  for (const d of discoveredFeedSpecs(result)) {
+    const r = repo.feeds.upsert({
+      platform: d.platform,
+      kind: d.kind,
+      target: d.target,
+      creatorId: linkCreator ? feed.creator_id : null,
+      trusted: linkCreator ? 1 : 0,
+      origin: 'discovered',
+      intervalMin: 180,
+    });
+    physique.screenFeed(r);
+    if (r.created) { created++; ids.push(r.feed.id); }
+  }
+  if (ids.length && !config.isTest) enqueue(ids, { trigger: 'discovered-feed', front: false });
+  return { created, ids };
+}
 
 const state = {
   running: new Map(),   // feedId -> live entry
@@ -166,10 +227,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     // the fetch can take a while: profile decisions read the body filter's settings as they are now (see physique.live)
     const hadCreator = !!feed.creator_id;
     if (result.profile) applyProfile(feed, result.profile, { ...cfg, liveBody: true });
-    if (result.discoveredFeed && feed.creator_id && cfg.autoLinkProfiles) {
-      const d = result.discoveredFeed;
-      physique.screenFeed(repo.feeds.upsert({ platform: d.platform, kind: d.kind, target: d.target, creatorId: feed.creator_id, trusted: 1, origin: 'linked', intervalMin: 180 }));
-    }
+    adoptDiscoveredFeeds(result, feed, cfg);
     if (result.links && feed.creator_id) applyProfile(feed, { links: result.links }, { ...cfg, liveBody: true });
 
     // Items are processed a few at a time: most of the wait is network (probing unknown hosts, resolving RedGIFs
@@ -364,4 +422,4 @@ function shutdown() {
   state.timer = null; state.hotTimer = null; state.stopRequested = true;
 }
 
-module.exports = { start, shutdown, tick, runFeed, enqueue, enqueuePlatforms, stopAll, pause, resume, status, seedDefaults, computeNextRun, tempo, _state: state, _waysIn: { noteWaysIn, followWaysIn } };
+module.exports = { start, shutdown, tick, runFeed, enqueue, enqueuePlatforms, stopAll, pause, resume, status, seedDefaults, computeNextRun, tempo, adoptDiscoveredFeeds, _state: state, _waysIn: { noteWaysIn, followWaysIn } };

@@ -705,13 +705,92 @@ async function onlyfansDiscovery({ leads = 10, reach = 4, searches = 4, budget, 
 }
 
 /**
+ * One web query per subject. The paid-page slug is a search term only — the paid host is never fetched.
+ * Display name is added when it is not just the handle, so one request covers handle, name and slug.
+ */
+function mentionSearchQuery(subject) {
+  const handle = String((subject && subject.handle) || '').replace(/^@/, '').trim();
+  const service = (subject && subject.service) || 'OnlyFans';
+  const host = (paid.PAID_HOSTS && paid.PAID_HOSTS[service]) || 'onlyfans.com';
+  const name = String((subject && subject.displayName) || '').replace(/["<>]/g, '').trim();
+  const nameBit = name && name.length >= 3 && name.length <= 80 && name.toLowerCase() !== handle.toLowerCase()
+    ? ` OR "${name}"` : '';
+  const sites = [
+    'site:x.com', 'site:twitter.com', 'site:reddit.com', 'site:redgifs.com', 'site:bsky.app',
+    'site:t.me', 'site:youtube.com', 'site:pixelfed.social', 'site:mastodon.social',
+  ].join(' OR ');
+  return `"${host}/${handle}" OR "@${handle}"${nameBit} (${sites})`;
+}
+
+function fediHostIsLocal(host) {
+  return /^(127\.0\.0\.1|localhost)(:|$)/i.test(String(host || ''));
+}
+
+/** Live instances in production. Tests only probe when the instance list points at the mock, so a suite never fans out to the public fediverse. */
+function fediMentionsOn() {
+  if (!config.isTest) return true;
+  const hosts = [...(config.mastodonInstances || []).slice(0, 1), ...(config.misskeyInstances || []).slice(0, 1)];
+  return hosts.some(fediHostIsLocal);
+}
+
+/**
+ * One Mastodon account search and one Misskey username search for this subject.
+ * Two requests at most. Bios that do not name the subject and do not read as a creator are dropped.
+ */
+async function probeFediMentions(subject, creatorId = null, aborted = () => false) {
+  const tally = { found: 0, linked: 0 };
+  if (aborted() || !subject || !subject.handle || !fediMentionsOn()) return tally;
+  const note = (spec, bio, displayName, avatar, followers) => {
+    if (!usable(spec) || spec.kind !== 'user') return;
+    if (takedowns.checkHandle(spec.target, spec.platform)) return;
+    const own = String(spec.target || '').split('@')[0];
+    const text = `${displayName || ''} ${bio || ''}`;
+    const isSame = sameName(own, subject.handle) || paid.pageLinked(subject.service || 'OnlyFans', text, subject.handle);
+    const mentions = String(bio || '').toLowerCase().includes(String(subject.handle).toLowerCase());
+    if (!isSame && !mentions && !CREATOR_STRONG.test(text)) return;
+    if (gate(displayName, bio, own).level) return;
+    const c = consider(spec, creatorId && isSame ? 'identity' : 'mention', creatorId || subject.handle, {
+      displayName: displayName || own,
+      bio: bio || null,
+      avatarUrl: avatar || null,
+      popularity: followers,
+      ...(creatorId && isSame ? { creatorId } : {}),
+    });
+    if (!c) return;
+    if (creatorId && isSame) tally.linked++; else tally.found++;
+  };
+  const mastodon = registry.get('mastodon');
+  if (mastodon && mastodon.searchAccounts && !aborted()) {
+    try {
+      for (const u of (await mastodon.searchAccounts(subject.handle, { limit: 5 })).slice(0, 5)) {
+        if (aborted()) break;
+        const parts = String(u.acct || '').split('@');
+        if (parts.length < 2 || !parts[0] || !parts[1]) continue;
+        note(parseProfile(`https://${parts[1]}/@${parts[0]}`), u.note, u.displayName, u.avatar, u.followers);
+      }
+    } catch { /* best effort */ }
+  }
+  const misskey = registry.get('misskey');
+  const mkHost = (config.misskeyInstances || [])[0];
+  if (misskey && misskey.searchUsers && mkHost && !aborted()) {
+    try {
+      for (const u of (await misskey.searchUsers(subject.handle, mkHost, 5)).slice(0, 5)) {
+        if (aborted()) break;
+        note(parseProfile(`https://${u.host}/@${u.username}`), u.description, u.displayName, u.avatar, u.followers);
+      }
+    } catch { /* best effort */ }
+  }
+  return tally;
+}
+
+/**
  * Creator mention / collab / feature discovery across X, Reddit, RedGIFs, Bluesky,
- * Telegram, Mastodon, YouTube, and the open web (via Brave Web + Images + Videos and DDG fallback).
+ * Telegram, Mastodon, Misskey, YouTube, and the open web (via Brave Web + Images + Videos and DDG fallback).
  *
  * For known creators and active OF/Fansly/JFF leads, searches for public posts, videos, and images
- * mentioning the creator's `@handle`, display name, or `onlyfans.com/<handle>` / `fansly.com/<handle>`
- * / `justfor.fans/<handle>`. Every candidate passes `leaks.check`, `takedowns.check`, `safety`, and
- * `scope.classify` (and never fetches paywalled hosts).
+ * mentioning the creator's `@handle`, display name, or paid-page slug (`onlyfans.com/<handle>` and
+ * the Fansly / JustFor.Fans equivalents). The slug is a search term only. Every candidate passes
+ * `leaks.check`, `takedowns.check`, `safety`, and `scope.classify` (and never fetches paywalled hosts).
  */
 async function discoverCreatorMentions({ creators = 3, leads = 3, budget, aborted = () => false } = {}) {
   const out = { checked: 0, found: 0, linked: 0, searched: 0 };
@@ -761,6 +840,9 @@ async function discoverCreatorMentions({ creators = 3, leads = 3, budget, aborte
   const searchAdaptersForSubject = async (subject, creatorId = null) => {
     const qHandle = subject.handle;
     const paidPage = subject.service ? `${paid.PAID_HOSTS[subject.service] || 'onlyfans.com'}/${qHandle}` : `onlyfans.com/${qHandle}`;
+    const fedi = await probeFediMentions(subject, creatorId, aborted);
+    out.found += fedi.found;
+    out.linked += fedi.linked;
 
     // 1. Reddit post search for paid page or @handle mentions
     const reddit = registry.get('reddit');
@@ -836,7 +918,7 @@ async function discoverCreatorMentions({ creators = 3, leads = 3, budget, aborte
 
     // 4. Web + Images + Videos search (Brave API or DDG HTML fallback)
     if (!aborted()) {
-      const webQ = `"${paidPage}" OR "@${qHandle}" (site:x.com OR site:twitter.com OR site:reddit.com OR site:redgifs.com OR site:bsky.app OR site:t.me)`;
+      const webQ = mentionSearchQuery(subject);
       try {
         const webHits = websearch.configured()
           ? await websearch.search(webQ, { count: 15, budget })
@@ -1237,4 +1319,4 @@ function start() {
 }
 function stop() { stopFlag = true; clearInterval(timer); timer = null; }
 
-module.exports = { seedCreators, seedStatus, onlyfansDiscovery, discoverCreatorMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskyLookalikes, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };
+module.exports = { seedCreators, seedStatus, onlyfansDiscovery, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskyLookalikes, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };
