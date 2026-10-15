@@ -5,6 +5,9 @@
  * "@Jake.Fit", "jake_fit@mastodon.social" and "jakefit.bsky.social" all become "jakefit".
  */
 const SUFFIX = /\.(bsky\.social|bsky\.team|social|tumblr\.com)$/i;
+// Real given names that begin with a filler-prefix letter sequence (e.g. "the" in Theodore, "im" in Imran)
+// so unseparated prefix stripping never mangles a man's actual name.
+const GIVEN_STEM = /^(theodor|theophil|theobald|theodoric|theon|thelonious|imran|immanuel|imre)/u;
 
 function normAlias(s) {
   let x = String(s || '').trim().replace(/^@+/, '');
@@ -13,11 +16,11 @@ function normAlias(s) {
   x = x.toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^\p{L}\p{N}]+/gu, '');
   // Handles grow filler affixes across platforms ("the_real_jake", "jake.official", "@RealJake backup"):
   // strip them so one man's accounts share a key. Stems must stay usable on their own, so a man
-  // actually called "Image" or "Theo" never collapses.
+  // actually called "Image", "Theo" or "Theodore" never collapses.
   let prev;
   do {
     prev = x;
-    x = x.replace(/^(the|real|official|iam|im|its|mr)(?=[\p{L}\p{N}]{4,}$)/u, '');
+    if (!GIVEN_STEM.test(x)) x = x.replace(/^(the|real|official|iam|im|its|mr)(?=[\p{L}\p{N}]{4,}$)/u, '');
     x = x.replace(/(official|onlyfans|fansly|backup|backupacc|alt|nsfw|xxx|vip|page)$/u, (m) => (x.length - m.length >= 4 ? '' : m));
   } while (x !== prev);
   return x;

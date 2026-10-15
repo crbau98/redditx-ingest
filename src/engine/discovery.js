@@ -699,18 +699,23 @@ async function seedCreators({ perRun = 2, staleDays = 30, aborted = () => false,
     out.checked++;
     const f = r && r.followed && r.followed.ok ? r.followed : null;
     const known = r && r.candidates ? r.candidates.filter((c) => c.status === 'following' && c.confidence >= 0.7) : [];
+    const extPaid = ((r && r.externalLinks) || []).filter((l) => l && l.handle);
     const summary = {
       at: new Date().toISOString(), error: (r && r.error) || null,
       creatorId: f ? f.creator.id : (known[0] && known[0].creatorId) || null,
       followed: f ? f.feeds.length : 0, already: known.length,
-      onlyfans: ((r && r.externalLinks) || []).filter((l) => l.handle).map((l) => l.handle),
+      onlyfans: extPaid.map((l) => l.handle),
       note: (r && r.note) || null,
     };
     if (f) { out.followed++; out.accounts += f.feeds.length; }
     // already followed earlier: the page he links still belongs on his profile
-    if (!f && summary.creatorId && summary.onlyfans.length) {
-      repo.creators.enrich(summary.creatorId, { links: summary.onlyfans.map((h) => ofLink(h)) });
-      for (const h of summary.onlyfans) repo.onlyfans.claim(h, summary.creatorId);
+    if (!f && summary.creatorId && extPaid.length) {
+      const links = extPaid.map((l) => {
+        const svc = l.service || paid.serviceOf(l.url) || 'OnlyFans';
+        return paid.SERVICES[svc] && paid.SERVICES[svc].trace ? paid.paidLink(svc, l.handle, { free: !!l.free }) : ofLink(l.handle);
+      });
+      repo.creators.enrich(summary.creatorId, { links });
+      for (const l of links) if (l.handle) repo.onlyfans.claim(l.handle, summary.creatorId, l.service || 'OnlyFans');
     }
     // "creators like him": paid pages that come up next to his name (lists, collabs) become leads to trace
     if (websearch.configured() && !summary.error) {

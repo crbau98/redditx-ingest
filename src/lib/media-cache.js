@@ -42,7 +42,7 @@ function put(url, buffer, type) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, buffer);
     fs.writeFileSync(`${file}.json`, JSON.stringify({ type }));
-    approx += buffer.length;
+    if (approx >= 0) approx += buffer.length;
     if (++puts % 50 === 0) scheduleEvict();
   } catch { /* cache is best-effort */ }
 }

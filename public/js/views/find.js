@@ -37,7 +37,7 @@ export async function find(root, { query }) {
     state.following = true;
     paint();
     try {
-      const selections = cands.filter((c) => c.verified).map((c) => ({ platform: c.platform, kind: c.kind, target: c.target }));
+      const selections = cands.map((c) => ({ platform: c.platform, kind: c.kind, target: c.target }));
       // Paid pages the lookup surfaced ride along, so the new profile links out to them from the start.
       const externalLinks = (state.result && state.result.externalLinks) || [];
       const r = await post('/api/lookup/follow', { name: input.value.trim(), selections, externalLinks });

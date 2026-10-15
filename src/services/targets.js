@@ -5,7 +5,7 @@
  * (every `user` feed has a creator; external/paywalled links are display-only).
  */
 const repo = require('../db/repo');
-const { ofLink } = require('../lib/onlyfans');
+const paid = require('../lib/paid');
 const registry = require('../sources');
 const { checkText } = require('../lib/safety');
 const { femaleCheck } = require('../lib/scope');
@@ -92,7 +92,11 @@ function addCreator({ name, inputs, bio }) {
 
   const feeds = []; const conflicts = []; const links = [];
   for (const s of specs) {
-    if (s.external) { links.push(s.handle ? ofLink(s.handle) : { platform: 'external', service: s.service, label: s.label, url: s.url }); continue; }
+    if (s.external) {
+      const traceable = s.handle && s.service && paid.SERVICES[s.service] && paid.SERVICES[s.service].trace;
+      links.push(traceable ? paid.paidLink(s.service, s.handle) : { platform: 'external', service: s.service, label: s.label, url: s.url });
+      continue;
+    }
     const r = addSpec(s, { creatorId: creator.id });
     if (r.status === 'conflict') conflicts.push({ input: s.label || s.target, reason: r.reason, creatorId: r.creator.id });
     else if (r.feed) feeds.push(r.feed);
