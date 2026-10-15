@@ -39,7 +39,7 @@ function addSpec(spec, { creatorId = null, origin = 'admin', trusted, hint, body
   }
 
   let creator = creatorId ? repo.creators.get(creatorId) : null;
-  if (spec.kind === 'user') {
+  if (spec.kind === 'user' || (spec.kind === 'channel' && spec.platform === 'youtube')) {
     const owner = repo.creators.byAccount(spec.platform, spec.target);
     if (owner && creator && owner.id !== creator.id) return { status: 'conflict', creator: owner, spec, reason: `Already belongs to ${owner.display_name || owner.handle}` };
     if (owner) creator = owner;
@@ -74,7 +74,7 @@ function addCreator({ name, inputs, bio }) {
   // If any account already belongs to a creator, extend that creator instead of duplicating.
   let creator = null;
   for (const s of ingestable) {
-    if (s.kind !== 'user') continue;
+    if (s.kind !== 'user' && !(s.kind === 'channel' && s.platform === 'youtube')) continue;
     const owner = repo.creators.byAccount(s.platform, s.target);
     if (owner) { creator = owner; break; }
   }
@@ -141,7 +141,7 @@ function importTargets(text, { hint } = {}) {
 /** Public-safe list of a creator's account links. */
 function publicAccounts(creatorId) {
   return repo.feeds.list({ creatorId, limit: 50 }).items
-    .filter((f) => f.kind === 'user' || (f.kind === 'feed' && f.platform === 'rss'))
+    .filter((f) => f.kind === 'user' || (f.kind === 'channel' && f.platform === 'youtube') || (f.kind === 'feed' && f.platform === 'rss'))
     .map((f) => ({ platform: f.platform, label: f.label || f.target, url: profileUrl(f.platform, f.kind, f.target) }))
     .filter((a) => a.url);
 }

@@ -31,9 +31,17 @@ test('youtube link parsing: channels ingestable, watch links stay external', () 
   assert.equal(ch.platform, 'youtube');
   assert.equal(ch.kind, 'user');
   assert.equal(ch.target, '@gymguy');
+  const chVideos = links.parseProfile('https://www.youtube.com/@gymguy/videos');
+  assert.equal(chVideos.platform, 'youtube');
+  assert.equal(chVideos.kind, 'user');
+  assert.equal(chVideos.target, '@gymguy');
   const cid = links.parseProfile('https://www.youtube.com/channel/UC1234567890abcdefghij');
   assert.equal(cid.platform, 'youtube');
   assert.equal(cid.kind, 'channel');
+  const bareCid = links.parseProfile('UC_x5XG1OV2P6uZZ5FSM9Ttw');
+  assert.equal(bareCid.platform, 'youtube');
+  assert.equal(bareCid.kind, 'channel');
+  assert.equal(bareCid.target, 'UC_x5XG1OV2P6uZZ5FSM9Ttw');
   const watch = links.parseProfile('https://www.youtube.com/watch?v=AbC123Xyz01');
   assert.equal(watch.platform, 'external');
   assert.equal(links.profileUrl('youtube', 'channel', 'UC1234567890abcdefghij'), 'https://www.youtube.com/channel/UC1234567890abcdefghij');
@@ -65,6 +73,10 @@ test('lookup directSpecs include youtube, peertube and lemmy probes', () => {
   assert.ok(plats.has('youtube'), `missing youtube in ${[...plats]}`);
   assert.ok(plats.has('peertube'), `missing peertube in ${[...plats]}`);
   assert.ok(plats.has('lemmy'), `missing lemmy in ${[...plats]}`);
+  const qChan = lookup.parseQuery('https://www.youtube.com/channel/UC1234567890abcdefghij');
+  assert.ok(qChan.spec && qChan.spec.platform === 'youtube' && qChan.spec.kind === 'channel');
+  const qBare = lookup.parseQuery('UC_x5XG1OV2P6uZZ5FSM9Ttw');
+  assert.ok(qBare.spec && qBare.spec.platform === 'youtube' && qBare.spec.kind === 'channel');
 });
 
 test('public lookup routes exist behind age gate with rate limits', async () => {

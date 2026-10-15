@@ -121,7 +121,7 @@ const creatorQ = {
   insert: db.prepare(`INSERT INTO creators (id, handle, display_name, bio, avatar_url, banner_url, scope, origin)
                       VALUES (@id, @handle, @display_name, @bio, @avatar_url, @banner_url, @scope, @origin)`),
   byAccount: db.prepare(`SELECT c.* FROM feeds f JOIN creators c ON c.id = f.creator_id
-                         WHERE f.platform = ? AND f.kind = 'user' AND f.target = ? COLLATE NOCASE LIMIT 1`),
+                         WHERE f.platform = ? AND f.kind IN ('user', 'channel') AND f.target = ? COLLATE NOCASE LIMIT 1`),
   stats: db.prepare(`UPDATE creators SET
       media_count = (SELECT COUNT(*) FROM media WHERE creator_id = @id AND publish_state = 'published'),
       video_count = (SELECT COUNT(*) FROM media WHERE creator_id = @id AND publish_state = 'published' AND media_type = 'video'),

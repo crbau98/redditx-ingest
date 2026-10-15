@@ -132,6 +132,8 @@ function parseProfile(input, hint = {}) {
     if (p === 'reddit') return out('reddit', 'user', m[1], { label: `u/${m[1]}` });
     return null; // ambiguous without a hint
   }
+  m = raw.match(/^(UC[A-Za-z0-9_-]{10,40})$/);
+  if (m) return out('youtube', 'channel', m[1], { label: `YouTube channel ${m[1].slice(0, 10)}…`, url: `https://www.youtube.com/channel/${m[1]}` });
 
   // ---- URLs -----------------------------------------------------------------
   let url;
@@ -204,14 +206,14 @@ function parseProfile(input, hint = {}) {
 
   // YouTube: channels are ingestable via official RSS; single videos stay external link-outs.
   if (matches(h, 'youtube.com')) {
-    if (parts[0] && parts[0].startsWith('@') && parts.length === 1 && /^@[A-Za-z0-9._-]{2,60}$/.test(parts[0])) {
-      return out('youtube', 'user', parts[0], { label: `${parts[0]} (YouTube)`, url: url.href });
+    if (parts[0] && parts[0].startsWith('@') && /^@[A-Za-z0-9._-]{2,60}$/.test(parts[0])) {
+      return out('youtube', 'user', parts[0], { label: `${parts[0]} (YouTube)`, url: `https://www.youtube.com/${parts[0]}` });
     }
     if (parts[0] === 'channel' && parts[1] && /^UC[A-Za-z0-9_-]{10,40}$/.test(parts[1])) {
-      return out('youtube', 'channel', parts[1], { label: `YouTube channel ${parts[1].slice(0, 10)}…`, url: url.href });
+      return out('youtube', 'channel', parts[1], { label: `YouTube channel ${parts[1].slice(0, 10)}…`, url: `https://www.youtube.com/channel/${parts[1]}` });
     }
     if ((parts[0] === 'c' || parts[0] === 'user') && parts[1] && /^[A-Za-z0-9._-]{2,60}$/.test(parts[1])) {
-      return out('youtube', 'user', `@${parts[1]}`, { label: `@${parts[1]} (YouTube)`, url: url.href });
+      return out('youtube', 'user', `@${parts[1]}`, { label: `@${parts[1]} (YouTube)`, url: `https://www.youtube.com/@${parts[1]}` });
     }
   }
 
