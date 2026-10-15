@@ -240,3 +240,14 @@ describe('iter13: creator profiles carry every paid page, not just OnlyFans', ()
     assert.ok(Array.isArray(list.items), 'all eight paid filters stay queryable');
   });
 });
+
+describe('iter14: Find keeps the paid pages it surfaced when following', () => {
+  test('the public follow route stores paid link-outs like the Find view now sends', async () => {
+    const r = await (await fetch(`${base}/api/lookup/follow`, { method: 'POST', headers: { ...AGE, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Findflow Guy', selections: [{ platform: 'redgifs', kind: 'user', target: 'findflowguy' }],
+        externalLinks: [{ service: 'Fansly', label: 'Fansly', url: 'https://fansly.com/FindflowGuy' }] }) })).json();
+    assert.ok(r.ok, JSON.stringify(r));
+    const links = repo.creators.get(r.creator.id).links;
+    assert.ok(links.some((l) => l.url === 'https://fansly.com/findflowguy' && l.handle === 'findflowguy'), JSON.stringify(links));
+  });
+});
