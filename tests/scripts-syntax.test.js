@@ -22,7 +22,8 @@ const pub = path.join(__dirname, '..', 'public', 'js');
 const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith('.js') ? [path.join(d, e.name)] : []));
 for (const f of walk(pub)) {
   test(`public/${path.relative(path.join(__dirname, '..', 'public'), f)} parses as a module`, () => {
-    const r = spawnSync(process.execPath, ['--input-type=module', '--check', f], { encoding: 'utf8' });
-    assert.strictEqual(r.status, 0, r.stderr);
+    // via stdin: with a file path node resolves imports instead of only parsing.
+    const r = spawnSync(process.execPath, ['--input-type=module', '--check'], { input: fs.readFileSync(f, 'utf8'), encoding: 'utf8' });
+    assert.strictEqual(r.status, 0, `${f}: ${r.stderr}`);
   });
 }
