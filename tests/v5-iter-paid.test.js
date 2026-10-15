@@ -95,6 +95,8 @@ describe('iter2: paid-lead tracing parity (Fansly/JFF)', () => {
     assert.ok(/fansly\.com\/northpeak"/.test(JSON.stringify(creator.links)));
     assert.equal(repo.onlyfans.get('northpeak', 'Fansly').status, 'claimed');
   });
+});
+
 describe('iter7: paid link-out accuracy', () => {
   test('enrich dedupes paid pages case-insensitively and refreshes the free flag', () => {
     const paid = require('../src/lib/paid');
@@ -119,7 +121,27 @@ describe('iter7: paid link-out accuracy', () => {
     assert.equal(repo.onlyfans.get('paidguy', 'JustFor.Fans').status, 'claimed');
   });
 });
-  test('admin: paste Fansly/JFF pages to trace, filter leads by service', async () => {
+describe('iter8: thumbnail sweep reads several pictures in flight', () => {
+  test('bounded concurrency keeps the same accounting and isolates failures', async () => {
+    const thumbs = require('../src/engine/thumbs');
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+    const fetch = async (url) => (String(url).includes('/bad') ? { status: 500, buffer: Buffer.alloc(0) } : { status: 200, buffer: png });
+    const ins = repo.db.prepare(`INSERT INTO media (id, platform, media_type, media_url, hash, publish_state, posted_at) VALUES (?, 'reddit', 'image', ?, ?, 'published', '2026-10-01T00:00:00Z')`);
+    ins.run('sw-good1', 'https://img.test/a.png', 'sw-h1');
+    ins.run('sw-good2', 'https://img.test/b.png', 'sw-h2');
+    ins.run('sw-good3', 'https://img.test/c.png', 'sw-h3');
+    ins.run('sw-bad1', 'https://img.test/bad.png', 'sw-h4');
+    const r = await thumbs.sweep({ limit: 4, concurrency: 3, fetch });
+    assert.equal(r.checked, 4, JSON.stringify(r));
+    assert.equal(r.retry, 1, 'the unreadable picture is left for a later round');
+    assert.equal(r.tinted, 3, 'every readable picture got its placeholder colour');
+    assert.match(repo.db.prepare('SELECT tint FROM media WHERE id = ?').get('sw-good1').tint, /^#[0-9a-f]{6}$/);
+    assert.equal(repo.db.prepare('SELECT tint FROM media WHERE id = ?').get('sw-bad1').tint, null, 'failures are not marked done');
+  });
+});
+
+describe('iter2-admin: paid lead admin actions', () => {
+  test('paste Fansly/JFF pages to trace, filter leads by service', async () => {
     const call = async (p, opts = {}) => { const res = await fetch(`${base}${p}`, { headers: AGE, ...opts }); return { status: res.status, json: await res.json().catch(() => null) }; };
     const add = await call('/api/admin/discovery/onlyfans', { method: 'POST', headers: ADMIN, body: JSON.stringify({ handles: 'https://fansly.com/adminguy\njustfor.fans/adminjff\nhttps://fansly.com/login' }) });
     assert.equal(add.status, 200);
