@@ -24,7 +24,8 @@ const config = require('../config');
 const bg = (style) => { const m = String(style || '').match(/url\((['"]?)(.*?)\1\)/); return m ? m[2] : null; };
 
 function parseCount(text) {
-  const m = String(text || '').trim().match(/^([\d.]+)\s*([KkMm]?)$/);
+  const clean = String(text || '').trim().replace(/[\s,\u00a0\u2009\u202f]/g, '');
+  const m = clean.match(/^([\d.]+)\s*([KkMm]?)$/);
   if (!m) return 0;
   return Math.round(parseFloat(m[1]) * ({ k: 1e3, m: 1e6 }[m[2].toLowerCase()] || 1));
 }
@@ -60,9 +61,16 @@ function parsePage(html, channel) {
       const url = bg($(a).attr('style'));
       if (url) media.push({ type: 'image', url, preview: url });
     });
+    // Grouped albums render additional photo wraps under a grouped container; the
+    // selector above already matches them, but document attachments (GIFs saved
+    // as documents, single-image docs) only expose a thumbnail <img>.
+    m.find('.tgme_widget_message_document_wrap img, .tgme_widget_message_document_thumb img, a.tgme_widget_message_document_wrap img').each((_, img) => {
+      const url = $(img).attr('src') || $(img).attr('data-src');
+      if (url && /^https?:\/\//i.test(url) && !media.some((x) => x.url === url)) media.push({ type: 'image', url, preview: url });
+    });
     m.find('.tgme_widget_message_video_player, .tgme_widget_message_roundvideo_player').each((_, v) => {
-      const video = $(v).find('video').attr('src');
-      const thumb = bg($(v).find('.tgme_widget_message_video_thumb, .tgme_widget_message_roundvideo_thumb').attr('style'));
+      const video = $(v).find('video').attr('src') || $(v).find('video').attr('data-src') || $(v).find('source').attr('src');
+      const thumb = bg($(v).find('.tgme_widget_message_video_thumb, .tgme_widget_message_roundvideo_thumb').attr('style')) || $(v).find('img').attr('src') || null;
       const dur = $(v).find('.message_video_duration').text().trim();
       if (video) media.push({ type: 'video', url: video, preview: thumb, duration: dur ? dur.split(':').reduce((a, n) => a * 60 + Number(n), 0) : null });
     });
@@ -165,7 +173,9 @@ function messageToItem(msg, d, ch) {
       if (!photo || !photo.length) throw new Error('empty download');
       it.localImage = photo;
     } else if (d.thumb) {
-      try { const t = await mt.download(msg, { thumb: true }); thumb = Buffer.isBuffer(t) && t.length ? t : null; } catch { thumb = null; }
+      // A failed thumbnail fetch leaves `thumb` undefined (not null) so materialize()
+      // retries it later instead of silently dropping the poster frame forever.
+      try { const t = await mt.download(msg, { thumb: true }); thumb = Buffer.isBuffer(t) && t.length ? t : undefined; } catch { thumb = undefined; }
       it.localImage = thumb;
     }
     return true;
@@ -187,8 +197,8 @@ function messageToItem(msg, d, ch) {
           if (!fs.existsSync(tmp) || fs.statSync(tmp).size === 0) throw new Error('empty download');
           await store.put(key, tmp, d.mime); stored.push(key);
         } finally { try { fs.unlinkSync(tmp); } catch { /* gone */ } }
-        if (d.thumb && thumb !== null) {
-          try { const t = thumb || await mt.download(msg, { thumb: true }); if (Buffer.isBuffer(t) && t.length) { await store.put(posterKey, t, 'image/jpeg'); stored.push(posterKey); it.previewUrl = store.urlFor(posterKey); } } catch { /* no poster */ }
+        if (d.thumb) {
+          try { const t = (thumb && thumb.length ? thumb : await mt.download(msg, { thumb: true })); if (Buffer.isBuffer(t) && t.length) { await store.put(posterKey, t, 'image/jpeg'); stored.push(posterKey); it.previewUrl = store.urlFor(posterKey); } } catch { /* no poster */ }
         }
       }
     } else if (await store.has(posterKey)) it.previewUrl = store.urlFor(posterKey);
@@ -249,10 +259,14 @@ async function fetchChannel(feed, ctx) {
     if (d.skip) { skipped[d.skip] = (skipped[d.skip] || 0) + 1; continue; }
     items.push(messageToItem(msg, d, ch));
   }
+  // Surface skip reasons in the feed's notes (the engine stores notes[0] as
+  // last_error): silently dropping oversized videos otherwise looks like success.
+  const notes = Object.entries(skipped).map(([reason, n]) => `skipped ${n} ${reason}`);
+  if (!done && backfilled < maxBackfill) notes.unshift(`backfilling history (${backfilled}/${maxBackfill} older messages read)`);
   return {
     items, profile, via: 'mtproto',
     cursor: { newestId, oldestId, done, backfilled, profiled: true },
-    notes: [],
+    notes,
     skipped,
   };
 }
@@ -282,7 +296,10 @@ module.exports = {
     let newestId = cursor.newestId || 0;
     let before = null;
     let profile;
-    const maxPages = cursor.newestId ? 1 : 3;
+    const maxPages = cursor.newestId ? 5 : 3;
+    // Incremental runs keep paging until they reach a known post: the first page
+    // only holds ~20 messages, so a busy channel can publish more than a page
+    // between runs (240 min interval) and the excess would otherwise be skipped.
     for (let page = 0; page < maxPages; page++) {
       if (ctx.aborted()) break;
       const html = await http.text(`https://t.me/s/${encodeURIComponent(channel)}${before ? `?before=${before}` : ''}`, { headers: { accept: 'text/html' }, maxBytes: 3_000_000 });

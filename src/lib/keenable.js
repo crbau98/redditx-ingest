@@ -28,11 +28,11 @@ function record() {
 /** Split the text answer into {url, title, description}. */
 function parseResults(text) {
   const out = [];
-  for (const block of String(text || '').split(/\n-{3,}\n/)) {
-    const url = (/^URL:\s*(\S+)/m.exec(block) || [])[1];
+  for (const block of String(text || '').split(/\r?\n-{3,}\r?\n/)) {
+    const url = (/^\s*URL:\s*(\S+)/m.exec(block) || [])[1];
     if (!url || !/^https?:\/\//i.test(url)) continue;
-    const title = (/^Title:\s*(.*)$/m.exec(block) || [])[1] || '';
-    const snip = block.split(/^Snippets:\s*$/m)[1] || '';
+    const title = (/^\s*Title:\s*(.*)$/m.exec(block) || [])[1] || '';
+    const snip = block.split(/^\s*Snippets:\s*$/m)[1] || '';
     out.push({ url, title: title.trim(), description: snip.replace(/\s+/g, ' ').trim().slice(0, 500) });
   }
   return out;
@@ -44,8 +44,7 @@ function parseResults(text) {
  */
 async function search(q, { count = 20, budget = 200, site } = {}) {
   if (!configured()) throw Object.assign(new Error('KEENABLE_API_KEY is not set'), { skip: true });
-  if (usage().count >= budget) throw Object.assign(new Error(`Keenable daily budget reached (${budget})`), { budget: true });
-  record();
+  if (usage().count >= budget) throw Object.assign(new Error(`Keenable daily budget reached (${budget}/day; raise the budget or set SEARXNG_URL for free fallback)`), { budget: true });
   const args = { query: q };
   if (site) args.site = site;
   let json;
@@ -63,6 +62,8 @@ async function search(q, { count = 20, budget = 200, site } = {}) {
   if (json && json.error) throw Object.assign(new Error(`Keenable: ${String(json.error.message || 'error').slice(0, 160)}`), { status: 502 });
   const text = ((json && json.result && json.result.content) || []).filter((c) => c && c.type === 'text').map((c) => c.text).join('\n---\n');
   if (json && json.result && json.result.isError) throw Object.assign(new Error(`Keenable: ${text.slice(0, 160) || 'tool error'}`), { status: 502 });
+  // Count only calls that reached the API: a rejected key (skip above) must not burn the daily budget.
+  record();
   return parseResults(text).slice(0, count);
 }
 

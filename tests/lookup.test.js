@@ -7,7 +7,7 @@ let repo; let registry; let lookup; let websearch; let server; let base; let eng
 const ADMIN = { 'x-admin-key': 'test-key', 'content-type': 'application/json' };
 
 // A tiny fake internet: platform:user:target -> profile + posts (or absent = 404)
-const post = (id, title = 'gym pic') => ({ sourceId: id, title, mediaType: 'image', mediaUrl: `https://i.redd.it/${id}.jpg`, previewUrl: `https://i.redd.it/${id}.jpg` });
+const post = (id, title = 'gym pic') => ({ sourceId: id, title, permalink: `https://www.reddit.com/r/gaybros/comments/${id}`, mediaType: 'image', mediaUrl: `https://i.redd.it/${id}.jpg`, previewUrl: `https://i.redd.it/${id}.jpg` });
 const WORLD = {
   'reddit:user:jaxstone': { profile: { displayName: 'Jax Stone', bio: 'gay fitness model • bsky: https://bsky.app/profile/jaxstone.bsky.social • https://onlyfans.com/jaxstone • https://linktr.ee/jaxstone', links: [
     { platform: 'bluesky', kind: 'user', target: 'jaxstone.bsky.social', ingestable: true }, { platform: 'external', service: 'OnlyFans', label: 'OnlyFans', url: 'https://onlyfans.com/jaxstone', external: true, ingestable: false },
@@ -59,6 +59,7 @@ describe('creator lookup', () => {
     assert.ok(by['reddit:jaxstone'] && by['bluesky:jaxstone.bsky.social'] && by['x:jaxstone'], Object.keys(by).join());
     assert.ok(by['telegram:jaxstone_official'], 'found through the link-in-bio page');
     assert.equal(by['reddit:jaxstone'].tier, 'strong'); assert.ok(by['reddit:jaxstone'].sampleCount === 3);
+    assert.deepEqual(by['reddit:jaxstone'].sample, { type: 'image', preview: 'https://i.redd.it/r1.jpg', thumb: 'https://i.redd.it/r1.jpg', title: 'gym pic', url: 'https://www.reddit.com/r/gaybros/comments/r1' });
     assert.ok(by['telegram:jaxstone_official'].evidence.some((e) => /link-in-bio/.test(e)));
     assert.ok(!Object.keys(by).some((k) => k.startsWith('redgifs:')), 'the trans-feminine account is hidden');
     assert.ok(!Object.keys(by).some((k) => k.startsWith('tumblr:')), 'the account whose bio states an age under 18 is dropped');

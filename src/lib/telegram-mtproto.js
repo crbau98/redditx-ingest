@@ -106,7 +106,11 @@ async function entityOf(target) {
   if (!warmed && /^id:/.test(key)) await dialogs(); // private channels are only resolvable once the dialog list has been read
   if (entities.has(key)) return entities.get(key);
   try {
-    const e = await c.getEntity(/^id:/.test(key) ? key.slice(3) : String(target).replace(/^@/, ''));
+    const raw = /^id:/.test(key) ? key.slice(3) : String(target).replace(/^@/, '');
+    // Private-channel targets arrive as "id:<numeric>": GramJS resolves numeric
+    // peers reliably as numbers, while a numeric string can miss.
+    const ref = /^\d+$/.test(raw) ? Number(raw) : raw;
+    const e = await c.getEntity(ref);
     entities.set(key, e);
     return e;
   } catch (e) { throw wrap(e); }

@@ -94,7 +94,7 @@ function blockFemaleCreator(item, feed, rule) {
  * A repost (Tumblr reblog, X retweet or quote, Bluesky repost, Reddit crosspost) carries somebody else's post. It belongs
  * to the ORIGINAL poster, not to the account whose feed we read, so the feed's own creator is not used for it.
  */
-const ownedByFeed = (item, feed) => !!feed.creator_id && ['user', 'feed', 'page'].includes(feed.kind) && !item.repostOf;
+const ownedByFeed = (item, feed) => !!feed.creator_id && ['user', 'channel', 'feed', 'page'].includes(feed.kind) && !item.repostOf;
 
 /** The creator this item belongs to, if one is already known (never creates one). */
 function knownCreator(item, feed) {
@@ -224,8 +224,7 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   if (isJunkTitle(item.title)) return { outcome: 'skipped', reason: 'junk title' };
   const mediaHost = hostOf(item.mediaUrl);
   // YouTube is thumbnail-only via official RSS: allow its image hosts (watch pages are never media URLs here).
-  const isYouTubeThumb = platform === 'youtube' && /^(i\.ytimg\.com|yt3\.ggpht\.com|youtube\.com|youtu\.be)$/i.test(mediaHost || '');
-  if (!isYouTubeThumb && hostBlocked(mediaHost)) return { outcome: 'skipped', reason: `blocked host ${mediaHost}` };
+  if (hostBlocked(mediaHost, platform)) return { outcome: 'skipped', reason: `blocked host ${mediaHost}` };
   const isHls = /\.m3u8(\?|$)/i.test(item.mediaUrl);
   if (!item.trusted && !hostTrusted(mediaHost) && !looksLikeDirectMedia(item.mediaUrl)) return { outcome: 'skipped', reason: `unknown host ${mediaHost}` };
   if (settings.probeUnknownHosts && !isHls && (item.probe || (!item.trusted && !hostTrusted(mediaHost)))) {
