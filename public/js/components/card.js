@@ -35,13 +35,14 @@ function startPreview(media, item) {
   v.src = proxied(item.media_url);
   v.addEventListener('playing', () => { v.style.opacity = 1; }, { once: true });
   v.style.opacity = 0;
-  v.style.transition = 'opacity .25s';
+  v.style.transition = 'opacity var(--dur-base) var(--spring-settle)';
   media.appendChild(v);
   live.add(media);
   v.play().catch(() => stopPreview(media));
 }
 
 function stopPreview(media) {
+  if (media._hoverTimer) { clearTimeout(media._hoverTimer); media._hoverTimer = 0; }
   pending.delete(media);
   const v = media.querySelector('video');
   if (v) { v.pause(); v.removeAttribute('src'); v.load(); v.remove(); }
@@ -56,6 +57,31 @@ const io = !canHover && 'IntersectionObserver' in window
       else stopPreview(media);
     }
   }, { threshold: [0, 0.65, 1] })
+  : null;
+
+/* ---- off-screen media relief for deep masonry feeds ---------------------
+ * Cards more than ~2.5 viewports away release decoded <img> bitmaps and any
+ * lingering <video> element while keeping their exact aspect-ratio box and
+ * dominant-color tint. Scrolling back restores src/srcset from HTTP cache. */
+const reliefIo = 'IntersectionObserver' in window
+  ? new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      const media = e.target;
+      if (!e.isIntersecting) {
+        stopPreview(media);
+        const img = media._img;
+        if (img && media._loaded && !media._parked) {
+          img.removeAttribute('src');
+          if (media._srcset) img.removeAttribute('srcset');
+          media._parked = true;
+        }
+      } else if (media._parked && media._img) {
+        if (media._srcset) media._img.srcset = media._srcset;
+        media._img.src = media._src;
+        media._parked = false;
+      }
+    }
+  }, { rootMargin: '2400px 0px', threshold: 0 })
   : null;
 
 // One listener repaints the save buttons for every card on the page. (A listener per card was only
@@ -78,8 +104,11 @@ export function mediaCard(item, { open, compact = false, why = null } = {}) {
   const ratio = item.width && item.height ? Math.min(Math.max(item.width / item.height, 0.55), 1.9) : 0.8;
   const isVideo = item.media_type === 'video';
   // Grids load the small thumbnail build when it exists (engine/thumbs.js, ~360px WebP),
-  // falling back to the platform preview. The full file only loads in the viewer.
-  const src = item.thumb_url || item.preview_url || item.thumbnail_url || (!isVideo ? item.media_url : null);
+  // pairing it with the platform preview at 2x when distinct. The full file only loads in the viewer.
+  const raw1x = item.thumb_url || item.preview_url || item.thumbnail_url || (!isVideo ? item.media_url : null);
+  const raw2x = item.thumb_url ? (item.preview_url || item.thumbnail_url || null) : null;
+  const src = raw1x ? proxied(raw1x) : null;
+  const srcset = src && raw2x && raw2x !== raw1x ? `${src} 1x, ${proxied(raw2x)} 2x` : null;
 
   const here = parse();
   const media = h('a', { class: 'card-media', href: href(here.path, { ...Object.fromEntries(here.query), m: item.id }), style: { aspectRatio: String(ratio) }, 'aria-label': item.title || 'Open media' });
@@ -91,12 +120,14 @@ export function mediaCard(item, { open, compact = false, why = null } = {}) {
   media.appendChild(ph);
   if (src) {
     const eager = eagerLeft > 0 && eagerLeft--;
-    const img = h('img', { class: 'loading', alt: item.title || '', loading: eager ? 'eager' : 'lazy', fetchpriority: eager ? 'high' : 'auto', decoding: 'async', src: proxied(src) });
+    const img = h('img', { class: 'loading', alt: item.title || '', loading: eager ? 'eager' : 'lazy', fetchpriority: eager ? 'high' : 'auto', decoding: 'async', src, srcset });
+    media._img = img; media._src = src; media._srcset = srcset;
     // The placeholder's shimmer stops as soon as the image is in: a grid of finished cards must not
     // keep animating underneath (it repainted every visible card, every frame, forever).
-    img.addEventListener('load', () => { img.classList.remove('loading'); ph.classList.add('done'); });
-    img.addEventListener('error', () => { img.remove(); ph.classList.add('done'); reportBroken(item.id); });
+    img.addEventListener('load', () => { media._loaded = true; img.classList.remove('loading'); ph.classList.add('done'); });
+    img.addEventListener('error', () => { media._img = null; img.remove(); ph.classList.add('done'); reportBroken(item.id); });
     media.appendChild(img);
+    if (reliefIo) reliefIo.observe(media);
   } else ph.classList.add('done');
   // On full cards the "why" chip rides in the caption over the image; compact cards keep it on the media.
   const whyChip = why ? h('span', { class: 'card-why', title: 'Why you are seeing this' }, icon('sparkle', 'sm'), why) : null;
@@ -113,7 +144,10 @@ export function mediaCard(item, { open, compact = false, why = null } = {}) {
   });
   if (isVideo) {
     if (canHover) {
-      media.addEventListener('mouseenter', () => startPreview(media, item));
+      media.addEventListener('mouseenter', () => {
+        clearTimeout(media._hoverTimer);
+        media._hoverTimer = setTimeout(() => startPreview(media, item), 65);
+      });
       media.addEventListener('mouseleave', () => stopPreview(media));
     } else if (io) io.observe(media);
   }

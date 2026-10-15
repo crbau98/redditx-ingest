@@ -26,6 +26,18 @@ export async function creators(root, { query }) {
   const field = (label, el) => h('label', { class: 'filter-field' }, h('span', { class: 'filter-label' }, label), el);
   const filtersActive = Boolean(f.q || f.sort !== 'media' || f.platform || f.paid);
   const clearBtn = filtersActive ? h('button', { class: 'chip clear-all', onclick: () => { search.value = ''; navigate('/creators', {}, { replace: true }); }, 'aria-label': 'Clear all creator filters' }, 'Clear all') : null;
+  const PAID_PILLS = [['onlyfans', 'OnlyFans', 'of'], ['fansly', 'Fansly', 'fansly'], ['justforfans', 'JFF', 'jff']];
+  const paidRow = h('div', { class: 'row wrap paid-quick', role: 'group', 'aria-label': 'Quick paid-page filters' },
+    PAID_PILLS.map(([v, label, cls]) => {
+      const on = f.paid === v;
+      return h('button', {
+        type: 'button',
+        class: `chip paid-filter ${cls}${on ? ' on' : ''}`,
+        'aria-pressed': String(on),
+        title: `Creators with a ${label} link-out`,
+        onclick: () => set({ paid: on ? '' : v }),
+      }, cls === 'of' ? h('span', { class: 'of-mark', 'aria-hidden': 'true' }) : h('span', { class: 'paid-dot', 'aria-hidden': 'true' }), label);
+    }));
   const grid = h('div', { class: 'creator-grid' });
   const more = h('div', { class: 'loadmore' });
   root.replaceChildren(
@@ -33,7 +45,7 @@ export async function creators(root, { query }) {
       h('div', { class: 'row wrap' },
         h('a', { class: 'btn primary sm', href: href('/find') }, icon('search', 'sm'), 'Find a creator'),
         h('a', { class: 'btn galaxy-cta sm', href: href('/galaxy') }, icon('sparkle', 'sm'), 'Explore as a 3D galaxy'))),
-    h('div', { class: 'row wrap creator-filters', style: { marginBottom: '18px' } }, search, field('Sort', sortSel), field('Source', platSel), field('Paid page', paidSel), clearBtn),
+    h('div', { class: 'row wrap creator-filters', style: { marginBottom: '18px' } }, search, field('Sort', sortSel), field('Source', platSel), field('Paid page', paidSel), paidRow, clearBtn),
     grid, more);
 
   get('/api/platforms').then((list) => { for (const p of list) platSel.appendChild(h('option', { value: p.platform, selected: f.platform === p.platform }, platformLabel(p.platform))); }).catch(() => {});

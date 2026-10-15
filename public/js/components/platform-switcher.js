@@ -44,8 +44,9 @@ function pills(list, total, value, onChange) {
 
 function paidCards(pages) {
   if (!pages.length) return null;
+  const paidTone = (name) => (/onlyfans/i.test(name) ? ' of' : /fansly/i.test(name) ? ' fansly' : /justfor\.?fans|^jff$/i.test(name) ? ' jff' : '');
   return h('div', { class: 'ps-paid', role: 'list', 'aria-label': 'Paid pages' }, pages.map((p) => h('a', {
-    class: 'ps-card', role: 'listitem', href: p.url, target: '_blank', rel: 'noopener noreferrer nofollow',
+    class: `ps-card${paidTone(p.name)}`, role: 'listitem', href: p.url, target: '_blank', rel: 'noopener noreferrer nofollow',
     title: `Opens ${p.name} in a new tab`,
   },
   h('span', { class: 'ps-card-txt' }, h('b', null, p.name), p.handle ? h('small', null, `@${p.handle}`) : null),
