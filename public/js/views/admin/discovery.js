@@ -4,9 +4,9 @@ import { parse, navigate } from '../../router.js';
 import { table, pager, toggle, platBadge, pageHead, act, kpi } from './ui.js';
 
 const STATUSES = [['pending', 'Waiting'], ['followed', 'Followed'], ['linked', 'Linked to a creator'], ['rejected', 'Rejected'], ['all', 'All']];
-const SIGNAL_LABEL = { identity: 'same name', mention: 'mentioned', cofollow: 'followed by', search: 'search', similar: 'looks like', hangout: 'creators post here', ofconfirmed: 'runs an OnlyFans page', onlyfans: 'same handle as an OnlyFans page' };
+const SIGNAL_LABEL = { identity: 'same name', mention: 'mentioned', cofollow: 'followed by', search: 'search', similar: 'looks like', hangout: 'creators post here', ofconfirmed: 'runs a paid page', onlyfans: 'same handle as a paid page' };
 // What each strategy found on the last run (keys of the run report).
-const STRATEGIES = [['mentions', 'Mentions'], ['graph', 'Bluesky follows'], ['lookalikes', 'Lookalikes'], ['people', 'People search'], ['communities', 'Communities & feeds'], ['hangouts', 'Where creators post'], ['topics', 'Web topics'], ['identity', 'Same-name search'], ['onlyfans', 'OnlyFans traced'], ['seeds', 'Named creators']];
+const STRATEGIES = [['mentions', 'Mentions'], ['graph', 'Bluesky follows'], ['lookalikes', 'Lookalikes'], ['people', 'People search'], ['communities', 'Communities & feeds'], ['hangouts', 'Where creators post'], ['topics', 'Web topics'], ['identity', 'Same-name search'], ['onlyfans', 'Paid pages traced'], ['seeds', 'Named creators']];
 const foundOf = (r) => (r ? (r.found !== undefined ? r.found : r.linked || 0) : null);
 const SCOPE = { in: ['good', 'male-focused'], uncertain: ['', 'unclear'], excluded: ['bad', 'off-topic'] };
 
@@ -14,8 +14,13 @@ const KIND_LABEL = { community: 'community', feedgen: 'custom feed', list: 'list
 const reach = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 100) / 10}k` : String(n));
 
 function signalChips(sig) {
+  const svcOf = (k, v) => {
+    if ((k !== 'ofconfirmed' && k !== 'onlyfans') || !Array.isArray(v) || !v[0] || !String(v[0]).includes(':')) return '';
+    const svc = String(v[0]).split(':')[0];
+    return ` · ${svc === 'JustFor.Fans' ? 'JFF' : svc}`;
+  };
   const chips = Object.entries(sig || {}).filter(([k, v]) => SIGNAL_LABEL[k] && Array.isArray(v) && v.length).map(([k, v]) =>
-    h('span', { class: `badge sig-${k}`, title: k === 'search' ? v.join('\n') : `${v.length} distinct source${v.length === 1 ? '' : 's'}` }, `${SIGNAL_LABEL[k]} ×${v.length}`));
+    h('span', { class: `badge sig-${k}`, title: k === 'search' ? v.join('\n') : `${v.length} distinct source${v.length === 1 ? '' : 's'}` }, `${SIGNAL_LABEL[k]}${svcOf(k, v)} ×${v.length}`));
   const pop = Number(sig && sig.popularity) || 0;
   if (pop) chips.push(h('span', { class: 'badge sig-reach', title: 'Audience: subscribers, followers or likes. Counts toward the score (log-scaled, up to +3).' }, icon('users', 'sm'), reach(pop)));
   return h('div', { class: 'row wrap', style: { gap: '4px' } }, chips);
@@ -28,7 +33,7 @@ function scoreBar(score, threshold) {
 
 export async function render(root) {
   const q = parse().query;
-  const f = { status: q.get('status') || 'pending', q: q.get('q') || '', sort: q.get('sort') || 'score', page: parseInt(q.get('page') || '0', 10) };
+  const f = { status: q.get('status') || 'pending', q: q.get('q') || '', sort: q.get('sort') || 'score', platform: q.get('platform') || '', page: parseInt(q.get('page') || '0', 10) };
   const set = (patch) => navigate('/admin/discovery', { ...f, ...patch }, { replace: true });
   const head = h('div'); const kpis = h('div', { class: 'kpis' }); const tableHost = h('div'); const tune = h('div'); const ofHost = h('div');
   const selected = new Set();
@@ -39,9 +44,11 @@ export async function render(root) {
 
   const search = h('input', { class: 'input sm', type: 'search', placeholder: 'Search candidates…', value: f.q, style: { maxWidth: '220px' } });
   search.addEventListener('input', debounce(() => set({ q: search.value.trim(), page: 0 }), 350));
+  const PLATFORMS = [['', 'All platforms'], ['bluesky', 'Bluesky'], ['reddit', 'Reddit'], ['redgifs', 'RedGIFs'], ['x', 'X'], ['telegram', 'Telegram'], ['mastodon', 'Mastodon'], ['misskey', 'Misskey'], ['lemmy', 'Lemmy'], ['tumblr', 'Tumblr'], ['peertube', 'PeerTube'], ['linkinbio', 'Link pages']];
   const bar = h('div', { class: 'toolbar' },
     h('div', { class: 'seg', role: 'group', 'aria-label': 'Status' }, STATUSES.map(([v, l]) => h('button', { class: f.status === v ? 'on' : '', onclick: () => set({ status: v, page: 0 }) }, l))),
     search,
+    h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Platform', onchange: (e) => set({ platform: e.target.value, page: 0 }) }, PLATFORMS.map(([v, l]) => h('option', { value: v, selected: f.platform === v }, l))),
     h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Sort', onchange: (e) => set({ sort: e.target.value }) }, [['score', 'Best score'], ['recent', 'Recently seen'], ['new', 'Newest']].map(([v, l]) => h('option', { value: v, selected: f.sort === v }, l))),
     h('span', { class: 'grow' }),
     h('button', { class: 'btn sm', onclick: (e) => bulk(e.currentTarget, 'follow') }, icon('check', 'sm'), 'Follow selected'),
@@ -173,7 +180,7 @@ export async function render(root) {
   }
 
   async function load() {
-    const [d, settings] = await Promise.all([adminGet('/discovery', { status: f.status, q: f.q, sort: f.sort, page: f.page, limit: 40 }), data ? Promise.resolve(null) : adminGet('/settings')]);
+    const [d, settings] = await Promise.all([adminGet('/discovery', { status: f.status, q: f.q, platform: f.platform || undefined, sort: f.sort, page: f.page, limit: 40 }), data ? Promise.resolve(null) : adminGet('/settings')]);
     data = d;
     if (settings) seedsText = settings.values.creatorSeeds || '';
     paintKpis(d); paintRun(d);

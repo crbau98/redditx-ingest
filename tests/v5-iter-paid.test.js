@@ -197,3 +197,18 @@ describe('iter10: the image cache never walks the disk on the request path', () 
     } finally { fs.statSync = realStat; }
   });
 });
+
+describe('iter11: the discovery queue filters by platform', () => {
+  test('platform narrows the queue; paid signal chips name their service', async () => {
+    const { parseProfile } = require('../src/lib/links');
+    discovery.consider(parseProfile('https://www.redgifs.com/users/platfilter_a'), 'search', 'test', { bio: 'gay creator 18+ onlyfans' });
+    discovery.consider(parseProfile('https://bsky.app/profile/platfilter-b.bsky.social'), 'search', 'test', { bio: 'gay creator 18+ onlyfans' });
+    const call = async (p) => { const res = await fetch(`${base}${p}`, { headers: { ...AGE, ...ADMIN } }); return res.json(); };
+    const rg = await call('/api/admin/discovery?status=pending&platform=redgifs&limit=200');
+    assert.ok(rg.candidates.items.length >= 1);
+    assert.ok(rg.candidates.items.every((c) => c.platform === 'redgifs'));
+    assert.ok(!rg.candidates.items.some((c) => c.target === 'platfilter-b.bsky.social'));
+    const all = await call('/api/admin/discovery?status=pending&limit=200');
+    assert.ok(all.candidates.items.some((c) => c.target === 'platfilter-b.bsky.social'));
+  });
+});
