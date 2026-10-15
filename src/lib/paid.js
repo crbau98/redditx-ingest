@@ -134,7 +134,8 @@ function pageLinked(service, text, handle) {
 /** The external-link object stored on a creator for a paid page. */
 function paidLink(service, handle, { free = false, url = null } = {}) {
   if (service === 'OnlyFans') return ofLink(handle, { free });
-  const linkUrl = url || (CANONICAL[service] && handle ? CANONICAL[service](handle) : null);
+  const canonicalBuilder = Object.prototype.hasOwnProperty.call(CANONICAL, service) ? CANONICAL[service] : null;
+  const linkUrl = url || (handle && typeof canonicalBuilder === 'function' ? canonicalBuilder(handle) : null);
   const l = { platform: 'external', service, label: handle ? `${service} · ${handle}` : service, url: linkUrl, ...(handle ? { handle } : {}) };
   if (free) l.free = true;
   return l;
