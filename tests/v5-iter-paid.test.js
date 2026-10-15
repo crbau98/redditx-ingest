@@ -95,6 +95,30 @@ describe('iter2: paid-lead tracing parity (Fansly/JFF)', () => {
     assert.ok(/fansly\.com\/northpeak"/.test(JSON.stringify(creator.links)));
     assert.equal(repo.onlyfans.get('northpeak', 'Fansly').status, 'claimed');
   });
+describe('iter7: paid link-out accuracy', () => {
+  test('enrich dedupes paid pages case-insensitively and refreshes the free flag', () => {
+    const paid = require('../src/lib/paid');
+    const c = repo.creators.create({ handle: 'casepage' });
+    repo.creators.enrich(c.id, { links: [{ platform: 'external', service: 'Fansly', label: 'Fansly · OldCase', url: 'https://fansly.com/OldCase' }] });
+    repo.creators.enrich(c.id, { links: [paid.paidLink('Fansly', 'oldcase', { free: true })] });
+    const links = repo.creators.get(c.id).links;
+    assert.equal(links.filter((l) => /fansly\.com/i.test(l.url)).length, 1, 'no duplicate page');
+    assert.equal(links.find((l) => /fansly\.com/i.test(l.url)).free, true);
+    repo.creators.enrich(c.id, { links: [paid.paidLink('Fansly', 'oldcase')] });
+    assert.equal(repo.creators.get(c.id).links.find((l) => /fansly\.com/i.test(l.url)).free, false, 'flag clears when the page stops saying free');
+  });
+  test('lookup follow stores canonical paid links with handles and claims them per service', () => {
+    const lookup = require('../src/engine/lookup');
+    const r = lookup.follow({ name: 'Paid Guy', selections: [{ platform: 'redgifs', kind: 'user', target: 'paidguy' }],
+      externalLinks: [{ service: 'Fansly', label: 'Fansly', url: 'https://fansly.com/PaidGuy' }, { service: 'JustFor.Fans', label: 'JFF', url: 'https://justfor.fans/paidguy' }] });
+    assert.ok(r.ok, JSON.stringify(r));
+    const links = repo.creators.get(r.creator.id).links;
+    assert.ok(links.some((l) => l.url === 'https://fansly.com/paidguy' && l.handle === 'paidguy'), JSON.stringify(links));
+    assert.ok(links.some((l) => l.url === 'https://justfor.fans/paidguy' && l.handle === 'paidguy'));
+    assert.equal(repo.onlyfans.get('paidguy', 'Fansly').status, 'claimed');
+    assert.equal(repo.onlyfans.get('paidguy', 'JustFor.Fans').status, 'claimed');
+  });
+});
   test('admin: paste Fansly/JFF pages to trace, filter leads by service', async () => {
     const call = async (p, opts = {}) => { const res = await fetch(`${base}${p}`, { headers: AGE, ...opts }); return { status: res.status, json: await res.json().catch(() => null) }; };
     const add = await call('/api/admin/discovery/onlyfans', { method: 'POST', headers: ADMIN, body: JSON.stringify({ handles: 'https://fansly.com/adminguy\njustfor.fans/adminjff\nhttps://fansly.com/login' }) });

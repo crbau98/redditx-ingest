@@ -16,6 +16,7 @@
 
 const config = require('../config');
 const { ofHandle } = require('./onlyfans');
+const paid = require('./paid');
 const { isLeakHost } = require('./leaks');
 
 const EXTERNAL = {
@@ -216,7 +217,9 @@ function parseProfile(input, hint = {}) {
 
   for (const [dom, label] of Object.entries(EXTERNAL)) {
     if (matches(h, dom)) {
-      return { platform: 'external', kind: 'link', target: url.href, ingestable: false, external: true, label: `${label}${parts[0] ? ` · ${parts[0].replace(/^@/, '')}` : ''}`, service: label, url: url.href };
+      // Traced paid pages carry their canonical handle, so profiles, claims and leads agree on one identity.
+      const handle = paid.SERVICES[label] && paid.SERVICES[label].trace ? paid.paidHandle(label, url.href) : null;
+      return { platform: 'external', kind: 'link', target: url.href, ingestable: false, external: true, label: `${label}${parts[0] ? ` · ${parts[0].replace(/^@/, '')}` : ''}`, service: label, url: url.href, ...(handle ? { handle } : {}) };
     }
   }
 

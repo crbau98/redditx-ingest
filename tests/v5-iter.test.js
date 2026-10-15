@@ -31,6 +31,13 @@ test('iter1: extractLinks catches bare paid URLs for every paid host', () => {
   }
 });
 
+/* ------------------------------------------------- item 7: paid link accuracy */
+test('iter7: parsed paid pages carry canonical handles', () => {
+  const { parseProfile } = require('../src/lib/links');
+  assert.equal(parseProfile('https://fansly.com/JakeFit/posts').handle, 'jakefit');
+  assert.equal(parseProfile('https://justfor.fans/Jake_Fit').handle, 'jake_fit');
+  assert.equal(parseProfile('https://manyvids.com/Profile/1/x').handle, undefined, 'non-traced services keep no handle claim');
+});
 /* ------------------------------------------------- item 5: dotted bio handles */
 test('iter5: bio alias lines catch Bluesky-style dotted and dashed handles', () => {
   const identity = require('../src/engine/identity');

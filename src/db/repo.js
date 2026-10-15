@@ -178,15 +178,24 @@ const creators = {
     if (bannerUrl && !c.banner_url) patch.bannerUrl = bannerUrl;
     if (links && links.length) {
       let existing = []; try { existing = JSON.parse(c.links || '[]'); } catch { /* ignore */ }
-      const seen = new Set(existing.map((l) => l.url));
-      // A page that says it is free now (or no longer) updates the stored link's flag.
+      const normUrl = (u) => String(u || '').toLowerCase().replace(/\/+$/, '');
+      const seen = new Set(existing.map((l) => normUrl(l.url)));
+      // A page that says it is free now (or no longer) updates the stored link's flag. Paid pages
+      // match by (service, handle) so 'Fansly.com/Jake' never duplicates 'fansly.com/jake'.
       let changed = false;
       for (const l of links) {
-        const old = l.handle && existing.find((e) => e.url === l.url);
-        if (old && !!old.free !== !!l.free) { old.free = !!l.free; old.handle = l.handle; changed = true; }
+        let old = l.handle
+          ? existing.find((e) => e.handle && String(e.handle).toLowerCase() === String(l.handle).toLowerCase() && (e.service || '') === (l.service || ''))
+          : null;
+        if (!old && l.url) old = existing.find((e) => normUrl(e.url) === normUrl(l.url));
+        if (old) {
+          if (!!old.free !== !!l.free) { old.free = !!l.free; changed = true; }
+          if (l.handle && !old.handle) { old.handle = l.handle; changed = true; }
+          continue;
+        }
+        if (l.url && !seen.has(normUrl(l.url))) { seen.add(normUrl(l.url)); existing.push(l); changed = true; }
       }
-      const merged = existing.concat(links.filter((l) => l.url && !seen.has(l.url)));
-      if (merged.length !== existing.length || changed) patch.links = merged.slice(0, 24);
+      if (changed) patch.links = existing.slice(0, 24);
     }
     if (Object.keys(patch).length) creators.update(id, patch);
   },
