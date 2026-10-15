@@ -172,3 +172,28 @@ describe('iter9: autocomplete answers repeat keystrokes from a short cache', () 
     } finally { repo.suggest = real; pub.suggestCache.clear(); }
   });
 });
+
+describe('iter10: the image cache never walks the disk on the request path', () => {
+  test('puts do no filesystem stats; eviction walks once over budget, then skips while under it', () => {
+    const fs = require('fs');
+    const cache = require('../src/lib/media-cache');
+    assert.equal(cache.enabled, true, 'test env enables the cache');
+    let stats = 0;
+    const realStat = fs.statSync;
+    fs.statSync = (...a) => { stats++; return realStat(...a); };
+    try {
+      const buf = Buffer.alloc(1024, 9);
+      for (let i = 0; i < 50; i++) cache.put(`https://img.test/cache${i}.png`, buf, 'image/png');
+      assert.equal(stats, 0, 'no stat() during 50 proxy puts — eviction is scheduled, not inline');
+      assert.ok(cache.get('https://img.test/cache0.png'), 'entries survive');
+      const big = Buffer.alloc(100 * 1024, 7);
+      for (let i = 0; i < 200; i++) cache.put(`https://img.test/big${i}.png`, big, 'image/png'); // ~20 MB over the 16 MB test budget
+      const before = stats;
+      cache.evict({ force: true });
+      assert.ok(stats > before, 'one walk establishes the true size and trims the oldest');
+      const walked = stats;
+      cache.evict({ force: true });
+      assert.equal(stats, walked, 'back under budget, the walk is skipped');
+    } finally { fs.statSync = realStat; }
+  });
+});
