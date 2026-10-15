@@ -130,6 +130,7 @@ function parseProfile(input, hint = {}) {
     if (p === 'x') return out('x', 'user', m[1], { label: `@${m[1]}` });
     if (p === 'redgifs') return out('redgifs', 'user', m[1].toLowerCase(), { label: m[1] });
     if (p === 'reddit') return out('reddit', 'user', m[1], { label: `u/${m[1]}` });
+    if (p === 'telegram' && /^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(m[1])) return out('telegram', 'user', m[1], { label: `t.me/${m[1]}`, url: `https://t.me/${m[1]}` });
     return null; // ambiguous without a hint
   }
   m = raw.match(/^(UC[A-Za-z0-9_-]{10,40})$/);
@@ -289,7 +290,7 @@ function profileUrl(platform, kind, target) {
     }
     case 'misskey': { const [u, i] = String(target).split('@'); return i ? `https://${i}/@${u}` : null; }
     case 'redgifs': return kind === 'niche' ? `https://www.redgifs.com/niches/${target}` : `https://www.redgifs.com/users/${target}`;
-    case 'telegram': return `https://t.me/${target}`;
+    case 'telegram': return /^id:/i.test(String(target || '')) ? null : `https://t.me/${target}`;
     case 'mastodon': { const [u, i] = String(target).split('@'); return i ? `https://${i}/@${u}` : null; }
     case 'lemmy': { const [c, i] = String(target).split('@'); return i ? `https://${i}/c/${c}` : null; }
     case 'peertube': {

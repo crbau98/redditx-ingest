@@ -33,7 +33,7 @@ const resolvers = [
  * 404) on many instances, and from discovery (Admin → Discovery), which searches for real communities itself.
  * Every untrusted (tag / search) seed carries unmistakable male wording: items must read male-focused to publish.
  */
-const SEED_VERSION = 6;
+const SEED_VERSION = 7;
 const seeds = (platform, kind, targets, extra) => targets.map((target) => ({ platform, kind, target, ...extra }));
 const SEEDS = [
   ...seeds('reddit', 'community', ['gaybrosgonewild', 'vlinesabsanddick', 'gaynsfw', 'twinks', 'massivecocks', 'gaymuscle',
@@ -53,6 +53,8 @@ const SEEDS = [
   ...seeds('peertube', 'search', ['gay', 'gay muscle', 'gay amateur', 'gay jock'], { trusted: false, intervalMin: 240 }),
   ...seeds('peertube', 'tag', ['gay'], { trusted: false, intervalMin: 240 }),
   ...seeds('bluesky', 'search', ['gaymuscle', 'gayjock', 'gayotter', 'gaynsfw', 'malenude'], { trusted: false, intervalMin: 180 }),
+  // Telegram — public channels via web preview (t.me/s/<channel>, no login or key required)
+  ...seeds('telegram', 'user', ['gaymusclemen', 'malephysique', 'gayjocksdaily', 'gayhunksdaily', 'mensfitnesshub', 'gayotters'], { trusted: true, intervalMin: 240 }),
 ];
 
 /** Seeds from earlier versions that are not clearly male-only. Existing databases switch them off (origin 'seed' only). */
