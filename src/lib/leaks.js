@@ -98,4 +98,4 @@ function checkItem(item) {
   return phrase ? { rule: `leak-text:${phrase}` } : null;
 }
 
-module.exports = { LEAK_DOMAINS, isLeakHost, isLeakUrl, leakText, checkItem };
+module.exports = { LEAK_DOMAINS, isLeakHost, isLeakUrl, leakText, isLeakText: (...args) => !!leakText(...args), checkItem };

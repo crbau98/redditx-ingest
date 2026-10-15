@@ -399,7 +399,27 @@ router.post('/telegram/sync', async (req, res) => {
 router.post('/maintenance/recompute', (req, res) => res.json({ ok: true, updated: repo.media.recomputeHot() }));
 
 /* ------------------------------------------------- audit / duplicates / backups / portability */
-router.get('/audit', (req, res) => res.json(repo.audit.list({ ...page(req), targetType: ['media', 'creator', 'report'].includes(req.query.type) ? req.query.type : undefined })));
+router.get('/takedowns', (req, res) => {
+  const kind = req.query.kind ? String(req.query.kind) : undefined;
+  res.json(repo.takedowns.list({ ...page(req), kind }));
+});
+router.post('/takedowns', (req, res) => {
+  try {
+    const { kind, value, reason } = req.body || {};
+    const out = repo.takedowns.add({ kind, value, reason, actor: 'admin' });
+    events.admin('takedown', { id: out.takedown && out.takedown.id, kind: out.takedown && out.takedown.kind, value: out.takedown && out.takedown.value });
+    res.status(201).json({ ok: true, ...out });
+  } catch (e) {
+    res.status(e.status || 400).json({ error: e.message });
+  }
+});
+router.delete('/takedowns/:id', (req, res) => {
+  const removed = repo.takedowns.remove(req.params.id, 'admin');
+  if (!removed) return res.status(404).json({ error: 'Takedown not found' });
+  res.json({ ok: true });
+});
+
+router.get('/audit', (req, res) => res.json(repo.audit.list({ ...page(req), targetType: ['media', 'creator', 'report', 'takedown'].includes(req.query.type) ? req.query.type : undefined })));
 
 router.get('/creators-duplicates', (req, res) => res.json(repo.creators.duplicates().slice(0, 100)));
 

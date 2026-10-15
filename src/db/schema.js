@@ -590,7 +590,26 @@ function v11(db) {
   `);
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11];
+/**
+ * v12: Creator takedowns & opt-out honoring. Stores creator, handle, URL and domain
+ * takedown entries so content that a creator has requested be removed or opted out of
+ * indexing is purged retroactively and blocked prospectively across all pipelines.
+ */
+function v12(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS takedowns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind TEXT NOT NULL CHECK(kind IN ('creator','handle','url','domain')),
+      value TEXT NOT NULL COLLATE NOCASE,
+      reason TEXT,
+      created_at TEXT NOT NULL DEFAULT (${NOW}),
+      UNIQUE(kind, value)
+    );
+    CREATE INDEX IF NOT EXISTS ix_takedowns_kind_val ON takedowns(kind, value COLLATE NOCASE);
+  `);
+}
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

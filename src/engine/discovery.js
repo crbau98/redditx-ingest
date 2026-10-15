@@ -27,8 +27,10 @@ const brave = require('../lib/brave');
 const websearch = require('../lib/websearch');
 const tgBot = require('../lib/telegram-bot');
 const registry = require('../sources');
-const { parseProfile, extractLinks, profileUrl } = require('../lib/links');
+const { parseProfile, extractLinks, profileUrl, linkHubHandle } = require('../lib/links');
 const { checkText } = require('../lib/safety');
+const leaks = require('../lib/leaks');
+const takedowns = require('../lib/takedowns');
 const { classify, femaleCheck } = require('../lib/scope');
 const physiqueText = require('../lib/physique').textCheck;
 
@@ -118,6 +120,7 @@ function consider(spec, type, value, meta = {}) {
   const target = String(spec.target);
   if (repo.feeds.find(spec.platform, spec.kind, target)) return null;               // already following it
   if (repo.blocklist.has('creator', `${spec.platform}:${target.toLowerCase()}`)) return null;
+  if (takedowns.checkHandle(target, spec.platform) || (spec.url && takedowns.checkUrl(spec.url))) return null;
   let c = repo.candidates.find(spec.platform, spec.kind, target);
   if (c && c.status !== 'pending') return c;
 
@@ -154,7 +157,7 @@ function consider(spec, type, value, meta = {}) {
   if (meta.popularity) signals.popularity = Math.max(Number(signals.popularity) || 0, Math.round(Number(meta.popularity)) || 0);
   const scope = classify([displayName, bio, target], { trusted: false }).scope;
   if (bio && !(signals.ofconfirmed || []).length) {
-    const own = spec.platform === 'linkinbio' ? (() => { try { return new URL(target).pathname.split('/').filter(Boolean)[0] || ''; } catch { return ''; } })() : target;
+    const own = spec.platform === 'linkinbio' ? (linkHubHandle(target) || (() => { try { return new URL(target).pathname.split('/').filter(Boolean)[0] || ''; } catch { return ''; } })()) : target;
     for (const { service, handle } of paid.findPaidHandles(bio)) {
       if (!paid.SERVICES[service] || !paid.SERVICES[service].trace || !paid.pageLinked(service, bio, handle)) continue;
       const key = leadKey(service, handle);
@@ -205,8 +208,8 @@ function mineMentions(limit = 3000) {
     for (const m of text.matchAll(/(?:^|[^\w/])\/?r\/([A-Za-z0-9_]{3,21})\b/g)) specs.push(parseProfile(`r/${m[1]}`));
     specs.push(...extractLinks(text));
     notePaidHandles(text, r.creator_id);
-    // Bare profile links ("bsky.app/profile/x", "t.me/x", "linktr.ee/x") are how people usually type them.
-    for (const m of text.matchAll(/(?:^|[\s(])((?:bsky\.app|x\.com|twitter\.com|t\.me|linktr\.ee|allmylinks\.com|beacons\.ai|redgifs\.com|reddit\.com)\/[^\s)<>"']+)/gi)) specs.push(parseProfile(`https://${m[1]}`));
+    // Bare profile links ("bsky.app/profile/x", "t.me/x", "linktr.ee/x", "bento.me/x") are how people usually type them.
+    for (const m of text.matchAll(/(?:^|[\s(])((?:bsky\.app|x\.com|twitter\.com|t\.me|linktr\.ee|allmylinks\.com|beacons\.ai|carrd\.co|campsite\.bio|solo\.to|bento\.me|direct\.me|milkshake\.app|msha\.ke|hoo\.be|snipfeed\.co|lnk\.bio|taplink\.cc|redgifs\.com|reddit\.com)\/[^\s)<>"']+)/gi)) specs.push(parseProfile(`https://${m[1]}`));
     const seen = new Set();
     for (const spec of specs) {
       if (!spec) continue;
@@ -321,7 +324,7 @@ async function braveIdentity({ creators = 3, budget, aborted = () => false } = {
     for (const r of results) {
       const spec = parseProfile(r.url);
       if (!usable(spec) || spec.kind === 'community') continue;
-      const handle = spec.platform === 'linkinbio' ? new URL(spec.target).pathname.split('/').filter(Boolean)[0] : spec.target;
+      const handle = spec.platform === 'linkinbio' ? (linkHubHandle(spec.target) || new URL(spec.target).pathname.split('/').filter(Boolean)[0]) : spec.target;
       if (coreHandle(handle) !== core) continue;
       const c = consider(spec, 'identity', t.id, { displayName: t.display_name, creatorId: t.id });
       if (c) linked++;
@@ -624,11 +627,12 @@ async function probeOnlyFans(lead, found, { budget, search = true } = {}) {
     }
     for (const r of results) {
       const snippet = `${r.title || ''} ${r.description || ''}`;
+      if (leaks.isLeakUrl(r.url) || leaks.isLeakText(snippet) || takedowns.checkUrl(r.url)) continue;
       const page = parseProfile(r.url);
       const named = linked(snippet); // the result page itself shows the exact paid-page link
       for (const spec of [page, ...extractLinks(snippet)]) {
         if (!usable(spec) || spec.kind === 'community') continue;
-        const own = spec.platform === 'linkinbio' ? (new URL(spec.target).pathname.split('/').filter(Boolean)[0] || '') : spec.target;
+        const own = spec.platform === 'linkinbio' ? (linkHubHandle(spec.target) || new URL(spec.target).pathname.split('/').filter(Boolean)[0] || '') : spec.target;
         // Proof needs the page to be theirs, not a fan's post that names the link: a link page (owner-curated)
         // or an account under the same name. Anyone else is just mentioning them.
         const same = sameName(own, handle);
@@ -697,6 +701,188 @@ async function onlyfansDiscovery({ leads = 10, reach = 4, searches = 4, budget, 
       if (r.outOfBudget) searchLeft = 0;
     }
   }
+  return out;
+}
+
+/**
+ * Creator mention / collab / feature discovery across X, Reddit, RedGIFs, Bluesky,
+ * Telegram, Mastodon, YouTube, and the open web (via Brave Web + Images + Videos and DDG fallback).
+ *
+ * For known creators and active OF/Fansly/JFF leads, searches for public posts, videos, and images
+ * mentioning the creator's `@handle`, display name, or `onlyfans.com/<handle>` / `fansly.com/<handle>`
+ * / `justfor.fans/<handle>`. Every candidate passes `leaks.check`, `takedowns.check`, `safety`, and
+ * `scope.classify` (and never fetches paywalled hosts).
+ */
+async function discoverCreatorMentions({ creators = 3, leads = 3, budget, aborted = () => false } = {}) {
+  const out = { checked: 0, found: 0, linked: 0, searched: 0 };
+  const activeCreators = repo.discoveryTargets({ prefix: 'mentions.web.', staleDays: 14, limit: creators, minMedia: 0, maxAccounts: 10 });
+  const workableLeads = repo.onlyfans.workable(leads);
+
+  const ingestSearchHit = (hit, subject, creatorId = null) => {
+    if (!hit || !hit.url) return 0;
+    const text = `${hit.title || ''} ${hit.description || ''} ${hit.creator || ''} ${hit.publisher || ''}`;
+    if (leaks.isLeakUrl(hit.url) || leaks.isLeakText(text) || brave.isPaywalledHost(hit.url)) return 0;
+    if (takedowns.checkUrl(hit.url) || takedowns.checkItem({ title: hit.title, text: hit.description, permalink: hit.url })) return 0;
+    if (gate(hit.title, hit.description).level) return 0;
+
+    let added = 0;
+    const specs = [parseProfile(hit.url), ...extractLinks(`${hit.url} ${text}`)];
+    for (const spec of specs) {
+      if (!usable(spec) || spec.kind === 'community') continue;
+      if (takedowns.checkHandle(spec.target, spec.platform)) continue;
+      const own = spec.platform === 'linkinbio' ? (linkHubHandle(spec.target) || '') : spec.target;
+      const isSame = sameName(own, subject.handle);
+      const isPaidNamed = subject.service ? paid.pageLinked(subject.service, text, subject.handle) : false;
+      const sc = classify([hit.title, hit.description, spec.target, subject.displayName], { trusted: isSame || isPaidNamed });
+      if (sc.scope === 'excluded') continue;
+
+      if (creatorId && (isSame || (isPaidNamed && spec.platform === 'linkinbio'))) {
+        if (consider(spec, 'identity', creatorId, { displayName: subject.displayName || hit.title, bio: hit.description, creatorId })) {
+          out.linked++;
+          added++;
+        }
+      } else if (isPaidNamed || isSame || sc.scope === 'in') {
+        const sigType = isPaidNamed && isSame ? 'ofconfirmed' : 'mention';
+        const sigVal = creatorId || (subject.service ? leadKey(subject.service, subject.handle) : subject.handle);
+        const c = consider(spec, sigType, sigVal, {
+          displayName: (hit.title || '').split(/[(|•·-]/)[0].trim() || null,
+          bio: hit.description || null,
+          avatarUrl: hit.thumbnailUrl || null,
+        });
+        if (c && c.status === 'pending' && c.scope !== 'excluded') {
+          out.found++;
+          added++;
+        }
+      }
+    }
+    return added;
+  };
+
+  const searchAdaptersForSubject = async (subject, creatorId = null) => {
+    const qHandle = subject.handle;
+    const paidPage = subject.service ? `${paid.PAID_HOSTS[subject.service] || 'onlyfans.com'}/${qHandle}` : `onlyfans.com/${qHandle}`;
+
+    // 1. Reddit post search for paid page or @handle mentions
+    const reddit = registry.get('reddit');
+    if (reddit && reddit.searchPosts && !aborted()) {
+      try {
+        const posts = await reddit.searchPosts(`"${paidPage}" OR "${qHandle}"`, 15);
+        for (const p of posts || []) {
+          if (!p || !p.author) continue;
+          const postText = `${p.title || ''} ${p.selftext || ''} ${p.url || ''}`;
+          if (leaks.isLeakText(postText) || leaks.isLeakUrl(p.url)) continue;
+          if (gate(p.title, p.selftext, p.author).level) continue;
+          const spec = parseProfile(`u/${p.author}`);
+          if (spec && usable(spec)) {
+            const isSame = sameName(p.author, qHandle);
+            const sigType = creatorId && isSame ? 'identity' : 'mention';
+            const c = consider(spec, sigType, creatorId || qHandle, {
+              displayName: p.author,
+              bio: p.title || null,
+              ...(creatorId && isSame ? { creatorId } : {}),
+            });
+            if (c && c.status === 'pending') out.found++;
+          }
+        }
+      } catch { /* best effort */ }
+    }
+
+    // 2. RedGIFs creator search
+    const rg = registry.get('redgifs');
+    if (rg && rg.searchCreators && !aborted()) {
+      try {
+        for (const u of (await rg.searchCreators(qHandle)).slice(0, 8)) {
+          if (!u || !u.username || u.gifs < 1) continue;
+          const spec = parseProfile(`https://www.redgifs.com/users/${u.username}`);
+          if (!usable(spec)) continue;
+          const uBio = `${u.description || ''} ${(u.links || []).join(' ')}`;
+          const isSame = sameName(u.username, qHandle) || paid.pageLinked(subject.service || 'OnlyFans', uBio, qHandle);
+          const mentionsHandle = uBio.toLowerCase().includes(qHandle.toLowerCase());
+          if (!isSame && !mentionsHandle && !CREATOR_STRONG.test(uBio)) continue;
+          const sigType = isSame ? (creatorId ? 'identity' : 'ofconfirmed') : 'mention';
+          const c = consider(spec, sigType, creatorId || leadKey(subject.service || 'OnlyFans', qHandle), {
+            displayName: u.name || u.username,
+            bio: u.description || null,
+            avatarUrl: u.avatar || null,
+            popularity: u.followers,
+            ...(creatorId && isSame ? { creatorId } : {}),
+          });
+          if (c) { if (creatorId && isSame) out.linked++; else out.found++; }
+        }
+      } catch { /* best effort */ }
+    }
+
+    // 3. Bluesky actor search
+    const bsky = registry.get('bluesky');
+    if (bsky && bsky.searchActors && !aborted()) {
+      try {
+        for (const p of (await bsky.searchActors(qHandle, 8))) {
+          if (!p || !p.handle || (p.labels || []).includes('!no-unauthenticated')) continue;
+          const spec = parseProfile(`https://bsky.app/profile/${p.handle}`);
+          if (!usable(spec)) continue;
+          const isSame = sameName(p.handle, qHandle) || paid.pageLinked(subject.service || 'OnlyFans', p.description || '', qHandle);
+          if (!isSame && !CREATOR_STRONG.test(`${p.displayName || ''} ${p.description || ''}`)) continue;
+          const c = consider(spec, creatorId && isSame ? 'identity' : 'mention', creatorId || qHandle, {
+            displayName: p.displayName,
+            bio: p.description,
+            avatarUrl: p.avatar,
+            popularity: p.followers,
+            ...(creatorId && isSame ? { creatorId } : {}),
+          });
+          if (c) { if (creatorId && isSame) out.linked++; else out.found++; }
+        }
+      } catch { /* best effort */ }
+    }
+
+    // 4. Web + Images + Videos search (Brave API or DDG HTML fallback)
+    if (!aborted()) {
+      const webQ = `"${paidPage}" OR "@${qHandle}" (site:x.com OR site:twitter.com OR site:reddit.com OR site:redgifs.com OR site:bsky.app OR site:t.me)`;
+      try {
+        const webHits = websearch.configured()
+          ? await websearch.search(webQ, { count: 15, budget })
+          : await brave.web(webQ, { count: 15, budget });
+        out.searched++;
+        for (const h of webHits || []) ingestSearchHit(h, subject, creatorId);
+      } catch { /* ignore */ }
+
+      try {
+        const imgHits = await brave.images(`"${qHandle}" "${paidPage}"`, { count: 10, budget });
+        for (const h of imgHits || []) ingestSearchHit(h, subject, creatorId);
+      } catch { /* ignore */ }
+
+      try {
+        const vidHits = await brave.videos(`"${qHandle}"`, { count: 10, budget });
+        for (const h of vidHits || []) ingestSearchHit(h, subject, creatorId);
+      } catch { /* ignore */ }
+    }
+  };
+
+  for (const c of activeCreators) {
+    if (aborted()) break;
+    if (takedowns.checkHandle(c.handle) || takedowns.checkItem({ creator_id: c.id, author: c.handle })) continue;
+    const paidEntries = paid.creatorPaid(c);
+    const primaryPaid = paidEntries.find((p) => p.handle) || null;
+    await searchAdaptersForSubject({
+      handle: (primaryPaid && primaryPaid.handle) || c.handle,
+      displayName: c.display_name || c.handle,
+      service: (primaryPaid && primaryPaid.service) || 'OnlyFans',
+    }, c.id);
+    repo.discoveryState.set(`mentions.web.${c.id}`, new Date().toISOString());
+    out.checked++;
+  }
+
+  for (const lead of workableLeads) {
+    if (aborted()) break;
+    if (takedowns.checkHandle(lead.handle)) continue;
+    if (gate(lead.handle, lead.display_name, lead.bio).level) continue;
+    await searchAdaptersForSubject({
+      handle: lead.handle,
+      displayName: lead.display_name || lead.handle,
+      service: lead.service || 'OnlyFans',
+    }, lead.creator_id || null);
+    out.checked++;
+  }
+
   return out;
 }
 
@@ -1050,4 +1236,4 @@ function start() {
 }
 function stop() { stopFlag = true; clearInterval(timer); timer = null; }
 
-module.exports = { seedCreators, seedStatus, onlyfansDiscovery, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskyLookalikes, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };
+module.exports = { seedCreators, seedStatus, onlyfansDiscovery, discoverCreatorMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskyLookalikes, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };

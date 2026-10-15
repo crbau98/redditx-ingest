@@ -19,6 +19,8 @@ const dedupe = require('../services/dedupe');
 const events = require('./events');
 const leaks = require('../lib/leaks');
 const paid = require('../lib/paid');
+const takedowns = require('../lib/takedowns');
+const { extractLinks } = require('../lib/links');
 const vault = require('../lib/vault');
 
 const SKIP_AUTHORS = new Set(['[deleted]', 'deleted', 'automoderator', 'web', 'null', 'undefined', '']);
@@ -97,13 +99,66 @@ function blockFemaleCreator(item, feed, rule) {
  */
 const ownedByFeed = (item, feed) => !!feed.creator_id && ['user', 'channel', 'feed', 'page'].includes(feed.kind) && !item.repostOf;
 
+/**
+ * Find an active known creator explicitly tagged or linked in a post's caption/links
+ * (e.g. a collab partner, promo repost account, or feature post mentioning `onlyfans.com/<handle>`,
+ * `fansly.com/<handle>`, `justfor.fans/<handle>`, or `@handle`).
+ */
+function mentionedKnownCreator(item, feed) {
+  const authorClean = cleanHandle(item.author).toLowerCase();
+  const blob = [item.title, item.text, item.description, item.altText, ...(item.links || [])].filter(Boolean).join('\n');
+  if (!blob) return null;
+
+  // 1. Check paid handles (onlyfans.com/<handle>, fansly.com/<handle>, justfor.fans/<handle>)
+  for (const { service, handle } of paid.findPaidHandles(blob)) {
+    const ownerRef = repo.onlyfans.ownerOf(handle, service);
+    if (ownerRef) {
+      const c = repo.creators.get(ownerRef.id);
+      if (c && c.status === 'active' && c.scope !== 'excluded') return c;
+    }
+    const lead = repo.onlyfans.get(handle, service);
+    if (lead && lead.creator_id) {
+      const c = repo.creators.get(lead.creator_id);
+      if (c && c.status === 'active' && c.scope !== 'excluded') return c;
+    }
+  }
+
+  // 2. Check explicit profile links in text/links
+  for (const l of extractLinks(blob)) {
+    if (l.ingestable && l.kind === 'user' && l.target) {
+      if (String(l.target).toLowerCase() === authorClean && l.platform === (feed && feed.platform)) continue;
+      const c = repo.creators.byAccount(l.platform, l.target);
+      if (c && c.status === 'active' && c.scope !== 'excluded') return c;
+    }
+  }
+
+  // 3. Check @handle / u/handle mentions against active followed/paid creators on the same platform or aliases
+  const handleRe = /(?:^|[\s(>])(?:@([A-Za-z0-9_]{3,30})(?!\.[A-Za-z0-9@])|\/?u\/([A-Za-z0-9_-]{3,30}))\b/g;
+  let m;
+  while ((m = handleRe.exec(blob))) {
+    const h = (m[1] || m[2] || '').toLowerCase();
+    if (!h || h === authorClean || SKIP_AUTHORS.has(h)) continue;
+    const plat = m[2] ? 'reddit' : (feed && feed.platform) || 'x';
+    const byAcc = repo.creators.byAccount(plat, h) || repo.creators.byAccount('x', h) || repo.creators.byAccount('reddit', h) || repo.creators.byAccount('redgifs', h);
+    if (byAcc && byAcc.status === 'active' && byAcc.scope !== 'excluded') {
+      const hasPaidOrBio = !!(byAcc.bio || (byAcc.links && byAcc.links.length) || byAcc.origin !== 'ingest');
+      if (hasPaidOrBio) return byAcc;
+    }
+  }
+
+  return null;
+}
+
 /** The creator this item belongs to, if one is already known (never creates one). */
 function knownCreator(item, feed) {
   if (ownedByFeed(item, feed)) return repo.creators.get(feed.creator_id);
-  if (['rss', 'web', 'linkinbio'].includes(feed.platform)) return null;
+  if (['rss', 'web', 'linkinbio'].includes(feed.platform)) return mentionedKnownCreator(item, feed);
   const handle = cleanHandle(item.author);
-  if (!handle || SKIP_AUTHORS.has(handle.toLowerCase())) return null;
-  return repo.creators.byAccount(feed.platform, handle);
+  if (handle && !SKIP_AUTHORS.has(handle.toLowerCase())) {
+    const direct = repo.creators.byAccount(feed.platform, handle);
+    if (direct) return direct;
+  }
+  return mentionedKnownCreator(item, feed);
 }
 
 /** Which creator does this item belong to? May create one. */
@@ -115,6 +170,8 @@ function resolveCreator(item, feed, adapter) {
   }
   const platform = feed.platform;
   if (['rss', 'web', 'linkinbio'].includes(platform) && !item.repostOf) {
+    const mentioned = mentionedKnownCreator(item, feed);
+    if (mentioned) return mentioned;
     // A site/feed with no creator yet becomes its own creator, owned by the feed.
     const name = cleanHandle(feed.label || item.author || new URL(feed.target).hostname);
     const c = repo.creators.create({ handle: name, displayName: item.author || name, origin: 'ingest' });
@@ -123,16 +180,39 @@ function resolveCreator(item, feed, adapter) {
     return c;
   }
   const handle = cleanHandle(item.author);
-  if (SKIP_AUTHORS.has(handle.toLowerCase())) return null;
-  if (repo.blocklist.has('creator', `${platform}:${handle}`)) return { blocked: true };
-  const existing = repo.creators.byAccount(platform, handle);
-  if (existing) {
-    if ((feed.kind === 'channel' || (platform === 'telegram' && feed.kind === 'user')) && !feed.creator_id && !item.repostOf && existing.status === 'active') {
-      repo.feeds.update(feed.id, { creatorId: existing.id });
-      feed.creator_id = existing.id;
+  if (!SKIP_AUTHORS.has(handle.toLowerCase())) {
+    if (repo.blocklist.has('creator', `${platform}:${handle}`)) return { blocked: true };
+    const existing = repo.creators.byAccount(platform, handle);
+    if (existing) {
+      if ((feed.kind === 'channel' || (platform === 'telegram' && feed.kind === 'user')) && !feed.creator_id && !item.repostOf && existing.status === 'active') {
+        repo.feeds.update(feed.id, { creatorId: existing.id });
+        feed.creator_id = existing.id;
+      }
+      return existing.status === 'active' ? existing : { blocked: true };
     }
-    return existing.status === 'active' ? existing : { blocked: true };
   }
+
+  // If this public post tags or links an already-known creator (collab, promo repost, feature post),
+  // attribute the item to that known creator and enqueue the posting profile for discovery.
+  const mentioned = mentionedKnownCreator(item, feed);
+  if (mentioned) {
+    if (handle && !SKIP_AUTHORS.has(handle.toLowerCase()) && ['x', 'reddit', 'bluesky', 'redgifs', 'telegram', 'mastodon'].includes(platform)) {
+      try {
+        require('./discovery').consider({
+          platform,
+          kind: 'user',
+          target: handle,
+          displayName: item.authorName || null,
+          bio: item.authorBio || item.title || item.text || null,
+          avatarUrl: item.authorAvatar || null,
+          signal: { type: 'mention', from: mentioned.id, via: `${platform}:collab` },
+        });
+      } catch { /* best effort */ }
+    }
+    return mentioned;
+  }
+
+  if (SKIP_AUTHORS.has(handle.toLowerCase())) return null;
   // Creator-level safety: handle / display name.
   if (checkText(handle, item.authorName).level === 'block') return { blocked: true };
 
@@ -199,6 +279,10 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   const leak = leaks.checkItem(item);
   if (leak) return { outcome: 'blocked', reason: leak.rule };
 
+  // ---- 2c. creator takedowns & opt-outs (never bypassable) --------------------------
+  const tdHit = takedowns.checkItem(item, feed);
+  if (tdHit) return { outcome: 'blocked', reason: 'takedown' };
+
   // ---- 3. blocklist -----------------------------------------------------------
   const sourceKey = `${platform}:${item.sourceId}:${item.position || 0}`;
   const hash = md5(canonicalUrl(item.mediaUrl));
@@ -208,13 +292,16 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   // creators / active paid-page leads carry their profile context into step 4 so short promo captions are not dropped.
   const known = knownCreator(item, feed);
   if (known && known.status !== 'active') return { outcome: 'blocked', reason: 'creator blocked' };
+  if (known && takedowns.checkItem(item, feed, null, known)) return { outcome: 'blocked', reason: 'takedown' };
   const paidHandles = paid.findPaidHandles([item.title, item.text, item.altText, item.authorBio, ...(item.links || [])].filter(Boolean).join('\n'));
   let paidTrusted = false;
   const extraScopeTexts = [];
   if (known) {
     if (known.display_name) extraScopeTexts.push(known.display_name);
     if (known.bio) extraScopeTexts.push(known.bio);
-    if (known.scope === 'in') paidTrusted = true;
+    if (known.scope === 'in' && (paidHandles.length > 0 || known.origin !== 'ingest' || (known.links && known.links.length > 0))) {
+      paidTrusted = true;
+    }
   }
   for (const { service, handle } of paidHandles) {
     const ownerRef = repo.onlyfans.ownerOf(handle, service);
@@ -346,6 +433,7 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   // ---- 7. creator -----------------------------------------------------------------
   const creator = resolveCreator(item, feed, adapter);
   if (creator && creator.blocked) return { outcome: 'blocked', reason: 'creator blocked' };
+  if (creator && takedowns.checkItem(item, feed, null, creator)) return { outcome: 'blocked', reason: 'takedown' };
 
   // ---- 7b. keep: a video whose link will expire (and that no source can refresh) is copied to the object store now, so it
   // still plays inside PRISM next week. Best effort: when the copy fails or the file is too big, the original link is kept.
@@ -426,4 +514,4 @@ async function processItem(rawItem, feed, adapter, settings) {
   return result;
 }
 
-module.exports = { processItem, resolveCreator, cleanHandle, _hostState: hostState };
+module.exports = { processItem, resolveCreator, knownCreator, mentionedKnownCreator, cleanHandle, _hostState: hostState };

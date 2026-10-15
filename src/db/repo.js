@@ -1449,6 +1449,173 @@ const onlyfans = {
   },
 };
 
+/* ----------------------------------------------------------------- takedowns */
+const takedownLib = require('../lib/takedowns');
+const takedowns = {
+  all() {
+    return db.prepare('SELECT * FROM takedowns ORDER BY id DESC').all();
+  },
+  get(id) {
+    return db.prepare('SELECT * FROM takedowns WHERE id = ?').get(Number(id)) || null;
+  },
+  find(kind, value) {
+    const norm = takedownLib.normalize(kind, value);
+    return db.prepare('SELECT * FROM takedowns WHERE kind = ? AND value = ? COLLATE NOCASE').get(norm.kind, norm.value) || null;
+  },
+  list({ kind, page = 0, limit = 100 } = {}) {
+    const lim = clampInt(limit, 1, 500, 100);
+    const pg = clampInt(page, 0, 100000, 0);
+    const where = kind && takedownLib.KINDS.includes(String(kind).toLowerCase()) ? 'WHERE kind = ?' : '';
+    const params = where ? [String(kind).toLowerCase()] : [];
+    const total = db.prepare(`SELECT COUNT(*) AS n FROM takedowns ${where}`).get(...params).n;
+    const items = db.prepare(`SELECT * FROM takedowns ${where} ORDER BY id DESC LIMIT ? OFFSET ?`).all(...params, lim, pg * lim);
+    return { items, total, page: pg, limit: lim };
+  },
+  check(item, feed = null) {
+    return takedownLib.checkItem(item, feed, takedowns.all());
+  },
+  add({ kind, value, reason = null, actor = 'admin' } = {}) {
+    const norm = takedownLib.normalize(kind, value);
+    const why = reason ? String(reason).trim() : 'takedown';
+    let td = null;
+    let purgedMedia = 0;
+    let disabledFeeds = 0;
+    let blockedCreators = 0;
+    const removedPhashes = [];
+    const removedMediaIds = [];
+
+    db.transaction(() => {
+      db.prepare(`INSERT INTO takedowns (kind, value, reason) VALUES (?, ?, ?)
+        ON CONFLICT(kind, value) DO UPDATE SET reason = COALESCE(excluded.reason, takedowns.reason)`)
+        .run(norm.kind, norm.value, reason ? String(reason).trim() : null);
+      td = db.prepare('SELECT * FROM takedowns WHERE kind = ? AND value = ? COLLATE NOCASE').get(norm.kind, norm.value);
+
+      const blockedCreatorIds = new Set();
+      const affectedCreators = new Set();
+
+      if (norm.kind === 'creator' || norm.kind === 'handle') {
+        const hasPlat = norm.value.includes(':');
+        const plat = hasPlat ? norm.value.split(':', 2)[0] : null;
+        const bare = hasPlat ? norm.value.split(':', 2)[1] : norm.value;
+
+        const allCreators = db.prepare('SELECT id, handle, display_name, links, status FROM creators').all();
+        for (const c of allCreators) {
+          let match = false;
+          if (norm.kind === 'creator' && (takedownLib.creatorMatches(c.id, norm.value) || takedownLib.creatorMatches(c.handle, norm.value))) {
+            match = true;
+          } else if (norm.kind === 'handle' && !plat && takedownLib.handleMatches(c.handle, null, bare)) {
+            match = true;
+          } else if (c.links && String(c.links).toLowerCase().includes(`/${bare}`)) {
+            match = true;
+          }
+          if (match) {
+            blockedCreatorIds.add(c.id);
+          }
+        }
+        // Check aliases and feeds for creator ownership
+        const aliasRows = db.prepare('SELECT creator_id FROM creator_aliases WHERE norm = ? OR alias = ? COLLATE NOCASE').all(bare.replace(/[^a-z0-9]/g, ''), bare);
+        for (const r of aliasRows) blockedCreatorIds.add(r.creator_id);
+
+        const feedMatches = plat
+          ? db.prepare('SELECT * FROM feeds WHERE platform = ? AND target = ? COLLATE NOCASE').all(plat, bare)
+          : db.prepare('SELECT * FROM feeds WHERE target = ? COLLATE NOCASE').all(bare);
+        for (const f of feedMatches) {
+          if (f.creator_id) blockedCreatorIds.add(f.creator_id);
+          if (f.enabled) {
+            db.prepare('UPDATE feeds SET enabled = 0 WHERE id = ?').run(f.id);
+            disabledFeeds++;
+          }
+          blocklist.add('creator', `${f.platform}:${String(f.target).toLowerCase()}`, why);
+        }
+
+        for (const cid of blockedCreatorIds) {
+          const c = creatorQ.get.get(cid);
+          if (!c) continue;
+          const creatorFeeds = db.prepare('SELECT id, enabled, platform, target FROM feeds WHERE creator_id = ?').all(cid);
+          for (const f of creatorFeeds) {
+            if (f.enabled) {
+              db.prepare('UPDATE feeds SET enabled = 0 WHERE id = ?').run(f.id);
+              disabledFeeds++;
+            }
+            blocklist.add('creator', `${f.platform}:${String(f.target).toLowerCase()}`, why);
+          }
+          db.prepare("UPDATE creators SET status = 'blocked', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(cid);
+          blocklist.add('creator', cid, why);
+          blockedCreators++;
+          affectedCreators.add(cid);
+        }
+
+        db.prepare("UPDATE candidates SET status = 'rejected', reason = 'takedown' WHERE target = ? COLLATE NOCASE AND status = 'pending'").run(bare);
+        db.prepare("UPDATE onlyfans_leads SET status = 'rejected', reason = 'takedown' WHERE handle = ? COLLATE NOCASE").run(bare);
+      } else if (norm.kind === 'url' || norm.kind === 'domain') {
+        const allFeeds = db.prepare('SELECT * FROM feeds WHERE enabled = 1').all();
+        for (const f of allFeeds) {
+          const matched = norm.kind === 'url'
+            ? takedownLib.urlMatches(f.target, norm.value)
+            : takedownLib.domainMatches(f.target, norm.value);
+          if (matched) {
+            db.prepare('UPDATE feeds SET enabled = 0 WHERE id = ?').run(f.id);
+            disabledFeeds++;
+          }
+        }
+      }
+
+      // Retroactively purge matching media items
+      const mediaRows = db.prepare(`SELECT id, creator_id, platform, author, title, description,
+        source_url, media_url, preview_url, thumbnail_url, hash, source_key, phash
+        FROM media WHERE publish_state != 'removed'`).all();
+      for (const m of mediaRows) {
+        const matchedByCreator = m.creator_id && blockedCreatorIds.has(m.creator_id);
+        const matchedByRule = matchedByCreator || takedownLib.checkItem({
+          creator_id: m.creator_id,
+          platform: m.platform,
+          author: m.author,
+          title: m.title,
+          text: m.description,
+          description: m.description,
+          source_url: m.source_url,
+          permalink: m.source_url,
+          media_url: m.media_url,
+          mediaUrl: m.media_url,
+          preview_url: m.preview_url,
+          previewUrl: m.preview_url,
+          thumbnail_url: m.thumbnail_url,
+          thumbnailUrl: m.thumbnail_url,
+        }, null, [td]);
+        if (!matchedByRule) continue;
+
+        db.prepare("UPDATE media SET publish_state = 'removed', review_reason = 'takedown', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(m.id);
+        if (m.hash) blocklist.add('hash', m.hash, why);
+        if (m.source_key) blocklist.add('source_key', m.source_key, why);
+        if (m.phash) {
+          db.prepare('INSERT OR IGNORE INTO phash_blocklist (phash, reason) VALUES (?, ?)').run(m.phash, why);
+          removedPhashes.push(m.phash);
+        }
+        if (m.creator_id) affectedCreators.add(m.creator_id);
+        removedMediaIds.push(m.id);
+        purgedMedia++;
+      }
+
+      for (const cid of affectedCreators) {
+        creatorQ.stats.run({ id: cid });
+      }
+      logAction('takedown', String(td.id), 'add', why, actor);
+    })();
+
+    for (const mid of removedMediaIds) notifyState(mid, 'removed');
+    for (const ph of removedPhashes) notifyBlocked(ph);
+
+    return { takedown: td, purged: purgedMedia, purgedMedia, disabledFeeds, blockedCreators };
+  },
+  remove(id, actor = 'admin') {
+    const row = takedowns.get(id);
+    if (!row) return false;
+    db.prepare('DELETE FROM takedowns WHERE id = ?').run(Number(id));
+    logAction('takedown', String(id), 'remove', `${row.kind}:${row.value}`, actor);
+    return true;
+  },
+};
+
 /** Recently ingested text from active creators — raw material for mention mining. */
 function mentionSource(afterIso, limit = 2000) {
   return db.prepare(`SELECT m.platform, m.title, m.description, m.creator_id, m.ingested_at FROM media m JOIN creators c ON c.id = m.creator_id
@@ -1487,6 +1654,6 @@ function discoveryTargets({ platform, prefix, staleDays, limit, minMedia = 1, ma
 module.exports = {
   db, nowIso, clampInt, cleanTag, ftsQuery, settings, hosts, blocklist, logAction, suggest, audit,
   creators, feeds, runs, media, reports, addTags, publicStats, adminOverview, discover,
-  candidates, discoveryState, onlyfans, mentionSource, discoveryTargets, communityHangouts, PLATFORM_TAGS, GENERIC_TAGS, tagIntel, library,
+  candidates, discoveryState, onlyfans, takedowns, mentionSource, discoveryTargets, communityHangouts, PLATFORM_TAGS, GENERIC_TAGS, tagIntel, library,
   serializeMedia, serializeCreator, SELECT_CREATOR_CARD,
 };

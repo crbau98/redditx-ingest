@@ -269,7 +269,7 @@ function noteProfile(creatorId, feed, profile) {
   return out;
 }
 
-const LINKPAGE_HOSTS = /(^|\.)(linktr\.ee|allmylinks\.com|beacons\.ai|carrd\.co|solo\.to|lnk\.bio|bio\.site|linkin\.bio|hoo\.be|bio\.link|direct\.me|linkpop\.com|taplink\.cc|msha\.ke|fans\.ly|fansly\.com|justfor\.fans|fanvue\.com|loyalfans\.com|fancentro\.com)$/i;
+const LINKPAGE_HOSTS = /(^|\.)(linktr\.ee|allmylinks\.com|beacons\.ai|carrd\.co|campsite\.bio|solo\.to|bento\.me|direct\.me|milkshake\.app|msha\.ke|hoo\.be|snipfeed\.co|lnk\.bio|taplink\.cc|bio\.site|linkin\.bio|bio\.link|linkpop\.com|withkoji\.com|stan\.store|fans\.ly|fansly\.com|justfor\.fans|fanvue\.com|loyalfans\.com|fancentro\.com)$/i;
 
 /** link-page or fan-page key from a creator's own profile link: host + first path segment. */
 function pageKey(url) {

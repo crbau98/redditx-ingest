@@ -179,6 +179,31 @@ router.post('/report', reportLimiter, (req, res) => {
   res.status(201).json({ ok: true, id });
 });
 
+/* ----------------------------------------------------- creator takedown registry */
+router.get('/takedowns', (req, res) => {
+  const page = repo.clampInt(req.query.page, 0, 100000, 0);
+  const limit = repo.clampInt(req.query.limit, 1, 500, 100);
+  const kind = req.query.kind ? String(req.query.kind) : undefined;
+  res.json(repo.takedowns.list({ kind, page, limit }));
+});
+
+router.post('/takedowns', (req, res) => {
+  try {
+    const { kind, value, reason } = req.body || {};
+    const out = repo.takedowns.add({ kind, value, reason, actor: 'api' });
+    events.admin('takedown', { id: out.takedown && out.takedown.id, kind: out.takedown && out.takedown.kind, value: out.takedown && out.takedown.value });
+    res.status(201).json({ ok: true, ...out });
+  } catch (e) {
+    res.status(e.status || 400).json({ error: e.message });
+  }
+});
+
+router.delete('/takedowns/:id', (req, res) => {
+  const removed = repo.takedowns.remove(req.params.id, 'api');
+  if (!removed) return res.status(404).json({ error: 'Takedown not found' });
+  res.json({ ok: true });
+});
+
 /* -------------------------------------------------------- age-gated content */
 router.use(['/discover', '/stats', '/suggest', '/search', '/recommend', '/graph', '/understand', '/topics', '/media', '/creators', '/tags', '/communities', '/subreddits', '/platforms', '/stream', '/lookup'], age.requireAge);
 
