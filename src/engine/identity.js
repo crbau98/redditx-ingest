@@ -79,9 +79,10 @@ function findByAlias(text) {
  * Handles a creator names as his own other accounts, in his own bio: "backup: @x", "new acc @x",
  * "formerly @x", "aka x", "old account got banned, now @x". Shout-outs ("go follow my bf @x") don't match.
  */
-const ALIAS_LINE = /\b(?:back[\s-]?up|alt(?:ernate)?|second|2nd|spare|other|new|old|main|priv(?:ate)?|nsfw|sfw|18\+|spicy)\s*(?:acc(?:oun)?t?|acct|page|profile|ig|insta|twitter|x|blog)?\s*(?:is|here|here's|:|-|–|—|=|→|->|>|at|on)?\s*@([A-Za-z0-9_.]{3,30})/gi;
-const AKA = /\b(?:formerly|previously|prev\.?|aka|a\.k\.a\.?|also known as|also goes by|fka|f\.k\.a\.?)\s*[:\-–—]?\s*@?([A-Za-z0-9_.]{3,30})/gi;
-const NEW_HOME = /\b(?:banned|suspended|deleted|locked|got taken down|lost my (?:old )?(?:acc(?:oun)?t|page))\b[^@\n]{0,40}@([A-Za-z0-9_.]{3,30})/gi;
+// Handles may be Bluesky-style ("jake-fit.bsky"), dotted or dashed: trailing dots/dashes are punctuation, not name.
+const ALIAS_LINE = /\b(?:back[\s-]?up|alt(?:ernate)?|second|2nd|spare|other|new|old|main|priv(?:ate)?|nsfw|sfw|18\+|spicy)\s*(?:acc(?:oun)?t?|acct|page|profile|ig|insta|twitter|x|blog)?\s*(?:is|here|here's|:|-|–|—|=|→|->|>|at|on)?\s*@([A-Za-z0-9_.-]{3,40})/gi;
+const AKA = /\b(?:formerly|previously|prev\.?|aka|a\.k\.a\.?|also known as|also goes by|fka|f\.k\.a\.?)\s*[:\-–—]?\s*@?([A-Za-z0-9_.-]{3,40})/gi;
+const NEW_HOME = /\b(?:banned|suspended|deleted|locked|got taken down|lost my (?:old )?(?:acc(?:oun)?t|page))\b[^@\n]{0,40}@([A-Za-z0-9_.-]{3,40})/gi;
 
 function bioAliases(bio) {
   const out = new Set();
@@ -90,7 +91,7 @@ function bioAliases(bio) {
     re.lastIndex = 0;
     let m;
     while ((m = re.exec(text))) {
-      const h = m[1].replace(/[._]+$/, '');
+      const h = m[1].replace(/[._-]+$/, '');
       if (usableAlias(normAlias(h))) out.add(h);
     }
   }
