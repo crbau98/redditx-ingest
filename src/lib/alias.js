@@ -5,9 +5,9 @@
  * "@Jake.Fit", "jake_fit@mastodon.social" and "jakefit.bsky.social" all become "jakefit".
  */
 const SUFFIX = /\.(bsky\.social|bsky\.team|social|tumblr\.com)$/i;
-// Real given names that begin with a filler-prefix letter sequence (e.g. "the" in Theodore, "im" in Imran)
+// Real given names that begin with a filler-prefix letter sequence (e.g. "the" in Theodore, "im" in Immanuel)
 // so unseparated prefix stripping never mangles a man's actual name.
-const GIVEN_STEM = /^(theodor|theophil|theobald|theodoric|theon|thelonious|imran|immanuel|imre)/u;
+const GIVEN_STEM = /^(theodor|theophil|theobald|theodoric|thelonious|immanuel)/u;
 
 function normAlias(s) {
   let x = String(s || '').trim().replace(/^@+/, '');

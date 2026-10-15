@@ -48,10 +48,11 @@ test('iter5: bio alias lines catch Bluesky-style dotted and dashed handles', () 
 /* ------------------------------------------------- item 4: alias affix keys */
 test('iter4: filler affixes collapse so one man’s accounts share an alias key', () => {
   const { normAlias, usableAlias } = require('../src/lib/alias');
-  for (const s of ['the_real_jake', '@RealJake', 'Jake.Official', 'iamjake', 'itsjake_backup', 'mrjakealt']) assert.equal(normAlias(s), 'jake', s);
+  for (const s of ['the_real_jake', '@RealJake', 'Jake.Official', 'iamjake', 'imrealjake', 'itsjake_backup', 'mrjakealt']) assert.equal(normAlias(s), 'jake', s);
   assert.equal(normAlias('@Jake.Fit'), 'jakefit', 'real stems survive');
   assert.equal(normAlias('Image'), 'image', 'a man actually called Image never collapses');
   assert.equal(normAlias('Theo'), 'theo', 'short names are left alone');
+  assert.equal(normAlias('Theodore'), 'theodore', 'given names with filler-like prefixes survive');
   assert.equal(usableAlias('jake'), true);
   for (const g of ['official', 'fanpage', 'instagram', 'backupacc']) assert.equal(usableAlias(g), false, g);
 });
