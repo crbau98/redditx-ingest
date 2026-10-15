@@ -14,6 +14,44 @@ Fixes from the v4.16 review, rebuilt on current main (the original follow-up PR 
 
 **Verification**: 653 unit tests after merging main (3 new guards in `tests/v416-lumen.test.js`). In Chromium: rendered column gap equals the JS gap (12 px desktop, 8 px phone); Tab focus shows a 2 px outline on buttons; a forced worst-case wide card clips 0 px at 1280, 390 and 360 px wide; phone creator page shows the full OnlyFans button; no console errors.
 
+## Unreleased — v5 Horizon iteration: paid parity, identity, perf, operability
+
+| Change | Files |
+|---|---|
+| **Paid-page parsing parity**: Fansly, JustFor.Fans, ManyVids, LoyalFans, Fanvue, FanCentro and Clips4Sale links parse to canonical handles like OnlyFans (string parsing only — the hosts are never fetched) | `lib/paid.js` (new), `lib/links.js` |
+| **Paid-lead tracing parity**: Fansly/JFF pages named in posts and bios become discovery leads traced to free public accounts exactly like OnlyFans (service-keyed leads, migration v11); admin paste-a-link and lead queue filter by service | `db/migrate.js`, `db/repo.js`, `engine/discovery.js`, `routes/admin.js`, `views/admin/discovery.js` |
+| **Reach**: Misskey people search joins discovery keyword reach; once-named leads stay cheap (no web search until a second source names them) | `sources/misskey.js`, `engine/discovery.js` |
+| **Identity**: alias keys collapse filler affixes (`the_`, `real_`, `_official`, `_backup`…); bio alias lines catch dotted/dashed handles; identity scan pairs creators sharing a Fansly/JFF page; paid link-outs carry canonical handles with case-insensitive dedupe and free-flag refresh | `lib/alias.js`, `lib/bio.js`, `engine/identity.js`, `engine/lookup.js`, `db/repo.js` |
+| **Creator profiles**: every paid page ships in a `paid` array on the creator DTO, with header buttons (Fansly/JFF) next to the OnlyFans CTA, card badges when there is no OF page, and all eight paid hosts in the Creators filter; **Find** keeps the paid link-outs it surfaced when following | `routes/public.js`, `views/creator.js`, `components/creator-card.js`, `views/creators.js`, `views/find.js` |
+| **Perf, measured or guarded**: thumbnail sweep reads up to 3 pictures in flight; autocomplete caches per query for 10 s (cap 200); image-cache eviction never walks the disk on the request path | `engine/thumbs.js`, `routes/public.js`, `lib/media-cache.js` |
+| **Admin operability**: Discovery queue filters by platform; paid signal chips name their service; Settings → Maintenance names every backlog (safety sweep, thumbnails, near-duplicates) | `views/admin/discovery.js`, `views/admin/settings.js`, `routes/admin.js`, `engine/discovery.js` |
+
+**Kept deliberately**: paywalled/subscription platforms and leak hosts are never fetched; no unofficial Instagram/TikTok scrapers; no face-match identity; no whole-web enumeration.
+
+## Unreleased — v5 Horizon: pull anyone in
+
+| Change | Files |
+|---|---|
+| **Public Find** (`#/find`): name/handle/link → verified public accounts with evidence → follow as one creator; age-gated + rate-limited public API wrapping the admin lookup engine; widened probes (YouTube, PeerTube, Lemmy) | `views/find.js`, `main.js`, `components/palette.js`, `views/creators.js`, `routes/public.js`, `engine/lookup.js` |
+| **YouTube via official RSS**: `youtube` adapter (`user`/`channel`), channel/@handle/UC parsing, thumbnail cards linking out to watch pages; pipeline allows YouTube image hosts | `sources/youtube.js`, `sources/index.js`, `lib/links.js`, `engine/pipeline.js` |
+| **Reach**: Pixelfed hosts in Mastodon instances, Fansly/JFF/YouTube/Pixelfed discovery topics, paid-page filter (OF/Fansly/JFF/ManyVids/LoyalFans) on Creators | `config.js`, `settings.js`, `views/creators.js`, `routes/public.js` |
+| **Perf**: grids prefer `thumb_url` with `tint` placeholders; Home WebGL prism + orbit mount after first paint; `thumb_url`/`tint` exposed on the public media DTO | `routes/public.js`, `components/card.js`, `views/home.js` |
+| **Docs**: `PRODUCT.md` + `DESIGN.md` capture the Lumen/Motion world and the lawful aggregation boundary | `PRODUCT.md`, `DESIGN.md`, `README.md` |
+
+**Kept deliberately**: paywalled/subscription platforms and leak hosts are never fetched; no unofficial Instagram/TikTok scrapers; no face-match identity; no whole-web enumeration.
+
+## 2026-10-14 — v5 "Motion", phase 2: the creator stage
+
+| Change | Files |
+|---|---|
+| **Stage header**: his best picture (highest-scored post, banner as fallback) full-bleed behind the name, washed into the page with a colour taken from that same picture; the wash fades in (opacity only) once the colour is known. Name set larger, with an "Also goes by" line when identity has aliases for him | `views/creator.js`, `app.css` |
+| **Scroll drift**: the stage picture moves a little slower than the page and eases in by 6% as you scroll, with CSS scroll-driven animation (no JS on scroll, transform only, off for reduced motion and in browsers without it) | `app.css` |
+| **"Free on" row**: every account where his posts are free, his free OnlyFans first, as lit pills in each platform's colour (one swipeable row on phones). Other links stay as dashed chips below | `views/creator.js`, `app.css` |
+| **Stats count up** the first time you open a creator in a visit; coming back shows them settled | `views/creator.js` |
+| **Platform switcher mounted** above the feed tabs; the creator feed and `setQ` carry `platform`. The component comes from the usability thread's PR #47 | `views/creator.js` |
+
+**Verification**: 6 new guards in `tests/v5-motion.test.js`; stage checked at 390×844 and 1440×900 in dark and light, and the switcher checked against the usability branch's component (pills render, a pill filters the feed and updates the URL, no console errors).
+
 ## 2026-10-14 — v5 platform switcher, phase 2 of Features and usability
 
 | Change | Files |

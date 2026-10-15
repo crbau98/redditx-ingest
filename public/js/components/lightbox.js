@@ -62,8 +62,8 @@ function start(items, loadMore) {
   S.amb = [h('div', { class: 'lb-ambient' }), h('div', { class: 'lb-ambient' })];
   S.ambIdx = 0;
   S.info$ = h('aside', { class: 'lb-info', 'aria-label': 'Details' });
-  S.prev = h('button', { class: 'lb-nav prev', 'aria-label': 'Previous', onclick: () => nav(-1) }, icon('chev-l', 'lg'));
-  S.next = h('button', { class: 'lb-nav next', 'aria-label': 'Next', onclick: () => nav(1) }, icon('chev-r', 'lg'));
+  S.prev = h('button', { class: 'lb-nav prev', 'aria-label': 'Previous (←)', title: 'Previous (← / J)', onclick: () => nav(-1) }, icon('chev-l', 'lg'));
+  S.next = h('button', { class: 'lb-nav next', 'aria-label': 'Next (→)', title: 'Next (→ / K)', onclick: () => nav(1) }, icon('chev-r', 'lg'));
   S.stage.append(S.prev, S.next);
   // Filmstrip: neighbours of the current item, for jumping around a long sequence (desktop).
   S.strip = h('div', { class: 'lb-strip', role: 'listbox', 'aria-label': 'More in this sequence' });
@@ -185,20 +185,22 @@ function paintTop() {
   const it = cur();
   if (!S || !it) return;
   const faved = favorites.has(it.id);
+  const dl = downloadLink(it);
+  if (dl) dl.append(h('span', { class: 'lb-lab', 'aria-hidden': 'true' }, 'File'));
   S.top.replaceChildren(
-    h('button', { class: 'btn icon', 'aria-label': 'Close viewer', onclick: closeLightbox }, icon('x')),
+    h('button', { class: 'btn icon', 'aria-label': 'Close viewer', title: 'Close (Esc)', onclick: closeLightbox }, icon('x')),
     h('div', { class: 'lb-title' },
       h('div', { style: { minWidth: 0 } }, h('div', { class: 't' }, it.title || it.creator_name || 'Untitled'), h('div', { class: 's' }, [it.creator_name || it.author, platformLabel(it.platform), fmt.ago(it.posted_at)].filter(Boolean).join(' · ')))),
     h('span', { class: 'lb-count' }, `${S.index + 1} / ${S.items.length}`),
-    // on desktop these sit in the top bar; on a phone they become a dock under your thumb
-    h('div', { class: 'lb-actions' },
-    h('button', { class: `btn icon fav${faved ? ' on' : ''}`, 'aria-label': faved ? 'Remove from saved' : 'Save', 'aria-pressed': String(faved), title: 'Save (F)', onclick: () => toggleFav(it) }, icon('heart')),
-    h('button', { class: `btn icon${collections.containing(it.id).length ? ' on' : ''}`, 'aria-label': 'Add to collection', title: 'Add to collection (C)', onclick: () => openCollectionPicker(it) }, icon('bookmark')),
-    h('button', { class: 'btn icon', 'aria-label': 'Share link', title: 'Copy link', onclick: () => share(it) }, icon('share')),
-    downloadLink(it),
+    // on desktop these sit in the top bar; on a phone they become a labelled dock under your thumb
+    h('div', { class: 'lb-actions', role: 'toolbar', 'aria-label': 'Viewer actions' },
+    h('button', { class: `btn icon fav${faved ? ' on' : ''}`, 'aria-label': faved ? 'Remove from saved' : 'Save', 'aria-pressed': String(faved), title: 'Save (F)', onclick: () => toggleFav(it) }, icon('heart'), h('span', { class: 'lb-lab', 'aria-hidden': 'true' }, 'Save')),
+    h('button', { class: `btn icon${collections.containing(it.id).length ? ' on' : ''}`, 'aria-label': 'Add to collection', title: 'Add to collection (C)', onclick: () => openCollectionPicker(it) }, icon('bookmark'), h('span', { class: 'lb-lab', 'aria-hidden': 'true' }, 'Collect')),
+    h('button', { class: 'btn icon', 'aria-label': 'Share link', title: 'Copy link', onclick: () => share(it) }, icon('share'), h('span', { class: 'lb-lab', 'aria-hidden': 'true' }, 'Share')),
+    dl,
     h('button', { class: `btn icon hide-mobile${S.slide ? ' on' : ''}`, 'aria-label': S.slide ? 'Stop slideshow' : 'Start slideshow', 'aria-pressed': String(!!S.slide), title: 'Slideshow (S)', onclick: toggleSlideshow }, icon(S.slide ? 'pause' : 'play', S.slide ? '' : 'fill')),
     h('button', { class: 'btn icon hide-mobile', 'aria-label': 'Keyboard shortcuts', title: 'Keyboard shortcuts (?)', onclick: showHelp }, icon('sliders')),
-    h('button', { class: `btn icon${S.info ? ' on' : ''}`, 'aria-label': 'Details', 'aria-pressed': String(S.info), title: 'Details (I)', onclick: () => setInfo(!S.info) }, icon('info'))));
+    h('button', { class: `btn icon${S.info ? ' on' : ''}`, 'aria-label': 'Details', 'aria-pressed': String(S.info), title: 'Details (I) — swipe up on touch', onclick: () => setInfo(!S.info) }, icon('info'), h('span', { class: 'lb-lab', 'aria-hidden': 'true' }, 'Details'))));
 }
 
 function setInfo(on) {

@@ -5,7 +5,7 @@
  * (every `user` feed has a creator; external/paywalled links are display-only).
  */
 const repo = require('../db/repo');
-const { ofLink } = require('../lib/onlyfans');
+const paid = require('../lib/paid');
 const registry = require('../sources');
 const { checkText } = require('../lib/safety');
 const { femaleCheck } = require('../lib/scope');
@@ -39,7 +39,7 @@ function addSpec(spec, { creatorId = null, origin = 'admin', trusted, hint, body
   }
 
   let creator = creatorId ? repo.creators.get(creatorId) : null;
-  if (spec.kind === 'user') {
+  if (spec.kind === 'user' || (spec.kind === 'channel' && spec.platform === 'youtube')) {
     const owner = repo.creators.byAccount(spec.platform, spec.target);
     if (owner && creator && owner.id !== creator.id) return { status: 'conflict', creator: owner, spec, reason: `Already belongs to ${owner.display_name || owner.handle}` };
     if (owner) creator = owner;
@@ -74,7 +74,7 @@ function addCreator({ name, inputs, bio }) {
   // If any account already belongs to a creator, extend that creator instead of duplicating.
   let creator = null;
   for (const s of ingestable) {
-    if (s.kind !== 'user') continue;
+    if (s.kind !== 'user' && !(s.kind === 'channel' && s.platform === 'youtube')) continue;
     const owner = repo.creators.byAccount(s.platform, s.target);
     if (owner) { creator = owner; break; }
   }
@@ -92,14 +92,18 @@ function addCreator({ name, inputs, bio }) {
 
   const feeds = []; const conflicts = []; const links = [];
   for (const s of specs) {
-    if (s.external) { links.push(s.handle ? ofLink(s.handle) : { platform: 'external', service: s.service, label: s.label, url: s.url }); continue; }
+    if (s.external) {
+      const traceable = s.handle && s.service && paid.SERVICES[s.service] && paid.SERVICES[s.service].trace;
+      links.push(traceable ? paid.paidLink(s.service, s.handle) : { platform: 'external', service: s.service, label: s.label, url: s.url });
+      continue;
+    }
     const r = addSpec(s, { creatorId: creator.id });
     if (r.status === 'conflict') conflicts.push({ input: s.label || s.target, reason: r.reason, creatorId: r.creator.id });
     else if (r.feed) feeds.push(r.feed);
   }
   if (links.length) repo.creators.enrich(creator.id, { links });
-  // An OnlyFans page added by hand: discovery then looks for this person's free accounts elsewhere.
-  for (const l of links) if (l.handle) repo.onlyfans.claim(l.handle, creator.id);
+  // A paid page added by hand: discovery then looks for this person's free accounts elsewhere.
+  for (const l of links) if (l.handle) repo.onlyfans.claim(l.handle, creator.id, l.service || 'OnlyFans');
   return { creator: repo.creators.detail(creator.id), feeds, conflicts, skipped, links };
 }
 
@@ -141,7 +145,7 @@ function importTargets(text, { hint } = {}) {
 /** Public-safe list of a creator's account links. */
 function publicAccounts(creatorId) {
   return repo.feeds.list({ creatorId, limit: 50 }).items
-    .filter((f) => f.kind === 'user' || (f.kind === 'feed' && f.platform === 'rss'))
+    .filter((f) => f.kind === 'user' || (f.kind === 'channel' && f.platform === 'youtube') || (f.kind === 'feed' && f.platform === 'rss'))
     .map((f) => ({ platform: f.platform, label: f.label || f.target, url: profileUrl(f.platform, f.kind, f.target) }))
     .filter((a) => a.url);
 }

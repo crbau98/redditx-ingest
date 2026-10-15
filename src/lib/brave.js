@@ -33,27 +33,32 @@ const pair = (h) => String(h || '').split(',').map((x) => Number(x.trim()));
  */
 async function search(q, { count = 20, budget = 40 } = {}) {
   if (!configured()) throw Object.assign(new Error('BRAVE_API_KEY is not set'), { skip: true });
-  if (usage().count >= budget) throw Object.assign(new Error(`Brave daily budget reached (${budget})`), { budget: true });
-  record();
+  if (usage().count >= budget) throw Object.assign(new Error(`Brave daily budget reached (${budget}/day; raise Settings → Brave searches per day or set SEARXNG_URL for free fallback)`), { budget: true });
   const url = `${config.baseUrls.brave}/res/v1/web/search?q=${encodeURIComponent(q)}&count=${Math.min(20, count)}&safesearch=off&spellcheck=0&text_decorations=0`;
   const headers = { accept: 'application/json', 'x-subscription-token': config.creds.braveKey };
   // Raw so the rate-limit headers are readable: Brave's free plan allows 1 request/second and a monthly quota, and a
   // 429 means different things for each (wait a second vs. stop until next month).
   let res = await http.raw(url, { headers, retries: 0 });
   if (res.status === 429) {
-    if (pair(res.headers['x-ratelimit-remaining'])[1] === 0) throw Object.assign(new Error('Brave monthly quota is used up'), { status: 429, budget: true });
+    if (pair(res.headers['x-ratelimit-remaining'])[1] === 0) throw Object.assign(new Error('Brave monthly quota is used up (HTTP 429, plan quota exhausted until next month)'), { status: 429, budget: true });
     const wait = Math.min(Math.max((pair(res.headers['x-ratelimit-reset'])[0] || 1) * 1000, 1100), 5000);
     await new Promise((r) => setTimeout(r, wait));
     res = await http.raw(url, { headers, retries: 0 });
-    if (res.status === 429) throw Object.assign(new Error('Brave rate limit hit (HTTP 429); will retry on the next discovery run'), { status: 429, retryAfter: wait * 4 });
+    if (res.status === 429) throw Object.assign(new Error('Brave rate limit hit (HTTP 429, 1 req/s on the free plan); will retry on the next discovery run'), { status: 429, retryAfter: wait * 4 });
   }
-  if (res.status === 401 || res.status === 403 || res.status === 422) {
-    // Key rejected / plan lacks web search: a configuration problem, not an outage.
+  if (res.status === 401 || res.status === 403) {
+    // Key rejected / plan lacks web search: a configuration problem, not an outage. Not counted against the daily budget.
     throw Object.assign(new Error(`Brave rejected the API key (HTTP ${res.status}); check BRAVE_API_KEY and that the plan includes Web Search`), { skip: true, status: res.status });
+  }
+  if (res.status === 422) {
+    throw Object.assign(new Error('Brave rejected the query (HTTP 422 — invalid parameters, not the API key)'), { status: res.status });
   }
   if (res.status >= 400) throw Object.assign(new Error(`Brave search failed (HTTP ${res.status})`), { status: res.status });
   let json;
   try { json = JSON.parse(res.body.toString('utf8')); } catch { throw Object.assign(new Error('Brave returned a non-JSON response'), { status: res.status }); }
+  // Count only requests that reached the API (key rejections and HTTP errors
+  // above throw before this point): a bad key must not burn the daily budget.
+  record();
   const strip = (s) => String(s || '').replace(/<[^>]+>/g, '');
   return ((json.web && json.web.results) || []).map((r) => ({ url: r.url, title: strip(r.title), description: strip(r.description) })).filter((r) => r.url);
 }

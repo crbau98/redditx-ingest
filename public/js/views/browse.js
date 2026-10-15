@@ -22,14 +22,15 @@ export async function browse(root) {
   for (const c of communities) { if (!byPlatform.has(c.platform)) byPlatform.set(c.platform, []); byPlatform.get(c.platform).push(c); }
 
   root.replaceChildren(
-    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Browse'), h('div', { class: 'sub' }, 'Every source, community and tag in the library'))),
+    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Browse'), h('div', { class: 'sub' }, 'Every free source, community and tag in the library — paid pages stay link-outs on creator profiles.')),
+      h('div', { class: 'row wrap' }, h('a', { class: 'btn primary sm', href: href('/find') }, icon('search', 'sm'), 'Find a creator'))),
     topics ? h('section', { class: 'section', style: { marginTop: '8px' } }, h('div', { class: 'section-head' }, h('div', null, h('h2', null, icon('sparkle'), 'Topics'), h('div', { class: 'sub' }, 'Tags that travel together, grouped automatically'))), topics) : null,
-    h('section', { class: 'section', style: { marginTop: '8px' } }, h('div', { class: 'section-head' }, h('h2', null, icon('layers'), 'Sources')),
+    h('section', { class: 'section', style: { marginTop: '8px' } }, h('div', { class: 'section-head' }, h('h2', null, icon('layers'), 'Sources'), h('div', { class: 'sub' }, 'Free platforms PRISM ingests — each tile opens Explore')),
       h('div', { class: 'browse-grid' }, platforms.map((p) => h('a', { class: 'browse-tile', href: href('/explore', { platform: p.platform }), style: { '--c': platformColor(p.platform) } },
         h('div', { class: 'name' }, platformLabel(p.platform)), h('div', { class: 'count num' }, fmt.int(p.count)), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'items'))))),
     h('section', { class: 'section' }, h('div', { class: 'section-head' }, h('h2', null, icon('tag'), 'Tags'), h('div', { class: 'sub' }, `${tags.length} most used`)),
       h('div', { class: 'tagcloud' }, [...tags].sort((a, b) => a.name.localeCompare(b.name)).map((t) => h('a', { href: href('/explore', { tag: t.name }), style: { fontSize: `${size(t.count).toFixed(1)}px` }, title: `${t.count} items` }, `#${t.name}`)))),
-    h('section', { class: 'section' }, h('div', { class: 'section-head' }, h('h2', null, icon('compass'), 'Communities')),
+    h('section', { class: 'section' }, h('div', { class: 'section-head' }, h('h2', null, icon('compass'), 'Communities'), h('div', { class: 'sub' }, 'Where creators post — each chip opens Explore')),
       h('div', { class: 'stack', style: { gap: '22px' } }, [...byPlatform.entries()].map(([plat, list]) => h('div', null,
         h('div', { class: 'row', style: { marginBottom: '10px' } }, h('span', { class: 'badge plat', style: { '--c': platformColor(plat) } }, platformLabel(plat)), h('span', { class: 'muted', style: { fontSize: '13px' } }, `${list.length} communities`)),
         h('div', { class: 'row wrap' }, list.slice(0, 60).map((c) => h('a', { class: 'chip', href: href('/explore', { community: c.name }) }, c.name, h('span', { class: 'n' }, fmt.num(c.count))))))))));

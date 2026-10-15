@@ -89,6 +89,7 @@ module.exports = {
   // Only well-established servers are listed; an unreachable one is reported in the feed's notes, never fatal.
   mastodonInstances: list(env.MASTODON_INSTANCES, [
     'mastodon.social', 'pawoo.net', 'mstdn.jp', 'fedibird.com', 'mastodon.online', 'mas.to', 'mastodon.world',
+    'pixelfed.social', 'pixelfed.de',
   ]),
   lemmyInstances: list(env.LEMMY_INSTANCES, [
     'lemmynsfw.com', 'lemmy.world', 'sh.itjust.works', 'lemmy.ml', 'lemm.ee', 'lemmy.dbzer0.com', 'reddthat.com',
@@ -114,6 +115,8 @@ module.exports = {
     x: env.X_BASE_URL || 'https://api.x.com',
     fxtwitter: env.FXTWITTER_BASE_URL || 'https://api.fxtwitter.com',
     xSyndication: env.X_SYNDICATION_URL || 'https://syndication.twitter.com',
+    // X's own embed API for single posts (keyless): the fallback when fxtwitter cannot read a post.
+    xEmbed: env.X_EMBED_URL || 'https://cdn.syndication.twimg.com',
     brave: env.BRAVE_BASE_URL || 'https://api.search.brave.com',
     telegramBot: env.TELEGRAM_BOT_BASE_URL || 'https://api.telegram.org',
     keenable: env.KEENABLE_BASE_URL || 'https://api.keenable.ai/mcp',

@@ -19,7 +19,7 @@ before(async () => {
     '/xrpc/app.bsky.actor.searchActors': (req, res, url) => {
       state.actorSearch.push(url.searchParams.get('q'));
       return { json: { actors: [
-        { handle: 'beardguy.bsky.social', displayName: 'Beard Guy 🔞', description: 'gay bear creator · onlyfans in bio', followersCount: 900 },
+        { handle: 'beardguy.bsky.social', displayName: 'Beard Guy 🔞', description: 'gay jock creator · onlyfans in bio', followersCount: 900 },
         { handle: 'plainuser.bsky.social', displayName: 'Plain', description: 'I like gay history books' },
         { handle: 'teenacc.bsky.social', displayName: 'Teen boys', description: 'gay nsfw creator' },
       ] } };
@@ -53,7 +53,7 @@ describe('v4.7 discovery reach', () => {
     const a = repo.creators.create({ handle: 'hang_a' }); const b = repo.creators.create({ handle: 'hang_b' }); const c = repo.creators.create({ handle: 'hang_c' });
     post(a, 'GayBeards'); post(b, 'GayBeards'); post(c, 'GayBeards');
     post(a, 'OnlyMine');                       // a single creator is not a pattern
-    post(a, 'bears@lemmy.test', 'lemmy'); post(b, 'bears@lemmy.test', 'lemmy');
+    post(a, 'otters@lemmy.test', 'lemmy'); post(b, 'otters@lemmy.test', 'lemmy');
     repo.feeds.upsert({ platform: 'reddit', kind: 'community', target: 'alreadyfollowed', origin: 'admin', runNow: false });
     post(a, 'alreadyfollowed'); post(b, 'alreadyfollowed');
     const r = discovery.creatorHangouts();
@@ -63,7 +63,7 @@ describe('v4.7 discovery reach', () => {
     assert.equal(sub.score, 1.5 * 3 + 2, 'three creators + "gay" in the name');
     assert.equal(repo.candidates.find('reddit', 'community', 'onlymine'), null);
     assert.equal(repo.candidates.find('reddit', 'community', 'alreadyfollowed'), null, 'followed communities are skipped');
-    assert.ok(repo.candidates.find('lemmy', 'community', 'bears@lemmy.test'));
+    assert.ok(repo.candidates.find('lemmy', 'community', 'otters@lemmy.test'));
     assert.ok(r.found >= 2);
   });
   test('Bluesky lookalikes: suggestions for followed creators, adult/creator-looking only, refreshed weekly', async () => {
@@ -82,9 +82,9 @@ describe('v4.7 discovery reach', () => {
     assert.equal(state.suggested, calls, 'not asked again within the week');
   });
   test('people search: Bluesky accounts and RedGIFs creators for a rotating keyword, through the safety gate', async () => {
-    settings.update({ discoveryKeywords: 'gay bears\ngay jocks' });
+    settings.update({ discoveryKeywords: 'gay otters\ngay jocks' });
     const r = await discovery.peopleSearch();
-    assert.deepEqual(state.actorSearch, ['gay bears']); assert.deepEqual(state.gifSearch, ['gay bears']);
+    assert.deepEqual(state.actorSearch, ['gay otters']); assert.deepEqual(state.gifSearch, ['gay otters']);
     assert.ok(repo.candidates.find('bluesky', 'user', 'beardguy.bsky.social'));
     assert.equal(repo.candidates.find('bluesky', 'user', 'plainuser.bsky.social'), null, 'needs creator + adult wording');
     const teen = repo.candidates.find('bluesky', 'user', 'teenacc.bsky.social');

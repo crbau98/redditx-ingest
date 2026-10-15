@@ -34,7 +34,11 @@ const VIDEO_EXT = /\.(mp4|webm|mov|m4v|gifv)(\?|#|$)/i;
 const hostOf = (url) => hostnameOf(url).replace(/^www\./, '');
 const hostMatches = (h, d) => h === d || h.endsWith('.' + d);
 
-function hostBlocked(h) { return !h || BLOCKED_HOSTS.some((d) => hostMatches(h, d)); }
+function isYouTubeThumbHost(h) { return /^(i\.ytimg\.com|yt3\.ggpht\.com|youtube\.com|youtu\.be)$/i.test(h || ''); }
+function hostBlocked(h, platform) {
+  if (platform === 'youtube' && isYouTubeThumbHost(h)) return false;
+  return !h || BLOCKED_HOSTS.some((d) => hostMatches(h, d));
+}
 function hostTrusted(h) { return !!h && TRUSTED_HOSTS.some((d) => hostMatches(h, d)); }
 function looksLikeDirectMedia(url) { return MEDIA_EXT.test(String(url || '')); }
 function looksLikeVideo(url) { return VIDEO_EXT.test(String(url || '')); }

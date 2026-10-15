@@ -22,7 +22,7 @@ const imagefilter = require('../lib/imagefilter');
 const { parseProfile, extractLinks, profileUrl } = require('../lib/links');
 const { checkText } = require('../lib/safety');
 const { femaleCheck, classify } = require('../lib/scope');
-const { ofLink, ofHandle } = require('../lib/onlyfans');
+const { ofLink } = require('../lib/onlyfans');
 const events = require('./events');
 
 const PROBE_TIMEOUT_MS = 18000;
@@ -69,10 +69,10 @@ function parseQuery(input) {
   const out = { raw, name: null, handles: [], spec: null };
   if (!raw) return out;
   const spec = registry.parseInput(raw);
-  if (spec && !spec.external && spec.kind === 'user' && spec.platform !== 'rss') {
+  if (spec && !spec.external && (spec.kind === 'user' || (spec.kind === 'channel' && spec.platform === 'youtube')) && spec.platform !== 'rss') {
     out.spec = spec;
-    const h = String(spec.target).split('@')[0].replace(/\.bsky\.social$/, '');
-    out.handles.push(h);
+    const h = String(spec.target).split('@')[0].replace(/\.bsky\.social$/, '') || String(spec.target).replace(/^@/, '');
+    if (spec.kind === 'user') out.handles.push(h);
     out.name = h;
     return out;
   }
@@ -115,7 +115,7 @@ class Pool {
   constructor() { this.map = new Map(); }
   add(spec, { source, evidence, displayName, bio, avatarUrl, followers, handleExact } = {}) {
     if (!spec || spec.external || !spec.ingestable) return null;
-    if (!['user', 'page'].includes(spec.kind)) return null; // a person's accounts, not communities / searches
+    if (!['user', 'page'].includes(spec.kind) && !(spec.kind === 'channel' && spec.platform === 'youtube')) return null; // a person's accounts, not communities / searches
     if (spec.platform === 'web' || spec.platform === 'rss') return null;
     if (spec.platform === 'linkinbio' && spec.kind !== 'page') return null;
     const k = keyOf(spec);
@@ -149,7 +149,10 @@ async function verify(c) {
     const items = res.items || [];
     const p = res.profile || {};
     c.sampleCount = items.length;
-    c.samples = items.slice(0, 4).map((i) => ({ type: i.mediaType, preview: i.previewUrl || (i.mediaType === 'image' ? i.mediaUrl : null), title: i.title || null }));
+    c.samples = items.slice(0, 4).map((i) => {
+      const preview = i.previewUrl || (i.mediaType === 'image' ? i.mediaUrl : null);
+      return { type: i.mediaType, preview, thumb: preview, title: i.title || null, url: i.permalink || c.url || null };
+    });
     if (p.displayName && !c.displayName) c.displayName = p.displayName;
     if (p.bio && !c.bio) c.bio = String(p.bio).slice(0, 500);
     if (p.avatarUrl && !c.avatarUrl) c.avatarUrl = p.avatarUrl;
@@ -184,6 +187,17 @@ function directSpecs(q) {
       const bsky = handle.replace(/_/g, '-'); // Bluesky handles are domain names: no underscores
       specs.push({ platform: 'bluesky', kind: 'user', target: bsky.includes('.') ? bsky : `${bsky}.bsky.social`, label: bsky, ingestable: true });
       if (/^[A-Za-z0-9-]{3,32}$/.test(handle)) specs.push({ platform: 'tumblr', kind: 'user', target: handle.toLowerCase(), label: `${handle} (Tumblr)`, ingestable: true });
+      if (/^[A-Za-z0-9_.-]{3,40}$/.test(handle)) specs.push({ platform: 'youtube', kind: 'user', target: `@${handle.toLowerCase()}`, label: `@${handle} (YouTube)`, ingestable: true });
+    }
+    // Federated user probes: PeerTube + Lemmy join the direct handle sweep.
+    if (/^[A-Za-z0-9_.-]{3,40}$/.test(handle)) {
+      for (const inst of (config.peertubeInstances || []).slice(0, 2)) {
+        specs.push({ platform: 'peertube', kind: 'user', target: `${handle.toLowerCase()}@${inst}`, label: `${handle}@${inst} (PeerTube)`, ingestable: true });
+      }
+      const lemmyInst = (config.lemmyInstances || [])[0];
+      if (lemmyInst && /^[A-Za-z0-9_]{3,30}$/.test(handle)) {
+        specs.push({ platform: 'lemmy', kind: 'user', target: `${handle}@${lemmyInst}`, label: `${handle}@${lemmyInst} (Lemmy)`, ingestable: true });
+      }
     }
   }
   const seen = new Set();
@@ -251,15 +265,21 @@ async function searchWeb(q, pl, notes) {
         // OnlyFans & co: kept as profile links, never ingested
       }
       notes.push({ platform: 'web', step: `web search (${provider || '?'})`, ok: true });
-    } catch (e) { notes.push({ platform: 'web', step: 'web search', ok: false, note: e.message }); if (e.skip) break; }
+    } catch (e) { notes.push({ platform: 'web', step: 'web search', ok: false, note: e.message }); if (e.skip || e.budget) break; }
   }
   return provider;
 }
 
-/** Everything external a verified candidate links to (OnlyFans, Throne...): shown and stored, never read. */
+/** Everything external a verified candidate links to (paid pages, tip jars...): shown and stored, never read. */
 function externalLinksOf(c) {
+  const paid = require('../lib/paid');
   const out = [];
-  for (const l of c.links || []) if (l.external) out.push(l.handle ? ofLink(l.handle) : { platform: 'external', service: l.service, label: l.label, url: l.url });
+  for (const l of c.links || []) {
+    if (!l.external) continue;
+    if (l.handle && l.service && paid.SERVICES[l.service] && paid.SERVICES[l.service].trace) out.push(paid.paidLink(l.service, l.handle));
+    else if (l.handle && (!l.service || l.service === 'OnlyFans')) out.push(ofLink(l.handle));
+    else out.push({ platform: 'external', service: l.service, label: l.label, url: l.url });
+  }
   return out;
 }
 
@@ -341,7 +361,7 @@ async function lookup(input, { imageCheck = true } = {}) {
     out.push({
       platform: c.platform, kind: c.kind, target: c.target, label: c.label, url: c.url,
       displayName: c.displayName, bio: c.bio ? String(c.bio).slice(0, 240) : null, avatarUrl: c.avatarUrl, followers: c.followers,
-      sampleCount: c.sampleCount, samples: c.samples, evidence: c.evidence.slice(0, 5), male: sc.male,
+      sampleCount: c.sampleCount, samples: c.samples, sample: c.samples[0] || null, evidence: c.evidence.slice(0, 5), male: sc.male,
       confidence: Math.round(conf * 100) / 100, tier: conf >= 0.7 ? 'strong' : conf >= 0.45 ? 'likely' : 'weak',
       status: blocked ? 'blocked' : existing ? 'following' : 'new', feedId: existing ? existing.id : null, creatorId: existing ? existing.creator_id : null,
     });
@@ -390,7 +410,7 @@ function follow({ name, selections, externalLinks = [], bio, creatorId = null } 
     if (!s || !s.platform || !s.target) continue;
     const adapter = registry.get(s.platform);
     const kind = s.kind || 'user';
-    if (!adapter || !adapter.kinds.includes(kind) || !['user', 'page'].includes(kind)) { rejected.push({ ...s, reason: 'unsupported' }); continue; } // a person's accounts, not communities
+    if (!adapter || !adapter.kinds.includes(kind) || (!['user', 'page'].includes(kind) && !(kind === 'channel' && s.platform === 'youtube'))) { rejected.push({ ...s, reason: 'unsupported' }); continue; } // a person's accounts, not communities
     if (femaleCheck(s.target, s.label).level === 'hard') { rejected.push({ ...s, reason: 'not male-focused' }); continue; }
     if (checkText(s.target, s.label).level === 'block') { rejected.push({ ...s, reason: 'safety' }); continue; }
     if (repo.blocklist.has('creator', `${s.platform}:${String(s.target).toLowerCase()}`)) { rejected.push({ ...s, reason: 'blocklisted' }); continue; }
@@ -417,11 +437,16 @@ function follow({ name, selections, externalLinks = [], bio, creatorId = null } 
     res = targets.addCreator({ name: cleanName, bio, inputs: accepted.map(tokenFor).join('\n') });
   }
   if (res.error) return { ...res, rejected };
+  const paid = require('../lib/paid');
   const ext = (externalLinks || []).filter((l) => l && /^https?:\/\//i.test(l.url || '')).slice(0, 12)
-    .map((l) => { const h = ofHandle(l.url); return h ? ofLink(h) : { platform: 'external', service: l.service, label: l.label, url: l.url }; });
+    .map((l) => {
+      const svc = l.service || paid.serviceOf(l.url);
+      const h = l.handle || (svc ? paid.paidHandle(svc, l.url) : null);
+      return h && svc && paid.SERVICES[svc] && paid.SERVICES[svc].trace ? paid.paidLink(svc, h, { free: !!l.free }) : { platform: 'external', service: l.service, label: l.label, url: l.url };
+    });
   require('./identity').addAlias(res.creator.id, cleanName, { kind: 'name', source: 'lookup' }); // the name he was looked up by
   if (ext.length) repo.creators.enrich(res.creator.id, { links: ext });
-  for (const l of ext) if (l.handle) repo.onlyfans.claim(l.handle, res.creator.id); // their page: no need to trace it as a lead
+  for (const l of ext) if (l.handle) repo.onlyfans.claim(l.handle, res.creator.id, l.service || 'OnlyFans'); // their page: no need to trace it as a lead
   const feedIds = res.feeds.map((f) => f.id);
   let queued = 0;
   try { queued = require('./engine').enqueue(feedIds, { force: true, trigger: 'lookup', limit: 300 }); } catch { /* engine not running (tests) */ }
@@ -433,7 +458,7 @@ function follow({ name, selections, externalLinks = [], bio, creatorId = null } 
 async function findAndFollow(input, { minConfidence = 0.7 } = {}) {
   const found = await lookup(input);
   if (found.error) return found;
-  const picks = found.candidates.filter((c) => c.status === 'new' && c.confidence >= minConfidence && c.kind === 'user');
+  const picks = found.candidates.filter((c) => c.status === 'new' && c.confidence >= minConfidence && (c.kind === 'user' || (c.kind === 'channel' && c.platform === 'youtube')));
   if (!picks.length) return { ...found, followed: null, note: 'No strong new match to follow automatically — review the candidates and pick the right accounts.' };
   const followed = follow({ name: found.name || input, selections: picks, externalLinks: found.externalLinks });
   return { ...found, followed };

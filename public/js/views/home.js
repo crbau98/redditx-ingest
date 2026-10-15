@@ -150,26 +150,40 @@ export async function home(root) {
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
 
   // Stats count up once on arrival; the hero's backdrop is a live WebGL prism shader and
-  // trending media turn on a 3D orbit beside the copy.
+  // trending media turn on a 3D orbit beside the copy. Both mount after first paint so the
+  // largest paint is not held back by WebGL setup on phones (static wash first, motion after).
   const stat = (n, label, format = fmt.num) => { const b = h('b', { class: 'num' }, format(n)); requestAnimationFrame(() => countUp(b, n, (v) => format(Math.round(v)))); return h('div', null, b, h('span', null, label)); };
   const openFromOrbit = (it, list) => openLightbox(list, Math.max(0, list.findIndex((x) => x.id === it.id)));
-  const orbit = data.trending.length >= 5 ? createOrbit(data.trending, { onOpen: openFromOrbit, compact: window.matchMedia('(max-width: 899px)').matches }) : null;
+  const orbitHolder = h('div', { class: 'hero-visual' });
   const copy = h('div', { class: 'hero-copy' },
     h('div', { class: 'hero-kicker' }, h('span', { class: 'live-dot' }), `${fmt.num(s.total)} photos & videos · ${fmt.num(s.creators)} creators · updated continuously`),
     h('h1', null, 'Discover male creators ', h('em', null, 'across the web')),
-    h('p', { class: 'lead' }, 'One feed for photos and videos from creators on Reddit, RedGIFs, Bluesky, Mastodon, X and more — fresh, searchable, and organised around the people who make it.'),
+    h('p', { class: 'lead' }, 'One feed for photos and videos from creators on Reddit, RedGIFs, Bluesky, Mastodon, X, YouTube and more — fresh, searchable, and organised around the people who make it.'),
     h('div', { class: 'hero-search' }, icon('search', 'lg'), input, h('button', { class: 'btn primary', onclick: go }, 'Search')),
     h('div', { class: 'hero-actions' },
+      h('a', { class: 'btn glass', href: href('/find') }, icon('search', 'sm'), 'Find a creator'),
       h('a', { class: 'btn glass', href: href('/reels') }, icon('film', 'sm'), 'Watch Reels'),
       h('button', { class: 'btn glass', onclick: surpriseMe }, icon('shuffle', 'sm'), 'Surprise me'),
       h('a', { class: 'btn ghost hide-mobile', href: href('/browse') }, icon('layers', 'sm'), 'Browse everything')),
     h('div', { class: 'hero-stats' }, stat(s.total, 'items'), stat(s.creators, 'creators'), stat(s.videos, 'videos'), stat(data.platforms.length, 'sources', (v) => String(v))));
-  const hero = h('section', { class: `hero${orbit ? ' hero-split' : ''}` },
+  const hero = h('section', { class: 'hero' },
     copy,
-    orbit ? h('div', { class: 'hero-visual' }, orbit.el, h('div', { class: 'orbit-hint' }, icon('chev-l', 'sm'), 'Drag to spin · tap to open', icon('chev-r', 'sm'))) : null,
+    data.trending.length >= 5 ? orbitHolder : null,
     data.tags.length && !(!tastes.ready() && !prefs.introDone) ? h('div', { class: 'hero-chips' }, data.tags.slice(0, 10).map((t) => h('a', { class: 'chip', href: href('/explore', { tag: t.name }) }, `#${t.name}`, h('span', { class: 'n' }, fmt.num(t.count))))) : null);
-  const stopPrism = mountPrismBackground(hero);
+  let stopPrism = () => {};
+  let orbit = null;
   const teardownHero = () => { stopPrism(); if (orbit) orbit.destroy(); };
+  const mountMotion = () => {
+    if (!hero.isConnected) return;
+    if (data.trending.length >= 5) {
+      hero.classList.add('hero-split');
+      orbit = createOrbit(data.trending, { onOpen: openFromOrbit, compact: window.matchMedia('(max-width: 899px)').matches });
+      orbitHolder.replaceChildren(orbit.el, h('div', { class: 'orbit-hint' }, icon('chev-l', 'sm'), 'Drag to spin · tap to open', icon('chev-r', 'sm')));
+    }
+    stopPrism = mountPrismBackground(hero);
+  };
+  if ('requestIdleCallback' in window) requestIdleCallback(mountMotion, { timeout: 1500 });
+  else setTimeout(mountMotion, 300);
 
   if (!s.total) {
     root.replaceChildren(hero, emptyState({

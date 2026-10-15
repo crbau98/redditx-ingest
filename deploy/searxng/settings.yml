@@ -1,4 +1,7 @@
-# SearXNG tuned as PRISM's web-search backend: JSON output on, safe search off, a handful of fast general engines.
+# SearXNG tuned as PRISM's web-search backend: JSON output on, safe search off, several general engines.
+# A VPS address gets CAPTCHAs from some engines (Google, DuckDuckGo, Startpage) sooner than a home connection, so
+# more engines are on than strictly needed, and a blocked engine is retried after an hour instead of SearXNG's
+# default of a day. PRISM's admin console (Discovery) shows which engines are failing.
 use_default_settings: true
 general:
   instance_name: prism-search
@@ -12,6 +15,13 @@ search:
   formats:
     - html
     - json
+  suspended_times:
+    SearxEngineAccessDenied: 3600
+    SearxEngineCaptcha: 3600
+    SearxEngineTooManyRequests: 600
+outgoing:
+  request_timeout: 5.0
+  max_request_timeout: 12.0
 engines:
   - name: google
     disabled: false
@@ -22,4 +32,10 @@ engines:
   - name: brave
     disabled: false
   - name: startpage
+    disabled: false
+  - name: yahoo
+    disabled: false
+  - name: mojeek
+    disabled: false
+  - name: qwant
     disabled: false

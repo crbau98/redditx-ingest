@@ -23,6 +23,7 @@ function staticCommands() {
     { group: 'Go to', icon: 'film', label: 'Reels', hint: 'full-screen, swipe through', run: go('/reels') },
     { group: 'Go to', icon: 'layers', label: 'Browse tags & sources', run: go('/browse') },
     { group: 'Go to', icon: 'users', label: 'Creators', run: go('/creators') },
+    { group: 'Go to', icon: 'search', label: 'Find a creator', hint: 'name, @handle or link → verify & follow', run: go('/find') },
     { group: 'Go to', icon: 'sparkle', label: 'Creator galaxy', hint: '3D map of who posts alike', run: go('/galaxy') },
     { group: 'Go to', icon: 'heart', label: 'Saved', run: go('/saved') },
     { group: 'Go to', icon: 'folder', label: 'Collections', run: go('/saved', { tab: 'collections' }) },
@@ -49,7 +50,7 @@ export function openPalette() {
   if (open) { open.input.focus(); return; }
   const root = $('#modal-root');
   const prevFocus = document.activeElement;
-  const input = h('input', { type: 'text', placeholder: 'Type a command, creator, tag…', 'aria-label': 'Command palette', autocomplete: 'off', spellcheck: 'false' });
+  const input = h('input', { type: 'text', placeholder: 'Type a command, creator, tag…  (try “find” for name / handle / link)', 'aria-label': 'Command palette', autocomplete: 'off', spellcheck: 'false' });
   const list = h('div', { class: 'palette-list', role: 'listbox' });
   const overlay = h('div', { class: 'overlay palette-overlay', role: 'presentation' },
     h('div', { class: 'modal palette', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Command palette' },

@@ -23,7 +23,7 @@ const SAFETY_SWEEP_VERSION = '3';
 async function sweep({ probe = false, limit = 1_000_000 } = {}) {
   const res = { checked: 0, blocked: 0, review: 0, hidden: 0, dead: 0, female: 0, femaleReview: 0, femaleCreators: 0, femaleFeeds: 0 };
   let after = 0;
-  const stmt = repo.db.prepare(`SELECT seq, id, title, description, tags_text, community, author, media_url, media_type, publish_state
+  const stmt = repo.db.prepare(`SELECT seq, id, platform, title, description, tags_text, community, author, media_url, media_type, publish_state
     FROM media WHERE publish_state IN ('published','review') AND seq > ? ORDER BY seq LIMIT 500`);
   events.log('INFO', 'Sweeping library against current safety and quality rules…');
   for (;;) {
@@ -40,7 +40,7 @@ async function sweep({ probe = false, limit = 1_000_000 } = {}) {
       if (g.level === 'hard') { repo.media.block(row.id, `scope sweep: ${g.rule}`, 'system'); res.female++; continue; }
       if (g.level === 'soft' && row.publish_state === 'published') { repo.media.setState(row.id, 'review', `scope:${g.rule}`); res.femaleReview++; continue; }
       const host = hostOf(row.media_url); // relative/local URLs have no host: nothing to judge
-      if (isJunkTitle(row.title) || (host && hostBlocked(host))) { repo.media.setState(row.id, 'hidden', 'junk'); res.hidden++; continue; }
+      if (isJunkTitle(row.title) || (host && hostBlocked(host, row.platform))) { repo.media.setState(row.id, 'hidden', 'junk'); res.hidden++; continue; }
       if (probe && row.publish_state === 'published' && !/\.m3u8/.test(row.media_url) && /imgur\.com/.test(row.media_url)) {
         const p = await probeMedia(row.media_url, row.media_type);
         if (!p.ok && /http (404|410)|too small/.test(p.reason)) { repo.media.setState(row.id, 'hidden', `dead: ${p.reason}`); res.dead++; }
@@ -100,7 +100,7 @@ async function imageSweep({ limit = 12, settings } = {}) {
 }
 
 /* ------------------------------------------------------------- physique sweep */
-const PHYSIQUE_SWEEP_VERSION = '1'; // bump to re-measure the whole library (e.g. after better anchors or a better model)
+const PHYSIQUE_SWEEP_VERSION = '2'; // 2: stricter anchors (v5). bump to re-measure the whole library (e.g. after better anchors or a better model)
 
 /**
  * Measure the build in stored pictures that have no physique score yet (oldest first, cursor `physique_sweep_seq`), hide the
@@ -231,7 +231,10 @@ function stopImageSweep() { if (sweepTimer) clearInterval(sweepTimer); sweepTime
 
 /** Run the safety sweep once per rule-set version, in the background after boot. */
 function startupSweepIfNeeded() {
-  setTimeout(() => { physique.textSweep(settingsStore.get()).catch((e) => events.log('WARN', `Body filter: ${e.message}`)); }, 3000).unref();
+  setTimeout(() => {
+    try { physique.migrateDefaults(); physique.reapply(settingsStore.get()); } catch (e) { events.log('WARN', `Body filter: ${e.message}`); }
+    physique.textSweep(settingsStore.get()).catch((e) => events.log('WARN', `Body filter: ${e.message}`));
+  }, 3000).unref();
   if (repo.settings.get('safety_sweep_version') === SAFETY_SWEEP_VERSION) return;
   setTimeout(async () => {
     try { await sweep(); repo.settings.set('safety_sweep_version', SAFETY_SWEEP_VERSION); }

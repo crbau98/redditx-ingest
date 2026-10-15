@@ -54,7 +54,7 @@ function creatorsFor(u, paidHost, limit) {
       for (const [cid, tags] of lib.creatorTags) {
         let n = Infinity;
         for (const t of u.tags) { const k = tags.get(t) || 0; if (k < n) n = k; if (!n) break; }
-        if (n && n !== Infinity && !seen.has(cid) && (!paid || paid.has(cid))) owners.push([cid, n]);
+        if (n && n !== Infinity && !seen.has(cid) && lib.visibleCreators.has(cid) && (!paid || paid.has(cid))) owners.push([cid, n]);
       }
       add(cards(owners.sort((a, b) => b[1] - a[1]).slice(0, limit * 2).map(([id]) => id), paidHost), 'tag');
     }

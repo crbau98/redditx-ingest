@@ -65,7 +65,8 @@ function hint(platform, e) {
   const st = e && e.status;
   if (platform === 'reddit' && (st === 403 || st === 429 || (/every transport/.test(msg) && !/ENOTFOUND|ECONNREFUSED|EAI_AGAIN/.test(msg)))) return 'Reddit blocks datacenter IPs. Create a "script" app at reddit.com/prefs/apps and set REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET (OAuth is the reliable route).';
   if (platform === 'bluesky' && /BSKY_|app password|auth/i.test(msg)) return 'Bluesky search needs an app password: set BSKY_IDENTIFIER and BSKY_APP_PASSWORD.';
-  if (platform === 'x') return 'Set X_BEARER_TOKEN for reliable X reads (keyless mode is best effort).';
+  if (platform === 'x' && (st === 402 || /HTTP 402/.test(msg))) return 'X_BEARER_TOKEN has no paid plan or credits (402): PRISM now falls back to keyless X; buy X API credits or remove the token.';
+  if (platform === 'x') return 'X without a working X_BEARER_TOKEN is best effort: keyless X finds posts through web search, so check that web search works.';
   if (platform === 'mastodon' && (st === 401 || st === 403 || st === 422)) return 'This server requires sign-in for public timelines: set MASTODON_ACCESS_TOKEN or change MASTODON_INSTANCES.';
   if (/ENOTFOUND|ECONNREFUSED|EAI_AGAIN|ETIMEDOUT|Timeout|EBLOCKED|fetch failed/i.test(msg) || st === 0) return 'No network route to this host: check outbound access / egress allow-list.';
   if (st === 404) return 'The target does not exist (or was removed). Try another feed.';

@@ -112,11 +112,12 @@ describe('similar posts by look', () => {
     assert.ok(r.json.items[0].similarity >= r.json.items[5].similarity);
   });
 
-  test('hidden posts and creators drop out', async () => {
+  test('hidden posts and creators drop out at once, even from an answer already cached', async () => {
     const victim = w.beach[1];
+    const before = await pub(`/api/media/${w.beach[0]}/similar?limit=5`);
+    assert.ok(before.json.items.some((x) => x.id === victim || x.creator_id === w.cs[3].id), 'warm the cache with them in it');
     repo.media.setState(victim, 'hidden', 'physique:test');
     repo.creators.update(w.cs[3].id, { status: 'hidden' });
-    visual._reset();
     const r = await pub(`/api/media/${w.beach[0]}/similar?limit=5`); // 5 beach posts remain visible within the per-creator cap
     const ids = r.json.items.map((x) => x.id);
     assert.ok(!ids.includes(victim));

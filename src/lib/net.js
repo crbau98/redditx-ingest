@@ -296,7 +296,10 @@ function open(url, { method: method0 = 'GET', headers = {}, timeout = 20000, max
           res.resume();
           if (hops >= maxRedirects) return reject(new HttpError('Too many redirects', { url: target }));
           hops++;
-          const next = new URL(loc, parsed);
+          // A malformed Location header must fail this request, not throw inside the socket callback (that would be an
+          // uncaught exception and take the whole server down).
+          let next;
+          try { next = new URL(loc, parsed); } catch { return reject(new HttpError('Invalid redirect', { url: target })); }
           const nextHdrs = { ...hdrs };
           // 301/302/303 after a POST are followed as GET without the body (browser/curl behaviour).
           if (method === 'POST' && [301, 302, 303].includes(res.statusCode)) {

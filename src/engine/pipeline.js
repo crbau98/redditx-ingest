@@ -22,6 +22,7 @@ const vault = require('../lib/vault');
 
 const SKIP_AUTHORS = new Set(['[deleted]', 'deleted', 'automoderator', 'web', 'null', 'undefined', '']);
 const REDGIFS_PAGE = /redgifs\.com\/(?:watch|ifr)\//i;
+const X_POST = /^https?:\/\/(?:www\.|mobile\.)?(?:x|twitter|fxtwitter|vxtwitter|fixupx)\.com\/[A-Za-z0-9_]{1,15}\/status\/\d+/i;
 const md5 = (s) => crypto.createHash('md5').update(s).digest('hex');
 
 const cleanHandle = (a) => String(a || '').replace(/^[@/]+/, '').replace(/^u\//i, '').trim().slice(0, 80);
@@ -93,7 +94,7 @@ function blockFemaleCreator(item, feed, rule) {
  * A repost (Tumblr reblog, X retweet or quote, Bluesky repost, Reddit crosspost) carries somebody else's post. It belongs
  * to the ORIGINAL poster, not to the account whose feed we read, so the feed's own creator is not used for it.
  */
-const ownedByFeed = (item, feed) => !!feed.creator_id && ['user', 'feed', 'page'].includes(feed.kind) && !item.repostOf;
+const ownedByFeed = (item, feed) => !!feed.creator_id && ['user', 'channel', 'feed', 'page'].includes(feed.kind) && !item.repostOf;
 
 /** The creator this item belongs to, if one is already known (never creates one). */
 function knownCreator(item, feed) {
@@ -165,6 +166,18 @@ async function processItemInner(rawItem, feed, adapter, settings) {
     item.tags.push(...(resolved.tags || []));
   }
 
+  // A link to one X post (a Reddit link post, a Telegram message...): read its media keylessly (fxtwitter / X embed API).
+  if (item.resolve === 'x' || X_POST.test(item.mediaUrl)) {
+    let resolved = null;
+    try { resolved = await registry.get('x').resolve(item.mediaUrl.replace(/\/\/(?:www\.|mobile\.)?(?:fxtwitter|vxtwitter|fixupx|twitter)\.com\//i, '//x.com/')); } catch { /* handled below */ }
+    if (!resolved) return { outcome: 'skipped', reason: 'unresolved X link' };
+    Object.assign(item, {
+      mediaUrl: resolved.mediaUrl, previewUrl: resolved.previewUrl || item.previewUrl, mediaType: resolved.mediaType,
+      hasAudio: resolved.hasAudio, width: resolved.width || item.width, height: resolved.height || item.height, trusted: true,
+    });
+    item.tags.push(...(resolved.tags || []));
+  }
+
   // ---- 2. safety (never bypassable) ---------------------------------------------
   const safety = checkItem(item);
   if (safety.level === 'block') return { outcome: 'blocked', reason: `safety:${safety.rule}` };
@@ -210,7 +223,8 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   // ---- 5. media sanity ---------------------------------------------------------
   if (isJunkTitle(item.title)) return { outcome: 'skipped', reason: 'junk title' };
   const mediaHost = hostOf(item.mediaUrl);
-  if (hostBlocked(mediaHost)) return { outcome: 'skipped', reason: `blocked host ${mediaHost}` };
+  // YouTube is thumbnail-only via official RSS: allow its image hosts (watch pages are never media URLs here).
+  if (hostBlocked(mediaHost, platform)) return { outcome: 'skipped', reason: `blocked host ${mediaHost}` };
   const isHls = /\.m3u8(\?|$)/i.test(item.mediaUrl);
   if (!item.trusted && !hostTrusted(mediaHost) && !looksLikeDirectMedia(item.mediaUrl)) return { outcome: 'skipped', reason: `unknown host ${mediaHost}` };
   if (settings.probeUnknownHosts && !isHls && (item.probe || (!item.trusted && !hostTrusted(mediaHost)))) {

@@ -16,6 +16,7 @@
 
 const config = require('../config');
 const { ofHandle } = require('./onlyfans');
+const paid = require('./paid');
 const { isLeakHost } = require('./leaks');
 
 const EXTERNAL = {
@@ -131,6 +132,8 @@ function parseProfile(input, hint = {}) {
     if (p === 'reddit') return out('reddit', 'user', m[1], { label: `u/${m[1]}` });
     return null; // ambiguous without a hint
   }
+  m = raw.match(/^(UC[A-Za-z0-9_-]{10,40})$/);
+  if (m) return out('youtube', 'channel', m[1], { label: `YouTube channel ${m[1].slice(0, 10)}…`, url: `https://www.youtube.com/channel/${m[1]}` });
 
   // ---- URLs -----------------------------------------------------------------
   let url;
@@ -201,9 +204,24 @@ function parseProfile(input, hint = {}) {
     return { platform: 'external', kind: 'link', target: `https://onlyfans.com/${handle}`, ingestable: false, external: true, label: `OnlyFans · ${handle}`, service: 'OnlyFans', url: `https://onlyfans.com/${handle}`, handle };
   }
 
+  // YouTube: channels are ingestable via official RSS; single videos stay external link-outs.
+  if (matches(h, 'youtube.com')) {
+    if (parts[0] && parts[0].startsWith('@') && /^@[A-Za-z0-9._-]{2,60}$/.test(parts[0])) {
+      return out('youtube', 'user', parts[0], { label: `${parts[0]} (YouTube)`, url: `https://www.youtube.com/${parts[0]}` });
+    }
+    if (parts[0] === 'channel' && parts[1] && /^UC[A-Za-z0-9_-]{10,40}$/.test(parts[1])) {
+      return out('youtube', 'channel', parts[1], { label: `YouTube channel ${parts[1].slice(0, 10)}…`, url: `https://www.youtube.com/channel/${parts[1]}` });
+    }
+    if ((parts[0] === 'c' || parts[0] === 'user') && parts[1] && /^[A-Za-z0-9._-]{2,60}$/.test(parts[1])) {
+      return out('youtube', 'user', `@${parts[1]}`, { label: `@${parts[1]} (YouTube)`, url: `https://www.youtube.com/@${parts[1]}` });
+    }
+  }
+
   for (const [dom, label] of Object.entries(EXTERNAL)) {
     if (matches(h, dom)) {
-      return { platform: 'external', kind: 'link', target: url.href, ingestable: false, external: true, label: `${label}${parts[0] ? ` · ${parts[0].replace(/^@/, '')}` : ''}`, service: label, url: url.href };
+      // Traced paid pages carry their canonical handle, so profiles, claims and leads agree on one identity.
+      const handle = paid.SERVICES[label] && paid.SERVICES[label].trace ? paid.paidHandle(label, url.href) : null;
+      return { platform: 'external', kind: 'link', target: url.href, ingestable: false, external: true, label: `${label}${parts[0] ? ` · ${parts[0].replace(/^@/, '')}` : ''}`, service: label, url: url.href, ...(handle ? { handle } : {}) };
     }
   }
 
@@ -248,7 +266,7 @@ function extractLinks(text) {
   const found = [];
   const seen = new Set();
   // Full URLs, plus the bare "onlyfans.com/name" / "linktr.ee/name" people type into bios.
-  const urlRe = /(?:https?:\/\/|www\.)[^\s<>"')\]]+|(?<![\w./@-])(?:onlyfans\.com|fansly\.com|justfor\.fans|linktr\.ee|allmylinks\.com|beacons\.ai)\/[^\s<>"')\]]+/gi;
+  const urlRe = /(?:https?:\/\/|www\.)[^\s<>"')\]]+|(?<![\w./@-])(?:onlyfans\.com|fansly\.com|justfor\.fans|manyvids\.com|loyalfans\.com|fanvue\.com|fancentro\.com|clips4sale\.com|linktr\.ee|allmylinks\.com|beacons\.ai)\/[^\s<>"')\]]+/gi;
   for (const u of String(text || '').match(urlRe) || []) {
     const p = parseProfile(u);
     if (!p) continue;
@@ -285,6 +303,12 @@ function profileUrl(platform, kind, target) {
       return base(String(target));
     }
     case 'rss': case 'web': case 'linkinbio': return /^https?:/.test(target) ? target : null;
+    case 'youtube': {
+      const t = String(target || '');
+      if (/^UC[A-Za-z0-9_-]{10,40}$/.test(t)) return `https://www.youtube.com/channel/${t}`;
+      if (/^@/.test(t)) return `https://www.youtube.com/${t}`;
+      return null;
+    }
     default: return null;
   }
 }

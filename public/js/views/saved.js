@@ -113,10 +113,12 @@ export async function saved(root, { query }) {
   if (tab === 'following') {
     const list = follows.list();
     if (!list.length) {
-      body.replaceChildren(emptyState({ icon: 'users', title: 'Not following anyone', text: 'Follow creators to find them here, with a “New” badge when they post.', actions: [h('a', { class: 'btn primary', href: href('/creators') }, 'Browse creators')] }));
+      body.replaceChildren(emptyState({ icon: 'users', title: 'Not following anyone', text: 'Follow creators from their profile, the viewer or Reels — the people land here, their newest posts under Following.', actions: [h('a', { class: 'btn primary', href: href('/creators') }, 'Browse creators')] }));
     } else {
       const grid = h('div', { class: 'creator-grid' }, list.map(() => h('div', { class: 'skeleton', style: { height: '260px' } })));
-      body.replaceChildren(h('div', { class: 'row wrap', style: { marginBottom: '14px' } },
+      body.replaceChildren(
+        h('p', { class: 'muted', style: { margin: '-4px 0 14px', fontSize: '13.5px' } }, 'The people you follow on this device — their newest posts collect under ', h('a', { href: href('/following') }, 'Following'), '.'),
+        h('div', { class: 'row wrap', style: { marginBottom: '14px' } },
         h('a', { class: 'btn sm primary', href: href('/reels', { following: '1', sort: 'recent', type: 'all' }) }, icon('film', 'sm'), 'Watch as Reels'),
         h('a', { class: 'btn sm', href: href('/following') }, icon('rss', 'sm'), 'Latest posts')), grid);
       // one request for every followed creator; ones the server no longer shows are dropped

@@ -82,7 +82,7 @@ export async function following(root, { query }) {
   parts.push(rest.el);
 
   root.replaceChildren(
-    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Following'), sub),
+    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Following'), sub, h('div', { class: 'sub' }, 'Their newest posts, on this device only — manage the people in Saved › Following.')),
       h('div', { class: 'row wrap' },
         h('a', { class: 'btn sm', href: href('/reels', { following: '1', sort: 'recent', type: type || 'all' }), title: 'Play the newest posts full screen' }, icon('film', 'sm'), 'Play as Reels'),
         h('a', { class: 'btn sm ghost', href: href('/saved', { tab: 'following' }) }, icon('users', 'sm'), 'Manage'))),

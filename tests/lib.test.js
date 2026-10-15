@@ -102,7 +102,9 @@ describe('profile / link parsing', () => {
   });
   test('does not mistake other sites’ @paths for Mastodon', () => {
     assert.notEqual(parseProfile('https://medium.com/@zed').platform, 'mastodon');
-    assert.equal(parseProfile('https://www.youtube.com/@zed').external, true);
+    // YouTube channels are ingestable via official RSS; single videos stay external link-outs.
+    assert.equal(parseProfile('https://www.youtube.com/@zed').platform, 'youtube');
+    assert.equal(parseProfile('https://www.youtube.com/watch?v=AbC123Xyz01').platform, 'external');
   });
   test('extractLinks pulls a deduplicated set out of free text', () => {
     const links = extractLinks('Find me: https://x.com/zed, https://x.com/zed again, https://bsky.app/profile/zed.bsky.social and https://onlyfans.com/zed');

@@ -25,19 +25,22 @@ const events = require('../engine/events');
 const MAX_BYTES = 4 * 1024 * 1024;
 const MIN_FACE_CONFIDENCE = 0.45; // detector confidence for a box to count as a face
 const CACHE_MAX = 2000;
+// A worker is swapped for a fresh one after this many pictures: the model's WebAssembly memory only ever grows, so a
+// periodic fresh start keeps each worker at its baseline (~450 MB) on a small server. 0 = never.
+const RECYCLE_AFTER = Math.max(0, parseInt(process.env.IMAGE_WORKER_RECYCLE ?? '2000', 10) || 0);
 
 let initPromise = null;
 let initError = null;
 let analyzer = null;   // test hook: async (url) => result
 let embedder = null;   // test hook: async (url) => {status, vec}
 const cache = new Map();
-const counters = { analyzed: 0, female: 0, errors: 0, cached: 0, totalMs: 0, hashed: 0, measured: 0, heavy: 0 };
+const counters = { recycled: 0, analyzed: 0, female: 0, errors: 0, cached: 0, totalMs: 0, hashed: 0, measured: 0, heavy: 0 };
 
 /* ------------------------------------------------------------------ the model */
 /**
  * Pool of worker threads, each with its own copy of the model (the wasm backend is single-threaded, so one copy would
  * both serialise every picture AND freeze the server's event loop while it thinks). IMAGE_WORKERS sets the size
- * (default: min(3, cpus - 1), at least 1); 0 runs the model in-process.
+ * (default: min(3, cpus - 1, one per 3 GB of memory), at least 1); 0 runs the model in-process.
  */
 class Pool {
   constructor(size) { this.size = size; this.workers = []; this.pending = new Map(); this.nextId = 1; this.info = ''; }
@@ -49,7 +52,7 @@ class Pool {
   spawn() {
     return new Promise((resolve, reject) => {
       const w = new Worker(path.join(__dirname, 'imagefilter-worker.js'));
-      const slot = { w, busy: 0, ready: false };
+      const slot = { w, busy: 0, ready: false, jobs: 0, retiring: false };
       // referenced while starting up or working (so a script awaiting a verdict is not abandoned), unreferenced when idle
       slot.sync = () => { if (slot.busy > 0 || !slot.ready) w.ref(); else w.unref(); };
       this.workers.push(slot);
@@ -59,13 +62,39 @@ class Pool {
         const p = this.pending.get(m.id);
         if (!p) return;
         this.pending.delete(m.id); slot.busy--; slot.sync();
+        if (slot.retiring && slot.busy === 0) w.terminate();
         if (m.error) p.reject(new Error(m.error)); else p.resolve(m.result);
       });
       w.on('error', (e) => { reject(e); this.failAll(slot, e); });
-      w.on('exit', () => { this.workers = this.workers.filter((x) => x !== slot); this.failAll(slot, new Error('image worker exited')); });
+      w.on('exit', (code) => {
+        this.workers = this.workers.filter((x) => x !== slot); this.failAll(slot, new Error('image worker exited'));
+        // A worker that dies after starting (out of memory in the model, a wasm abort) is replaced, so the pool does not
+        // quietly shrink to nothing and leave every later picture failing with "no image workers".
+        if (slot.ready && !slot.retiring && !this.closing) this.respawn(code);
+      });
       slot.sync(); // AFTER the listeners: attaching a 'message' listener re-references the worker
     });
   }
+
+  respawn(code) {
+    const now = Date.now();
+    this.deaths = (this.deaths || []).filter((t) => now - t < 10 * 60000).concat(now);
+    const wait = Math.min(5 * 60000, 2000 * 2 ** (this.deaths.length - 1)); // 2 s, 4 s, 8 s … at most 5 min while it keeps dying
+    events.log('WARN', `Image worker stopped (exit code ${code}); starting a new one in ${Math.round(wait / 1000)} s`);
+    const t = setTimeout(() => { if (!this.closing) this.spawn().catch((e) => events.log('WARN', `Image worker could not restart: ${e.message}`)); }, wait);
+    t.unref();
+  }
+
+  /** Replace a worker with a fresh one: the new one starts first, the old one finishes what it holds and then exits. */
+  recycle(slot) {
+    if (slot.retiring || this.closing) return;
+    slot.retiring = true; counters.recycled++;
+    this.spawn().catch((e) => events.log('WARN', `Image worker could not restart: ${e.message}`));
+    if (slot.busy === 0) slot.w.terminate();
+  }
+
+  /** Swap every worker for a fresh one (frees the memory the models have grown into). */
+  recycleAll() { for (const s of [...this.workers]) if (s.ready) this.recycle(s); }
 
   failAll(slot, err) { for (const [id, p] of this.pending) if (p.slot === slot) { this.pending.delete(id); p.reject(err); } }
 
@@ -74,10 +103,13 @@ class Pool {
   embed(buffer) { return this.send('embed', buffer).then((u8) => Buffer.from(u8.buffer, u8.byteOffset, u8.byteLength)); }
 
   send(type, buffer, extra = {}) {
-    const slot = this.workers.reduce((a, b) => (!a || b.busy < a.busy ? b : a), null);
+    const usable = this.workers.filter((x) => x.ready && !x.retiring);
+    const from = usable.length ? usable : this.workers.filter((x) => !x.retiring).length ? this.workers.filter((x) => !x.retiring) : this.workers;
+    const slot = from.reduce((a, b) => (!a || b.busy < a.busy ? b : a), null);
     if (!slot) return Promise.reject(new Error('no image workers'));
     const id = this.nextId++;
     slot.busy++; slot.sync();
+    if (RECYCLE_AFTER && ++slot.jobs >= RECYCLE_AFTER) this.recycle(slot);
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject, slot });
       const copy = new Uint8Array(buffer); // the cached download stays usable: the copy is transferred
@@ -85,7 +117,7 @@ class Pool {
     });
   }
 
-  async shutdown() { await Promise.all(this.workers.map((s) => s.w.terminate())); this.workers = []; }
+  async shutdown() { this.closing = true; await Promise.all(this.workers.map((s) => s.w.terminate())); this.workers = []; }
 }
 
 let pool = null;
@@ -94,7 +126,10 @@ let inProcess = null; // { detect } when running the model in this thread
 function workerCount() {
   const env = process.env.IMAGE_WORKERS;
   if (env !== undefined && env !== '') return Math.max(0, parseInt(env, 10) || 0);
-  return Math.max(1, Math.min(3, os.cpus().length - 1));
+  // Each worker holds its own copy of the models (~450 MB once warm), so memory caps the pool too: one worker per 3 GB.
+  // On the 4 GB server two workers plus the app ran it out of memory (the kernel killed PRISM twice on 2026-10-14).
+  const byMemory = Math.floor(os.totalmem() / (3 * 1024 ** 3));
+  return Math.max(1, Math.min(3, os.cpus().length - 1, byMemory));
 }
 
 function init() {
@@ -265,10 +300,13 @@ function status() {
 /** Stop the worker threads (tests and graceful shutdown). */
 async function shutdown() { if (pool) { await pool.shutdown(); pool = null; } initPromise = null; }
 
+/** Swap the image workers for fresh ones (the memory watchdog calls this when the server runs high). */
+function recycle() { if (pool) pool.recycleAll(); }
+
 /** Test hook: replace the whole fetch+detect step with `fn(url, {faces, hash, body}) -> {status:'ok', faces:[{gender, score, confidence}], body?: {decided, score}, phash?}`. */
 function _setAnalyzer(fn) { analyzer = fn; }
 /** Test hook: replace fetch+embed with `fn(url) -> {status:'ok', vec}`. */
 function _setEmbedder(fn) { embedder = fn; }
 function _reset() { cache.clear(); analyzer = null; embedder = null; }
 
-module.exports = { analyze, judge, checkItem, imageUrlOf, embedUrl, available, status, init, shutdown, noteHeavy, _setAnalyzer, _setEmbedder, _reset };
+module.exports = { analyze, judge, checkItem, imageUrlOf, embedUrl, available, status, readBuffer, init, shutdown, recycle, noteHeavy, _setAnalyzer, _setEmbedder, _reset };
