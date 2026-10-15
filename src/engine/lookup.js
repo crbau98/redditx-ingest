@@ -23,6 +23,7 @@ const { parseProfile, extractLinks, profileUrl } = require('../lib/links');
 const { checkText } = require('../lib/safety');
 const { femaleCheck, classify } = require('../lib/scope');
 const { ofLink } = require('../lib/onlyfans');
+const paid = require('../lib/paid');
 const events = require('./events');
 
 const PROBE_TIMEOUT_MS = 18000;
@@ -66,7 +67,7 @@ function nameSimilarity(query, ...fields) {
 /** Split what was typed into a display name and handle guesses. */
 function parseQuery(input) {
   const raw = String(input || '').trim().slice(0, 200);
-  const out = { raw, name: null, handles: [], spec: null };
+  const out = { raw, name: null, handles: [], spec: null, externalSpec: null };
   if (!raw) return out;
   const spec = registry.parseInput(raw);
   if (spec && !spec.external && (spec.kind === 'user' || (spec.kind === 'channel' && spec.platform === 'youtube')) && spec.platform !== 'rss') {
@@ -75,6 +76,20 @@ function parseQuery(input) {
     if (spec.kind === 'user') out.handles.push(h);
     out.name = h;
     return out;
+  }
+  if (spec && spec.external) {
+    const h = spec.handle
+      || (spec.service ? paid.paidHandle(spec.service, raw) : null)
+      || (() => { try { return (new URL(/^[a-z]+:\/\//i.test(raw) ? raw : `https://${raw}`).pathname.split('/').filter(Boolean)[0] || '').replace(/^@/, ''); } catch { return ''; } })();
+    if (h && /^[A-Za-z0-9_.\-]{2,40}$/.test(h)) {
+      out.externalSpec = spec;
+      out.handles.push(h.toLowerCase());
+      const stripped = h.toLowerCase().replace(/[_.\-]+/g, '');
+      if (stripped !== h.toLowerCase() && stripped.length >= 3) out.handles.push(stripped);
+      out.name = h;
+      out.handles = out.handles.slice(0, MAX_VARIANTS);
+      return out;
+    }
   }
   const bare = raw.replace(/^@/, '').replace(/^u\//i, '');
   const ws = words(bare);
@@ -241,8 +256,8 @@ async function searchPeople(q, pl, notes, deadline) {
 async function searchWeb(q, pl, notes) {
   if (!websearch.configured()) { notes.push({ platform: 'web', step: 'web search', ok: false, note: 'no web search configured (BRAVE_API_KEY or SEARXNG_URL)' }); return null; }
   const term = (q.name || q.raw).replace(/"/g, '');
-  const queries = [`"${term}" (onlyfans OR twitter OR bluesky OR reddit OR redgifs OR telegram OR linktree OR tumblr)`, `"${term}" gay creator links`];
-  if (q.handles[0] && compact(q.handles[0]) !== compact(term)) queries.unshift(`"${q.handles[0]}" (onlyfans OR twitter OR bluesky OR reddit OR redgifs OR linktree)`);
+  const queries = [`"${term}" (onlyfans OR fansly OR "justfor.fans" OR twitter OR bluesky OR reddit OR redgifs OR telegram OR linktree OR tumblr)`, `"${term}" gay creator links`];
+  if (q.handles[0] && compact(q.handles[0]) !== compact(term)) queries.unshift(`"${q.handles[0]}" (onlyfans OR fansly OR "justfor.fans" OR twitter OR bluesky OR reddit OR redgifs OR linktree)`);
   // Site-restricted searches find the profile pages themselves (where the bio lives), which general results bury.
   const jobs = queries.slice(0, 3).map((query) => ({ query }));
   for (const site of ['linktr.ee', 'bsky.app', 'x.com']) jobs.push({ query: `"${term}"`, site });
@@ -272,13 +287,18 @@ async function searchWeb(q, pl, notes) {
 
 /** Everything external a verified candidate links to (paid pages, tip jars...): shown and stored, never read. */
 function externalLinksOf(c) {
-  const paid = require('../lib/paid');
   const out = [];
+  const free = paid.freeHint(c.bio);
   for (const l of c.links || []) {
     if (!l.external) continue;
-    if (l.handle && l.service && paid.SERVICES[l.service] && paid.SERVICES[l.service].trace) out.push(paid.paidLink(l.service, l.handle));
-    else if (l.handle && (!l.service || l.service === 'OnlyFans')) out.push(ofLink(l.handle));
+    if (l.handle && l.service && paid.SERVICES[l.service] && paid.SERVICES[l.service].trace) out.push(paid.paidLink(l.service, l.handle, { free }));
+    else if (l.handle && (!l.service || l.service === 'OnlyFans')) out.push(ofLink(l.handle, { free }));
     else out.push({ platform: 'external', service: l.service, label: l.label, url: l.url });
+  }
+  for (const { service, handle } of paid.findPaidHandles(c.bio)) {
+    if (paid.SERVICES[service] && paid.SERVICES[service].trace && !out.some((e) => e.handle === handle && (e.service || 'OnlyFans') === service)) {
+      out.push(paid.paidLink(service, handle, { free }));
+    }
   }
   return out;
 }
@@ -340,10 +360,32 @@ async function lookup(input, { imageCheck = true } = {}) {
   // 4: score, gate, annotate
   const hidden = { safety: 0, notMale: 0, unverified: 0 };
   const externals = [];
+  if (q.externalSpec) {
+    if (q.externalSpec.handle && q.externalSpec.service && paid.SERVICES[q.externalSpec.service] && paid.SERVICES[q.externalSpec.service].trace) {
+      externals.push(paid.paidLink(q.externalSpec.service, q.externalSpec.handle));
+    } else if (q.externalSpec.handle) {
+      externals.push(ofLink(q.externalSpec.handle));
+    }
+  }
+  const paidByCandidate = new Map();
+  const paidCounts = new Map();
+  for (const c of pl.list()) {
+    const ext = externalLinksOf(c);
+    paidByCandidate.set(c, ext);
+    if (c.verified) {
+      for (const l of ext) {
+        if (l.handle) {
+          const pk = `${l.service || 'OnlyFans'}:${l.handle}`;
+          paidCounts.set(pk, (paidCounts.get(pk) || 0) + 1);
+        }
+      }
+    }
+  }
   const out = [];
   for (const c of pl.list()) {
-    if (c.platform === 'linkinbio') { externals.push(...externalLinksOf(c)); continue; }
-    externals.push(...externalLinksOf(c));
+    const cExt = paidByCandidate.get(c) || [];
+    if (c.platform === 'linkinbio') { externals.push(...cExt); continue; }
+    externals.push(...cExt);
     if (!c.verified) { hidden.unverified++; continue; }
     const text = [c.target, c.label, c.displayName, c.bio];
     if (checkText(...text).level === 'block') { hidden.safety++; continue; }
@@ -351,10 +393,15 @@ async function lookup(input, { imageCheck = true } = {}) {
     const sc = classify(text, { trusted: true });
     const handle = String(c.target).split('@')[0];
     const sim = Math.max(nameSimilarity(q.raw, handle, c.displayName), q.handles.length ? Math.max(...q.handles.map((h) => nameSimilarity(h, handle))) : 0);
+    const paidMatch = cExt.some((l) => l.handle && (
+      (q.externalSpec && q.externalSpec.handle === l.handle)
+      || q.handles.some((h) => compact(h) === compact(l.handle))
+      || (paidCounts.get(`${l.service || 'OnlyFans'}:${l.handle}`) || 0) >= 2
+    ));
     const independent = c.sources.size;
-    let conf = 0.12 + 0.5 * sim + (c.handleExact ? 0.08 : 0) + (c.sources.has('bio-link') ? 0.22 : 0) + (c.sources.has('web-search') ? 0.08 : 0) + (c.sources.has('people-search') ? 0.06 : 0)
+    let conf = 0.12 + 0.5 * sim + (c.handleExact ? 0.08 : 0) + (c.sources.has('bio-link') || paidMatch ? 0.22 : 0) + (c.sources.has('web-search') ? 0.08 : 0) + (c.sources.has('people-search') ? 0.06 : 0)
       + (independent > 1 ? 0.06 * (independent - 1) : 0) + (c.sampleCount ? 0.07 : 0) + (c.followers >= 100 ? 0.03 : 0);
-    if (sim < 0.4 && !c.sources.has('bio-link')) conf = Math.min(conf, 0.4);
+    if (sim < 0.4 && !c.sources.has('bio-link') && !paidMatch) conf = Math.min(conf, 0.4);
     conf = Math.max(0.05, Math.min(0.99, conf));
     const existing = repo.feeds.find(c.platform, c.kind, c.target);
     const blocked = repo.blocklist.has('creator', `${c.platform}:${String(c.target).toLowerCase()}`);

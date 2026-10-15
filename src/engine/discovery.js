@@ -52,7 +52,7 @@ const bskyHttp = require('../sources/http').forPlatform('bluesky', 400);
 // hangout: a community where several followed creators post (per creator, max 6)
 // ofconfirmed: the account links to the exact OnlyFans page we were looking for (same person, proven)
 // onlyfans: the account has the same handle as an OnlyFans page creators promote (likely the same person)
-const WEIGHTS = { identity: 6, mention: 3, cofollow: 1.5, search: 2, similar: 2, hangout: 1.5, ofconfirmed: 6, onlyfans: 2 };
+const WEIGHTS = { identity: 6, mention: 3, cofollow: 1.5, search: 2, similar: 2, hangout: 1.5, ofconfirmed: 8, onlyfans: 2 };
 const CAPS = { identity: 1, mention: 5, cofollow: 8, search: 3, similar: 4, hangout: 6, ofconfirmed: 1, onlyfans: 1 };
 const FOLLOWABLE_KINDS = new Set(['user', 'page']);
 // Communities and custom feeds mix many posters, so they are held to a stricter bar than people.
@@ -150,8 +150,25 @@ function consider(spec, type, value, meta = {}) {
   if (value) list.add(String(value).slice(0, 120));
   signals[type] = [...list].slice(0, 25);
   if (meta.ofSources) signals.ofsrc = Math.max(Number(signals.ofsrc) || 0, Number(meta.ofSources) || 0);
+  if (type === 'ofconfirmed') signals.ofsrc = Math.max(Number(signals.ofsrc) || 0, 1);
   if (meta.popularity) signals.popularity = Math.max(Number(signals.popularity) || 0, Math.round(Number(meta.popularity)) || 0);
-  const scope = classify([displayName, bio, target].map(splitCamel), { trusted: false }).scope;
+  const scope = classify([displayName, bio, target], { trusted: false }).scope;
+  if (bio && !(signals.ofconfirmed || []).length) {
+    const own = spec.platform === 'linkinbio' ? (() => { try { return new URL(target).pathname.split('/').filter(Boolean)[0] || ''; } catch { return ''; } })() : target;
+    for (const { service, handle } of paid.findPaidHandles(bio)) {
+      if (!paid.SERVICES[service] || !paid.SERVICES[service].trace || !paid.pageLinked(service, bio, handle)) continue;
+      const key = leadKey(service, handle);
+      const lead = repo.onlyfans.get(handle, service);
+      const activeLead = lead && lead.status !== 'rejected' && lead.status !== 'claimed';
+      const matchesQueued = (signals.onlyfans || []).includes(key);
+      if (matchesQueued || ((spec.platform === 'linkinbio' || sameName(own, handle)) && (activeLead || scope === 'in'))) {
+        signals.ofconfirmed = [key];
+        delete signals.onlyfans;
+        signals.ofsrc = Math.max(Number(signals.ofsrc) || 0, (lead && (lead.sources.length || lead.mentions)) || 1);
+        break;
+      }
+    }
+  }
   const score = scoreOf(signals, scope);
   const fields = {
     label: spec.label || (c && c.label) || target, url: spec.url || (c && c.url) || profileUrl(spec.platform, spec.kind, target),
@@ -295,7 +312,7 @@ async function braveIdentity({ creators = 3, budget, aborted = () => false } = {
     if (aborted()) break;
     const core = coreHandle(t.handle);
     let results;
-    try { results = await websearch.search(`"${core}" (onlyfans OR bluesky OR twitter OR reddit OR redgifs OR telegram OR linktree)`, { budget }); searched++; } catch (e) {
+    try { results = await websearch.search(`"${core}" (onlyfans OR fansly OR "justfor.fans" OR bluesky OR twitter OR reddit OR redgifs OR telegram OR linktree)`, { budget }); searched++; } catch (e) {
       if (e.budget || e.skip) break; // out of budget: try this creator again next time
       events.log('WARN', `Discovery: web search for ${t.handle} failed — ${e.message}`);
       results = [];
@@ -581,8 +598,12 @@ async function probeOnlyFans(lead, found, { budget, search = true } = {}) {
   }
   const bh = handle.replace(/[_.]/g, '');
   if (BSKY_HANDLE.test(bh)) {
+    const bskyDash = handle.replace(/[_.]/g, '-');
+    const actors = [`${bh}.bsky.social`];
+    if (bskyDash !== bh && BSKY_HANDLE.test(bskyDash)) actors.push(`${bskyDash}.bsky.social`);
     try {
-      const json = await bskyHttp.json(`${config.baseUrls.bsky}/xrpc/app.bsky.actor.getProfiles?actors=${encodeURIComponent(`${bh}.bsky.social`)}`);
+      const qs = actors.map((a) => `actors=${encodeURIComponent(a)}`).join('&');
+      const json = await bskyHttp.json(`${config.baseUrls.bsky}/xrpc/app.bsky.actor.getProfiles?${qs}`);
       for (const p of json.profiles || []) {
         if ((p.labels || []).some((l) => l.val === '!no-unauthenticated')) continue;
         const proven = linked(p.description);
@@ -592,8 +613,9 @@ async function probeOnlyFans(lead, found, { budget, search = true } = {}) {
   }
   // Same-handle guesses that enrich() confirms (or drops) once it reads the profile.
   const xa = registry.get('x');
-  if (xa && xa.apiAvailable && xa.apiAvailable() && /^[a-z0-9_]{3,15}$/.test(handle)) found(parseProfile(`https://x.com/${handle}`), false, {});
-  if (tgBot.configured() && TG_HANDLE.test(handle)) found(parseProfile(`https://t.me/${handle}`), false, {});
+  if (xa && xa.apiAvailable && xa.apiAvailable() && /^[a-z0-9_]{3,15}$/i.test(handle)) found(parseProfile(`https://x.com/${handle}`), false, {});
+  const canTgPreview = !config.isTest || !!process.env.TELEGRAM_WEB_BASE_URL;
+  if ((tgBot.configured() || canTgPreview) && TG_HANDLE.test(handle)) found(parseProfile(`https://t.me/${handle}`), false, {});
   if (search && websearch.configured()) {
     let results = [];
     try { results = await websearch.search(`"${pageHost}/${handle}"`, { budget }); } catch (e) {
@@ -626,7 +648,7 @@ async function probeOnlyFans(lead, found, { budget, search = true } = {}) {
  * known accounts get the same search, and what it finds is linked to them (their content from elsewhere).
  * OnlyFans, Fansly and JustFor.Fans; the paid hosts themselves are never read.
  */
-async function onlyfansDiscovery({ leads = 6, reach = 3, searches = 2, budget, aborted = () => false } = {}) {
+async function onlyfansDiscovery({ leads = 10, reach = 4, searches = 4, budget, aborted = () => false } = {}) {
   const out = { checked: 0, found: 0, linked: 0, searched: 0, rejected: 0 };
   let searchLeft = searches;
   for (const lead of repo.onlyfans.workable(leads)) {
@@ -646,7 +668,7 @@ async function onlyfansDiscovery({ leads = 6, reach = 3, searches = 2, budget, a
     // Web searches are the scarce resource: spend them on pages more than one source vouches for.
     const search = searchLeft > 0 && (lead.mentions >= 2 || lead.origin === 'search' || lead.attempts > 0);
     const r = await probeOnlyFans(lead, (spec, proven, meta) => {
-      const c = consider(spec, proven ? 'ofconfirmed' : 'onlyfans', key, { ...meta, ofSources: lead.sources.length || lead.mentions });
+      const c = consider(spec, proven ? 'ofconfirmed' : 'onlyfans', key, { ...meta, ofSources: Math.max(1, lead.sources.length || lead.mentions || 1) });
       if (c) accounts.push({ platform: spec.platform, kind: spec.kind, target: spec.target, proven, candidate: c.id });
     }, { budget, search });
     if (r.searched) { searchLeft--; out.searched++; }
@@ -754,21 +776,40 @@ function seedStatus() {
 /** A profile read later (enrich) that links the paid page we guessed from its handle proves it. */
 function confirmOnlyFans(c, bio) {
   const key = (c.signals.onlyfans || [])[0];
-  if (!key) return c.signals;
-  const { service, handle } = splitLead(key);
-  if (!paid.pageLinked(service, bio, handle)) return c.signals;
-  const signals = { ...c.signals, ofconfirmed: [key] };
-  delete signals.onlyfans;
-  return signals;
+  if (key) {
+    const { service, handle } = splitLead(key);
+    if (paid.pageLinked(service, bio, handle)) {
+      const signals = { ...c.signals, ofconfirmed: [key], ofsrc: Math.max(Number(c.signals.ofsrc) || 0, 1) };
+      delete signals.onlyfans;
+      return signals;
+    }
+  }
+  if (!(c.signals.ofconfirmed || []).length && bio) {
+    for (const { service, handle } of paid.findPaidHandles(bio)) {
+      if (!paid.SERVICES[service] || !paid.SERVICES[service].trace || !paid.pageLinked(service, bio, handle)) continue;
+      const lead = repo.onlyfans.get(handle, service);
+      const activeLead = lead && lead.status !== 'rejected' && lead.status !== 'claimed';
+      if ((c.platform === 'linkinbio' || sameName(c.target, handle)) && activeLead) {
+        const signals = { ...c.signals, ofconfirmed: [leadKey(service, handle)], ofsrc: Math.max(Number(c.signals.ofsrc) || 0, lead.sources.length || lead.mentions || 1) };
+        delete signals.onlyfans;
+        return signals;
+      }
+    }
+  }
+  return c.signals;
 }
 
 /** Fill in names/bios for Telegram, Bluesky and X leads so scope and safety can judge them. */
 async function enrich({ limit = 12 } = {}) {
   let done = 0;
-  if (tgBot.configured()) {
+  const tgAdapter = registry.get('telegram');
+  const canTgPreview = !config.isTest || !!process.env.TELEGRAM_WEB_BASE_URL;
+  if (tgBot.configured() || (canTgPreview && tgAdapter && tgAdapter.lookupChannel)) {
     for (const c of repo.candidates.needingDetails('telegram', limit)) {
       try {
-        const info = await tgBot.channelInfo(c.target);
+        const info = tgBot.configured()
+          ? await tgBot.channelInfo(c.target)
+          : await tgAdapter.lookupChannel(c.target);
         if (!info) { repo.candidates.update(c.id, { status: 'rejected', reason: 'Telegram: channel not found or private', decided_at: new Date().toISOString() }); continue; }
         const scope = classify([info.title, info.description, c.target], { trusted: false }).scope;
         const j = judgeLookup(c, info.title, info.description);
@@ -847,7 +888,7 @@ function follow(candidate, { actor = 'discovery' } = {}) {
   // Communities and custom feeds mix many posters: when discovery follows one on its own, every
   // post is still scope-checked (untrusted). A human follow trusts it like an admin-added source.
   const shared = c.kind === 'community' || c.kind === 'feedgen' || c.kind === 'list';
-  const trusted = actor !== 'discovery' ? true : shared ? false : c.scope === 'in' || !!identity;
+  const trusted = actor !== 'discovery' ? true : shared ? false : c.scope === 'in' || !!identity || !!(c.signals.ofconfirmed || []).length;
   const r = targets.addSpec(spec, { creatorId: identity || null, origin: 'discovered', trusted, bodyOverride: actor !== 'discovery' });
   if (r.status !== 'created' && r.status !== 'exists') {
     repo.candidates.update(c.id, { status: 'rejected', reason: r.reason || r.status, decided_at: new Date().toISOString() });
@@ -861,8 +902,15 @@ function follow(candidate, { actor = 'discovery' } = {}) {
   if (ofPage && r.creator) {
     const { service, handle } = splitLead(ofPage);
     const lead = repo.onlyfans.get(handle, service);
-    repo.creators.enrich(r.creator.id, { links: [paid.paidLink(service, handle, { free: !!(lead && lead.free) })] });
+    repo.creators.enrich(r.creator.id, { links: [paid.paidLink(service, handle, { free: !!(lead && lead.free) || paid.freeHint(c.bio) })] });
     repo.onlyfans.claim(handle, r.creator.id, service);
+  } else if (r.creator && c.bio) {
+    for (const { service, handle } of paid.findPaidHandles(c.bio)) {
+      if (paid.SERVICES[service] && paid.SERVICES[service].trace && (c.platform === 'linkinbio' || sameName(c.target, handle))) {
+        repo.creators.enrich(r.creator.id, { links: [paid.paidLink(service, handle, { free: paid.freeHint(c.bio) })] });
+        repo.onlyfans.claim(handle, r.creator.id, service);
+      }
+    }
   }
   repo.logAction('candidate', c.id, status === 'linked' ? 'link' : 'follow', describeSignals(c.signals) || null, actor);
   try { require('./engine').enqueue([r.feed.id], { trigger: 'discovery', front: false }); } catch { /* engine not running (tests) */ }
@@ -896,7 +944,7 @@ function promote(s = settingsStore.get()) {
       const shared = SHARED_KINDS.has(c.kind);
       // shared spaces need the switch and a male-focused description; people need a male signal unless already a known creator
       // An account proven to run an OnlyFans page that followed creators promote is vouched for by them.
-      const vouched = (c.signals.ofconfirmed || []).length && (Number(c.signals.ofsrc) || 0) >= 1 && c.scope !== 'excluded';
+      const vouched = (c.signals.ofconfirmed || []).length > 0 && c.scope !== 'excluded';
       if ((shared && (!s.discoveryAutoCommunities || c.scope !== 'in')) || (c.scope !== 'in' && !(c.signals.identity || []).length && !vouched)) { skipped++; continue; }
       const r = follow(c);
       if (r.ok && !r.already) {

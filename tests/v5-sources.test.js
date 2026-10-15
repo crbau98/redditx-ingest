@@ -50,10 +50,14 @@ test('GayForFans, its sister sites, leak mirrors and file lockers are leak hosts
 });
 
 test('posts that sell themselves as leaks are recognised; ordinary wording is not', () => {
-  for (const t of ['Hot jock OF leak 🔥', 'leaked onlyfans pack', 'DM for mega link', 'full onlyfans siterip', '#ofleaks', 'his leaked videos', 'all here https://gofile.io/d/xyz']) {
+  for (const t of ['Hot jock OF leak 🔥', 'leaked onlyfans pack', 'DM for mega link', 'DM for folder', 'DM me for the siterip', 'onlyfans bypass', 'full onlyfans siterip', '#ofleaks', 'his leaked videos', 'all here https://gofile.io/d/xyz']) {
     assert.ok(leaks.leakText(t), t);
   }
-  for (const t of ['precum leaking', 'a lot of leaks in my roof', 'free OnlyFans, link in bio', 'gym pump', 'Subscribe to my OnlyFans']) {
+  for (const t of [
+    'precum leaking', 'a lot of leaks in my roof', 'free OnlyFans, link in bio', 'gym pump', 'Subscribe to my OnlyFans',
+    'DM me for the link to my VIP page', 'DM for full video on my OnlyFans', 'OnlyFans free access trial link in bio',
+    'Fansly free access for 7 days', 'my VIP OnlyFans is 50% off', 'full OnlyFans collection on my page',
+  ]) {
     assert.equal(leaks.leakText(t), null, t);
   }
 });

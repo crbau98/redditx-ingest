@@ -18,6 +18,7 @@ const physique = require('./physique');
 const dedupe = require('../services/dedupe');
 const events = require('./events');
 const leaks = require('../lib/leaks');
+const paid = require('../lib/paid');
 const vault = require('../lib/vault');
 
 const SKIP_AUTHORS = new Set(['[deleted]', 'deleted', 'automoderator', 'web', 'null', 'undefined', '']);
@@ -125,11 +126,22 @@ function resolveCreator(item, feed, adapter) {
   if (SKIP_AUTHORS.has(handle.toLowerCase())) return null;
   if (repo.blocklist.has('creator', `${platform}:${handle}`)) return { blocked: true };
   const existing = repo.creators.byAccount(platform, handle);
-  if (existing) return existing.status === 'active' ? existing : { blocked: true };
+  if (existing) {
+    if ((feed.kind === 'channel' || (platform === 'telegram' && feed.kind === 'user')) && !feed.creator_id && !item.repostOf && existing.status === 'active') {
+      repo.feeds.update(feed.id, { creatorId: existing.id });
+      feed.creator_id = existing.id;
+    }
+    return existing.status === 'active' ? existing : { blocked: true };
+  }
   // Creator-level safety: handle / display name.
   if (checkText(handle, item.authorName).level === 'block') return { blocked: true };
 
   const c = repo.creators.create({ handle, displayName: item.authorName || handle, avatarUrl: item.authorAvatar, origin: 'ingest' });
+  if ((feed.kind === 'channel' || (platform === 'telegram' && feed.kind === 'user')) && !feed.creator_id && !item.repostOf) {
+    repo.feeds.update(feed.id, { creatorId: c.id });
+    feed.creator_id = c.id;
+    if (feed.kind === 'channel') return c;
+  }
   const a = adapter || registry.get(platform);
   if (a && a.kinds.includes('user')) {
     repo.feeds.upsert({
@@ -192,8 +204,45 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   const hash = md5(canonicalUrl(item.mediaUrl));
   if (repo.blocklist.has('hash', hash) || repo.blocklist.has('source_key', sourceKey)) return { outcome: 'blocked', reason: 'blocklisted' };
 
+  // A creator that is already hidden or blocked would be refused at step 7 anyway: refuse now, and let known male
+  // creators / active paid-page leads carry their profile context into step 4 so short promo captions are not dropped.
+  const known = knownCreator(item, feed);
+  if (known && known.status !== 'active') return { outcome: 'blocked', reason: 'creator blocked' };
+  const paidHandles = paid.findPaidHandles([item.title, item.text, item.altText, item.authorBio, ...(item.links || [])].filter(Boolean).join('\n'));
+  let paidTrusted = false;
+  const extraScopeTexts = [];
+  if (known) {
+    if (known.display_name) extraScopeTexts.push(known.display_name);
+    if (known.bio) extraScopeTexts.push(known.bio);
+    if (known.scope === 'in') paidTrusted = true;
+  }
+  for (const { service, handle } of paidHandles) {
+    const ownerRef = repo.onlyfans.ownerOf(handle, service);
+    const owner = ownerRef ? repo.creators.get(ownerRef.id) : null;
+    if (owner && owner.status !== 'active') return { outcome: 'blocked', reason: 'creator blocked' };
+    if (owner && owner.status === 'active' && owner.scope !== 'excluded') {
+      if (owner.display_name) extraScopeTexts.push(owner.display_name);
+      if (owner.bio) extraScopeTexts.push(owner.bio);
+      paidTrusted = true;
+    }
+    const lead = repo.onlyfans.get(handle, service);
+    if (lead && lead.status === 'rejected') continue;
+    if (lead && lead.status !== 'rejected') {
+      if (lead.display_name) extraScopeTexts.push(lead.display_name);
+      if (lead.bio) extraScopeTexts.push(lead.bio);
+      paidTrusted = true;
+    }
+  }
+  if (!paidTrusted && paidHandles.length && (feed.kind === 'user' || feed.kind === 'channel' || (known && known.scope !== 'excluded'))) {
+    paidTrusted = true;
+  }
+  const effectiveTrusted = !!feed.trusted || paidTrusted;
+
   // ---- 4. scope: is this male-focused? ---------------------------------------------
-  const sc = classify([item.title, item.text, item.altText, item.community, item.author, item.authorName, item.authorBio, item.tags, item.labels], { trusted: !!feed.trusted, screen: [item.query] });
+  const sc = classify(
+    [item.title, item.text, item.altText, item.community, item.author, item.authorName, item.authorBio, item.tags, item.labels, ...extraScopeTexts],
+    { trusted: effectiveTrusted, screen: [item.query] },
+  );
   if (sc.scope === 'excluded') {
     // A female / feminine person (handle, display name or bio) is removed as a creator, not just per post:
     // their other posts, their feeds and their other accounts never come back.
@@ -204,7 +253,7 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   // (femaleSoft items DO have male evidence of their own: they are kept for a human, see below.)
   // An open search / tag feed that shows no male evidence at all is dropped instead of piling up in the review queue
   // (a "gay" search returns mostly women on some platforms). Set "Unclear items from open feeds" to review to keep them.
-  if (sc.scope === 'uncertain' && !sc.femaleSoft && !feed.trusted && settings.scopeMode === 'strict' && settings.untrustedUnclear === 'drop') return { outcome: 'excluded', reason: 'scope:no male signal' };
+  if (sc.scope === 'uncertain' && !sc.femaleSoft && !effectiveTrusted && settings.scopeMode === 'strict' && settings.untrustedUnclear === 'drop') return { outcome: 'excluded', reason: 'scope:no male signal' };
 
   // ---- 4b. physique (text): "chubby", "superchub", "gainer", "dad bod" ... ----------------------
   // Only fit / athletic bodies are shown. Words in the item's own text exclude it before anything is downloaded; the same
@@ -242,10 +291,6 @@ async function processItemInner(rawItem, feed, adapter, settings) {
 
   // ---- 6. dedupe ----------------------------------------------------------------
   if (repo.media.hashExists(hash) || repo.media.keyExists(sourceKey)) return { outcome: 'dupe' };
-
-  // A creator that is already hidden or blocked would be refused at step 7 anyway: refuse now, before any download or model work.
-  const known = knownCreator(item, feed);
-  if (known && known.status !== 'active') return { outcome: 'blocked', reason: 'creator blocked' };
 
   // ---- 6a. fetch the media into our own storage -----------------------------------------
   // Sources whose files cannot be hotlinked (Telegram) hand over a `materialize()` instead of a finished URL. It runs only now,

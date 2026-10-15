@@ -49,10 +49,12 @@ const SCHEMA = {
     default: ['gay male model bluesky', 'male fitness model onlyfans x.com', 'gay creator linktree 18+', 'muscle model telegram channel', 'gay twink creator redgifs', 'muscle daddy creator onlyfans bluesky', 'gay amateur couple onlyfans twitter', 'male model throne wishlist',
       'gay bodybuilder creator linktree', 'hairy gay creator onlyfans', 'gay jock creator link in bio', 'gay otter creator bluesky 18+', 'gay daddy creator mastodon nsfw', 'gay content creator tumblr nsfw', 'gay muscle videos peertube',
       'gay porn star official links', 'gay amateur creator allmylinks', 'gay athlete creator beacons.ai', 'gay fitness creator beacons.ai', 'ゲイ 筋肉 クリエイター', 'ゲイ 細マッチョ リンク', 'gay cam model linktree', 'male nude model portfolio',
-      // OnlyFans pages in search results become leads (their snippet is the public bio); fit / athletic first
+      // OnlyFans / Fansly / JustFor.Fans pages in search results become leads (their snippet is the public bio); fit / athletic first
       'site:onlyfans.com gay muscle', 'site:onlyfans.com male fitness model', 'site:onlyfans.com gay athlete', 'site:onlyfans.com gay jock', 'site:onlyfans.com free gay',
+      'site:fansly.com gay muscle', 'site:fansly.com male fitness model', 'site:justfor.fans gay muscle', 'site:justfor.fans gay jock',
       'free gay onlyfans telegram', 'gay onlyfans promo twitter muscle', 'male onlyfans creator redgifs fit',
-      'gay creator fansly linktree 18+', 'gay muscle creator justfor.fans links', 'gay fitness creator youtube channel', 'gay model pixelfed portfolio'].join('\n'),
+      'gay creator fansly linktree 18+', 'gay muscle creator justfor.fans links', 'gay fansly creator twitter bluesky',
+      'gay justfor.fans creator telegram', 'gay fitness creator youtube channel', 'gay model pixelfed portfolio'].join('\n'),
   },
   // --- discovery reach (v4.6) ---
   discoveryCommunities: { type: 'bool', default: true, label: 'Search Reddit, Lemmy and Bluesky for communities and custom feeds', group: 'discovery' },

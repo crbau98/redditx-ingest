@@ -251,3 +251,72 @@ describe('iter14: Find keeps the paid pages it surfaced when following', () => {
     assert.ok(links.some((l) => l.url === 'https://fansly.com/findflowguy' && l.handle === 'findflowguy'), JSON.stringify(links));
   });
 });
+
+describe('paid creator guardrails: promo posts, bio claims, auto-follow & lookup URLs', () => {
+  test('short promo posts from known male creators or active paid leads pass strict scope on untrusted feeds', async () => {
+    const pipeline = require('../src/engine/pipeline');
+    const paid = require('../src/lib/paid');
+    const c = repo.creators.create({ handle: 'fitpromo_guy', displayName: 'Fit Promo Guy', bio: 'Gay muscle athlete 18+' });
+    repo.creators.update(c.id, { scope: 'in' });
+    repo.creators.enrich(c.id, { links: [paid.paidLink('Fansly', 'fitpromo_guy')] });
+    repo.onlyfans.claim('fitpromo_guy', c.id, 'Fansly');
+    const untrustedFeed = repo.feeds.upsert({ platform: 'x', kind: 'search', target: 'fitness', trusted: 0, origin: 'admin' }).feed;
+    const item = {
+      sourceId: 'promo-short-1',
+      title: 'new post up 🔗 fansly.com/fitpromo_guy',
+      text: 'new post up 🔗 fansly.com/fitpromo_guy',
+      author: 'fitpromo_guy',
+      mediaType: 'image',
+      mediaUrl: 'https://pbs.twimg.com/media/promo1.jpg',
+      trusted: true,
+    };
+    const strict = { probeUnknownHosts: false, hostReachability: false, scopeMode: 'strict', untrustedUnclear: 'drop', imageFilter: false, dedupe: false, physiqueFilter: false };
+    const r = await pipeline.processItem(item, untrustedFeed, null, strict);
+    assert.equal(r.outcome, 'added', JSON.stringify(r));
+  });
+
+  test('applyProfile extracts and claims Fansly and JustFor.Fans links and prose mentions', () => {
+    const { applyProfile } = require('../src/engine/creators');
+    const { extractLinks } = require('../src/lib/links');
+    const c = repo.creators.create({ handle: 'jff_athlete', displayName: 'JFF Athlete' });
+    const f = repo.feeds.upsert({ platform: 'bluesky', kind: 'user', target: 'jff-athlete.bsky.social', creatorId: c.id, trusted: 1 }).feed;
+    const bio = 'Gay jock 18+ · https://justfor.fans/jff_athlete · Fansly: @jff_athlete';
+    applyProfile(f, { displayName: 'JFF Athlete', bio, links: extractLinks(bio) }, { autoLinkProfiles: false, physiqueFilter: false });
+    const updated = repo.creators.get(c.id);
+    assert.ok(updated.links.some((l) => l.service === 'JustFor.Fans' && l.handle === 'jff_athlete'));
+    assert.ok(updated.links.some((l) => l.service === 'Fansly' && l.handle === 'jff_athlete'));
+    assert.equal(repo.onlyfans.get('jff_athlete', 'JustFor.Fans').status, 'claimed');
+    assert.equal(repo.onlyfans.get('jff_athlete', 'Fansly').status, 'claimed');
+  });
+
+  test('confirmed paid lead (ofconfirmed) meets auto-follow threshold and marks feed trusted', () => {
+    const { parseProfile } = require('../src/lib/links');
+    repo.onlyfans.note('provenhunk', { service: 'OnlyFans', origin: 'post' });
+    const cand = discovery.consider(
+      parseProfile('https://x.com/provenhunk'),
+      'ofconfirmed',
+      'provenhunk',
+      { displayName: 'Proven Hunk', bio: '18+ fitness · onlyfans.com/provenhunk' },
+    );
+    assert.ok(cand.score >= 8, `expected score >= 8, got ${cand.score}`);
+    const promoted = discovery.promote({ maxFeeds: 600, discoveryMaxFollowsPerRun: 10, discoveryAutoFollowScore: 8, discoveryAutoCommunities: false });
+    assert.ok(promoted.followed >= 1);
+    const feed = repo.feeds.find('x', 'user', 'provenhunk');
+    assert.ok(feed, 'x user feed created');
+    assert.equal(feed.trusted, 1, 'confirmed paid creator feed is trusted');
+    assert.equal(repo.onlyfans.get('provenhunk', 'OnlyFans').status, 'claimed');
+  });
+
+  test('lookup.parseQuery extracts creator handle from pasted OnlyFans, Fansly and JustFor.Fans URLs', () => {
+    const lookup = require('../src/engine/lookup');
+    for (const [url, service, handle] of [
+      ['https://onlyfans.com/Jax_Stone', 'OnlyFans', 'jax_stone'],
+      ['https://fansly.com/Jax_Stone/posts', 'Fansly', 'jax_stone'],
+      ['https://justfor.fans/JaxStone', 'JustFor.Fans', 'jaxstone'],
+    ]) {
+      const q = lookup.parseQuery(url);
+      assert.equal(q.handles[0], handle, url);
+      assert.ok(q.externalSpec && q.externalSpec.service === service, url);
+    }
+  });
+});
