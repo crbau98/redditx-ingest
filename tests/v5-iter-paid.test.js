@@ -212,3 +212,15 @@ describe('iter11: the discovery queue filters by platform', () => {
     assert.ok(all.candidates.items.some((c) => c.target === 'platfilter-b.bsky.social'));
   });
 });
+
+describe('iter12: maintenance names every backlog, thumbnails included', () => {
+  test('image-filter status carries the thumbnail backlog and its switch', async () => {
+    const res = await fetch(`${base}/api/admin/maintenance/image-filter`, { headers: { ...AGE, ...ADMIN } });
+    assert.equal(res.status, 200);
+    const j = await res.json();
+    assert.equal(typeof j.thumbnails.remaining, 'number', JSON.stringify(Object.keys(j)));
+    assert.equal(j.thumbnails.enabled, true, 'test env leaves thumbnails on');
+    assert.equal(typeof j.sweep.remaining, 'number');
+    assert.equal(typeof j.dedupe.remaining, 'number');
+  });
+});

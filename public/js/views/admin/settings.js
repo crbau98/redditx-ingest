@@ -60,10 +60,20 @@ export async function render(root) {
       h('div', { class: 'setting', style: { marginTop: '8px' } }, h('div', null, h('div', { class: 'l' }, 'Export configuration'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Creators, feeds and the blocklist as JSON — no media, no secrets.')),
         h('div', { class: 'row' }, h('button', { class: 'btn sm', onclick: downloadConfig }, icon('download', 'sm'), 'Export'), h('button', { class: 'btn sm', onclick: () => fileInput.click() }, icon('upload', 'sm'), 'Import'), fileInput))),
     h('div', { class: 'panel' }, h('h3', null, 'Maintenance'),
+      h('p', { class: 'muted maint-status', style: { fontSize: '12.5px', margin: '0 0 8px' } }, 'Loading sweep backlogs…'),
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Re-run the safety & quality sweep'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Applies today’s rules to everything already stored. Runs automatically after upgrades.')),
         h('button', { class: 'btn sm', onclick: (e) => act(e.currentTarget, async () => { const r = await adminPost('/maintenance/sweep', {}); toast(`Checked ${r.checked} · blocked ${r.blocked} · to review ${r.review} · hidden ${r.hidden}`, 'ok'); }) }, 'Run sweep')),
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Also check for dead Imgur links'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Slower: makes a network request per Imgur item.')),
         h('button', { class: 'btn sm', onclick: (e) => act(e.currentTarget, async () => { const r = await adminPost('/maintenance/sweep', { probe: true }); toast(`Dead links hidden: ${r.dead}`, 'ok'); }) }, 'Sweep + probe')),
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Recompute “Trending”'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Happens every 10 minutes on its own.')),
         h('button', { class: 'btn sm', onclick: (e) => act(e.currentTarget, () => adminPost('/maintenance/recompute'), 'Recomputed') }, 'Recompute'))));
+  const maintStatus = root.querySelector('.maint-status');
+  adminGet('/maintenance/image-filter').then((m) => {
+    if (!maintStatus || !maintStatus.isConnected) return;
+    maintStatus.textContent = [
+      `Safety sweep: ${fmt.int(m.sweep.remaining)} left`,
+      m.thumbnails && m.thumbnails.enabled === false ? 'Thumbnails: off' : `Thumbnails: ${fmt.int(m.thumbnails.remaining)} left`,
+      `Near-duplicates: ${fmt.int(m.dedupe.remaining)} left`,
+    ].join(' · ');
+  }).catch(() => { if (maintStatus) maintStatus.textContent = ''; });
 }

@@ -373,7 +373,7 @@ router.post('/maintenance/sweep', async (req, res) => {
 });
 router.get('/maintenance/image-filter', async (req, res) => {
   const s = settingsStore.get();
-  res.json({ enabled: s.imageFilter, threshold: s.imageFilterThreshold, sweep: { enabled: s.imageSweep, perMinute: s.imageSweepPerTick, ...maintenance.imageSweepProgress() }, physique: { ...physique.stats(s), sweep: maintenance.physiqueSweepProgress() }, dedupe: { enabled: s.dedupe, distance: s.dedupeDistance, ...maintenance.hashSweepProgress() }, model: { available: await imagefilter.available(), ...imagefilter.status() } });
+  res.json({ enabled: s.imageFilter, threshold: s.imageFilterThreshold, sweep: { enabled: s.imageSweep, perMinute: s.imageSweepPerTick, ...maintenance.imageSweepProgress() }, physique: { ...physique.stats(s), sweep: maintenance.physiqueSweepProgress() }, dedupe: { enabled: s.dedupe, distance: s.dedupeDistance, ...maintenance.hashSweepProgress() }, thumbnails: { enabled: s.thumbnails, perMinute: s.thumbnailsPerMinute, ...require('../engine/thumbs').progress() }, model: { available: await imagefilter.available(), ...imagefilter.status() } });
 });
 router.post('/maintenance/physique-sweep', async (req, res) => {
   try {
