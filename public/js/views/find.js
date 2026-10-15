@@ -49,6 +49,9 @@ export async function find(root, { query }) {
 
   function evidenceCard(c) {
     const ev = (c.evidence || []).slice(0, 3);
+    const sample = c.sample || (c.samples && c.samples[0]);
+    const thumb = sample && (sample.thumb || sample.preview);
+    const sampleUrl = (sample && sample.url) || c.url || '#';
     return h('div', { class: 'card find-cand' },
       h('div', { class: 'row', style: { gap: '10px', alignItems: 'center' } },
         avatar({ avatar_url: c.avatarUrl, display_name: c.displayName || c.target }, 40),
@@ -57,9 +60,9 @@ export async function find(root, { query }) {
           h('div', { class: 'muted sm truncate' }, `${c.platform} · ${c.target}`))),
       c.bio ? h('p', { class: 'muted sm find-cand-bio' }, String(c.bio).slice(0, 160)) : null,
       ev.length ? h('ul', { class: 'find-ev' }, ev.map((e) => h('li', null, icon('check', 'sm'), h('span', null, e)))) : null,
-      c.sample ? h('a', { class: 'find-sample', href: c.sample.url || '#', target: '_blank', rel: 'noopener noreferrer nofollow' },
-        c.sample.thumb ? h('span', { class: 'find-sample-thumb', style: { backgroundImage: `url("${c.sample.thumb}")` } }) : null,
-        h('span', { class: 'find-sample-txt' }, h('b', null, 'Latest post'), h('small', { class: 'muted' }, String(c.sample.title || c.sample.url || '').slice(0, 90)))) : null);
+      sample ? h('a', { class: 'find-sample', href: sampleUrl, target: '_blank', rel: 'noopener noreferrer nofollow' },
+        thumb ? h('span', { class: 'find-sample-thumb', style: { backgroundImage: `url("${thumb}")` } }) : null,
+        h('span', { class: 'find-sample-txt' }, h('b', null, 'Latest post'), h('small', { class: 'muted' }, String(sample.title || sample.url || c.url || '').slice(0, 90)))) : null);
   }
 
   function paint() {

@@ -149,7 +149,10 @@ async function verify(c) {
     const items = res.items || [];
     const p = res.profile || {};
     c.sampleCount = items.length;
-    c.samples = items.slice(0, 4).map((i) => ({ type: i.mediaType, preview: i.previewUrl || (i.mediaType === 'image' ? i.mediaUrl : null), title: i.title || null }));
+    c.samples = items.slice(0, 4).map((i) => {
+      const preview = i.previewUrl || (i.mediaType === 'image' ? i.mediaUrl : null);
+      return { type: i.mediaType, preview, thumb: preview, title: i.title || null, url: i.permalink || c.url || null };
+    });
     if (p.displayName && !c.displayName) c.displayName = p.displayName;
     if (p.bio && !c.bio) c.bio = String(p.bio).slice(0, 500);
     if (p.avatarUrl && !c.avatarUrl) c.avatarUrl = p.avatarUrl;
@@ -352,7 +355,7 @@ async function lookup(input, { imageCheck = true } = {}) {
     out.push({
       platform: c.platform, kind: c.kind, target: c.target, label: c.label, url: c.url,
       displayName: c.displayName, bio: c.bio ? String(c.bio).slice(0, 240) : null, avatarUrl: c.avatarUrl, followers: c.followers,
-      sampleCount: c.sampleCount, samples: c.samples, evidence: c.evidence.slice(0, 5), male: sc.male,
+      sampleCount: c.sampleCount, samples: c.samples, sample: c.samples[0] || null, evidence: c.evidence.slice(0, 5), male: sc.male,
       confidence: Math.round(conf * 100) / 100, tier: conf >= 0.7 ? 'strong' : conf >= 0.45 ? 'likely' : 'weak',
       status: blocked ? 'blocked' : existing ? 'following' : 'new', feedId: existing ? existing.id : null, creatorId: existing ? existing.creator_id : null,
     });
