@@ -24,4 +24,4 @@ Visitor mode: **Operate** (find, follow, watch). Admin mode: **Operate** (curate
 
 1. Find → verify → follow → deep read → Home/Explore/Reels/Following.
 2. Community/tag/search surfaces a poster → auto-track after N posts → bio links reveal his other accounts → identity merges.
-3. Discovery hourly: mentions, Bluesky graph/lookalikes/people search, rotating web topics, OnlyFans-lead traces, community search → scored candidates → auto-follow or Admin → Discovery queue.
+3. Discovery hourly: mentions, Bluesky graph/lookalikes/people search, rotating web topics, paid-lead traces (OnlyFans, Fansly, JustFor.Fans), community search → scored candidates → auto-follow or Admin → Discovery queue.

@@ -70,16 +70,23 @@ async function make(row, { fetch = net.fetchBuffer } = {}) {
   return out;
 }
 
-/** One round: up to `limit` items, newest first. */
-async function sweep({ limit = 30 } = {}) {
+/** One round: up to `limit` items, newest first, `concurrency` pictures in flight (they wait on the network). */
+async function sweep({ limit = 30, concurrency = 3, fetch } = {}) {
   const res = { checked: 0, tinted: 0, thumbs: 0, retry: 0 };
-  for (const row of q.todo.all(limit)) {
-    res.checked++;
-    const r = await make(row);
-    if (!r) { res.retry++; continue; }
-    if (r.tint) res.tinted++;
-    if (r.thumb_url) res.thumbs++;
-  }
+  const rows = q.todo.all(limit);
+  let i = 0;
+  const take = async () => {
+    while (i < rows.length) {
+      const row = rows[i++];
+      res.checked++;
+      let r = null;
+      try { r = await make(row, fetch ? { fetch } : {}); } catch { r = null; }
+      if (!r) { res.retry++; continue; }
+      if (r.tint) res.tinted++;
+      if (r.thumb_url) res.thumbs++;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, rows.length)) }, take));
   return res;
 }
 

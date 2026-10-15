@@ -16,6 +16,7 @@
 
 const config = require('../config');
 const { ofHandle } = require('./onlyfans');
+const paid = require('./paid');
 const { isLeakHost } = require('./leaks');
 
 const EXTERNAL = {
@@ -218,7 +219,9 @@ function parseProfile(input, hint = {}) {
 
   for (const [dom, label] of Object.entries(EXTERNAL)) {
     if (matches(h, dom)) {
-      return { platform: 'external', kind: 'link', target: url.href, ingestable: false, external: true, label: `${label}${parts[0] ? ` · ${parts[0].replace(/^@/, '')}` : ''}`, service: label, url: url.href };
+      // Traced paid pages carry their canonical handle, so profiles, claims and leads agree on one identity.
+      const handle = paid.SERVICES[label] && paid.SERVICES[label].trace ? paid.paidHandle(label, url.href) : null;
+      return { platform: 'external', kind: 'link', target: url.href, ingestable: false, external: true, label: `${label}${parts[0] ? ` · ${parts[0].replace(/^@/, '')}` : ''}`, service: label, url: url.href, ...(handle ? { handle } : {}) };
     }
   }
 
@@ -263,7 +266,7 @@ function extractLinks(text) {
   const found = [];
   const seen = new Set();
   // Full URLs, plus the bare "onlyfans.com/name" / "linktr.ee/name" people type into bios.
-  const urlRe = /(?:https?:\/\/|www\.)[^\s<>"')\]]+|(?<![\w./@-])(?:onlyfans\.com|fansly\.com|justfor\.fans|linktr\.ee|allmylinks\.com|beacons\.ai)\/[^\s<>"')\]]+/gi;
+  const urlRe = /(?:https?:\/\/|www\.)[^\s<>"')\]]+|(?<![\w./@-])(?:onlyfans\.com|fansly\.com|justfor\.fans|manyvids\.com|loyalfans\.com|fanvue\.com|fancentro\.com|clips4sale\.com|linktr\.ee|allmylinks\.com|beacons\.ai)\/[^\s<>"')\]]+/gi;
   for (const u of String(text || '').match(urlRe) || []) {
     const p = parseProfile(u);
     if (!p) continue;

@@ -178,15 +178,24 @@ const creators = {
     if (bannerUrl && !c.banner_url) patch.bannerUrl = bannerUrl;
     if (links && links.length) {
       let existing = []; try { existing = JSON.parse(c.links || '[]'); } catch { /* ignore */ }
-      const seen = new Set(existing.map((l) => l.url));
-      // A page that says it is free now (or no longer) updates the stored link's flag.
+      const normUrl = (u) => String(u || '').toLowerCase().replace(/\/+$/, '');
+      const seen = new Set(existing.map((l) => normUrl(l.url)));
+      // A page that says it is free now (or no longer) updates the stored link's flag. Paid pages
+      // match by (service, handle) so 'Fansly.com/Jake' never duplicates 'fansly.com/jake'.
       let changed = false;
       for (const l of links) {
-        const old = l.handle && existing.find((e) => e.url === l.url);
-        if (old && !!old.free !== !!l.free) { old.free = !!l.free; old.handle = l.handle; changed = true; }
+        let old = l.handle
+          ? existing.find((e) => e.handle && String(e.handle).toLowerCase() === String(l.handle).toLowerCase() && (e.service || '') === (l.service || ''))
+          : null;
+        if (!old && l.url) old = existing.find((e) => normUrl(e.url) === normUrl(l.url));
+        if (old) {
+          if (!!old.free !== !!l.free) { old.free = !!l.free; changed = true; }
+          if (l.handle && !old.handle) { old.handle = l.handle; changed = true; }
+          continue;
+        }
+        if (l.url && !seen.has(normUrl(l.url))) { seen.add(normUrl(l.url)); existing.push(l); changed = true; }
       }
-      const merged = existing.concat(links.filter((l) => l.url && !seen.has(l.url)));
-      if (merged.length !== existing.length || changed) patch.links = merged.slice(0, 24);
+      if (changed) patch.links = existing.slice(0, 24);
     }
     if (Object.keys(patch).length) creators.update(id, patch);
   },
@@ -1350,43 +1359,48 @@ const parseLead = (r) => {
   try { out.accounts = JSON.parse(r.accounts || '[]'); } catch { out.accounts = []; }
   return out;
 };
+const OF = 'OnlyFans';
+/** Canonical paid-page host per traced service, for owner matching and lead search queries. */
+const PAID_HOSTS = { 'OnlyFans': 'onlyfans.com', 'Fansly': 'fansly.com', 'JustFor.Fans': 'justfor.fans' };
 const onlyfans = {
-  get(handle) { return parseLead(db.prepare('SELECT * FROM onlyfans_leads WHERE handle = ?').get(String(handle))); },
+  get(handle, service = OF) { return parseLead(db.prepare('SELECT * FROM onlyfans_leads WHERE service = ? AND handle = ?').get(service, String(handle))); },
   /**
-   * Someone named this OnlyFans page. `sourceId` is the creator whose post/bio named it (null for web search).
+   * Someone named this paid page. `sourceId` is the creator whose post/bio named it (null for web search).
    * Counts one mention per distinct source, so a promo channel reposting the same creator does not inflate it.
    */
-  note(handle, { sourceId = null, origin = 'post', displayName = null, bio = null, free = false } = {}) {
+  note(handle, { service = OF, sourceId = null, origin = 'post', displayName = null, bio = null, free = false } = {}) {
     const h = String(handle).toLowerCase();
-    const cur = onlyfans.get(h);
+    const cur = onlyfans.get(h, service);
     if (!cur) {
-      db.prepare(`INSERT INTO onlyfans_leads (handle, mentions, sources, origin, display_name, bio, free) VALUES (?, 1, ?, ?, ?, ?, ?)`)
-        .run(h, JSON.stringify(sourceId ? [sourceId] : []), origin, displayName, bio, free ? 1 : 0);
-      return onlyfans.get(h);
+      db.prepare(`INSERT INTO onlyfans_leads (service, handle, mentions, sources, origin, display_name, bio, free) VALUES (?, ?, 1, ?, ?, ?, ?, ?)`)
+        .run(service, h, JSON.stringify(sourceId ? [sourceId] : []), origin, displayName, bio, free ? 1 : 0);
+      return onlyfans.get(h, service);
     }
     const sources = new Set(cur.sources);
     const fresh = sourceId ? !sources.has(sourceId) : origin !== cur.origin;
     if (sourceId) sources.add(sourceId);
     db.prepare(`UPDATE onlyfans_leads SET mentions = mentions + ?, sources = ?, display_name = COALESCE(display_name, ?), bio = COALESCE(bio, ?),
-        free = MAX(free, ?), last_seen = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE handle = ?`)
-      .run(fresh ? 1 : 0, JSON.stringify([...sources].slice(-25)), displayName, bio, free ? 1 : 0, h);
-    return onlyfans.get(h);
+        free = MAX(free, ?), last_seen = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE service = ? AND handle = ?`)
+      .run(fresh ? 1 : 0, JSON.stringify([...sources].slice(-25)), displayName, bio, free ? 1 : 0, service, h);
+    return onlyfans.get(h, service);
   },
   /** A followed creator links to this page: it is theirs. */
-  claim(handle, creatorId) {
+  claim(handle, creatorId, service = OF) {
     const h = String(handle).toLowerCase();
-    db.prepare(`INSERT INTO onlyfans_leads (handle, creator_id, status, origin, checked_at) VALUES (?, ?, 'claimed', 'profile', strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-      ON CONFLICT(handle) DO UPDATE SET creator_id = excluded.creator_id, status = 'claimed', last_seen = excluded.last_seen`).run(h, creatorId);
+    db.prepare(`INSERT INTO onlyfans_leads (service, handle, creator_id, status, origin, checked_at) VALUES (?, ?, ?, 'claimed', 'profile', strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      ON CONFLICT(service, handle) DO UPDATE SET creator_id = excluded.creator_id, status = 'claimed', last_seen = excluded.last_seen`).run(service, h, creatorId);
   },
-  update(handle, patch) {
+  update(handle, patch, service = OF) {
+    if (typeof service === 'object' && service !== null) { patch = { ...service, ...patch }; service = OF; } // update(handle, {service, ...}) also works
+    if (patch.service !== undefined) service = patch.service;
     const cols = ['status', 'reason', 'display_name', 'bio', 'creator_id', 'checked_at', 'attempts'];
-    const sets = []; const params = { handle: String(handle).toLowerCase() };
+    const sets = []; const params = { service, handle: String(handle).toLowerCase() };
     for (const c of cols) if (patch[c] !== undefined) { sets.push(`${c} = @${c}`); params[c] = patch[c]; }
     if (patch.accounts !== undefined) { sets.push('accounts = @accounts'); params.accounts = JSON.stringify(patch.accounts.slice(0, 12)); }
     if (patch.free !== undefined) { sets.push('free = @free'); params.free = patch.free ? 1 : 0; }
-    if (!sets.length) return onlyfans.get(handle);
-    db.prepare(`UPDATE onlyfans_leads SET ${sets.join(', ')} WHERE handle = @handle`).run(params);
-    return onlyfans.get(handle);
+    if (!sets.length) return onlyfans.get(handle, service);
+    db.prepare(`UPDATE onlyfans_leads SET ${sets.join(', ')} WHERE service = @service AND handle = @handle`).run(params);
+    return onlyfans.get(handle, service);
   },
   /** Leads to look for next: never-checked first, then the most-mentioned whose last look is older than `staleDays`. */
   workable(limit = 10, staleDays = 14) {
@@ -1394,9 +1408,10 @@ const onlyfans = {
     return db.prepare(`SELECT * FROM onlyfans_leads WHERE (status = 'pending') OR (status = 'searching' AND attempts < 4 AND (checked_at IS NULL OR checked_at < ?))
       ORDER BY status = 'pending' DESC, mentions DESC, last_seen DESC LIMIT ?`).all(since, limit).map(parseLead);
   },
-  list({ status, page = 0, limit = 50, q: query } = {}) {
+  list({ status, service, page = 0, limit = 50, q: query } = {}) {
     const where = []; const params = [];
     if (status && status !== 'all') { where.push('l.status = ?'); params.push(status); }
+    if (service && service !== 'all') { where.push('l.service = ?'); params.push(service); }
     if (query) { where.push("l.handle LIKE ? ESCAPE '\\'"); params.push(`%${String(query).replace(/[\\%_]/g, (m) => `\\${m}`)}%`); }
     const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const total = db.prepare(`SELECT COUNT(*) AS n FROM onlyfans_leads l ${w}`).get(...params).n;
@@ -1405,24 +1420,30 @@ const onlyfans = {
       .all(...params, limit, page * limit).map(parseLead);
     return { items, total, page, limit };
   },
-  /** The active creator whose stored links point at this OnlyFans page, if any. */
-  ownerOf(handle) {
+  /** The active creator whose stored links point at this paid page, if any. */
+  ownerOf(handle, service = OF) {
+    const host = PAID_HOSTS[service] || PAID_HOSTS[OF];
     const h = String(handle).toLowerCase().replace(/[\\%_]/g, (m) => `\\${m}`);
-    return db.prepare(`SELECT id, handle FROM creators WHERE status = 'active' AND links LIKE ? ESCAPE '\\' LIMIT 1`).get(`%onlyfans.com/${h}"%`) || null;
+    return db.prepare(`SELECT id, handle FROM creators WHERE status = 'active' AND links LIKE ? ESCAPE '\\' LIMIT 1`).get(`%${host}/${h}"%`) || null;
   },
-  /** Creators with an OnlyFans page but few known accounts elsewhere, least recently searched first. */
-  reachTargets(limit = 4, staleDays = 30, maxAccounts = 4) {
+  /** Creators with a paid page but few known accounts elsewhere, least recently searched first. */
+  reachTargets(limit = 4, staleDays = 30, maxAccounts = 4, service = OF, keyPrefix = null) {
+    const host = PAID_HOSTS[service] || PAID_HOSTS[OF];
+    const key = keyPrefix || 'of.reach.';
     const since = new Date(Date.now() - staleDays * 86400000).toISOString();
     return db.prepare(`SELECT c.id, c.handle, c.display_name, c.links,
         (SELECT COUNT(*) FROM feeds x WHERE x.creator_id = c.id AND x.kind IN ('user','page')) AS accounts
-      FROM creators c LEFT JOIN discovery_state ds ON ds.key = 'of.reach.' || c.id
-      WHERE c.status = 'active' AND c.scope != 'excluded' AND c.links GLOB '*onlyfans.com/[A-Za-z0-9]*' AND (ds.updated_at IS NULL OR ds.updated_at < ?)
+      FROM creators c LEFT JOIN discovery_state ds ON ds.key = ? || c.id
+      WHERE c.status = 'active' AND c.scope != 'excluded' AND c.links GLOB ? AND (ds.updated_at IS NULL OR ds.updated_at < ?)
         AND (SELECT COUNT(*) FROM feeds x WHERE x.creator_id = c.id AND x.kind IN ('user','page')) <= ?
-      ORDER BY ds.updated_at IS NOT NULL, ds.updated_at ASC, c.media_count DESC LIMIT ?`).all(since, maxAccounts, limit);
+      ORDER BY ds.updated_at IS NOT NULL, ds.updated_at ASC, c.media_count DESC LIMIT ?`).all(key, `*${host}/[A-Za-z0-9]*`, since, maxAccounts, limit);
   },
   counts() {
-    const out = { pending: 0, searching: 0, found: 0, claimed: 0, rejected: 0 };
-    for (const r of db.prepare('SELECT status, COUNT(*) AS n FROM onlyfans_leads GROUP BY status').all()) out[r.status] = r.n;
+    const out = { pending: 0, searching: 0, found: 0, claimed: 0, rejected: 0, byService: {} };
+    for (const r of db.prepare('SELECT service, status, COUNT(*) AS n FROM onlyfans_leads GROUP BY service, status').all()) {
+      out[r.status] = (out[r.status] || 0) + r.n;
+      (out.byService[r.service] = out.byService[r.service] || {})[r.status] = r.n;
+    }
     out.creators = db.prepare("SELECT COUNT(*) AS n FROM creators WHERE status = 'active' AND links GLOB '*onlyfans.com/[A-Za-z0-9]*'").get().n;
     return out;
   },

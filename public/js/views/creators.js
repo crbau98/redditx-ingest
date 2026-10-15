@@ -8,7 +8,7 @@ const SORTS = [['media', 'Most posts'], ['score', 'Top rated'], ['recent', 'Rece
 
 export async function creators(root, { query }) {
   document.title = 'Creators — PRISM';
-  const PAID_OPTS = [['', 'All creators'], ['onlyfans', 'OnlyFans'], ['fansly', 'Fansly'], ['justforfans', 'JustFor.Fans'], ['manyvids', 'ManyVids'], ['loyalfans', 'LoyalFans']];
+  const PAID_OPTS = [['', 'All creators'], ['onlyfans', 'OnlyFans'], ['fansly', 'Fansly'], ['justforfans', 'JustFor.Fans'], ['manyvids', 'ManyVids'], ['loyalfans', 'LoyalFans'], ['fancentro', 'FanCentro'], ['fanvue', 'Fanvue'], ['clips4sale', 'Clips4Sale']];
   const f = { q: query.get('q') || '', sort: query.get('sort') || 'media', platform: query.get('platform') || '', paid: query.get('paid') || (query.get('onlyfans') === '1' ? 'onlyfans' : '') };
   const set = (patch) => {
     const next = { ...f, ...patch };

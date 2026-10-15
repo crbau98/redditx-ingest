@@ -42,12 +42,28 @@ function put(url, buffer, type) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, buffer);
     fs.writeFileSync(`${file}.json`, JSON.stringify({ type }));
-    if (++puts % 50 === 0) evict();
+    if (approx >= 0) approx += buffer.length;
+    if (++puts % 50 === 0) scheduleEvict();
   } catch { /* cache is best-effort */ }
 }
 
-function evict() {
+// Eviction never runs on the request path: the proxy calls put() per image, and a full
+// directory walk (tens of thousands of stats on a big cache) would stall every other request.
+// Instead puts only schedule one run, at most once a minute, and the run itself skips the walk
+// while the running byte estimate is under budget.
+let lastEvict = 0;
+let evictScheduled = false;
+let approx = -1; // running byte estimate; unknown until the first full walk
+function scheduleEvict() {
+  if (evictScheduled || Date.now() - lastEvict < 60000) return;
+  evictScheduled = true;
+  setImmediate(() => { evictScheduled = false; evict(); });
+}
+function evict({ force = false } = {}) {
   try {
+    if (!force && Date.now() - lastEvict < 60000) return;
+    lastEvict = Date.now();
+    if (approx >= 0 && approx <= maxBytes) return; // cheap path: no directory walk
     const files = [];
     let total = 0;
     for (const sub of fs.readdirSync(dir)) {
@@ -59,11 +75,12 @@ function evict() {
         total += st.size;
       }
     }
+    approx = total;
     if (total <= maxBytes) return;
     files.sort((a, b) => a.t - b.t);
     for (const f of files) {
       if (total <= maxBytes * 0.85) break;
-      try { fs.unlinkSync(f.p); fs.unlinkSync(`${f.p}.json`); } catch { /* ignore */ }
+      try { fs.unlinkSync(f.p); fs.unlinkSync(`${f.p}.json`); approx -= f.s; } catch { /* ignore */ }
       total -= f.s;
     }
   } catch { /* ignore */ }

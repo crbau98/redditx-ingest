@@ -6,6 +6,11 @@ export function creatorCard(c, { mini = false, badge = null } = {}) {
   const thumbs = (c.previews || []).slice(0, 3);
   while (thumbs.length < 3) thumbs.push(null);
   const isNew = follows.has(c.id) && c.last_media_at && follows.seen(c.id) && c.last_media_at > follows.seen(c.id);
+  // Cards name the paid page when there is no OnlyFans badge to carry it.
+  const paidBadge = !c.onlyfans && Array.isArray(c.paid)
+    ? (c.paid.some((l) => l && l.service === 'Fansly') ? ['Fansly', 'Has a Fansly page']
+      : c.paid.some((l) => l && l.service === 'JustFor.Fans') ? ['JFF', 'Has a JustFor.Fans page'] : null)
+    : null;
   return h('a', { class: `creator-card${mini ? ' mini' : ''}`, href: href(`/creator/${c.id}`), 'aria-label': c.display_name || c.handle, style: badge ? { position: 'relative' } : null },
     badge ? h('span', { class: 'rise' }, icon('trend', 'sm'), badge) : null,
     h('div', { class: 'creator-thumbs' }, thumbs.map((t) => h('div', { style: t ? { backgroundImage: `url("${proxied(t)}")` } : {} }))),
@@ -13,7 +18,8 @@ export function creatorCard(c, { mini = false, badge = null } = {}) {
       avatar(c, 56),
       h('div', null,
         h('div', { class: 'creator-name' }, c.display_name || c.handle, c.verified ? icon('verified', 'fill') : null, isNew ? h('span', { class: 'badge good' }, 'New') : null,
-          c.onlyfans ? h('span', { class: `badge of${c.onlyfans.free ? ' free' : ''}`, title: c.onlyfans.free ? 'Has a free OnlyFans page' : 'Has an OnlyFans page' }, c.onlyfans.free ? 'OF · Free' : 'OF') : null),
+          c.onlyfans ? h('span', { class: `badge of${c.onlyfans.free ? ' free' : ''}`, title: c.onlyfans.free ? 'Has a free OnlyFans page' : 'Has an OnlyFans page' }, c.onlyfans.free ? 'OF · Free' : 'OF') : null,
+          paidBadge ? h('span', { class: 'badge', title: paidBadge[1] }, paidBadge[0]) : null),
         h('div', { class: 'creator-handle' }, `@${c.handle}`)),
       h('div', { class: 'creator-stats' },
         h('span', null, h('b', null, fmt.num(c.media_count)), ' posts'),

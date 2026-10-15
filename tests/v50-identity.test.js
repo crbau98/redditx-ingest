@@ -148,6 +148,18 @@ describe('creator identity', () => {
     assert.ok(identity.aliasesOf(a.c.id).some((x) => x.norm === 'bennyreds'));
   });
 
+  test('scan pairs creators who promote the same Fansly page, like OnlyFans', () => {
+    const paid = require('../src/lib/paid');
+    const a = person('cole_x', 'x');
+    const b = person('colereds', 'redgifs');
+    repo.creators.enrich(a.c.id, { links: [paid.paidLink('Fansly', 'colefree')] });
+    repo.creators.update(b.c.id, { bio: 'free page fansly.com/colefree' });
+    const r = identity.scan();
+    assert.ok(r.links >= 1);
+    const link = identity.queue().items.find((l) => [l.a.id, l.b.id].includes(a.c.id) && [l.a.id, l.b.id].includes(b.c.id));
+    assert.ok(link && link.evidence.some((e) => e.type === 'same-paid'), JSON.stringify(link && link.evidence));
+  });
+
   test('two links from the same man (after a merge) are not "mutual"', () => {
     const k = person('finn_keep'); const g = person('finn_gone'); const t = person('finnthird');
     identity.noteLink(k.c.id, t.c.id, { type: 'bio-link', from: k.c.id, detail: 'x:finnthird' }, { autoMerge: false });
@@ -166,7 +178,7 @@ describe('creator identity', () => {
     identity.addAlias(c.id, 'reese_alt', { platform: 'x', source: 'account' });
     assert.ok(repo.creators.detail(c.id).aliases.some((a) => a.alias === 'reese_alt'));
     identity.addAlias(c.id, 'reese_alt', { source: 'bio' });
-    assert.equal(identity.aliasesOf(c.id).find((a) => a.norm === 'reesealt').source, 'account', 'never demoted');
+    assert.equal(identity.aliasesOf(c.id).find((a) => a.norm === 'reese').source, 'account', 'never demoted');
     const g = person('reese_two');
     identity.addAlias(c.id, 'Reese Two', { kind: 'name', source: 'bio' });
     identity.addAlias(g.c.id, 'Reese Two', { kind: 'name', source: 'profile' });

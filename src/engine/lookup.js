@@ -22,7 +22,7 @@ const imagefilter = require('../lib/imagefilter');
 const { parseProfile, extractLinks, profileUrl } = require('../lib/links');
 const { checkText } = require('../lib/safety');
 const { femaleCheck, classify } = require('../lib/scope');
-const { ofLink, ofHandle } = require('../lib/onlyfans');
+const { ofLink } = require('../lib/onlyfans');
 const events = require('./events');
 
 const PROBE_TIMEOUT_MS = 18000;
@@ -270,10 +270,16 @@ async function searchWeb(q, pl, notes) {
   return provider;
 }
 
-/** Everything external a verified candidate links to (OnlyFans, Throne...): shown and stored, never read. */
+/** Everything external a verified candidate links to (paid pages, tip jars...): shown and stored, never read. */
 function externalLinksOf(c) {
+  const paid = require('../lib/paid');
   const out = [];
-  for (const l of c.links || []) if (l.external) out.push(l.handle ? ofLink(l.handle) : { platform: 'external', service: l.service, label: l.label, url: l.url });
+  for (const l of c.links || []) {
+    if (!l.external) continue;
+    if (l.handle && l.service && paid.SERVICES[l.service] && paid.SERVICES[l.service].trace) out.push(paid.paidLink(l.service, l.handle));
+    else if (l.handle && (!l.service || l.service === 'OnlyFans')) out.push(ofLink(l.handle));
+    else out.push({ platform: 'external', service: l.service, label: l.label, url: l.url });
+  }
   return out;
 }
 
@@ -431,11 +437,16 @@ function follow({ name, selections, externalLinks = [], bio, creatorId = null } 
     res = targets.addCreator({ name: cleanName, bio, inputs: accepted.map(tokenFor).join('\n') });
   }
   if (res.error) return { ...res, rejected };
+  const paid = require('../lib/paid');
   const ext = (externalLinks || []).filter((l) => l && /^https?:\/\//i.test(l.url || '')).slice(0, 12)
-    .map((l) => { const h = ofHandle(l.url); return h ? ofLink(h) : { platform: 'external', service: l.service, label: l.label, url: l.url }; });
+    .map((l) => {
+      const svc = l.service || paid.serviceOf(l.url);
+      const h = l.handle || (svc ? paid.paidHandle(svc, l.url) : null);
+      return h && svc && paid.SERVICES[svc] && paid.SERVICES[svc].trace ? paid.paidLink(svc, h, { free: !!l.free }) : { platform: 'external', service: l.service, label: l.label, url: l.url };
+    });
   require('./identity').addAlias(res.creator.id, cleanName, { kind: 'name', source: 'lookup' }); // the name he was looked up by
   if (ext.length) repo.creators.enrich(res.creator.id, { links: ext });
-  for (const l of ext) if (l.handle) repo.onlyfans.claim(l.handle, res.creator.id); // their page: no need to trace it as a lead
+  for (const l of ext) if (l.handle) repo.onlyfans.claim(l.handle, res.creator.id, l.service || 'OnlyFans'); // their page: no need to trace it as a lead
   const feedIds = res.feeds.map((f) => f.id);
   let queued = 0;
   try { queued = require('./engine').enqueue(feedIds, { force: true, trigger: 'lookup', limit: 300 }); } catch { /* engine not running (tests) */ }

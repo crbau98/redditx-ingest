@@ -11,6 +11,7 @@ const { publicAccounts } = require('../services/targets');
 const { understand, buildVocabulary, PAID } = require('../lib/query');
 const { search } = require('../engine/search');
 const { creatorOnlyFans } = require('../lib/onlyfans');
+const { creatorPaid } = require('../lib/paid');
 const { normAlias } = require('../lib/alias');
 
 const router = express.Router();
@@ -39,7 +40,7 @@ function publicCreator(c) {
     id: c.id, handle: c.handle, display_name: c.display_name, bio: c.bio, avatar_url: c.avatar_url, banner_url: c.banner_url,
     links: c.links, verified: c.verified, media_count: c.media_count, video_count: c.video_count, total_score: c.total_score,
     last_media_at: c.last_media_at, previews: c.previews, platforms: c.platforms, added_at: c.created_at,
-    onlyfans: creatorOnlyFans(c),
+    onlyfans: creatorOnlyFans(c), paid: creatorPaid(c),
   };
 }
 
@@ -95,6 +96,20 @@ function warm() {
   const queue = [() => repo.library(), ...warmers];
   const next = () => { const g = queue.shift(); if (!g) return; try { g(); } catch (e) { console.error('[warm]', e.message); } setImmediate(next); };
   setImmediate(next);
+}
+// Autocomplete fires per keystroke (three queries: creators, tags, communities). A 10-second
+// per-query cache absorbs the burst while typing; the cap keeps one-off queries from growing it.
+const suggestCache = new Map();
+const SUGGEST_TTL_MS = 10000;
+const SUGGEST_CACHE_MAX = 200;
+function suggestCached(query, limit = 6) {
+  const key = `${String(query || '').slice(0, 40)}|${limit}`;
+  const hit = suggestCache.get(key);
+  if (hit && Date.now() - hit.at <= SUGGEST_TTL_MS) return hit.val;
+  const val = repo.suggest(query, limit);
+  suggestCache.set(key, { at: Date.now(), val });
+  if (suggestCache.size > SUGGEST_CACHE_MAX) suggestCache.delete(suggestCache.keys().next().value);
+  return val;
 }
 const discoverCached = ttl(30000, () => {
   const d = repo.discover();
@@ -255,7 +270,7 @@ router.get('/creators/:id/media', (req, res) => {
   res.json({ ...r, items: r.items.map(publicMedia) });
 });
 
-router.get('/suggest', (req, res) => res.json(repo.suggest(typeof req.query.q === 'string' ? req.query.q : '', 6)));
+router.get('/suggest', (req, res) => res.json(suggestCached(typeof req.query.q === 'string' ? req.query.q : '', 6)));
 
 router.get('/creators/:id/similar', (req, res) => {
   const c = repo.creators.get(req.params.id);
@@ -391,3 +406,5 @@ module.exports = router;
 module.exports.publicMedia = publicMedia;
 module.exports.warm = warm;
 module.exports.publicCreator = publicCreator;
+module.exports.suggestCached = suggestCached;
+module.exports.suggestCache = suggestCache;

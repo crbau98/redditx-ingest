@@ -91,6 +91,9 @@ export async function creator(root, { params, query }) {
   // A glowing ring (like a "story") when they posted in the last two days.
   const fresh = c.last_media_at && Date.now() - new Date(c.last_media_at).getTime() < 2 * 86400000;
   const headAvatar = avatar(c, 112);
+  // His other paid pages (Fansly, JustFor.Fans…) as header buttons next to the OnlyFans one — link-outs, never fetched.
+  const paidCtas = (c.paid || []).filter((l) => l && l.url).slice(0, 2).map((l) =>
+    h('a', { class: 'btn', href: l.url, target: '_blank', rel: 'noopener noreferrer nofollow', title: l.url }, `${l.service === 'JustFor.Fans' ? 'JFF' : l.service || 'Paid page'}${l.free ? ' · free' : ''}`, icon('external', 'sm')));
   const head = h('div', { class: 'profile-head' },
     h('div', { class: `avatar-ring${fresh ? ' live' : ''}`, title: fresh ? `Posted ${fmt.ago(c.last_media_at)}` : null }, headAvatar),
     h('div', { class: 'profile-info' }, h('h1', null, c.display_name || c.handle, c.verified ? icon('verified', 'fill') : null), h('div', { class: 'creator-handle' }, `@${c.handle}`),
@@ -98,6 +101,7 @@ export async function creator(root, { params, query }) {
     h('div', { class: 'profile-actions' }, followBtn,
       c.onlyfans ? h('a', { class: `btn of-cta${c.onlyfans.free ? ' free' : ''}`, href: c.onlyfans.url, target: '_blank', rel: 'noopener noreferrer nofollow', title: `onlyfans.com/${c.onlyfans.handle}` },
         h('span', { class: 'of-mark', 'aria-hidden': 'true' }), c.onlyfans.free ? 'Free OnlyFans' : 'OnlyFans', icon('external', 'sm')) : null,
+      ...paidCtas,
       c.media_count ? h('a', { class: 'btn', href: href('/reels', { creator: c.id, sort: 'recent', type: 'all' }), title: 'Watch everything full screen' }, icon('film', 'sm'), 'Reels') : null,
       h('button', { class: 'btn icon', 'aria-label': 'Copy profile link', title: 'Copy link', onclick: async () => toast((await copyText(location.href)) ? 'Link copied' : 'Could not copy') }, icon('share')),
       h('button', { class: 'btn icon', 'aria-label': 'Report', title: 'Report', onclick: () => openReport({ creatorId: c.id, title: 'Report this creator' }) }, icon('flag'))));

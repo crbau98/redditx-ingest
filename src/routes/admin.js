@@ -302,34 +302,40 @@ router.post('/discovery/candidates', (req, res) => {
   res.json(out);
 });
 
-/* ---------------------------------------------------------- OnlyFans leads */
-// OnlyFans pages named in posts, bios and search results; PRISM traces each to the person's free public accounts.
+/* ---------------------------------------------------------- Paid-page leads */
+// Paid pages named in posts, bios and search results (OnlyFans, Fansly, JustFor.Fans); PRISM traces each
+// to the person's free public accounts. The paid hosts themselves are never read.
+const paidLib = require('../lib/paid');
 router.get('/discovery/onlyfans', (req, res) => {
   const status = ['pending', 'searching', 'found', 'claimed', 'rejected', 'all'].includes(req.query.status) ? req.query.status : 'all';
-  res.json({ counts: repo.onlyfans.counts(), ...repo.onlyfans.list({ status, ...page(req, 200), q: typeof req.query.q === 'string' ? req.query.q.slice(0, 60) : undefined }) });
+  const service = ['OnlyFans', 'Fansly', 'JustFor.Fans', 'all'].includes(req.query.service) ? req.query.service : 'all';
+  res.json({ counts: repo.onlyfans.counts(), ...repo.onlyfans.list({ status, service, ...page(req, 200), q: typeof req.query.q === 'string' ? req.query.q.slice(0, 60) : undefined }) });
 });
-/** Paste OnlyFans links or handles (one per line): each becomes a lead the next discovery run traces. */
+/** Paste paid-page links or handles (one per line): each becomes a lead the next discovery run traces. */
 router.post('/discovery/onlyfans', (req, res) => {
-  const { ofHandle, normal } = require('../lib/onlyfans');
+  const { normal } = require('../lib/onlyfans');
   const lines = String((req.body && req.body.handles) || '').split(/[\n,\s]+/).map((l) => l.trim()).filter(Boolean).slice(0, 200);
   const out = { added: 0, claimed: 0, invalid: [] };
   for (const line of lines) {
-    const handle = /onlyfans\.com/i.test(line) ? ofHandle(line) : normal(line);
+    const svc = paidLib.serviceOf(line);
+    const service = svc && paidLib.SERVICES[svc].trace ? svc : 'OnlyFans';
+    const handle = svc && paidLib.SERVICES[svc].trace ? paidLib.paidHandle(service, line) : (/onlyfans\.com/i.test(line) ? paidLib.ofHandle(line) : normal(line));
     if (!handle) { out.invalid.push(line.slice(0, 80)); continue; }
-    const owner = repo.onlyfans.ownerOf(handle);
-    if (owner) { repo.onlyfans.claim(handle, owner.id); out.claimed++; continue; }
-    const lead = repo.onlyfans.note(handle, { origin: 'admin' });
-    if (lead.status === 'rejected' || lead.status === 'searching') repo.onlyfans.update(handle, { status: 'pending', reason: null, attempts: 0 });
+    const owner = repo.onlyfans.ownerOf(handle, service);
+    if (owner) { repo.onlyfans.claim(handle, owner.id, service); out.claimed++; continue; }
+    const lead = repo.onlyfans.note(handle, { service, origin: 'admin' });
+    if (lead.status === 'rejected' || lead.status === 'searching') repo.onlyfans.update(handle, { service, status: 'pending', reason: null, attempts: 0 });
     out.added++;
   }
   res.json(out);
 });
 router.post('/discovery/onlyfans/:handle', (req, res) => {
-  const lead = repo.onlyfans.get(req.params.handle);
+  const service = ['OnlyFans', 'Fansly', 'JustFor.Fans'].includes(req.body && req.body.service) ? req.body.service : 'OnlyFans';
+  const lead = repo.onlyfans.get(req.params.handle, service);
   if (!lead) return bad(res, 'Not found', 404);
   const action = req.body && req.body.action;
-  if (action === 'retry') return res.json(repo.onlyfans.update(lead.handle, { status: 'pending', reason: null, attempts: 0 }));
-  if (action === 'reject') return res.json(repo.onlyfans.update(lead.handle, { status: 'rejected', reason: 'rejected by admin', checked_at: new Date().toISOString() }));
+  if (action === 'retry') return res.json(repo.onlyfans.update(lead.handle, { service, status: 'pending', reason: null, attempts: 0 }));
+  if (action === 'reject') return res.json(repo.onlyfans.update(lead.handle, { service, status: 'rejected', reason: 'rejected by admin', checked_at: new Date().toISOString() }));
   return bad(res, 'action must be retry or reject');
 });
 
@@ -367,7 +373,7 @@ router.post('/maintenance/sweep', async (req, res) => {
 });
 router.get('/maintenance/image-filter', async (req, res) => {
   const s = settingsStore.get();
-  res.json({ enabled: s.imageFilter, threshold: s.imageFilterThreshold, sweep: { enabled: s.imageSweep, perMinute: s.imageSweepPerTick, ...maintenance.imageSweepProgress() }, physique: { ...physique.stats(s), sweep: maintenance.physiqueSweepProgress() }, dedupe: { enabled: s.dedupe, distance: s.dedupeDistance, ...maintenance.hashSweepProgress() }, model: { available: await imagefilter.available(), ...imagefilter.status() } });
+  res.json({ enabled: s.imageFilter, threshold: s.imageFilterThreshold, sweep: { enabled: s.imageSweep, perMinute: s.imageSweepPerTick, ...maintenance.imageSweepProgress() }, physique: { ...physique.stats(s), sweep: maintenance.physiqueSweepProgress() }, dedupe: { enabled: s.dedupe, distance: s.dedupeDistance, ...maintenance.hashSweepProgress() }, thumbnails: { enabled: s.thumbnails, perMinute: s.thumbnailsPerMinute, ...require('../engine/thumbs').progress() }, model: { available: await imagefilter.available(), ...imagefilter.status() } });
 });
 router.post('/maintenance/physique-sweep', async (req, res) => {
   try {

@@ -4,9 +4,9 @@ import { parse, navigate } from '../../router.js';
 import { table, pager, toggle, platBadge, pageHead, act, kpi } from './ui.js';
 
 const STATUSES = [['pending', 'Waiting'], ['followed', 'Followed'], ['linked', 'Linked to a creator'], ['rejected', 'Rejected'], ['all', 'All']];
-const SIGNAL_LABEL = { identity: 'same name', mention: 'mentioned', cofollow: 'followed by', search: 'search', similar: 'looks like', hangout: 'creators post here', ofconfirmed: 'runs an OnlyFans page', onlyfans: 'same handle as an OnlyFans page' };
+const SIGNAL_LABEL = { identity: 'same name', mention: 'mentioned', cofollow: 'followed by', search: 'search', similar: 'looks like', hangout: 'creators post here', ofconfirmed: 'runs a paid page', onlyfans: 'same handle as a paid page' };
 // What each strategy found on the last run (keys of the run report).
-const STRATEGIES = [['mentions', 'Mentions'], ['graph', 'Bluesky follows'], ['lookalikes', 'Lookalikes'], ['people', 'People search'], ['communities', 'Communities & feeds'], ['hangouts', 'Where creators post'], ['topics', 'Web topics'], ['identity', 'Same-name search'], ['onlyfans', 'OnlyFans traced'], ['seeds', 'Named creators']];
+const STRATEGIES = [['mentions', 'Mentions'], ['graph', 'Bluesky follows'], ['lookalikes', 'Lookalikes'], ['people', 'People search'], ['communities', 'Communities & feeds'], ['hangouts', 'Where creators post'], ['topics', 'Web topics'], ['identity', 'Same-name search'], ['onlyfans', 'Paid pages traced'], ['seeds', 'Named creators']];
 const foundOf = (r) => (r ? (r.found !== undefined ? r.found : r.linked || 0) : null);
 const SCOPE = { in: ['good', 'male-focused'], uncertain: ['', 'unclear'], excluded: ['bad', 'off-topic'] };
 
@@ -14,8 +14,13 @@ const KIND_LABEL = { community: 'community', feedgen: 'custom feed', list: 'list
 const reach = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 100) / 10}k` : String(n));
 
 function signalChips(sig) {
+  const svcOf = (k, v) => {
+    if ((k !== 'ofconfirmed' && k !== 'onlyfans') || !Array.isArray(v) || !v[0] || !String(v[0]).includes(':')) return '';
+    const svc = String(v[0]).split(':')[0];
+    return ` · ${svc === 'JustFor.Fans' ? 'JFF' : svc}`;
+  };
   const chips = Object.entries(sig || {}).filter(([k, v]) => SIGNAL_LABEL[k] && Array.isArray(v) && v.length).map(([k, v]) =>
-    h('span', { class: `badge sig-${k}`, title: k === 'search' ? v.join('\n') : `${v.length} distinct source${v.length === 1 ? '' : 's'}` }, `${SIGNAL_LABEL[k]} ×${v.length}`));
+    h('span', { class: `badge sig-${k}`, title: k === 'search' ? v.join('\n') : `${v.length} distinct source${v.length === 1 ? '' : 's'}` }, `${SIGNAL_LABEL[k]}${svcOf(k, v)} ×${v.length}`));
   const pop = Number(sig && sig.popularity) || 0;
   if (pop) chips.push(h('span', { class: 'badge sig-reach', title: 'Audience: subscribers, followers or likes. Counts toward the score (log-scaled, up to +3).' }, icon('users', 'sm'), reach(pop)));
   return h('div', { class: 'row wrap', style: { gap: '4px' } }, chips);
@@ -28,7 +33,7 @@ function scoreBar(score, threshold) {
 
 export async function render(root) {
   const q = parse().query;
-  const f = { status: q.get('status') || 'pending', q: q.get('q') || '', sort: q.get('sort') || 'score', page: parseInt(q.get('page') || '0', 10) };
+  const f = { status: q.get('status') || 'pending', q: q.get('q') || '', sort: q.get('sort') || 'score', platform: q.get('platform') || '', page: parseInt(q.get('page') || '0', 10) };
   const set = (patch) => navigate('/admin/discovery', { ...f, ...patch }, { replace: true });
   const head = h('div'); const kpis = h('div', { class: 'kpis' }); const tableHost = h('div'); const tune = h('div'); const ofHost = h('div');
   const selected = new Set();
@@ -39,9 +44,11 @@ export async function render(root) {
 
   const search = h('input', { class: 'input sm', type: 'search', placeholder: 'Search candidates…', value: f.q, style: { maxWidth: '220px' } });
   search.addEventListener('input', debounce(() => set({ q: search.value.trim(), page: 0 }), 350));
+  const PLATFORMS = [['', 'All platforms'], ['bluesky', 'Bluesky'], ['reddit', 'Reddit'], ['redgifs', 'RedGIFs'], ['x', 'X'], ['telegram', 'Telegram'], ['mastodon', 'Mastodon'], ['misskey', 'Misskey'], ['lemmy', 'Lemmy'], ['tumblr', 'Tumblr'], ['peertube', 'PeerTube'], ['linkinbio', 'Link pages']];
   const bar = h('div', { class: 'toolbar' },
     h('div', { class: 'seg', role: 'group', 'aria-label': 'Status' }, STATUSES.map(([v, l]) => h('button', { class: f.status === v ? 'on' : '', onclick: () => set({ status: v, page: 0 }) }, l))),
     search,
+    h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Platform', onchange: (e) => set({ platform: e.target.value, page: 0 }) }, PLATFORMS.map(([v, l]) => h('option', { value: v, selected: f.platform === v }, l))),
     h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Sort', onchange: (e) => set({ sort: e.target.value }) }, [['score', 'Best score'], ['recent', 'Recently seen'], ['new', 'Newest']].map(([v, l]) => h('option', { value: v, selected: f.sort === v }, l))),
     h('span', { class: 'grow' }),
     h('button', { class: 'btn sm', onclick: (e) => bulk(e.currentTarget, 'follow') }, icon('check', 'sm'), 'Follow selected'),
@@ -128,9 +135,12 @@ export async function render(root) {
   }
 
   const OF_STATUS = { pending: ['', 'not traced yet'], searching: ['warn', 'nothing found yet'], found: ['good', 'accounts found'], claimed: ['info', 'followed creator'], rejected: ['bad', 'rejected'] };
+  const OF_HOSTS = { 'OnlyFans': 'onlyfans.com', 'Fansly': 'fansly.com', 'JustFor.Fans': 'justfor.fans' };
+  const pageHref = (l) => `https://${OF_HOSTS[l.service] || 'onlyfans.com'}/${l.handle}`;
+  const leadAction = (l, action) => adminPost(`/discovery/onlyfans/${encodeURIComponent(l.handle)}`, { action, service: l.service || 'OnlyFans' });
   async function loadOnlyFans() {
     const r = await adminGet('/discovery/onlyfans', { limit: 15 });
-    const paste = h('textarea', { class: 'textarea', rows: 3, spellcheck: 'false', placeholder: 'onlyfans.com/name or just the handle, one per line' });
+    const paste = h('textarea', { class: 'textarea', rows: 3, spellcheck: 'false', placeholder: 'onlyfans.com/name, fansly.com/name or justfor.fans/name — or just the handle, one per line' });
     const add = h('button', { class: 'btn sm primary', onclick: (e) => act(e.currentTarget, async () => {
       const out = await adminPost('/discovery/onlyfans', { handles: paste.value });
       toast(`${out.added} added${out.claimed ? ` · ${out.claimed} already followed` : ''}${out.invalid.length ? ` · ${out.invalid.length} not recognised` : ''}`, 'ok');
@@ -150,24 +160,27 @@ export async function render(root) {
     ofHost.replaceChildren(h('details', { class: 'panel', style: { marginTop: '14px' } },
       h('summary', null, h('b', null, 'OnlyFans creators'), h('span', { class: 'muted', style: { marginLeft: '10px', fontSize: '13px' } },
         `${fmt.int(c.creators)} followed creators have a page · ${fmt.int(c.pending + c.searching)} pages being traced · ${fmt.int(c.found)} traced to free accounts`)),
-      h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Pages named in posts, bios and web searches. Each is traced to the creator’s free public accounts, which then appear in the queue above with their score.'),
+      h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Pages named in posts, bios and web searches (OnlyFans, Fansly, JustFor.Fans — the paid hosts themselves are never read). Each is traced to the creator’s free public accounts, which then appear in the queue above with their score.'),
       h('div', { class: 'field' }, h('label', null, 'Creators to find by name (one per line). Each is looked up across every platform PRISM reads, two per discovery run, and re-checked monthly'), seeds,
         h('button', { class: 'btn sm', style: { marginTop: '8px' }, onclick: (e) => act(e.currentTarget, async () => { await adminPut('/settings', { creatorSeeds: seeds.value }); seedsText = seeds.value; toast('Saved: the next discovery run looks them up', 'ok'); }) }, 'Save names')),
       seedRows.length ? h('div', { style: { margin: '6px 0 14px' } }, seedRows) : null,
-      h('div', { class: 'field' }, h('label', null, 'OnlyFans pages to trace'), paste, h('div', { style: { marginTop: '8px' } }, add)),
+      h('div', { class: 'field' }, h('label', null, 'Paid pages to trace'), paste, h('div', { style: { marginTop: '8px' } }, add)),
       table([
-        { label: 'Page', render: (l) => h('div', { class: 'cell-stack' }, h('a', { href: `https://onlyfans.com/${l.handle}`, target: '_blank', rel: 'noopener noreferrer nofollow', style: { fontWeight: 600 } }, l.display_name || l.handle), h('span', { class: 'sub truncate', style: { maxWidth: '300px' }, title: l.bio || '' }, l.bio ? l.bio.slice(0, 100) : `@${l.handle}`)) },
+        { label: 'Page', render: (l) => h('div', { class: 'cell-stack' }, h('span', { class: 'row', style: { gap: '6px', alignItems: 'center' } },
+          h('a', { href: pageHref(l), target: '_blank', rel: 'noopener noreferrer nofollow', style: { fontWeight: 600 } }, l.display_name || l.handle),
+          l.service && l.service !== 'OnlyFans' ? h('span', { class: 'badge info' }, l.service === 'JustFor.Fans' ? 'JFF' : l.service) : null),
+          h('span', { class: 'sub truncate', style: { maxWidth: '300px' }, title: l.bio || '' }, l.bio ? l.bio.slice(0, 100) : `@${l.handle}`)) },
         { label: 'Named by', render: (l) => h('span', { class: 'sub' }, l.origin === 'search' ? 'web search' : l.origin === 'admin' ? 'you' : `${l.mentions} source${l.mentions === 1 ? '' : 's'}`, l.free ? h('span', { class: 'badge good', style: { marginLeft: '6px' } }, 'free') : null) },
         { label: 'Status', render: (l) => h('div', { class: 'cell-stack' }, h('span', { class: `badge ${OF_STATUS[l.status][0]}` }, OF_STATUS[l.status][1]),
           l.creator_handle ? h('a', { class: 'sub', href: `#/creator/${l.creator_id}` }, `@${l.creator_handle}`) : l.accounts.length ? h('span', { class: 'sub' }, l.accounts.map((a) => `${a.platform}${a.proven ? ' ✓' : ''}`).join(' · ')) : l.reason ? h('span', { class: 'sub' }, l.reason) : null) },
         { label: '', render: (l) => h('div', { class: 'actions' }, l.status !== 'claimed' ? [
-          h('button', { class: 'btn sm ghost', onclick: (e) => act(e.currentTarget, async () => { await adminPost(`/discovery/onlyfans/${encodeURIComponent(l.handle)}`, { action: 'retry' }); loadOnlyFans(); }) }, 'Retrace'),
-          l.status !== 'rejected' ? h('button', { class: 'btn sm ghost', onclick: (e) => act(e.currentTarget, async () => { await adminPost(`/discovery/onlyfans/${encodeURIComponent(l.handle)}`, { action: 'reject' }); loadOnlyFans(); }) }, 'Reject') : null] : null) },
+          h('button', { class: 'btn sm ghost', onclick: (e) => act(e.currentTarget, async () => { await leadAction(l, 'retry'); loadOnlyFans(); }) }, 'Retrace'),
+          l.status !== 'rejected' ? h('button', { class: 'btn sm ghost', onclick: (e) => act(e.currentTarget, async () => { await leadAction(l, 'reject'); loadOnlyFans(); }) }, 'Reject') : null] : null) },
       ], r.items, { empty: 'No OnlyFans pages seen yet. They are picked up from posts and bios as feeds sync, or paste some above.' })));
   }
 
   async function load() {
-    const [d, settings] = await Promise.all([adminGet('/discovery', { status: f.status, q: f.q, sort: f.sort, page: f.page, limit: 40 }), data ? Promise.resolve(null) : adminGet('/settings')]);
+    const [d, settings] = await Promise.all([adminGet('/discovery', { status: f.status, q: f.q, platform: f.platform || undefined, sort: f.sort, page: f.page, limit: 40 }), data ? Promise.resolve(null) : adminGet('/settings')]);
     data = d;
     if (settings) seedsText = settings.values.creatorSeeds || '';
     paintKpis(d); paintRun(d);

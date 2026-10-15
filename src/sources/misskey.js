@@ -158,6 +158,20 @@ module.exports = {
   kinds: ['user', 'tag'],
   intervalMin: { user: 180, tag: 120 },
   parseNote, detectSoftware, isMisskeyFamily, splitTarget,
+
+  /**
+   * People search: accounts whose username or name match, on one instance.
+   * `users/search-by-username` needs no sign-in on open servers; instances that gate it
+   * raise a skip error (reported on the feed, never fatal to discovery).
+   */
+  async searchUsers(q, host, limit = 10) {
+    const users = await api(host, 'users/search-by-username', { query: String(q || '').slice(0, 60), limit: Math.max(1, Math.min(30, limit)) });
+    return (Array.isArray(users) ? users : []).slice(0, limit).map((u) => ({
+      username: u.username, host: (u.host || host).toLowerCase(),
+      displayName: u.name || u.username, description: u.description || null,
+      avatar: u.avatarUrl || null, followers: u.followersCount || 0,
+    })).filter((u) => u.username);
+  },
   isConfigured: () => ({ ok: true, note: `Instances: ${config.misskeyInstances.join(', ')}` }),
 
   async fetch(feed, ctx) {
