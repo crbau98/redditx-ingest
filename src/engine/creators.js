@@ -9,7 +9,7 @@ const registry = require('../sources');
 const events = require('./events');
 const { checkText } = require('../lib/safety');
 const { femaleCheck } = require('../lib/scope');
-const { findOnlyFans, freeHint, ofLink } = require('../lib/onlyfans');
+const paid = require('../lib/paid');
 
 const LINKABLE_KINDS = new Set(['user', 'feed', 'page']);
 const MAX_LINKED_FEEDS_PER_CREATOR = 10;
@@ -52,9 +52,16 @@ function applyProfile(feed, profile, settings) {
   if (settings.autoLinkProfiles) for (const a of named.accounts) require('./discovery').consider(a, 'identity', creator.id, { creatorId: creator.id });
 
   const externals = [];
-  const free = freeHint(profile.bio);
+  const free = paid.freeHint(profile.bio);
   for (const l of profile.links || []) {
-    if (l.external && l.handle && l.service === 'OnlyFans') { externals.push(ofLink(l.handle, { free })); continue; }
+    if (l.external && l.handle && l.service && paid.SERVICES[l.service] && paid.SERVICES[l.service].trace) {
+      externals.push(paid.paidLink(l.service, l.handle, { free }));
+      continue;
+    }
+    if (l.external && l.handle && (!l.service || l.service === 'OnlyFans')) {
+      externals.push(paid.ofLink(l.handle, { free }));
+      continue;
+    }
     if (l.external) { externals.push({ platform: 'external', service: l.service, label: l.label, url: l.url }); continue; }
     if (!settings.autoLinkProfiles || !l.ingestable || !LINKABLE_KINDS.has(l.kind) || l.platform === 'web') continue;
     const adapter = registry.get(l.platform);
@@ -73,15 +80,19 @@ function applyProfile(feed, profile, settings) {
     physique.screenFeed(r);
     if (r.created) { out.linked++; events.log('INFO', `Linked ${l.platform}:${l.target} to ${creator.handle}`); }
   }
-  // "OnlyFans: @name" written out in the bio, with no link.
-  for (const handle of findOnlyFans(profile.bio)) if (!externals.some((e) => e.handle === handle)) externals.push(ofLink(handle, { free }));
+  // "OnlyFans: @name" / "Fansly: @name" / "JFF: @name" written out in the bio, with no link.
+  for (const { service, handle } of paid.findPaidHandles(profile.bio)) {
+    if (!externals.some((e) => e.handle === handle && (e.service || 'OnlyFans') === service)) {
+      externals.push(paid.paidLink(service, handle, { free }));
+    }
+  }
   if (externals.length) repo.creators.enrich(creator.id, { links: externals });
-  for (const e of externals) if (e.handle) repo.onlyfans.claim(e.handle, creator.id);
+  for (const e of externals) if (e.handle) repo.onlyfans.claim(e.handle, creator.id, e.service || 'OnlyFans');
   // Last, now nothing else will touch creator.id: merge him with any account the evidence says is the same man.
   const kept = require('./identity').settle(creator.id);
   if (kept !== creator.id) {
     out.mergedInto = kept;
-    for (const e of externals) if (e.handle) repo.onlyfans.claim(e.handle, kept);
+    for (const e of externals) if (e.handle) repo.onlyfans.claim(e.handle, kept, e.service || 'OnlyFans');
   }
   return out;
 }

@@ -16,10 +16,12 @@ export function createMasonry({ density = 'm', render }) {
   let heights = [];
   let colCount = 0;
   let colWidth = 0;
+  let lastWidth = 0;
   let cur = density;
 
-  const count = () => {
-    const w = el.clientWidth || el.parentElement?.clientWidth || window.innerWidth;
+  const measureWidth = (hint = 0) => Math.round(hint || el.clientWidth || el.parentElement?.clientWidth || window.innerWidth);
+
+  const count = (w = measureWidth()) => {
     const gap = GAP[cur];
     const min = (w < 640 ? MIN_COL_PHONE : MIN_COL)[cur];
     return Math.max(1, Math.min(8, Math.floor((w + gap) / (min + gap))));
@@ -30,10 +32,11 @@ export function createMasonry({ density = 'm', render }) {
     return colWidth * r; // the caption sits over the image (v4.16), so a card is exactly its media
   };
 
-  function build() {
+  function build(wHint = 0) {
     el.textContent = '';
-    colCount = count();
-    const w = el.clientWidth || window.innerWidth;
+    const w = measureWidth(wHint);
+    lastWidth = w;
+    colCount = count(w);
     colWidth = (w - (colCount - 1) * GAP[cur]) / colCount;
     cols = Array.from({ length: colCount }, () => h('div', { class: 'masonry-col' }));
     heights = new Array(colCount).fill(0);
@@ -41,6 +44,8 @@ export function createMasonry({ density = 'm', render }) {
   }
 
   function place(items) {
+    if (!items.length || !colCount) return;
+    const frags = cols.map(() => document.createDocumentFragment());
     for (const item of items) {
       let target = 0;
       for (let i = 1; i < colCount; i++) if (heights[i] < heights[target]) target = i;
@@ -48,14 +53,20 @@ export function createMasonry({ density = 'm', render }) {
       const card = render(item, cur);
       // the size a card stands in for while the browser skips rendering it off-screen (see app.css)
       card.style.containIntrinsicSize = `auto ${Math.round(est)}px`;
-      cols[target].appendChild(card);
+      frags[target].appendChild(card);
       heights[target] += est + GAP[cur];
+    }
+    for (let i = 0; i < colCount; i++) {
+      if (frags[i].childNodes.length) cols[i].appendChild(frags[i]);
     }
   }
 
-  const ro = 'ResizeObserver' in window ? new ResizeObserver(() => {
+  const ro = 'ResizeObserver' in window ? new ResizeObserver((entries) => {
     if (!el.isConnected) return;
-    if (count() !== colCount && all.length) { build(); place(all); }
+    const w = Math.round(entries[0]?.contentRect?.width || 0);
+    if (!w || w === lastWidth) return;
+    lastWidth = w;
+    if (count(w) !== colCount && all.length) { build(w); place(all); }
   }) : null;
   if (ro) ro.observe(el);
 
@@ -67,10 +78,10 @@ export function createMasonry({ density = 'm', render }) {
       all = all.concat(items);
       place(items);
     },
-    clear() { all = []; el.textContent = ''; cols = []; heights = []; },
+    clear() { all = []; el.textContent = ''; cols = []; heights = []; lastWidth = 0; },
     setDensity(d) {
       cur = d; el.className = `masonry density-${d}`;
-      if (all.length) { build(); place(all); }
+      if (all.length) { build(lastWidth); place(all); }
     },
     destroy() { if (ro) ro.disconnect(); },
   };

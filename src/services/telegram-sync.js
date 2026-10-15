@@ -34,7 +34,9 @@ async function sync({ autoFollow = config.telegram.autoFollow } = {}) {
     const list = await mt.dialogs();
     const res = { channels: list.length, created: 0, switchedOff: 0, skippedFemale: [], skippedBody: [], at: new Date().toISOString() };
     const bodyFilter = settingsStore.get().physiqueFilter === true;
+    const wantTrusted = config.telegram.trustJoined ? 1 : 0;
     const joined = new Set();
+    const createdIds = [];
     for (const d of list) {
       const target = targetOf(d);
       joined.add(target.toLowerCase());
@@ -53,11 +55,19 @@ async function sync({ autoFollow = config.telegram.autoFollow } = {}) {
       }
       if (!autoFollow) continue;
       if (repo.blocklist.has('creator', `telegram:${target.toLowerCase()}`)) continue;
-      const { created } = repo.feeds.upsert({
-        platform: 'telegram', kind: 'channel', target, label: d.title, trusted: config.telegram.trustJoined ? 1 : 0,
+      const { feed, created } = repo.feeds.upsert({
+        platform: 'telegram', kind: 'channel', target, label: d.title, trusted: wantTrusted,
         origin: 'telegram-sync', intervalMin: 120,
       });
-      if (created) res.created++;
+      if (created) {
+        res.created++;
+        if (feed && feed.id) createdIds.push(feed.id);
+      } else if (feed && feed.origin === 'telegram-sync' && Number(feed.trusted) !== wantTrusted) {
+        repo.feeds.update(feed.id, { trusted: wantTrusted });
+      }
+    }
+    if (createdIds.length) {
+      try { require('../engine/engine').enqueue(createdIds, { trigger: 'telegram-sync', front: false }); } catch { /* engine not running (tests) */ }
     }
     // channels the account left: stop polling them
     for (const f of repo.db.prepare("SELECT id, target FROM feeds WHERE platform = 'telegram' AND kind = 'channel' AND origin = 'telegram-sync' AND enabled = 1").all()) {

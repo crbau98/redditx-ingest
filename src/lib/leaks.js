@@ -44,9 +44,9 @@ const LEAK_TEXT = [
   /\b(?:leak|leaks|leaked)\s*(?:from\s*)?(?:his|my)?\s*OF\b/,
   /#(?:onlyfans|of|fansly|gay)?leaks?\b/i,
   /\bmega\s*(?:link|links|folder|pack|drive|collection)\b/i,
-  /\b(?:dm|message|msg)\s*(?:me\s*)?for\s*(?:the\s*)?(?:mega|links?|folder|leaks?|full\s*(?:vid|video)s?)\b/i,
-  /\b(?:paywall|onlyfans|fansly)\s*(?:bypass|free\s*access|unlocked?)\b/i,
-  /\b(?:full|entire)\s*(?:onlyfans|of|fansly)\s*(?:pack|collection|archive|siterip|rip)\b/i,
+  /\b(?:dm|message|msg)\s*(?:me\s*)?for\s*(?:the\s*)?(?:mega|folder|leaks?|leaked|siterip)\b/i,
+  /\b(?:paywall|onlyfans|fansly|justfor\.?fans)\s*bypass\b/i,
+  /(?<!\bmy\s)\b(?:full|entire)\s*(?:onlyfans|of|fansly|justfor\.?fans|jff)\s*(?:pack|archive|siterip|rip|dump|folder|mega)\b/i,
   /\bsite\s*-?\s*rip\b/i,
 ];
 
@@ -98,4 +98,4 @@ function checkItem(item) {
   return phrase ? { rule: `leak-text:${phrase}` } : null;
 }
 
-module.exports = { LEAK_DOMAINS, isLeakHost, isLeakUrl, leakText, checkItem };
+module.exports = { LEAK_DOMAINS, isLeakHost, isLeakUrl, leakText, isLeakText: (...args) => !!leakText(...args), checkItem };

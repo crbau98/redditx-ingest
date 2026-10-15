@@ -45,18 +45,31 @@ export async function api(path, { method = 'GET', body, admin = false, signal } 
  * Any write (POST) clears it, so likes/saves are never shown stale.
  */
 const CACHE_MS = 30000;
-const cache = new Map(); // url -> { at, promise }
+const cache = new Map(); // url -> { at, inflight, promise }
 const noCache = /^\/api\/(stream|admin|age|health)/;
+
+function cachedRead(key, run) {
+  const hit = cache.get(key);
+  if (hit && (hit.inflight || Date.now() - hit.at < CACHE_MS)) return hit.promise;
+  const entry = { at: Date.now(), inflight: true, promise: null };
+  const promise = run().then((d) => {
+    entry.at = Date.now();
+    entry.inflight = false;
+    return d;
+  }, (err) => {
+    if (cache.get(key) === entry) cache.delete(key);
+    throw err;
+  });
+  entry.promise = promise;
+  cache.set(key, entry);
+  if (cache.size > 250) cache.delete(cache.keys().next().value);
+  return promise;
+}
+
 export function get(path, query, opts) {
   const url = `${path}${qs(query)}`;
   if ((opts && (opts.signal || opts.fresh)) || noCache.test(path)) return api(url, opts);
-  const hit = cache.get(url);
-  if (hit && Date.now() - hit.at < CACHE_MS) return hit.promise.then((d) => structuredClone(d));
-  const promise = api(url, opts);
-  cache.set(url, { at: Date.now(), promise });
-  if (cache.size > 250) cache.delete(cache.keys().next().value);
-  promise.catch(() => { if (cache.get(url) && cache.get(url).promise === promise) cache.delete(url); });
-  return promise.then((d) => structuredClone(d));
+  return cachedRead(url, () => api(url, opts)).then((d) => structuredClone(d));
 }
 /**
  * A read that carries its question in a POST body (a follow list does not fit in a URL). Shares
@@ -66,16 +79,16 @@ export function query(path, body, opts) {
   const key = `POST ${path} ${JSON.stringify(body ?? {})}`;
   const run = () => api(path, { method: 'POST', body: body ?? {}, ...opts });
   if (opts && (opts.signal || opts.fresh)) return run();
-  const hit = cache.get(key);
-  if (hit && Date.now() - hit.at < CACHE_MS) return hit.promise.then((d) => structuredClone(d));
-  const promise = run();
-  cache.set(key, { at: Date.now(), promise });
-  if (cache.size > 250) cache.delete(cache.keys().next().value);
-  promise.catch(() => { if (cache.get(key) && cache.get(key).promise === promise) cache.delete(key); });
-  return promise.then((d) => structuredClone(d));
+  return cachedRead(key, run).then((d) => structuredClone(d));
 }
-/** Warm the cache for a likely next request (hover, idle time). Errors are ignored. */
-export function prefetch(path, query) { get(path, query).catch(() => {}); }
+/** Warm the cache for a likely next request (hover, idle time) without cloning or competing on slow links. */
+export function prefetch(path, query) {
+  const conn = typeof navigator !== 'undefined' && navigator.connection;
+  if (conn && (conn.saveData || /(^|-)2g$|^3g$/.test(conn.effectiveType || ''))) return;
+  const url = `${path}${qs(query)}`;
+  if (noCache.test(path)) return;
+  cachedRead(url, () => api(url)).catch(() => {});
+}
 export function clearApiCache() { cache.clear(); }
 // View pings and broken-media reports change nothing anyone sees; every other write may.
 export const post = (path, body, opts) => { if (!/\/(view|broken)$/.test(path)) cache.clear(); return api(path, { method: 'POST', body: body ?? {}, ...opts }); };

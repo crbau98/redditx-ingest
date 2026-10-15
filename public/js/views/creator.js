@@ -92,8 +92,9 @@ export async function creator(root, { params, query }) {
   const fresh = c.last_media_at && Date.now() - new Date(c.last_media_at).getTime() < 2 * 86400000;
   const headAvatar = avatar(c, 112);
   // His other paid pages (Fansly, JustFor.Fans…) as header buttons next to the OnlyFans one — link-outs, never fetched.
+  const paidTone = (l) => (/fansly/i.test(l.service || l.url || '') ? ' paid-cta fansly' : /justfor\.?fans|^jff$/i.test(l.service || l.url || '') ? ' paid-cta jff' : ' paid-cta');
   const paidCtas = (c.paid || []).filter((l) => l && l.url).slice(0, 2).map((l) =>
-    h('a', { class: 'btn', href: l.url, target: '_blank', rel: 'noopener noreferrer nofollow', title: l.url }, `${l.service === 'JustFor.Fans' ? 'JFF' : l.service || 'Paid page'}${l.free ? ' · free' : ''}`, icon('external', 'sm')));
+    h('a', { class: `btn${paidTone(l)}${l.free ? ' free' : ''}`, href: l.url, target: '_blank', rel: 'noopener noreferrer nofollow', title: l.url }, `${l.service === 'JustFor.Fans' ? 'JFF' : l.service || 'Paid page'}${l.free ? ' · free' : ''}`, icon('external', 'sm')));
   const head = h('div', { class: 'profile-head' },
     h('div', { class: `avatar-ring${fresh ? ' live' : ''}`, title: fresh ? `Posted ${fmt.ago(c.last_media_at)}` : null }, headAvatar),
     h('div', { class: 'profile-info' }, h('h1', null, c.display_name || c.handle, c.verified ? icon('verified', 'fill') : null), h('div', { class: 'creator-handle' }, `@${c.handle}`),

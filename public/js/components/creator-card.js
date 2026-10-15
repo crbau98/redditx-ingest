@@ -7,10 +7,13 @@ export function creatorCard(c, { mini = false, badge = null } = {}) {
   while (thumbs.length < 3) thumbs.push(null);
   const isNew = follows.has(c.id) && c.last_media_at && follows.seen(c.id) && c.last_media_at > follows.seen(c.id);
   // Cards name the paid page when there is no OnlyFans badge to carry it.
-  const paidBadge = !c.onlyfans && Array.isArray(c.paid)
-    ? (c.paid.some((l) => l && l.service === 'Fansly') ? ['Fansly', 'Has a Fansly page']
-      : c.paid.some((l) => l && l.service === 'JustFor.Fans') ? ['JFF', 'Has a JustFor.Fans page'] : null)
-    : null;
+  const fansly = !c.onlyfans && Array.isArray(c.paid) ? c.paid.find((l) => l && (l.service === 'Fansly' || /fansly\.com/i.test(l.url || ''))) : null;
+  const jff = !c.onlyfans && !fansly && Array.isArray(c.paid) ? c.paid.find((l) => l && (l.service === 'JustFor.Fans' || /justfor\.fans/i.test(l.url || ''))) : null;
+  const paidBadge = fansly
+    ? [fansly.free ? 'Fansly · Free' : 'Fansly', fansly.free ? 'Has a free Fansly page' : 'Has a Fansly page', `fansly${fansly.free ? ' free' : ''}`]
+    : jff
+      ? [jff.free ? 'JFF · Free' : 'JFF', jff.free ? 'Has a free JustFor.Fans page' : 'Has a JustFor.Fans page', `jff${jff.free ? ' free' : ''}`]
+      : null;
   return h('a', { class: `creator-card${mini ? ' mini' : ''}`, href: href(`/creator/${c.id}`), 'aria-label': c.display_name || c.handle, style: badge ? { position: 'relative' } : null },
     badge ? h('span', { class: 'rise' }, icon('trend', 'sm'), badge) : null,
     h('div', { class: 'creator-thumbs' }, thumbs.map((t) => h('div', { style: t ? { backgroundImage: `url("${proxied(t)}")` } : {} }))),
@@ -19,7 +22,7 @@ export function creatorCard(c, { mini = false, badge = null } = {}) {
       h('div', null,
         h('div', { class: 'creator-name' }, c.display_name || c.handle, c.verified ? icon('verified', 'fill') : null, isNew ? h('span', { class: 'badge good' }, 'New') : null,
           c.onlyfans ? h('span', { class: `badge of${c.onlyfans.free ? ' free' : ''}`, title: c.onlyfans.free ? 'Has a free OnlyFans page' : 'Has an OnlyFans page' }, c.onlyfans.free ? 'OF · Free' : 'OF') : null,
-          paidBadge ? h('span', { class: 'badge', title: paidBadge[1] }, paidBadge[0]) : null),
+          paidBadge ? h('span', { class: `badge ${paidBadge[2]}`, title: paidBadge[1] }, paidBadge[0]) : null),
         h('div', { class: 'creator-handle' }, `@${c.handle}`)),
       h('div', { class: 'creator-stats' },
         h('span', null, h('b', null, fmt.num(c.media_count)), ' posts'),

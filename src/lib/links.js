@@ -50,11 +50,50 @@ const EXTERNAL = {
   'grindr.com': 'Grindr',
 };
 
-const LINKINBIO = [
-  'linktr.ee', 'allmylinks.com', 'beacons.ai', 'carrd.co', 'solo.to', 'lnk.bio',
-  'bio.site', 'linkin.bio', 'hoo.be', 'campsite.bio', 'bio.link', 'direct.me',
-  'linkpop.com', 'withkoji.com', 'taplink.cc', 'msha.ke', 'stan.store',
+const LINK_HUB_HOSTS = [
+  'linktr.ee', 'beacons.ai', 'allmylinks.com', 'carrd.co', 'campsite.bio',
+  'solo.to', 'bento.me', 'direct.me', 'milkshake.app', 'msha.ke',
+  'hoo.be', 'snipfeed.co', 'lnk.bio', 'taplink.cc', 'bio.site',
+  'linkin.bio', 'bio.link', 'linkpop.com', 'withkoji.com', 'stan.store',
 ];
+const LINKINBIO = LINK_HUB_HOSTS;
+
+const LINK_HUB_RESERVED = new Set([
+  's', 'p', 'u', 'i', 'login', 'signup', 'register', 'about', 'pricing', 'terms',
+  'privacy', 'help', 'support', 'contact', 'blog', 'press', 'jobs', 'careers',
+  'admin', 'api', 'cdn', 'static', 'assets', 'explore', 'discover', 'marketplace',
+]);
+
+/** True when a URL or hostname points to a supported link-in-bio hub. */
+function isLinkHubUrl(input) {
+  if (!input) return false;
+  let u;
+  try { u = new URL(/^[a-z]+:\/\//i.test(String(input)) ? String(input) : `https://${input}`); } catch { return false; }
+  const h = host(u.hostname);
+  return LINK_HUB_HOSTS.some((lb) => matches(h, lb));
+}
+
+/** Extract the creator handle from a link-in-bio URL (e.g. `https://linktr.ee/foo` or `https://foo.carrd.co`). */
+function linkHubHandle(input) {
+  if (!input) return null;
+  let u;
+  try { u = new URL(/^[a-z]+:\/\//i.test(String(input)) ? String(input) : `https://${input}`); } catch { return null; }
+  const h = host(u.hostname);
+  const hub = LINK_HUB_HOSTS.find((lb) => matches(h, lb));
+  if (!hub) return null;
+  if (h !== hub && h.endsWith(`.${hub}`)) {
+    const sub = h.slice(0, -(hub.length + 1)).split('.')[0];
+    if (sub && sub !== 'www' && !LINK_HUB_RESERVED.has(sub) && /^[a-z0-9_.]{3,32}$/i.test(sub)) {
+      return sub.toLowerCase();
+    }
+  }
+  const parts = u.pathname.split('/').filter(Boolean);
+  let seg = parts[0] || '';
+  if ((seg === 'u' || seg === 'p' || seg === 's') && parts[1]) seg = parts[1];
+  seg = seg.replace(/^@/, '');
+  if (!seg || LINK_HUB_RESERVED.has(seg.toLowerCase()) || !/^[a-z0-9_.-]{3,32}$/i.test(seg)) return null;
+  return seg.toLowerCase();
+}
 
 const X_RESERVED = new Set([
   'i', 'home', 'intent', 'share', 'search', 'hashtag', 'explore', 'settings',
@@ -130,6 +169,7 @@ function parseProfile(input, hint = {}) {
     if (p === 'x') return out('x', 'user', m[1], { label: `@${m[1]}` });
     if (p === 'redgifs') return out('redgifs', 'user', m[1].toLowerCase(), { label: m[1] });
     if (p === 'reddit') return out('reddit', 'user', m[1], { label: `u/${m[1]}` });
+    if (p === 'telegram' && /^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(m[1])) return out('telegram', 'user', m[1], { label: `t.me/${m[1]}`, url: `https://t.me/${m[1]}` });
     return null; // ambiguous without a hint
   }
   m = raw.match(/^(UC[A-Za-z0-9_-]{10,40})$/);
@@ -265,8 +305,8 @@ function parseProfile(input, hint = {}) {
 function extractLinks(text) {
   const found = [];
   const seen = new Set();
-  // Full URLs, plus the bare "onlyfans.com/name" / "linktr.ee/name" people type into bios.
-  const urlRe = /(?:https?:\/\/|www\.)[^\s<>"')\]]+|(?<![\w./@-])(?:onlyfans\.com|fansly\.com|justfor\.fans|manyvids\.com|loyalfans\.com|fanvue\.com|fancentro\.com|clips4sale\.com|linktr\.ee|allmylinks\.com|beacons\.ai)\/[^\s<>"')\]]+/gi;
+  // Full URLs, plus the bare "onlyfans.com/name" / "linktr.ee/name" / "name.carrd.co" people type into bios.
+  const urlRe = /(?:https?:\/\/|www\.)[^\s<>"')\]]+|(?<![\w./@-])(?:(?:onlyfans\.com|fansly\.com|justfor\.fans|manyvids\.com|loyalfans\.com|fanvue\.com|fancentro\.com|clips4sale\.com|linktr\.ee|beacons\.ai|allmylinks\.com|carrd\.co|campsite\.bio|solo\.to|bento\.me|direct\.me|milkshake\.app|msha\.ke|hoo\.be|snipfeed\.co|lnk\.bio|taplink\.cc|bio\.site|linkin\.bio|bio\.link|linkpop\.com|withkoji\.com|stan\.store)\/[^\s<>"')\]]+|[a-z0-9_-]{3,32}\.carrd\.co(?:\/[^\s<>"')\]]*)?)/gi;
   for (const u of String(text || '').match(urlRe) || []) {
     const p = parseProfile(u);
     if (!p) continue;
@@ -289,7 +329,7 @@ function profileUrl(platform, kind, target) {
     }
     case 'misskey': { const [u, i] = String(target).split('@'); return i ? `https://${i}/@${u}` : null; }
     case 'redgifs': return kind === 'niche' ? `https://www.redgifs.com/niches/${target}` : `https://www.redgifs.com/users/${target}`;
-    case 'telegram': return `https://t.me/${target}`;
+    case 'telegram': return /^id:/i.test(String(target || '')) ? null : `https://t.me/${target}`;
     case 'mastodon': { const [u, i] = String(target).split('@'); return i ? `https://${i}/@${u}` : null; }
     case 'lemmy': { const [c, i] = String(target).split('@'); return i ? `https://${i}/c/${c}` : null; }
     case 'peertube': {
@@ -313,4 +353,4 @@ function profileUrl(platform, kind, target) {
   }
 }
 
-module.exports = { parseProfile, extractLinks, profileUrl, isMisskeyHost, isPeertubeHost, EXTERNAL, LINKINBIO };
+module.exports = { parseProfile, extractLinks, profileUrl, isMisskeyHost, isPeertubeHost, isLinkHubUrl, linkHubHandle, EXTERNAL, LINKINBIO, LINK_HUB_HOSTS };

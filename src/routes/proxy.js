@@ -26,6 +26,7 @@ const router = express.Router();
 const KNOWN_SUFFIXES = [
   'redd.it', 'redditmedia.com', 'imgur.com', 'redgifs.com', 'gfycat.com', 'twimg.com',
   'bsky.app', 'bsky.social', 'bsky.network',
+  'telesco.pe', 'telegram-cdn.org', 'cdn-telegram.org', 'telegram.org',
 ];
 const HLS_TYPES = /^(application\/(vnd\.apple\.mpegurl|x-mpegurl|octet-stream)|audio\/mpegurl|video\/mp2t)/i;
 

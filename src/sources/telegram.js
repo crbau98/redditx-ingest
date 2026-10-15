@@ -22,6 +22,7 @@ const store = require('../lib/objectstore');
 const config = require('../config');
 
 const bg = (style) => { const m = String(style || '').match(/url\((['"]?)(.*?)\1\)/); return m ? m[2] : null; };
+const absUrl = (u) => (u && u.startsWith('//') ? `https:${u}` : u || null);
 
 function parseCount(text) {
   const clean = String(text || '').trim().replace(/[\s,\u00a0\u2009\u202f]/g, '');
@@ -58,21 +59,22 @@ function parsePage(html, channel) {
     if (!id) return;
     const media = [];
     m.find('.tgme_widget_message_photo_wrap').each((_, a) => {
-      const url = bg($(a).attr('style'));
+      const url = absUrl(bg($(a).attr('style')));
       if (url) media.push({ type: 'image', url, preview: url });
     });
     // Grouped albums render additional photo wraps under a grouped container; the
     // selector above already matches them, but document attachments (GIFs saved
     // as documents, single-image docs) only expose a thumbnail <img>.
     m.find('.tgme_widget_message_document_wrap img, .tgme_widget_message_document_thumb img, a.tgme_widget_message_document_wrap img').each((_, img) => {
-      const url = $(img).attr('src') || $(img).attr('data-src');
+      const url = absUrl($(img).attr('src') || $(img).attr('data-src'));
       if (url && /^https?:\/\//i.test(url) && !media.some((x) => x.url === url)) media.push({ type: 'image', url, preview: url });
     });
     m.find('.tgme_widget_message_video_player, .tgme_widget_message_roundvideo_player').each((_, v) => {
-      const video = $(v).find('video').attr('src') || $(v).find('video').attr('data-src') || $(v).find('source').attr('src');
-      const thumb = bg($(v).find('.tgme_widget_message_video_thumb, .tgme_widget_message_roundvideo_thumb').attr('style')) || $(v).find('img').attr('src') || null;
+      const video = absUrl($(v).find('video').attr('src') || $(v).find('video').attr('data-src') || $(v).find('source').attr('src'));
+      const thumb = absUrl(bg($(v).find('.tgme_widget_message_video_thumb, .tgme_widget_message_roundvideo_thumb').attr('style')) || $(v).find('img').attr('src') || null);
       const dur = $(v).find('.message_video_duration').text().trim();
       if (video) media.push({ type: 'video', url: video, preview: thumb, duration: dur ? dur.split(':').reduce((a, n) => a * 60 + Number(n), 0) : null });
+      else if (thumb && !media.some((x) => x.url === thumb)) media.push({ type: 'image', url: thumb, preview: thumb });
     });
     if (!media.length) return;
     // "Forwarded from <channel>": the channel the post came from is a lead for discovery (engine followWaysIn)
@@ -92,20 +94,23 @@ function parsePage(html, channel) {
   const profile = {
     displayName: $('.tgme_channel_info_header_title').first().text().trim() || null,
     bio: desc || null,
-    avatarUrl: $('.tgme_page_photo_image img').attr('src') || $('.tgme_channel_info_header img').first().attr('src') || null,
+    avatarUrl: absUrl($('.tgme_page_photo_image img').attr('src') || $('.tgme_channel_info_header img').first().attr('src') || null),
     links: extractLinks(`${desc} ${hrefs}`),
   };
   const hasChannel = $('.tgme_channel_info, .tgme_header_title').length > 0 || messages.length > 0 || $('.tgme_widget_message').length > 0;
   return { messages, profile, hasChannel, minId: Math.min(...$('.tgme_widget_message[data-post]').map((_, e) => Number(($(e).attr('data-post') || '').split('/')[1]) || Infinity).get(), Infinity) };
 }
 
-function toItems(msg, channel) {
+function toItems(msg, channel, profile) {
   return msg.media.map((m, i) => ({
     sourceId: `${channel}/${msg.id}`,
     position: i,
     title: clip(msg.text, 300),
     text: clip(msg.text, 400),
     author: channel,
+    authorName: (profile && profile.displayName) || null,
+    authorBio: (profile && profile.bio) || null,
+    community: channel,
     score: msg.views ? Math.round(msg.views / 20) : 0,
     postedAt: msg.date,
     permalink: msg.link,
@@ -217,13 +222,13 @@ async function fetchChannel(feed, ctx) {
   const entity = await mt.entityOf(target);
   const ch = {
     id: String(entity.id), username: entity.username || null, title: entity.title || feed.label || target, target,
-    trusted: !!feed.trusted, about: null,
+    trusted: !!feed.trusted, about: cur.about || null,
   };
   let profile;
   if (ctx.needProfile || !cur.profiled) {
     try {
       const p = await mt.profile(target);
-      ch.about = p.about;
+      ch.about = p.about || ch.about;
       let avatarUrl = null;
       if (p.avatar) { try { const k = `tg/${ch.id}/avatar.jpg`; await store.put(k, p.avatar, 'image/jpeg'); avatarUrl = store.urlFor(k); } catch { /* no avatar */ } }
       profile = { displayName: p.title, bio: p.about, avatarUrl, links: extractLinks(p.about || '') };
@@ -265,9 +270,28 @@ async function fetchChannel(feed, ctx) {
   if (!done && backfilled < maxBackfill) notes.unshift(`backfilling history (${backfilled}/${maxBackfill} older messages read)`);
   return {
     items, profile, via: 'mtproto',
-    cursor: { newestId, oldestId, done, backfilled, profiled: true },
+    cursor: { newestId, oldestId, done, backfilled, profiled: true, ...(ch.about ? { about: String(ch.about).slice(0, 500) } : {}) },
     notes,
     skipped,
+  };
+}
+
+async function lookupChannel(target) {
+  const channel = String(target || '').replace(/^@/, '');
+  if (!channel) return null;
+  if (bot.configured()) {
+    const info = await bot.channelInfo(channel);
+    if (info) return info;
+  }
+  const webBase = (config.baseUrls && config.baseUrls.telegramWeb) || 'https://t.me';
+  const html = await http.text(`${webBase}/s/${encodeURIComponent(channel)}`, { headers: { accept: 'text/html' }, maxBytes: 3_000_000 });
+  const parsed = parsePage(html, channel);
+  if (!parsed.hasChannel) return null;
+  return {
+    username: channel,
+    title: (parsed.profile && parsed.profile.displayName) || channel,
+    description: (parsed.profile && parsed.profile.bio) || '',
+    members: 0,
   };
 }
 
@@ -277,7 +301,7 @@ module.exports = {
   color: '#26a5e4',
   kinds: ['user', 'channel'], // user: a public channel through its web preview; channel: a channel the logged-in account joined (MTProto)
   intervalMin: { user: 240, channel: 120 },
-  parsePage, toItems, parseCount, messageToItem, fetchChannel, forwardHandle, mtForward,
+  parsePage, toItems, parseCount, messageToItem, fetchChannel, forwardHandle, mtForward, lookupChannel,
   isConfigured: (kind) => {
     if (kind === 'channel') {
       const c = mt.configured();
@@ -291,18 +315,20 @@ module.exports = {
   async fetch(feed, ctx) {
     if (feed.kind === 'channel') return fetchChannel(feed, ctx);
     const channel = String(feed.target).replace(/^@/, '');
+    const webBase = (config.baseUrls && config.baseUrls.telegramWeb) || 'https://t.me';
     const cursor = ctx.cursor || {};
     const items = [];
     let newestId = cursor.newestId || 0;
     let before = null;
     let profile;
+    let pageProfile = null;
     const maxPages = cursor.newestId ? 5 : 3;
     // Incremental runs keep paging until they reach a known post: the first page
     // only holds ~20 messages, so a busy channel can publish more than a page
     // between runs (240 min interval) and the excess would otherwise be skipped.
     for (let page = 0; page < maxPages; page++) {
       if (ctx.aborted()) break;
-      const html = await http.text(`https://t.me/s/${encodeURIComponent(channel)}${before ? `?before=${before}` : ''}`, { headers: { accept: 'text/html' }, maxBytes: 3_000_000 });
+      const html = await http.text(`${webBase}/s/${encodeURIComponent(channel)}${before ? `?before=${before}` : ''}`, { headers: { accept: 'text/html' }, maxBytes: 3_000_000 });
       const parsed = parsePage(html, channel);
       if (!parsed.hasChannel || (!parsed.messages.length && page === 0 && !/tgme_widget_message/.test(html))) {
         // With a bot token we can at least tell "doesn't exist" from "exists but hides its preview".
@@ -314,21 +340,28 @@ module.exports = {
         }
         throw Object.assign(new Error(why), { status: 404 });
       }
-      if (page === 0 && (ctx.needProfile || !cursor.newestId)) {
-        profile = parsed.profile;
-        // The bot API returns the full channel description (the preview truncates it) — more links to follow.
-        if (bot.configured()) {
-          const info = await bot.channelInfo(channel).catch(() => null);
-          if (info && info.description) profile = { ...profile, bio: profile.bio || info.description, displayName: profile.displayName || info.title, links: [...(profile.links || []), ...extractLinks(info.description)] };
+      if (page === 0) {
+        pageProfile = parsed.profile;
+        if (ctx.needProfile || !cursor.newestId) {
+          profile = parsed.profile;
+          // The bot API returns the full channel description (the preview truncates it) — more links to follow.
+          if (bot.configured()) {
+            const info = await bot.channelInfo(channel).catch(() => null);
+            if (info && info.description) profile = { ...profile, bio: profile.bio || info.description, displayName: profile.displayName || info.title, links: [...(profile.links || []), ...extractLinks(info.description)] };
+          }
+          pageProfile = profile;
         }
       }
       let reachedKnown = false;
+      let addedOnPage = 0;
       for (const msg of parsed.messages.sort((a, b) => b.id - a.id)) {
+        if (before !== null && msg.id >= before) continue;
         if (msg.id > newestId) newestId = msg.id;
         if (cursor.newestId && msg.id <= cursor.newestId && !ctx.force) { reachedKnown = true; continue; }
-        items.push(...toItems(msg, channel));
+        items.push(...toItems(msg, channel, pageProfile));
+        addedOnPage++;
       }
-      if (reachedKnown || !Number.isFinite(parsed.minId)) break;
+      if (reachedKnown || !addedOnPage || !Number.isFinite(parsed.minId) || (before !== null && parsed.minId >= before)) break;
       before = parsed.minId;
     }
     return { items, cursor: newestId ? { newestId } : undefined, profile, via: 'web-preview' };

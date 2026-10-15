@@ -21,7 +21,7 @@ const store = require('./objectstore');
 /** Platforms whose stream links the proxy refreshes on demand (see sources/index.js refreshMedia). */
 const REFRESHABLE = new Set(['redgifs', 'x']);
 const SIGNED_PARAM = /^(expires?|x-amz-expires|x-amz-signature|x-amz-credential|signature|sig|token|oe|oh|_nc_sid|hdnts|hdnea|validto|policy|key-pair-id|exp|e|st)$/i;
-const EXPIRING_HOSTS = ['fbcdn.net', 'cdninstagram.com', 'tiktokcdn.com', 'tiktokcdn-us.com', 'snapchat.com', 'discordapp.net', 'discordapp.com', 'cdn.discordapp.com'];
+const EXPIRING_HOSTS = ['fbcdn.net', 'cdninstagram.com', 'tiktokcdn.com', 'tiktokcdn-us.com', 'snapchat.com', 'discordapp.net', 'discordapp.com', 'cdn.discordapp.com', 'telesco.pe', 'telegram-cdn.org', 'cdn-telegram.org'];
 const VIDEO_TYPE = /^video\/(mp4|webm|quicktime|x-m4v)$/i;
 // CDNs and S3 buckets often serve videos as a generic binary (or with no type at all): those are kept when the first bytes
 // are a video container (ISO-BMFF "ftyp" for mp4/mov/m4v, EBML for webm), and stored under the type the bytes show.

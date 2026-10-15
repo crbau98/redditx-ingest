@@ -164,6 +164,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     stats.fetched = items.length;
 
     // the fetch can take a while: profile decisions read the body filter's settings as they are now (see physique.live)
+    const hadCreator = !!feed.creator_id;
     if (result.profile) applyProfile(feed, result.profile, { ...cfg, liveBody: true });
     if (result.discoveredFeed && feed.creator_id && cfg.autoLinkProfiles) {
       const d = result.discoveredFeed;
@@ -199,6 +200,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
       }
     };
     await Promise.all(Array.from({ length: Math.min(ITEM_CONCURRENCY, items.length) }, worker));
+    if (result.profile && !hadCreator && feed.creator_id) applyProfile(feed, result.profile, { ...cfg, liveBody: true });
 
     for (const id of touched) repo.creators.refreshStats(id);
     if (feed.creator_id) repo.creators.refreshStats(feed.creator_id);

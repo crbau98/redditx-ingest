@@ -308,6 +308,72 @@ describe('joined channels: sync + ingestion', () => {
     assert.equal(got.items[0].permalink, 'https://t.me/c/200/10'); assert.equal(got.items[0].author, 'c200'); assert.equal(got.items[0].authorName, 'Secret Club');
   });
 
+  test('MTProto channel with disk store fallback links creator to channel feed without spawning a broken c<id> user feed', async () => {
+    const savedStore = { ...config.store };
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-tg-disk-'));
+    const savedDir = config.dataDir;
+    config.store.kind = 'disk';
+    config.store.endpoint = '';
+    config.store.bucket = '';
+    config.dataDir = dir;
+    try {
+      assert.equal(tg.isConfigured('channel').ok, true, 'channel isConfigured works with disk store fallback');
+      const feed = repo.feeds.get(repo.db.prepare("SELECT id FROM feeds WHERE target = 'id:200'").get().id);
+      repo.feeds.update(feed.id, { enabled: true });
+      const got = await tg.fetch(feed, { limit: 40, cursor: {}, aborted: () => false });
+      imagefilter._setAnalyzer(async () => ({ status: 'ok', faces: [{ gender: 'male', score: 0.9, confidence: 0.9 }] }));
+      const r = await pipeline.processItem(got.items[0], repo.feeds.get(feed.id), tg, settings);
+      assert.equal(r.outcome, 'added', JSON.stringify(r));
+      const updatedFeed = repo.feeds.get(feed.id);
+      assert.ok(updatedFeed.creator_id, 'channel feed is linked to its creator');
+      const bogusUserFeed = repo.feeds.find('telegram', 'user', 'c200');
+      assert.equal(bogusUserFeed, null, 'no broken user feed created for private channel c200');
+    } finally {
+      imagefilter._reset();
+      Object.assign(config.store, savedStore);
+      config.dataDir = savedDir;
+    }
+  });
+
+  test('public t.me/s web preview ingests short-caption posts end-to-end using channel profile context and trusted CDN hosts', async () => {
+    const html = `
+      <div class="tgme_channel_info">
+        <div class="tgme_channel_info_header_title">Gay Muscle Hub</div>
+        <div class="tgme_channel_info_description">Fit male athletes &amp; jocks · https://fansly.com/gaymusclehub</div>
+      </div>
+      <div class="tgme_widget_message" data-post="gaymusclehub/42">
+        <a class="tgme_widget_message_photo_wrap" style="background-image:url('//cdn4.telesco.pe/file/test42.jpg')"></a>
+        <div class="tgme_widget_message_text">🔥</div>
+        <a class="tgme_widget_message_date" href="https://t.me/gaymusclehub/42"><time datetime="2026-10-14T12:00:00Z"></time></a>
+        <span class="tgme_widget_message_views">1.2K</span>
+      </div>
+    `;
+    const webSrv = http.createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(html);
+    });
+    await new Promise((r) => webSrv.listen(0, '127.0.0.1', r));
+    const savedWeb = config.baseUrls.telegramWeb;
+    config.baseUrls.telegramWeb = `http://127.0.0.1:${webSrv.address().port}`;
+    try {
+      const feed = repo.feeds.upsert({ platform: 'telegram', kind: 'user', target: 'gaymusclehub', trusted: 0, origin: 'discovered' }).feed;
+      const fetched = await tg.fetch(feed, { limit: 20, cursor: { newestId: 10 }, force: false, needProfile: false, aborted: () => false });
+      assert.equal(fetched.items.length, 1);
+      assert.equal(fetched.items[0].mediaUrl, 'https://cdn4.telesco.pe/file/test42.jpg', 'protocol-relative URL normalized');
+      assert.equal(fetched.items[0].authorName, 'Gay Muscle Hub', 'channel title attached even on incremental runs');
+      assert.match(fetched.items[0].authorBio, /Fit male athletes/);
+      imagefilter._setAnalyzer(async () => ({ status: 'ok', faces: [{ gender: 'male', score: 0.9, confidence: 0.9 }] }));
+      const strictSettings = { probeUnknownHosts: true, hostReachability: true, scopeMode: 'strict', untrustedUnclear: 'drop', imageFilter: false, dedupe: false };
+      const res = await pipeline.processItem(fetched.items[0], feed, tg, strictSettings);
+      assert.equal(res.outcome, 'added', JSON.stringify(res));
+    } finally {
+      imagefilter._reset();
+      config.baseUrls.telegramWeb = savedWeb;
+      webSrv.closeAllConnections?.();
+      await new Promise((r) => webSrv.close(r));
+    }
+  });
+
   test('not configured / dead session: clear messages, not crashes', async () => {
     mt._setFactory(null);
     assert.equal(tg.isConfigured('channel').ok, false);

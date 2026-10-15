@@ -29,7 +29,7 @@
 
 /* ---------- viewer: phone dock, immersive tap, drag-to-dismiss -------------- */
 .lb-actions { display: contents; }
-.lb-top, .lb-actions, .lb-ambient { transition: opacity .22s, transform .22s; }
+.lb-top, .lb-actions, .lb-ambient { transition: opacity var(--dur-base) var(--spring-glide), transform var(--dur-base) var(--spring-glide); }
 .lb.chrome-off .lb-top, .lb.chrome-off .lb-actions, .lb.chrome-off .lb-strip { opacity: 0; pointer-events: none; }
 .lb.dragging { background: rgba(4, 4, 7, calc(.96 - var(--drag, 0) * .9)); }
 .lb.dragging .lb-ambient.on { opacity: calc(.95 - var(--drag, 0)); }
@@ -77,7 +77,7 @@
 .follow-rail::-webkit-scrollbar { display: none; }
 .follow-chip { position: relative; flex: none; display: grid; justify-items: center; gap: 7px; width: 76px; scroll-snap-align: start; color: var(--text-2, var(--text)); text-decoration: none; border-radius: 14px; }
 .follow-chip:focus-visible { outline: none; box-shadow: var(--ring, 0 0 0 2px var(--accent)); }
-.follow-ring { display: grid; place-items: center; width: 66px; height: 66px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--line-strong); transition: transform .2s var(--ease); }
+.follow-ring { display: grid; place-items: center; width: 66px; height: 66px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--line-strong); transition: transform var(--dur-base) var(--spring-snap); }
 .follow-chip.has-new .follow-ring { background: var(--grad); box-shadow: none; }
 .follow-chip.has-new .follow-ring .avatar { box-shadow: 0 0 0 3px var(--bg); }
 .follow-chip:hover .follow-ring { transform: scale(1.05); }
@@ -141,8 +141,9 @@
 .ps { display: grid; gap: 10px; margin: 12px 0; min-width: 0; }
 .ps-pills { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding: 4px; margin: -4px; scroll-snap-type: x proximity; }
 .ps-pills::-webkit-scrollbar { display: none; }
-.ps-pill { flex: none; display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; scroll-snap-align: start; transition: background .15s, border-color .15s, color .15s; }
-.ps-pill:hover { border-color: var(--line-strong); background: var(--surface-2); }
+.ps-pill { flex: none; display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--raise, none), var(--surface); box-shadow: var(--hi, none); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; scroll-snap-align: start; transition: background-color var(--dur-quick), border-color var(--dur-quick), color var(--dur-quick), transform var(--dur-base) var(--spring-snap); }
+.ps-pill:hover { border-color: var(--line-strong); background: var(--raise, none), var(--surface-2); }
+.ps-pill:active { transform: scale(.96); }
 .ps-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .ps-pill.on { background: var(--text); color: var(--bg); border-color: var(--text); }
 .ps-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c, #94a3b8); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c, #94a3b8) 25%, transparent); }
@@ -155,15 +156,18 @@
   .ps-paid::-webkit-scrollbar { display: none; }
   .ps-card { flex: none; width: min(230px, 72vw); scroll-snap-align: start; }
 }
-.ps-card { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 12px; border-radius: 12px; border: 1px solid var(--line); background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 9%, var(--surface)), var(--surface)); color: var(--text); min-width: 0; }
-.ps-card:hover, .ps-card:focus-visible { border-color: var(--line-strong); }
+.ps-card { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 12px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--paid-c, var(--accent)) 28%, var(--line)); background: var(--raise, none), linear-gradient(135deg, color-mix(in srgb, var(--paid-c, var(--accent)) 11%, var(--surface)), var(--surface)); box-shadow: var(--hi, none); color: var(--text); min-width: 0; transition: border-color var(--dur-quick), transform var(--dur-base) var(--spring-snap); }
+.ps-card.of { --paid-c: var(--of, #00aff0); }
+.ps-card.fansly { --paid-c: var(--fansly, #1da1f2); }
+.ps-card.jff { --paid-c: var(--jff, #a855f7); }
+.ps-card:hover, .ps-card:focus-visible { border-color: color-mix(in srgb, var(--paid-c, var(--accent)) 55%, var(--line-strong)); transform: translateY(-1px); }
 .ps-card-txt { display: grid; min-width: 0; }
 .ps-card-txt b, .ps-card-txt small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ps-card-txt small { color: var(--muted); }
 .ps-card-meta { margin-left: auto; display: flex; align-items: center; gap: 6px; flex: none; }
 .ps-price { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .ps-card > svg { color: var(--muted); flex: none; }
-@media (prefers-reduced-motion: reduce) { .ps-pill { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .ps-pill, .ps-card { transition: none; } }
 
 /* ---- Viewer dock labels (phones): icon + word under the thumb ---- */
 .lb-lab { display: none; }

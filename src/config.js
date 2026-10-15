@@ -119,6 +119,7 @@ module.exports = {
     xEmbed: env.X_EMBED_URL || 'https://cdn.syndication.twimg.com',
     brave: env.BRAVE_BASE_URL || 'https://api.search.brave.com',
     telegramBot: env.TELEGRAM_BOT_BASE_URL || 'https://api.telegram.org',
+    telegramWeb: String(env.TELEGRAM_WEB_BASE_URL || 'https://t.me').replace(/\/+$/, ''),
     keenable: env.KEENABLE_BASE_URL || 'https://api.keenable.ai/mcp',
     // Tumblr's global tag feeds (blog feeds live on <blog>.tumblr.com or the blog's own domain).
     tumblr: String(env.TUMBLR_BASE_URL || 'https://www.tumblr.com').replace(/\/+$/, ''),

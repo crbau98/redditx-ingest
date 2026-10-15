@@ -18,11 +18,15 @@ const registry = require('../sources');
 const repo = require('../db/repo');
 const config = require('../config');
 const websearch = require('../lib/websearch');
+const brave = require('../lib/brave');
 const imagefilter = require('../lib/imagefilter');
-const { parseProfile, extractLinks, profileUrl } = require('../lib/links');
+const { parseProfile, extractLinks, profileUrl, linkHubHandle } = require('../lib/links');
 const { checkText } = require('../lib/safety');
+const leaks = require('../lib/leaks');
+const takedowns = require('../lib/takedowns');
 const { femaleCheck, classify } = require('../lib/scope');
 const { ofLink } = require('../lib/onlyfans');
+const paid = require('../lib/paid');
 const events = require('./events');
 
 const PROBE_TIMEOUT_MS = 18000;
@@ -66,7 +70,7 @@ function nameSimilarity(query, ...fields) {
 /** Split what was typed into a display name and handle guesses. */
 function parseQuery(input) {
   const raw = String(input || '').trim().slice(0, 200);
-  const out = { raw, name: null, handles: [], spec: null };
+  const out = { raw, name: null, handles: [], spec: null, externalSpec: null };
   if (!raw) return out;
   const spec = registry.parseInput(raw);
   if (spec && !spec.external && (spec.kind === 'user' || (spec.kind === 'channel' && spec.platform === 'youtube')) && spec.platform !== 'rss') {
@@ -75,6 +79,20 @@ function parseQuery(input) {
     if (spec.kind === 'user') out.handles.push(h);
     out.name = h;
     return out;
+  }
+  if (spec && spec.external) {
+    const h = spec.handle
+      || (spec.service ? paid.paidHandle(spec.service, raw) : null)
+      || (() => { try { return (new URL(/^[a-z]+:\/\//i.test(raw) ? raw : `https://${raw}`).pathname.split('/').filter(Boolean)[0] || '').replace(/^@/, ''); } catch { return ''; } })();
+    if (h && /^[A-Za-z0-9_.\-]{2,40}$/.test(h)) {
+      out.externalSpec = spec;
+      out.handles.push(h.toLowerCase());
+      const stripped = h.toLowerCase().replace(/[_.\-]+/g, '');
+      if (stripped !== h.toLowerCase() && stripped.length >= 3) out.handles.push(stripped);
+      out.name = h;
+      out.handles = out.handles.slice(0, MAX_VARIANTS);
+      return out;
+    }
   }
   const bare = raw.replace(/^@/, '').replace(/^u\//i, '');
   const ws = words(bare);
@@ -118,6 +136,7 @@ class Pool {
     if (!['user', 'page'].includes(spec.kind) && !(spec.kind === 'channel' && spec.platform === 'youtube')) return null; // a person's accounts, not communities / searches
     if (spec.platform === 'web' || spec.platform === 'rss') return null;
     if (spec.platform === 'linkinbio' && spec.kind !== 'page') return null;
+    if (takedowns.checkHandle(spec.target, spec.platform) || (spec.url && takedowns.checkUrl(spec.url))) return null;
     const k = keyOf(spec);
     let c = this.map.get(k);
     if (!c) {
@@ -238,47 +257,126 @@ async function searchPeople(q, pl, notes, deadline) {
   await pool(tasks, 3, deadline);
 }
 
-async function searchWeb(q, pl, notes) {
-  if (!websearch.configured()) { notes.push({ platform: 'web', step: 'web search', ok: false, note: 'no web search configured (BRAVE_API_KEY or SEARXNG_URL)' }); return null; }
+async function searchWeb(q, pl, notes, mediaHits = [], webLinks = []) {
   const term = (q.name || q.raw).replace(/"/g, '');
-  const queries = [`"${term}" (onlyfans OR twitter OR bluesky OR reddit OR redgifs OR telegram OR linktree OR tumblr)`, `"${term}" gay creator links`];
-  if (q.handles[0] && compact(q.handles[0]) !== compact(term)) queries.unshift(`"${q.handles[0]}" (onlyfans OR twitter OR bluesky OR reddit OR redgifs OR linktree)`);
-  // Site-restricted searches find the profile pages themselves (where the bio lives), which general results bury.
+  const canWebSearch = websearch.configured();
+  const canDdg = !config.isTest || !!process.env.DDG_BASE_URL || brave.configured();
+  if (!canWebSearch && !canDdg) {
+    notes.push({ platform: 'web', step: 'web search', ok: false, note: 'no web search configured (BRAVE_API_KEY or SEARXNG_URL)' });
+    return null;
+  }
+
+  const queries = [`"${term}" (onlyfans OR fansly OR "justfor.fans" OR twitter OR bluesky OR reddit OR redgifs OR telegram OR linktree OR tumblr)`, `"${term}" gay creator links`];
+  if (q.handles[0] && compact(q.handles[0]) !== compact(term)) queries.unshift(`"${q.handles[0]}" (onlyfans OR fansly OR "justfor.fans" OR twitter OR bluesky OR reddit OR redgifs OR linktree)`);
   const jobs = queries.slice(0, 3).map((query) => ({ query }));
   for (const site of ['linktr.ee', 'bsky.app', 'x.com']) jobs.push({ query: `"${term}"`, site });
   let provider = null;
+  const seenWeb = new Set();
+  const seenMedia = new Set();
+
+  const ingestResultSpecs = (r, sourceLabel = 'web-search') => {
+    if (!r || !r.url) return;
+    const text = `${r.title || ''} ${r.description || ''}`;
+    if (leaks.isLeakUrl(r.url) || leaks.isLeakText(text) || takedowns.checkUrl(r.url)) return;
+    if (checkText(r.title, r.description).level === 'block') return;
+    const specs = [parseProfile(r.url), ...extractLinks(text)].filter(Boolean);
+    for (const spec of specs) {
+      const handle = spec.platform === 'linkinbio' ? (linkHubHandle(spec.target) || (() => { try { return new URL(spec.target).pathname.split('/').filter(Boolean)[0] || ''; } catch { return ''; } })()) : String(spec.target).split('@')[0];
+      const sim = Math.max(nameSimilarity(term, handle), nameSimilarity(term, (r.title || '').split(/[(|•·\-–]/)[0]));
+      const mentions = compact(text).includes(compact(term)) || words(term).every((w) => compact(text).includes(w));
+      if (sim < 0.5 && !(mentions && spec.url === r.url)) continue;
+      pl.add(spec, { source: sourceLabel, evidence: `web search: ${(r.title || r.url).slice(0, 70)}`, displayName: (r.title || '').split(/[(|•·\-–]/)[0].trim() || null, bio: r.description });
+    }
+    if (!seenWeb.has(r.url) && !brave.isPaywalledHost(r.url)) {
+      seenWeb.add(r.url);
+      webLinks.push({ url: r.url, title: r.title || null, description: r.description || null });
+    }
+  };
+
   for (const { query, site } of jobs) {
     try {
-      const results = await websearch.search(query, { count: 20, budget: 200, site });
-      provider = results.provider || provider;
-      for (const r of results) {
-        const text = `${r.title} ${r.description}`;
-        const specs = [parseProfile(r.url), ...extractLinks(text)].filter(Boolean);
-        for (const spec of specs) {
-          const handle = spec.platform === 'linkinbio' ? (() => { try { return new URL(spec.target).pathname.split('/').filter(Boolean)[0] || ''; } catch { return ''; } })() : String(spec.target).split('@')[0];
-          const sim = Math.max(nameSimilarity(term, handle), nameSimilarity(term, r.title.split(/[(|•·\-–]/)[0]));
-          // A result page about the person (name in the title / snippet) is evidence; a stray link is not.
-          const mentions = compact(text).includes(compact(term)) || words(term).every((w) => compact(text).includes(w));
-          if (sim < 0.5 && !(mentions && spec.url === r.url)) continue;
-          pl.add(spec, { source: 'web-search', evidence: `web search: ${(r.title || r.url).slice(0, 70)}`, displayName: (r.title || '').split(/[(|•·\-–]/)[0].trim() || null, bio: r.description });
-        }
-        // OnlyFans & co: kept as profile links, never ingested
+      let results;
+      if (canWebSearch) {
+        results = await websearch.search(query, { count: 20, budget: 200, site });
+        provider = results.provider || provider;
+      } else {
+        results = await brave.web(site ? `${query} site:${site}` : query, { count: 20, budget: 200 });
+        provider = provider || (brave.configured() ? 'brave' : 'ddg');
       }
+      for (const r of results) ingestResultSpecs(r, 'web-search');
       notes.push({ platform: 'web', step: `web search (${provider || '?'})`, ok: true });
-    } catch (e) { notes.push({ platform: 'web', step: 'web search', ok: false, note: e.message }); if (e.skip || e.budget) break; }
+    } catch (e) {
+      if (canDdg && (e.skip || e.budget)) {
+        try {
+          const fallbackHits = await brave.ddgWeb(site ? `${query} site:${site}` : query, { count: 20 });
+          provider = provider || 'ddg';
+          for (const r of fallbackHits) ingestResultSpecs(r, 'web-search');
+          notes.push({ platform: 'web', step: 'web search (ddg)', ok: true });
+          continue;
+        } catch { /* fall through */ }
+      }
+      notes.push({ platform: 'web', step: 'web search', ok: false, note: e.message });
+      if (e.skip || e.budget) break;
+    }
   }
+
+  // Enrich lookup with public web image & video appearances (Brave Images/Videos + DDG fallback)
+  if (canDdg) {
+    const mediaQuery = q.handles[0] ? `"${q.handles[0]}"` : `"${term}"`;
+    const pushMediaHit = (hit) => {
+      if (!hit || !hit.url) return;
+      const text = `${hit.title || ''} ${hit.description || ''}`;
+      if (leaks.isLeakUrl(hit.url) || leaks.isLeakUrl(hit.mediaUrl) || leaks.isLeakText(text)) return;
+      if (brave.isPaywalledHost(hit.url) || brave.isPaywalledHost(hit.mediaUrl)) return;
+      if (takedowns.checkUrl(hit.url) || (hit.mediaUrl && takedowns.checkUrl(hit.mediaUrl))) return;
+      if (checkText(hit.title, hit.description).level === 'block') return;
+      if (femaleCheck(hit.title, hit.description).level === 'hard') return;
+      const key = hit.mediaUrl || hit.url;
+      if (seenMedia.has(key)) return;
+      seenMedia.add(key);
+      const parsed = parseProfile(hit.pageUrl || hit.url);
+      if (parsed && !parsed.external && parsed.ingestable) {
+        ingestResultSpecs({ url: hit.pageUrl || hit.url, title: hit.title || '', description: hit.description || '' }, 'media-search');
+      }
+      mediaHits.push({
+        url: hit.url,
+        pageUrl: hit.pageUrl || hit.url,
+        mediaUrl: hit.mediaUrl || hit.imageUrl || hit.url,
+        thumbnailUrl: hit.thumbnailUrl || hit.imageUrl || null,
+        type: hit.type || 'image',
+        title: hit.title || null,
+        source: hit.source || null,
+        platform: parsed && !parsed.external ? parsed.platform : 'web',
+      });
+    };
+
+    try {
+      const [imgs, vids] = await Promise.all([
+        brave.images(mediaQuery, { count: 10, budget: 200 }).catch(() => []),
+        brave.videos(mediaQuery, { count: 10, budget: 200 }).catch(() => []),
+      ]);
+      for (const h of imgs || []) pushMediaHit(h);
+      for (const h of vids || []) pushMediaHit(h);
+    } catch { /* best effort */ }
+  }
+
   return provider;
 }
 
 /** Everything external a verified candidate links to (paid pages, tip jars...): shown and stored, never read. */
 function externalLinksOf(c) {
-  const paid = require('../lib/paid');
   const out = [];
+  const free = paid.freeHint(c.bio);
   for (const l of c.links || []) {
     if (!l.external) continue;
-    if (l.handle && l.service && paid.SERVICES[l.service] && paid.SERVICES[l.service].trace) out.push(paid.paidLink(l.service, l.handle));
-    else if (l.handle && (!l.service || l.service === 'OnlyFans')) out.push(ofLink(l.handle));
+    if (l.handle && l.service && paid.SERVICES[l.service] && paid.SERVICES[l.service].trace) out.push(paid.paidLink(l.service, l.handle, { free }));
+    else if (l.handle && (!l.service || l.service === 'OnlyFans')) out.push(ofLink(l.handle, { free }));
     else out.push({ platform: 'external', service: l.service, label: l.label, url: l.url });
+  }
+  for (const { service, handle } of paid.findPaidHandles(c.bio)) {
+    if (paid.SERVICES[service] && paid.SERVICES[service].trace && !out.some((e) => e.handle === handle && (e.service || 'OnlyFans') === service)) {
+      out.push(paid.paidLink(service, handle, { free }));
+    }
   }
   return out;
 }
@@ -296,20 +394,24 @@ async function lookup(input, { imageCheck = true } = {}) {
   const unsafe = checkText(q.raw);
   if (unsafe.level === 'block') return { error: 'That search is not allowed' };
   if (femaleCheck(q.raw).level === 'hard') return { error: 'PRISM only follows male creators' };
+  if (takedowns.checkHandle(q.raw) || takedowns.checkUrl(q.raw)) return { error: 'This creator has requested a takedown / opt-out' };
 
   const pl = new Pool();
   const notes = [];
+  const mediaHits = [];
+  const webLinks = [];
 
   // 1 + 2: direct probes and searches in parallel
   const direct = directSpecs(q).map((spec) => async () => {
     const c = pl.add(spec, { source: 'direct', evidence: `handle “${String(spec.target).split('@')[0]}” on ${(registry.get(spec.platform) || {}).label || spec.platform}`, handleExact: true });
+    if (!c) return false;
     const ok = await verify(c);
     if (!ok) pl.map.delete(keyOf(c)); // a guessed handle that does not exist is not a candidate
     return ok;
   });
   const searches = [
     () => searchPeople(q, pl, notes, deadline),
-    () => searchWeb(q, pl, notes).then((p) => { q.provider = p; }),
+    () => searchWeb(q, pl, notes, mediaHits, webLinks).then((p) => { q.provider = p; }),
   ];
   await pool([...searches, ...direct], CONCURRENCY, deadline);
 
@@ -340,10 +442,32 @@ async function lookup(input, { imageCheck = true } = {}) {
   // 4: score, gate, annotate
   const hidden = { safety: 0, notMale: 0, unverified: 0 };
   const externals = [];
+  if (q.externalSpec) {
+    if (q.externalSpec.handle && q.externalSpec.service && paid.SERVICES[q.externalSpec.service] && paid.SERVICES[q.externalSpec.service].trace) {
+      externals.push(paid.paidLink(q.externalSpec.service, q.externalSpec.handle));
+    } else if (q.externalSpec.handle) {
+      externals.push(ofLink(q.externalSpec.handle));
+    }
+  }
+  const paidByCandidate = new Map();
+  const paidCounts = new Map();
+  for (const c of pl.list()) {
+    const ext = externalLinksOf(c);
+    paidByCandidate.set(c, ext);
+    if (c.verified) {
+      for (const l of ext) {
+        if (l.handle) {
+          const pk = `${l.service || 'OnlyFans'}:${l.handle}`;
+          paidCounts.set(pk, (paidCounts.get(pk) || 0) + 1);
+        }
+      }
+    }
+  }
   const out = [];
   for (const c of pl.list()) {
-    if (c.platform === 'linkinbio') { externals.push(...externalLinksOf(c)); continue; }
-    externals.push(...externalLinksOf(c));
+    const cExt = paidByCandidate.get(c) || [];
+    if (c.platform === 'linkinbio') { externals.push(...cExt); continue; }
+    externals.push(...cExt);
     if (!c.verified) { hidden.unverified++; continue; }
     const text = [c.target, c.label, c.displayName, c.bio];
     if (checkText(...text).level === 'block') { hidden.safety++; continue; }
@@ -351,10 +475,15 @@ async function lookup(input, { imageCheck = true } = {}) {
     const sc = classify(text, { trusted: true });
     const handle = String(c.target).split('@')[0];
     const sim = Math.max(nameSimilarity(q.raw, handle, c.displayName), q.handles.length ? Math.max(...q.handles.map((h) => nameSimilarity(h, handle))) : 0);
+    const paidMatch = cExt.some((l) => l.handle && (
+      (q.externalSpec && q.externalSpec.handle === l.handle)
+      || q.handles.some((h) => compact(h) === compact(l.handle))
+      || (paidCounts.get(`${l.service || 'OnlyFans'}:${l.handle}`) || 0) >= 2
+    ));
     const independent = c.sources.size;
-    let conf = 0.12 + 0.5 * sim + (c.handleExact ? 0.08 : 0) + (c.sources.has('bio-link') ? 0.22 : 0) + (c.sources.has('web-search') ? 0.08 : 0) + (c.sources.has('people-search') ? 0.06 : 0)
+    let conf = 0.12 + 0.5 * sim + (c.handleExact ? 0.08 : 0) + (c.sources.has('bio-link') || paidMatch ? 0.22 : 0) + (c.sources.has('web-search') ? 0.08 : 0) + (c.sources.has('people-search') ? 0.06 : 0)
       + (independent > 1 ? 0.06 * (independent - 1) : 0) + (c.sampleCount ? 0.07 : 0) + (c.followers >= 100 ? 0.03 : 0);
-    if (sim < 0.4 && !c.sources.has('bio-link')) conf = Math.min(conf, 0.4);
+    if (sim < 0.4 && !c.sources.has('bio-link') && !paidMatch) conf = Math.min(conf, 0.4);
     conf = Math.max(0.05, Math.min(0.99, conf));
     const existing = repo.feeds.find(c.platform, c.kind, c.target);
     const blocked = repo.blocklist.has('creator', `${c.platform}:${String(c.target).toLowerCase()}`);
@@ -381,7 +510,21 @@ async function lookup(input, { imageCheck = true } = {}) {
   const seenExt = new Set();
   const externalLinks = externals.filter((l) => { const k = l.url; if (seenExt.has(k)) return false; seenExt.add(k); return true; }).slice(0, 12);
   const searched = [...new Set(directSpecs(q).map((s) => s.platform))];
-  const result = { query: q.raw, name: q.name, handles: q.handles, candidates: visible, externalLinks, hidden, notes, searched, webSearch: q.provider || null, ms: Date.now() - started };
+  const result = {
+    query: q.raw,
+    name: q.name,
+    handles: q.handles,
+    candidates: visible,
+    accounts: visible,
+    externalLinks,
+    mediaHits: mediaHits.slice(0, 24),
+    webLinks: webLinks.slice(0, 24),
+    hidden,
+    notes,
+    searched,
+    webSearch: q.provider || null,
+    ms: Date.now() - started,
+  };
   events.log('INFO', `Lookup "${q.raw}": ${visible.length} account(s) (${visible.filter((c) => c.tier === 'strong').length} strong) in ${result.ms} ms`);
   return result;
 }
@@ -414,6 +557,7 @@ function follow({ name, selections, externalLinks = [], bio, creatorId = null } 
     if (femaleCheck(s.target, s.label).level === 'hard') { rejected.push({ ...s, reason: 'not male-focused' }); continue; }
     if (checkText(s.target, s.label).level === 'block') { rejected.push({ ...s, reason: 'safety' }); continue; }
     if (repo.blocklist.has('creator', `${s.platform}:${String(s.target).toLowerCase()}`)) { rejected.push({ ...s, reason: 'blocklisted' }); continue; }
+    if (takedowns.checkHandle(s.target, s.platform)) { rejected.push({ ...s, reason: 'takedown' }); continue; }
     accepted.push({ platform: s.platform, kind, target: String(s.target), label: s.label });
   }
   if (!accepted.length) return { error: 'Nothing to follow', rejected };
@@ -464,4 +608,4 @@ async function findAndFollow(input, { minConfidence = 0.7 } = {}) {
   return { ...found, followed };
 }
 
-module.exports = { lookup, follow, findAndFollow, parseQuery, nameSimilarity, directSpecs, dice };
+module.exports = { lookup, run: lookup, follow, findAndFollow, searchWeb, parseQuery, nameSimilarity, directSpecs, dice };

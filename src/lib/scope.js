@@ -19,6 +19,7 @@
  *   - untrusted (open searches / hashtags): a positive male signal is required, otherwise 'uncertain'.
  */
 const { normalize } = require('./safety');
+const { findPaidHandles } = require('./paid');
 
 // Whole-word male signals, two strengths.
 //   STRONG  words that say "this is about men" and that female-focused posts do not use for themselves.
@@ -26,7 +27,9 @@ const { normalize } = require('./safety');
 //           them constantly, so on their own they never make an item male-focused for an open (untrusted) feed.
 const MALE_STRONG = new RegExp(
   '\\b(?:gay[a-z0-9]*|male|males|men|man|manly|guy|guys|dude|dudes|twinks?|bears?|otters?|jocks?|jockstraps?|daddy|daddies|hunks?|' +
-  'm4m|m4a|dilf|dilfs|hombres?|homme|hommes|homem|homens|maenner|schwul|gai|gei|bofe|hairy men|menofmastodon|malenude)\\b' +
+  'm4m|m4a|mlm|dilf|dilfs|hombres?|homme|hommes|homem|homens|maenner|schwul|gai|gei|bofe|hairy men|menofmastodon|malenude|' +
+  'justfor\\.?fans|he\\s*\\/\\s*him|his\\s*\\/\\s*him|gym\\s*(?:bros?|lads?|guys?)|frat\\s*(?:boys?|bros?|guys?)|' +
+  'muscle\\s*(?:gods?|cubs?|bulls?|studs?|boys?|pups?|bros?|lads?))\\b' +
   '|[\\[(]\\s*m\\s*[\\])]',
 );
 const MALE_WEAK = /\b(?:cocks?|dicks?|bulges?|abs|pecs|beard|bearded|bf|boyfriend|husband|hubby|hung|studs?|bros?|boys?|lads?|dads?|muscles?|muscular)\b/;
@@ -117,8 +120,10 @@ function classify(texts, { trusted = false, screen = [] } = {}) {
   const text = toText(flat);
   const split = toText(flat.map(splitCamel));
   const cjk = MALE_SUBSTR.some((w) => text.includes(w));
-  const strongMale = MALE_STRONG.test(text) || MALE_STRONG.test(split) || cjk;
-  const male = strongMale || MALE_WEAK.test(text) || MALE_WEAK.test(split);
+  const weakMale = MALE_WEAK.test(text) || MALE_WEAK.test(split);
+  const hasPaidPage = weakMale && findPaidHandles(flat.join(' \n ')).length > 0;
+  const strongMale = MALE_STRONG.test(text) || MALE_STRONG.test(split) || cjk || hasPaidPage;
+  const male = strongMale || weakMale;
   const f = femaleCheck([...flat, ...[].concat(screen || []).flat(Infinity).filter(Boolean)]);
   if (f.level === 'hard') return { scope: 'excluded', male, strongMale, female: true, femaleSoft: false, rule: f.rule };
   if (f.level === 'soft') {

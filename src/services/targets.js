@@ -145,7 +145,7 @@ function importTargets(text, { hint } = {}) {
 /** Public-safe list of a creator's account links. */
 function publicAccounts(creatorId) {
   return repo.feeds.list({ creatorId, limit: 50 }).items
-    .filter((f) => f.kind === 'user' || (f.kind === 'channel' && f.platform === 'youtube') || (f.kind === 'feed' && f.platform === 'rss'))
+    .filter((f) => f.kind === 'user' || (f.kind === 'channel' && (f.platform === 'youtube' || f.platform === 'telegram')) || (f.kind === 'feed' && f.platform === 'rss'))
     .map((f) => ({ platform: f.platform, label: f.label || f.target, url: profileUrl(f.platform, f.kind, f.target) }))
     .filter((a) => a.url);
 }

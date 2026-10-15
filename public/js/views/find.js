@@ -1,8 +1,17 @@
 import { h, icon, avatar, emptyState } from '../dom.js';
 import { post } from '../api.js';
 import { navigate, href } from '../router.js';
+import { platformLabel, platformColor } from '../store.js';
 
 const EXAMPLES = ['Christian Hogue', '@jakipz', 'https://bsky.app/profile/jakipz.bsky.social', 'https://www.youtube.com/@GymGuy', 'UC_x5XG1OV2P6uZZ5FSM9Ttw'];
+
+const paidKind = (l) => {
+  const s = `${l.service || ''} ${l.label || ''} ${l.url || ''}`.toLowerCase();
+  if (s.includes('onlyfans')) return ['of', 'OnlyFans'];
+  if (s.includes('fansly')) return ['fansly', 'Fansly'];
+  if (s.includes('justfor.fans') || s.includes('justforfans') || /\bjff\b/.test(s)) return ['jff', 'JFF'];
+  return ['', l.service || 'Paid'];
+};
 
 /** Public Find-a-creator: name, handle or any public link → verified accounts → follow as one creator. */
 export async function find(root, { query }) {
@@ -56,9 +65,11 @@ export async function find(root, { query }) {
     return h('div', { class: 'card find-cand' },
       h('div', { class: 'row', style: { gap: '10px', alignItems: 'center' } },
         avatar({ avatar_url: c.avatarUrl, display_name: c.displayName || c.target }, 40),
-        h('div', { style: { minWidth: 0 } },
+        h('div', { style: { minWidth: 0, flex: '1' } },
           h('div', { class: 'find-cand-name' }, c.displayName || c.target, ' ', h('span', { class: 'badge good' }, icon('check', 'sm'), 'Verified')),
-          h('div', { class: 'muted sm truncate' }, `${c.platform} · ${c.target}`))),
+          h('div', { class: 'find-cand-sub' },
+            h('span', { class: 'badge plat', style: { '--c': platformColor(c.platform) } }, platformLabel(c.platform)),
+            h('span', { class: 'muted sm truncate' }, c.target)))),
       c.bio ? h('p', { class: 'muted sm find-cand-bio' }, String(c.bio).slice(0, 160)) : null,
       ev.length ? h('ul', { class: 'find-ev' }, ev.map((e) => h('li', null, icon('check', 'sm'), h('span', null, e)))) : null,
       sample ? h('a', { class: 'find-sample', href: sampleUrl, target: '_blank', rel: 'noopener noreferrer nofollow' },
@@ -115,8 +126,12 @@ export async function find(root, { query }) {
       if (ext.length) {
         out.append(h('section', { class: 'find-paid', 'aria-label': 'Paid pages' },
           h('div', { class: 'muted sm' }, 'Paid pages open on the creator’s own site — PRISM never fetches inside them:'),
-          h('div', { class: 'row wrap', style: { gap: '8px', marginTop: '8px' } }, ext.map((l) =>
-            h('a', { class: 'linkchip ext', href: l.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, icon('external', 'sm'), String(l.label || l.url).slice(0, 60))))));
+          h('div', { class: 'row wrap', style: { gap: '8px', marginTop: '8px' } }, ext.map((l) => {
+            const [tone, tag] = paidKind(l);
+            return h('a', { class: `linkchip ext${tone ? ` paid-pill ${tone}` : ''}`, href: l.url, target: '_blank', rel: 'noopener noreferrer nofollow' },
+              tone ? h('span', { class: `badge ${tone}${l.free ? ' free' : ''}` }, l.free ? `${tag} · Free` : tag) : null,
+              icon('external', 'sm'), String(l.label || l.url).slice(0, 60));
+          }))));
       }
     } else {
       out.append(

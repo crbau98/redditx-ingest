@@ -253,17 +253,35 @@ async function boot() {
   initTilt();
   initRails($('#app'));
   // Hover (or touch) on a creator link warms the profile request, so the click opens instantly.
+  // Pointer hover waits a brief 65ms intent window so fast cursor sweeps across a grid never fire a storm of prefetches.
   const warmed = new Map();
-  const warmCreator = (e) => {
-    const a = e.target && e.target.closest ? e.target.closest('a[href^="#/creator/"]') : null;
-    if (!a) return;
+  let hoverTimer = 0;
+  let hoverLink = null;
+  const fireWarm = (a) => {
     const id = a.getAttribute('href').slice('#/creator/'.length).split(/[?/]/)[0];
     if (!id || Date.now() - (warmed.get(id) || 0) < 25000) return;
     warmed.set(id, Date.now());
     prefetch(`/api/creators/${id}`);
   };
-  document.addEventListener('pointerover', warmCreator, { passive: true });
-  document.addEventListener('touchstart', warmCreator, { passive: true });
+  document.addEventListener('pointerover', (e) => {
+    const a = e.target && e.target.closest ? e.target.closest('a[href^="#/creator/"]') : null;
+    if (a === hoverLink) return;
+    clearTimeout(hoverTimer);
+    hoverLink = a;
+    if (!a) return;
+    hoverTimer = setTimeout(() => { if (hoverLink === a) fireWarm(a); }, 65);
+  }, { passive: true });
+  document.addEventListener('pointerout', (e) => {
+    if (!hoverLink) return;
+    const rel = e.relatedTarget;
+    if (rel && rel.closest && rel.closest('a[href^="#/creator/"]') === hoverLink) return;
+    clearTimeout(hoverTimer);
+    hoverLink = null;
+  }, { passive: true });
+  document.addEventListener('touchstart', (e) => {
+    const a = e.target && e.target.closest ? e.target.closest('a[href^="#/creator/"]') : null;
+    if (a) fireWarm(a);
+  }, { passive: true });
   window.addEventListener('hashchange', () => render(shell));
   await render(shell);
   wireFollowBadges();

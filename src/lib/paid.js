@@ -126,9 +126,12 @@ function pageUrl(service, handle) {
 }
 /** Does this text link the exact paid page (the profile-link proof)? */
 function pageLinked(service, text, handle) {
-  if (service === 'OnlyFans') return findOnlyFans(text).includes(String(handle).toLowerCase());
+  const want = String(handle || '').toLowerCase();
+  if (!want) return false;
+  if (service === 'OnlyFans' && findOnlyFans(text).includes(want)) return true;
+  if (findPaidHandles(text).some((p) => p.service === service && p.handle === want)) return true;
   const host = PAID_HOSTS[service];
-  return !!host && String(text || '').toLowerCase().includes(`${host}/${String(handle).toLowerCase()}`);
+  return !!host && String(text || '').toLowerCase().includes(`${host}/${want}`);
 }
 
 /** The external-link object stored on a creator for a paid page. */
