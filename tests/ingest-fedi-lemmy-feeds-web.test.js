@@ -65,7 +65,7 @@ before(async () => {
   brave = await start({
     '/res/v1/web/search': (req, res, url) => {
       state.braveCalls.push({ token: req.headers['x-subscription-token'], accept: req.headers.accept, q: url.searchParams.get('q') });
-      if (url.searchParams.get('q') === 'badkey') return { status: 422, json: { error: 'SUBSCRIPTION_TOKEN_INVALID' } };
+      if (url.searchParams.get('q') === 'badkey') return { status: 401, json: { error: 'SUBSCRIPTION_TOKEN_INVALID' } };
       if (url.searchParams.get('q') === 'quota') return { status: 429, headers: { 'x-ratelimit-remaining': '1, 0', 'x-ratelimit-reset': '1, 99999' }, json: {} };
       if (state.brave429-- > 0) return { status: 429, headers: { 'x-ratelimit-remaining': '0, 900', 'x-ratelimit-reset': '1, 99999' }, json: {} };
       return { json: { web: { results: [{ url: 'https://bsky.app/profile/zed.bsky.social', title: 'Zed <strong>bsky</strong>', description: 'x' }, { title: 'no url' }] } } };
