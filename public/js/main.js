@@ -10,7 +10,7 @@ import { openTakedownForm } from './components/report.js';
 import { openMenu } from './components/menu.js';
 import { dropFeedStash } from './components/feed.js';
 import { attachSuggest } from './components/suggest.js';
-import { primeEager } from './components/card.js';
+import { dur, sharedMotionBusy, spring } from './components/transitions.js';
 import { smartSearch } from './smart.js';
 import { home } from './views/home.js';
 import { explore } from './views/explore.js';
@@ -178,6 +178,36 @@ function setNav(key) {
   }
 }
 
+/* --------------------------------------------------------- route motion */
+// A short opacity + translate on <main>. Skipped for Reels/Galaxy (a transform on main
+// becomes the containing block of their fixed layer) and while a shared-element flight
+// is measuring, so this never fights transitions.js.
+function routeMotionBlocked() {
+  return document.body.classList.contains('reels-mode')
+    || document.body.classList.contains('galaxy-mode')
+    || window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    || sharedMotionBusy();
+}
+
+async function routeMotionExit(main) {
+  if (!main || typeof main.animate !== 'function' || routeMotionBlocked() || !main.childElementCount) return;
+  main.getAnimations().forEach((a) => a.cancel());
+  const anim = main.animate(
+    [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(-8px)' }],
+    { duration: dur('quick'), easing: spring('glide'), fill: 'forwards' },
+  );
+  try { await anim.finished; } catch { /* a newer route cancelled it */ }
+  anim.cancel();
+}
+
+function routeMotionEnter(main) {
+  if (!main) return;
+  main.classList.remove('view-enter');
+  if (routeMotionBlocked()) return;
+  void main.offsetWidth;
+  main.classList.add('view-enter');
+}
+
 /* ----------------------------------------------------------------- router */
 async function render(shell) {
   const p = parse();
@@ -188,6 +218,8 @@ async function render(shell) {
   if (currentKey) scrollMemory.set(currentKey, window.scrollY);
   currentKey = key;
   const fresh = freshNav; freshNav = false;
+  await routeMotionExit(shell.main);
+  if (token !== renderToken) return;
   if (cleanup) { try { cleanup(); } catch (e) { console.error(e); } cleanup = null; }
   // after cleanup: tearing the old page down stashes its feed, which a fresh start must not reuse
   if (fresh) { scrollMemory.delete(key); dropFeedStash(key); }
@@ -197,14 +229,13 @@ async function render(shell) {
   setNav(match.route.nav);
   if (p.path === '/explore') shell.searchInput.value = p.query.get('q') || '';
   else if (p.path !== '/') shell.searchInput.value = '';
-  shell.main.classList.remove('view-enter'); void shell.main.offsetWidth; shell.main.classList.add('view-enter');
-  primeEager(6);
   visits.touch();
   document.title = 'PRISM — Discover male creators';
   try {
     const result = await match.route.view(shell.main, { params: match.params, query: p.query });
     if (token !== renderToken) { if (typeof result === 'function') result(); return; }
     cleanup = typeof result === 'function' ? result : null;
+    routeMotionEnter(shell.main);
     // Back from a creator or a search lands where you were: feeds rebuild from their stash
     // synchronously (see feed.js), so the old scroll position exists again by now.
     const y = scrollMemory.get(key);

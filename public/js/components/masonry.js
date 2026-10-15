@@ -3,6 +3,10 @@ import { h } from '../dom.js';
 const MIN_COL = { s: 150, m: 215, l: 310 };
 const MIN_COL_PHONE = { s: 100, m: 155, l: 330 }; // phones: dense/cozy = 3/2 columns, large = 1
 const GAP = { s: 8, m: 14, l: 16 };
+// Beyond the card bitmap release (~2400px): shells this far from the viewport drop their live
+// card DOM and keep only a height spacer, so a long feed does not hold hundreds of nodes.
+const WINDOW_PX = 3600;
+const STAGGER_CAP = 8;
 
 /**
  * Shortest-column masonry driven by known aspect ratios, so appending a page
@@ -32,7 +36,61 @@ export function createMasonry({ density = 'm', render }) {
     return colWidth * r; // the caption sits over the image (v4.16), so a card is exactly its media
   };
 
+  const motionOk = () => !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    && !(navigator.connection && navigator.connection.saveData);
+
+  function tag(node, item, est) {
+    node._masonryItem = item;
+    node._est = est;
+  }
+
+  function restore(shell, { focus = false } = {}) {
+    if (!shell.isConnected || !shell.classList.contains('card-parked') || !shell._masonryItem) return;
+    const fresh = render(shell._masonryItem, cur, { eager: false });
+    fresh.style.containIntrinsicSize = shell.style.containIntrinsicSize;
+    tag(fresh, shell._masonryItem, shell._est);
+    if (windowIo) windowIo.unobserve(shell);
+    shell.replaceWith(fresh);
+    if (windowIo) windowIo.observe(fresh);
+    if (focus) {
+      const next = fresh.querySelector('a, button');
+      if (next) next.focus({ preventScroll: true });
+    }
+  }
+
+  function park(card) {
+    if (!card || !card.isConnected || card.classList.contains('card-parked') || !card._masonryItem) return;
+    if (card.contains(document.activeElement)) return;
+    const item = card._masonryItem;
+    const px = Math.round(card.offsetHeight || card._est || 240);
+    const shell = h('article', {
+      class: `card card-parked${card.classList.contains('compact') ? ' compact' : ''}`,
+      dataset: { id: item.id },
+      tabindex: '0',
+      'aria-label': item.title || 'Load post',
+      style: { height: `${px}px`, containIntrinsicSize: card.style.containIntrinsicSize || `auto ${px}px` },
+    });
+    tag(shell, item, card._est || px);
+    shell.addEventListener('focus', () => restore(shell, { focus: true }));
+    if (windowIo) windowIo.unobserve(card);
+    card.replaceWith(shell);
+    if (windowIo) windowIo.observe(shell);
+  }
+
+  const windowIo = typeof IntersectionObserver !== 'undefined'
+    ? new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        const node = e.target;
+        if (e.isIntersecting) restore(node);
+        else park(node);
+      }
+    }, { rootMargin: `${WINDOW_PX}px 0px`, threshold: 0 })
+    : null;
+
+  function watch(node) { if (windowIo) windowIo.observe(node); }
+
   function build(wHint = 0) {
+    if (windowIo) for (const col of cols) for (const child of col.children) windowIo.unobserve(child);
     el.textContent = '';
     const w = measureWidth(wHint);
     lastWidth = w;
@@ -43,21 +101,53 @@ export function createMasonry({ density = 'm', render }) {
     el.append(...cols);
   }
 
-  function place(items) {
+  function place(items, { first = false, stagger = true } = {}) {
     if (!items.length || !colCount) return;
+    const arrive = stagger && motionOk();
+    let staggerN = 0;
+    let index = 0;
+    const origin = el.isConnected ? el.getBoundingClientRect().top + window.scrollY : 0;
+    const viewTop = window.scrollY - WINDOW_PX;
+    const viewBot = window.scrollY + (window.innerHeight || 800) + WINDOW_PX;
     const frags = cols.map(() => document.createDocumentFragment());
     for (const item of items) {
       let target = 0;
       for (let i = 1; i < colCount; i++) if (heights[i] < heights[target]) target = i;
       const est = estimate(item);
-      const card = render(item, cur);
-      // the size a card stands in for while the browser skips rendering it off-screen (see app.css)
-      card.style.containIntrinsicSize = `auto ${Math.round(est)}px`;
+      const top = origin + heights[target];
+      const far = el.isConnected && (top > viewBot || top + est < viewTop);
+      const eager = first && !far && index < colCount;
+      let card;
+      if (far) {
+        const px = Math.round(est);
+        card = h('article', {
+          class: 'card card-parked',
+          dataset: { id: item.id },
+          tabindex: '0',
+          'aria-label': item.title || 'Load post',
+          style: { height: `${px}px`, containIntrinsicSize: `auto ${px}px` },
+        });
+        tag(card, item, est);
+        card.addEventListener('focus', () => restore(card, { focus: true }));
+      } else {
+        card = render(item, cur, { eager });
+        card.style.containIntrinsicSize = `auto ${Math.round(est)}px`;
+        tag(card, item, est);
+        if (arrive && staggerN < STAGGER_CAP) {
+          card.classList.add('card-arrive');
+          card.style.animationDelay = `calc(var(--dur-quick) * ${staggerN} / 4)`;
+          staggerN++;
+        }
+      }
       frags[target].appendChild(card);
       heights[target] += est + GAP[cur];
+      index++;
     }
     for (let i = 0; i < colCount; i++) {
-      if (frags[i].childNodes.length) cols[i].appendChild(frags[i]);
+      if (!frags[i].childNodes.length) continue;
+      const nodes = [...frags[i].childNodes];
+      cols[i].appendChild(frags[i]);
+      for (const node of nodes) watch(node);
     }
   }
 
@@ -66,7 +156,7 @@ export function createMasonry({ density = 'm', render }) {
     const w = Math.round(entries[0]?.contentRect?.width || 0);
     if (!w || w === lastWidth) return;
     lastWidth = w;
-    if (count(w) !== colCount && all.length) { build(w); place(all); }
+    if (count(w) !== colCount && all.length) { build(w); place(all, { stagger: false }); }
   }) : null;
   if (ro) ro.observe(el);
 
@@ -74,15 +164,22 @@ export function createMasonry({ density = 'm', render }) {
     el,
     get items() { return all; },
     add(items) {
+      const first = all.length === 0;
       if (!cols.length) build();
       all = all.concat(items);
-      place(items);
+      place(items, { first });
     },
-    clear() { all = []; el.textContent = ''; cols = []; heights = []; lastWidth = 0; },
+    clear() {
+      if (windowIo) for (const col of cols) for (const child of col.children) windowIo.unobserve(child);
+      all = []; el.textContent = ''; cols = []; heights = []; lastWidth = 0;
+    },
     setDensity(d) {
       cur = d; el.className = `masonry density-${d}`;
-      if (all.length) { build(lastWidth); place(all); }
+      if (all.length) { build(lastWidth); place(all, { stagger: false }); }
     },
-    destroy() { if (ro) ro.disconnect(); },
+    destroy() {
+      if (ro) ro.disconnect();
+      if (windowIo) windowIo.disconnect();
+    },
   };
 }

@@ -218,7 +218,7 @@ main { padding: 24px var(--pad) 80px; max-width: 1720px; margin: 0 auto; min-hei
 .footer a:hover, .footer button:hover { color: var(--text); }
 .footer button { background: none; border: 0; padding: 0; color: inherit; font-size: inherit; }
 
-.view-enter { animation: viewIn var(--dur-slow) var(--ease); }
+.view-enter { animation: viewIn var(--dur-base) var(--spring-glide); }
 @keyframes viewIn { from { opacity: 0; transform: translateY(8px); } }
 
 .section { margin: 36px 0 0; }
@@ -1111,8 +1111,8 @@ p, .lead, .sub, .profile-bio { text-wrap: pretty; }
   .bottomnav a:active svg { transform: scale(.88); transition-duration: .1s; }
 }
 :root[data-theme='light'] .bottomnav { box-shadow: var(--hi), 0 18px 44px -14px rgba(24, 16, 56, .3); }
-.view-enter { animation: viewIn var(--dur-slow) var(--ease-out); }
-@keyframes viewIn { from { opacity: 0; transform: translateY(10px); } }
+.view-enter { animation: viewIn var(--dur-base) var(--spring-glide); }
+@keyframes viewIn { from { opacity: 0; transform: translateY(8px); } }
 /* Full-screen views skip it: a transform on <main> makes it the containing block of their fixed layer,
    which then jumps by the app bar's height when the animation ends (a layout shift on every visit). */
 body.reels-mode .view-enter, body.galaxy-mode .view-enter { animation: none; }
@@ -1195,6 +1195,15 @@ body.reels-mode .view-enter, body.galaxy-mode .view-enter { animation: none; }
 
 /* ---------- filter bar: one quiet row ---------------------------------------- */
 .filterbar { background: color-mix(in srgb, var(--bg) 82%, transparent); border-bottom-color: transparent; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .035), 0 1px 0 var(--line); }
+.filterbar::before { content: ''; position: absolute; left: var(--pad); right: var(--pad); top: 0; height: 1px; pointer-events: none; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 55%, var(--accent-3)), transparent); }
+.explore-head h1 { font-family: var(--font-display); font-size: clamp(30px, 3.2vw, 44px); letter-spacing: -.04em; line-height: 1.02; }
+.explore-count { font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+.filterbar .seg, .filterbar .chip, .filterbar .select { letter-spacing: -.011em; }
+.card-parked { background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line); }
+.card-parked:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@keyframes card-arrive { from { opacity: 0; transform: translateY(8px); } }
+.card-arrive { animation: card-arrive var(--dur-base) var(--spring-glide) both; }
+@media (prefers-reduced-motion: reduce) { .card-arrive, .view-enter { animation: none; } }
 @media (max-width: 639px) {
   /* phones: the one-row, swipeable filter layout comes from ux.css (.filter-scroll); this only fades its edge */
   .filter-scroll { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 32px), transparent); }

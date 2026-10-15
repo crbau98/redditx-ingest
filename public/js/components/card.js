@@ -95,12 +95,9 @@ bus.on('fav', (d) => {
 });
 
 /** One media card. `open(item)` is called when the media is activated. */
-// The first few cards a page renders are above the fold: load them eagerly at high priority so the
-// largest paint is not held back by lazy-loading heuristics. The router re-arms this per page.
-let eagerLeft = 0;
-export function primeEager(n = 6) { eagerLeft = n; }
-
-export function mediaCard(item, { open, compact = false, why = null } = {}) {
+// `eager: true` is only the first viewport row (one card per column). Everything else stays lazy
+// at the default fetch priority so a long page does not compete with that first row.
+export function mediaCard(item, { open, compact = false, why = null, eager = false } = {}) {
   const ratio = item.width && item.height ? Math.min(Math.max(item.width / item.height, 0.55), 1.9) : 0.8;
   const isVideo = item.media_type === 'video';
   // Grids load the small thumbnail build when it exists (engine/thumbs.js, ~360px WebP),

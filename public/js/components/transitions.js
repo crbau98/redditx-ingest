@@ -224,6 +224,13 @@ function videoFrame(v) {
  * creator row, a search result) lifts a copy of the avatar off the page. It hovers while the
  * profile loads, then flies into the header when creator.js calls landAvatar(). */
 let flight = null;
+let motionHold = 0;
+
+/** True while a shared-element flight is in the air or about to measure, so route fades stay out of its way. */
+export function sharedMotionBusy() {
+  if (motionHold > 0 || flight) return true;
+  return !!(flipSource && performance.now() - flipSource.at < 900);
+}
 
 export function initAvatarFlights() {
   document.addEventListener('click', (e) => {
@@ -263,11 +270,13 @@ export function landAvatar(target, id) {
   if (String(flight.id) !== String(id)) { cancelFlight(); return; }
   const f = flight; flight = null; clearTimeout(f.timer);
   target.style.opacity = '0';
+  motionHold++;
+  const release = () => { motionHold = Math.max(0, motionHold - 1); };
   // Measure after the router has restored scroll for the new page (it runs once the view resolves).
   requestAnimationFrame(() => {
     const to = target.getBoundingClientRect();
     const from = f.ghost.getBoundingClientRect();
-    if (!target.isConnected || !visible(to)) { target.style.opacity = ''; f.ghost.remove(); return; }
+    if (!target.isConnected || !visible(to)) { target.style.opacity = ''; f.ghost.remove(); release(); return; }
     const s = to.width / f.rect.width;
     const dx = (to.left + to.width / 2) - (from.left + from.width / 2);
     const dy = (to.top + to.height / 2) - (from.top + from.height / 2);
@@ -278,7 +287,7 @@ export function landAvatar(target, id) {
       { transform: `translate(${dx}px, ${dy}px) scale(${s})` },
     ], { duration: dur('slow'), easing: spring('settle'), fill: 'forwards' });
     holdForFirstFrame([fly]);
-    const done = () => { target.style.opacity = ''; f.ghost.remove(); };
+    const done = () => { target.style.opacity = ''; f.ghost.remove(); release(); };
     fly.onfinish = done; fly.oncancel = done;
   });
 }
