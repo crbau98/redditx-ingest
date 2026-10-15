@@ -224,3 +224,19 @@ describe('iter12: maintenance names every backlog, thumbnails included', () => {
     assert.equal(typeof j.dedupe.remaining, 'number');
   });
 });
+
+describe('iter13: creator profiles carry every paid page, not just OnlyFans', () => {
+  test('public profiles list Fansly/JFF link-outs beside the OnlyFans badge', async () => {
+    const paid = require('../src/lib/paid');
+    const c = repo.creators.create({ handle: 'paidprofile_guy' });
+    repo.creators.enrich(c.id, { links: [paid.paidLink('Fansly', 'paidprofile', { free: true }), paid.paidLink('JustFor.Fans', 'paidprofile')] });
+    const res = await fetch(`${base}/api/creators/${c.id}`, { headers: AGE });
+    assert.equal(res.status, 200);
+    const j = await res.json();
+    assert.ok(Array.isArray(j.paid) && j.paid.length === 2, JSON.stringify(j.paid));
+    assert.ok(j.paid.some((l) => l.url === 'https://fansly.com/paidprofile' && l.free === true));
+    assert.ok(j.paid.some((l) => l.url === 'https://justfor.fans/paidprofile'));
+    const list = await (await fetch(`${base}/api/creators?paid=fancentro&limit=100`, { headers: AGE })).json();
+    assert.ok(Array.isArray(list.items), 'all eight paid filters stay queryable');
+  });
+});
