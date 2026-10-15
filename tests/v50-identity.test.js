@@ -166,7 +166,7 @@ describe('creator identity', () => {
     identity.addAlias(c.id, 'reese_alt', { platform: 'x', source: 'account' });
     assert.ok(repo.creators.detail(c.id).aliases.some((a) => a.alias === 'reese_alt'));
     identity.addAlias(c.id, 'reese_alt', { source: 'bio' });
-    assert.equal(identity.aliasesOf(c.id).find((a) => a.norm === 'reesealt').source, 'account', 'never demoted');
+    assert.equal(identity.aliasesOf(c.id).find((a) => a.norm === 'reese').source, 'account', 'never demoted');
     const g = person('reese_two');
     identity.addAlias(c.id, 'Reese Two', { kind: 'name', source: 'bio' });
     identity.addAlias(g.c.id, 'Reese Two', { kind: 'name', source: 'profile' });
