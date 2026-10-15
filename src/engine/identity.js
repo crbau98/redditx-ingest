@@ -15,7 +15,7 @@ const repo = require('../db/repo');
 const events = require('./events');
 const settingsStore = require('../settings');
 const { normAlias, usableAlias } = require('../lib/alias');
-const { findOnlyFans } = require('../lib/onlyfans');
+const paid = require('../lib/paid');
 
 const db = repo.db;
 
@@ -25,6 +25,7 @@ const WEIGHTS = {
   mutual: 2,           // ...and B's bio links back to A
   'bio-alias': 3,      // A's bio says "backup / new / old account: @<B's handle>"
   'same-onlyfans': 4,  // both promote the same OnlyFans page
+  'same-paid': 4,      // both promote the same Fansly / JustFor.Fans page
   'same-linkpage': 4,  // both use the same link-in-bio page
   admin: 10,
 };
@@ -284,7 +285,8 @@ function pageKey(url) {
 
 /**
  * Periodic pass (from discovery): keep aliases in step with followed accounts, and pair up creators who promote the
- * same OnlyFans page or the same link-in-bio page from their own profiles. Pure SQL + JSON, a few ms per thousand creators.
+ * same paid page (OnlyFans, Fansly, JustFor.Fans) or the same link-in-bio page from their own profiles.
+ * Pure SQL + JSON, a few ms per thousand creators.
  */
 function scan() {
   const out = { aliases: 0, links: 0, merged: 0 };
@@ -293,15 +295,23 @@ function scan() {
   }
   const byKey = new Map();
   const note = (key, type, id) => { if (!byKey.has(key)) byKey.set(key, { type, ids: new Set() }); byKey.get(key).ids.add(id); };
+  const notePaid = (service, handle, id) => {
+    const h = String(handle || '').toLowerCase();
+    if (!h) return;
+    if (service === 'OnlyFans') note(`of:${h}`, 'same-onlyfans', id);
+    else note(`paid:${service}:${h}`, 'same-paid', id);
+  };
   for (const c of db.prepare("SELECT id, links, bio FROM creators WHERE status != 'blocked'").all()) {
     let links = []; try { links = JSON.parse(c.links || '[]'); } catch { links = []; }
     for (const l of links) {
       if (!l) continue;
-      if (l.service === 'OnlyFans' && l.handle) note(`of:${String(l.handle).toLowerCase()}`, 'same-onlyfans', c.id);
+      const svc = l.service || paid.serviceOf(l.url || '');
+      const handle = l.handle || (svc ? paid.paidHandle(svc, l.url || '') : null);
+      if (svc && paid.SERVICES[svc] && paid.SERVICES[svc].trace && handle) notePaid(svc, handle, c.id);
       const k = l.url && pageKey(l.url);
       if (k) note(`page:${k}`, 'same-linkpage', c.id);
     }
-    for (const h of findOnlyFans(c.bio)) note(`of:${h}`, 'same-onlyfans', c.id);
+    for (const p of paid.findPaidHandles(c.bio).filter((p) => paid.SERVICES[p.service].trace)) notePaid(p.service, p.handle, c.id);
   }
   for (const [key, { type, ids }] of byKey) {
     if (ids.size < 2 || ids.size > 4) continue; // more than four creators on one page is an agency or a promo hub, not one man
@@ -309,7 +319,7 @@ function scan() {
     for (let i = 0; i < list.length; i++) {
       for (let j = i + 1; j < list.length; j++) {
         if (!repo.creators.get(list[i]) || !repo.creators.get(list[j])) continue; // merged away earlier in this pass
-        const r = noteLink(list[i], list[j], { type, detail: key.replace(/^(of|page):/, '') });
+        const r = noteLink(list[i], list[j], { type, detail: key.replace(/^(of|paid|page):/, '') });
         if (r) { out.links++; if (r.merged) out.merged++; }
       }
     }
