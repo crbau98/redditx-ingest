@@ -53,7 +53,15 @@ const configured = () => !!apiKey();
 
 /** "1, 18000" style X-RateLimit-* headers: [per-second, per-month] values. */
 const pair = (h) => String(h || '').split(',').map((x) => Number(x.trim()));
-const strip = (s) => String(s || '').replace(/<[^>]+>/g, '').trim();
+const strip = (s) => {
+  let out = String(s || '');
+  let prev;
+  do {
+    prev = out;
+    out = out.replace(/<[^>]+>/g, '');
+  } while (out !== prev);
+  return out.trim();
+};
 
 function parseVideoDuration(val) {
   if (val === null || val === undefined) return null;
