@@ -155,3 +155,20 @@ describe('iter2-admin: paid lead admin actions', () => {
     assert.equal(rej.json.service, 'Fansly');
   });
 });
+
+describe('iter9: autocomplete answers repeat keystrokes from a short cache', () => {
+  test('the second identical query skips the database; the cache is capped', () => {
+    const pub = require('../src/routes/public');
+    let calls = 0;
+    const real = repo.suggest;
+    repo.suggest = (...a) => { calls++; return real(...a); };
+    try {
+      pub.suggestCache.clear();
+      const first = pub.suggestCached('gym', 6);
+      assert.deepEqual(pub.suggestCached('gym', 6), first);
+      assert.equal(calls, 1, 'repeat keystroke served from cache');
+      for (let i = 0; i < 250; i++) pub.suggestCached(`query${i}`, 6);
+      assert.ok(pub.suggestCache.size <= 200, `cap holds (${pub.suggestCache.size})`);
+    } finally { repo.suggest = real; pub.suggestCache.clear(); }
+  });
+});
