@@ -82,8 +82,9 @@ const PARSERS = { 'OnlyFans': ofHandle, 'Fansly': fanslyHandle, 'JustFor.Fans': 
 
 /** Canonical handle for a paid page URL, or null for site pages / other services. */
 function paidHandle(service, url) {
+  if (!Object.prototype.hasOwnProperty.call(PARSERS, service)) return null;
   const fn = PARSERS[service];
-  return fn ? fn(url) : null;
+  return typeof fn === 'function' ? fn(url) : null;
 }
 
 const LINK_RES = {
