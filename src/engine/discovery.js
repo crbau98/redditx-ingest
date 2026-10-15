@@ -1170,6 +1170,7 @@ async function run({ trigger = 'schedule' } = {}) {
     if (s.discoveryExpand) {
       report.lookalikes = await blueskyLookalikes({ aborted });
       report.people = await peopleSearch({ aborted });
+      report.creatorMentions = await discoverCreatorMentions({ budget: s.braveDailyBudget, aborted });
     }
     report.identities = require('./identity').scan();
     report.enrich = await enrich();

@@ -448,6 +448,12 @@ describe('1. Creator Takedowns & Opt-Out Honoring', () => {
       displayName: 'OptOut Creator',
       bio: 'Gay fitness 18+ · onlyfans.com/optout_creator',
     });
+    const innocentCreator = repo.creators.create({
+      handle: 'optout_creator_2',
+      displayName: 'Innocent Creator',
+      bio: 'Gay fitness 18+',
+      links: [{ platform: 'OnlyFans', handle: 'optout_creator_2', url: 'https://onlyfans.com/optout_creator_2' }],
+    });
     const feed = repo.feeds.upsert({
       platform: 'x',
       kind: 'user',
@@ -477,10 +483,10 @@ describe('1. Creator Takedowns & Opt-Out Honoring', () => {
 
     assert.equal(repo.media.get(mediaId).publish_state, 'published');
 
-    // Create takedown via POST /api/takedowns
-    const postRes = await fetch(`${base}/api/takedowns`, {
+    // Create takedown via POST /api/admin/takedowns
+    const postRes = await fetch(`${base}/api/admin/takedowns`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: ADMIN,
       body: JSON.stringify({ kind: 'handle', value: '@OptOut_Creator', reason: 'Creator requested opt-out' }),
     });
     assert.equal(postRes.status, 201);
@@ -495,6 +501,7 @@ describe('1. Creator Takedowns & Opt-Out Honoring', () => {
     assert.equal(repo.media.get(mediaId).review_reason, 'takedown');
     assert.equal(repo.feeds.get(feed.id).enabled, 0);
     assert.equal(repo.creators.get(creator.id).status, 'blocked');
+    assert.equal(repo.creators.get(innocentCreator.id).status, 'active', 'Prefix-similar creator links must not be collateral-blocked');
     assert.ok(repo.blocklist.has('hash', 'td-hash-1'));
 
     // Verify prospective pipeline drop with reason: 'takedown'
@@ -515,12 +522,13 @@ describe('1. Creator Takedowns & Opt-Out Honoring', () => {
     assert.equal(droppedByAuthor.outcome, 'blocked');
     assert.equal(droppedByAuthor.reason, 'takedown');
 
-    // Also dropped when someone else mentions their paid handle
+    // Also dropped when someone else mentions their paid handle in description or links (with empty title)
     const droppedByPaidMention = await pipeline.processItem(
       {
         sourceId: 'td-future-2',
         author: 'some_reposter',
-        title: 'Check out onlyfans.com/optout_creator hot pics',
+        title: '',
+        description: 'Check out onlyfans.com/optout_creator hot pics',
         mediaType: 'image',
         mediaUrl: 'https://i.redd.it/future-optout2.jpg',
         trusted: true,
@@ -532,8 +540,8 @@ describe('1. Creator Takedowns & Opt-Out Honoring', () => {
     assert.equal(droppedByPaidMention.outcome, 'blocked');
     assert.equal(droppedByPaidMention.reason, 'takedown');
 
-    // Verify GET /api/takedowns and DELETE /api/takedowns/:id
-    const listRes = await fetch(`${base}/api/takedowns`);
+    // Verify GET /api/admin/takedowns and DELETE /api/admin/takedowns/:id
+    const listRes = await fetch(`${base}/api/admin/takedowns`, { headers: ADMIN });
     assert.equal(listRes.status, 200);
     const listJson = await listRes.json();
     assert.ok(listJson.items.some((t) => t.id === postJson.takedown.id));
@@ -558,7 +566,7 @@ describe('1. Creator Takedowns & Opt-Out Honoring', () => {
     assert.equal(droppedByDomain.outcome, 'blocked');
     assert.equal(droppedByDomain.reason, 'takedown');
 
-    const delRes = await fetch(`${base}/api/takedowns/${domTd.takedown.id}`, { method: 'DELETE', headers: ADMIN });
+    const delRes = await fetch(`${base}/api/admin/takedowns/${domTd.takedown.id}`, { method: 'DELETE', headers: ADMIN });
     assert.equal(delRes.status, 200);
     assert.equal(repo.takedowns.get(domTd.takedown.id), null);
   });
@@ -715,6 +723,9 @@ describe('3. Brave Images/Videos, DDG Fallback & Creator Mention Search', () => 
     });
     assert.equal(res.outcome, 'added', JSON.stringify(res));
     assert.equal(res.creatorId, atlas.id, 'Post mentioning @atlas_fit / onlyfans.com/atlas_fit is attributed to Atlas Fit');
+    const collabCand = repo.candidates.find('reddit', 'user', 'new_collab_buddy');
+    assert.ok(collabCand, 'Collab poster is enqueued as a candidate');
+    assert.ok(Array.isArray(collabCand.signals.mention) && collabCand.signals.mention.includes(atlas.id), 'Collab poster has mention signal');
   });
 
   test('discoverCreatorMentions searches across RedGIFs, Reddit, Bluesky, and web to surface collab accounts and link hubs', async () => {

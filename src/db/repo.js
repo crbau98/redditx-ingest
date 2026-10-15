@@ -1505,16 +1505,31 @@ const takedowns = {
             match = true;
           } else if (norm.kind === 'handle' && !plat && takedownLib.handleMatches(c.handle, null, bare)) {
             match = true;
-          } else if (c.links && String(c.links).toLowerCase().includes(`/${bare}`)) {
-            match = true;
+          } else if (c.links) {
+            let links = [];
+            try { links = typeof c.links === 'string' ? JSON.parse(c.links) : c.links; } catch { links = []; }
+            for (const l of Array.isArray(links) ? links : []) {
+              if (!l) continue;
+              const lPlat = String(l.service || l.platform || '').toLowerCase();
+              if (l.handle && (norm.kind === 'creator' ? takedownLib.creatorMatches(l.handle, norm.value) : takedownLib.handleMatches(l.handle, lPlat || null, norm.value))) {
+                match = true;
+                break;
+              }
+              if (l.url && takedownLib.checkUrl(l.url, [td])) {
+                match = true;
+                break;
+              }
+            }
           }
           if (match) {
             blockedCreatorIds.add(c.id);
           }
         }
         // Check aliases and feeds for creator ownership
-        const aliasRows = db.prepare('SELECT creator_id FROM creator_aliases WHERE norm = ? OR alias = ? COLLATE NOCASE').all(bare.replace(/[^a-z0-9]/g, ''), bare);
-        for (const r of aliasRows) blockedCreatorIds.add(r.creator_id);
+        if (!plat) {
+          const aliasRows = db.prepare('SELECT creator_id FROM creator_aliases WHERE norm = ? OR alias = ? COLLATE NOCASE').all(bare.replace(/[^a-z0-9]/g, ''), bare);
+          for (const r of aliasRows) blockedCreatorIds.add(r.creator_id);
+        }
 
         const feedMatches = plat
           ? db.prepare('SELECT * FROM feeds WHERE platform = ? AND target = ? COLLATE NOCASE').all(plat, bare)

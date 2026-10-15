@@ -198,15 +198,16 @@ function resolveCreator(item, feed, adapter) {
   if (mentioned) {
     if (handle && !SKIP_AUTHORS.has(handle.toLowerCase()) && ['x', 'reddit', 'bluesky', 'redgifs', 'telegram', 'mastodon'].includes(platform)) {
       try {
-        require('./discovery').consider({
-          platform,
-          kind: 'user',
-          target: handle,
-          displayName: item.authorName || null,
-          bio: item.authorBio || item.title || item.text || null,
-          avatarUrl: item.authorAvatar || null,
-          signal: { type: 'mention', from: mentioned.id, via: `${platform}:collab` },
-        });
+        require('./discovery').consider(
+          { platform, kind: 'user', target: handle, ingestable: true },
+          'mention',
+          mentioned.id,
+          {
+            displayName: item.authorName || null,
+            bio: item.authorBio || item.title || item.text || null,
+            avatarUrl: item.authorAvatar || null,
+          },
+        );
       } catch { /* best effort */ }
     }
     return mentioned;

@@ -250,12 +250,15 @@ function checkItem(item, feed = null, explicitList = null, extraCreator = null) 
   }
 
   // Gather paid handles mentioned in text or links
-  const paidHits = paid.findPaidHandles(item.title, item.text, item.description, item.altText, item.links);
+  const linkStrings = Array.isArray(item.links)
+    ? item.links.map((l) => (l && typeof l === 'object' ? l.url || l.handle || '' : l)).filter(Boolean)
+    : [];
+  const paidHits = paid.findPaidHandles([item.title, item.text, item.description, item.altText, ...linkStrings].filter(Boolean).join('\n'));
   const urls = new Set();
   for (const ph of paidHits) {
     handles.add(normalizeHandle(ph.handle));
-    const host = paid.SERVICES[ph.service] && paid.SERVICES[ph.service].host;
-    if (host) urls.add(`https://${host}/${ph.handle}`);
+    const url = paid.pageUrl(ph.service, ph.handle);
+    if (url) urls.add(url);
   }
 
   // Gather candidate URLs
@@ -265,13 +268,13 @@ function checkItem(item, feed = null, explicitList = null, extraCreator = null) 
     item.previewUrl, item.preview_url,
     item.thumbnailUrl, item.thumbnail_url,
     feed && (feed.kind === 'page' || /^https?:\/\//i.test(String(feed.target || ''))) ? feed.target : null,
-    ...(Array.isArray(item.links) ? item.links : []),
+    ...linkStrings,
   ]) {
     if (u && typeof u === 'string') urls.add(u);
   }
 
   // Also extract social / link-hub links from text/title/description
-  for (const blob of [item.title, item.text, item.description, ...(Array.isArray(item.links) ? item.links : [])]) {
+  for (const blob of [item.title, item.text, item.description, ...linkStrings]) {
     if (!blob) continue;
     for (const l of extractLinks(String(blob))) {
       if (l.handle) handles.add(normalizeHandle(l.handle));
