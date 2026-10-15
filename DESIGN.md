@@ -13,8 +13,8 @@ World: dark cinematic base, gradient brand (`--accent` pink, `--accent-2` violet
 
 - Home: static accent wash first; WebGL prism (`prism-bg.js`) + 3D orbit (`orbit.js`) mount after first paint via `requestIdleCallback`. Reduced-motion and software-GPU get still equivalents.
 - Grids: shortest-column masonry from metadata aspect ratios, `content-visibility: auto` with `containIntrinsicSize` estimates, `thumb_url` as card src, `tint` as placeholder, eager + `fetchpriority=high` for first ~6 cards, max 2 live preview videos.
-- Find (`#/find`): large name field, example chips, verified-account evidence cards with samples, paid link-outs, empty/error/rate-limit states, avatar→profile flight on follow.
-- Creators: paid-page select (OF/Fansly/JFF/ManyVids/LoyalFans) + platform select + search + sort; Find CTA beside Galaxy CTA.
+- Find (`#/find`): large name field, example chips, verified-account evidence cards with samples, paid link-outs (kept on the new profile when followed), empty/error/rate-limit states, avatar→profile flight on follow.
+- Creators: paid-page select (all eight paid hosts) + platform select + search + sort; Find CTA beside Galaxy CTA.
 - Creator profile: stage header (best picture full-bleed, color wash, scroll drift via CSS only), platform switcher pills + paid link-outs, feed tabs.
 - Reels: full-viewport slides, one playing video, buffer-ahead (not on data-saver/2G/3G), baked ambient backdrop, compositor progress bar.
 - Accessibility: visible two-tone focus ring (inside media on cards), named controls, alt text, reduced-motion collapses durations and disables orbit/shader/reveals.

@@ -1,5 +1,19 @@
 # UI changelog
 
+## Unreleased — v5 Horizon iteration: paid parity, identity, perf, operability
+
+| Change | Files |
+|---|---|
+| **Paid-page parsing parity**: Fansly, JustFor.Fans, ManyVids, LoyalFans, Fanvue, FanCentro and Clips4Sale links parse to canonical handles like OnlyFans (string parsing only — the hosts are never fetched) | `lib/paid.js` (new), `lib/links.js` |
+| **Paid-lead tracing parity**: Fansly/JFF pages named in posts and bios become discovery leads traced to free public accounts exactly like OnlyFans (service-keyed leads, migration v11); admin paste-a-link and lead queue filter by service | `db/migrate.js`, `db/repo.js`, `engine/discovery.js`, `routes/admin.js`, `views/admin/discovery.js` |
+| **Reach**: Misskey people search joins discovery keyword reach; once-named leads stay cheap (no web search until a second source names them) | `sources/misskey.js`, `engine/discovery.js` |
+| **Identity**: alias keys collapse filler affixes (`the_`, `real_`, `_official`, `_backup`…); bio alias lines catch dotted/dashed handles; identity scan pairs creators sharing a Fansly/JFF page; paid link-outs carry canonical handles with case-insensitive dedupe and free-flag refresh | `lib/alias.js`, `lib/bio.js`, `engine/identity.js`, `engine/lookup.js`, `db/repo.js` |
+| **Creator profiles**: every paid page ships in a `paid` array on the creator DTO, with header buttons (Fansly/JFF) next to the OnlyFans CTA, card badges when there is no OF page, and all eight paid hosts in the Creators filter; **Find** keeps the paid link-outs it surfaced when following | `routes/public.js`, `views/creator.js`, `components/creator-card.js`, `views/creators.js`, `views/find.js` |
+| **Perf, measured or guarded**: thumbnail sweep reads up to 3 pictures in flight; autocomplete caches per query for 10 s (cap 200); image-cache eviction never walks the disk on the request path | `engine/thumbs.js`, `routes/public.js`, `lib/media-cache.js` |
+| **Admin operability**: Discovery queue filters by platform; paid signal chips name their service; Settings → Maintenance names every backlog (safety sweep, thumbnails, near-duplicates) | `views/admin/discovery.js`, `views/admin/settings.js`, `routes/admin.js`, `engine/discovery.js` |
+
+**Kept deliberately**: paywalled/subscription platforms and leak hosts are never fetched; no unofficial Instagram/TikTok scrapers; no face-match identity; no whole-web enumeration.
+
 ## Unreleased — v5 Horizon: pull anyone in
 
 | Change | Files |
