@@ -1,4 +1,5 @@
 import { h } from '../dom.js';
+import { releaseCard } from './card.js';
 
 const MIN_COL = { s: 150, m: 215, l: 310 };
 const MIN_COL_PHONE = { s: 100, m: 155, l: 330 }; // phones: dense/cozy = 3/2 columns, large = 1
@@ -73,6 +74,7 @@ export function createMasonry({ density = 'm', render }) {
     tag(shell, item, card._est || px);
     shell.addEventListener('focus', () => restore(shell, { focus: true }));
     if (windowIo) windowIo.unobserve(card);
+    releaseCard(card);
     card.replaceWith(shell);
     if (windowIo) windowIo.observe(shell);
   }
@@ -89,8 +91,17 @@ export function createMasonry({ density = 'm', render }) {
 
   function watch(node) { if (windowIo) windowIo.observe(node); }
 
+  function releaseAll() {
+    for (const col of cols) {
+      for (const child of col.children) {
+        if (windowIo) windowIo.unobserve(child);
+        releaseCard(child);
+      }
+    }
+  }
+
   function build(wHint = 0) {
-    if (windowIo) for (const col of cols) for (const child of col.children) windowIo.unobserve(child);
+    releaseAll();
     el.textContent = '';
     const w = measureWidth(wHint);
     lastWidth = w;
@@ -170,7 +181,7 @@ export function createMasonry({ density = 'm', render }) {
       place(items, { first });
     },
     clear() {
-      if (windowIo) for (const col of cols) for (const child of col.children) windowIo.unobserve(child);
+      releaseAll();
       all = []; el.textContent = ''; cols = []; heights = []; lastWidth = 0;
     },
     setDensity(d) {
@@ -178,6 +189,7 @@ export function createMasonry({ density = 'm', render }) {
       if (all.length) { build(lastWidth); place(all, { stagger: false }); }
     },
     destroy() {
+      releaseAll();
       if (ro) ro.disconnect();
       if (windowIo) windowIo.disconnect();
     },
