@@ -1,5 +1,15 @@
 # UI changelog
 
+## Unreleased — v5 Horizon reach + motion
+
+| Change | Files |
+|---|---|
+| **Masonry windowing**: cards more than ~3600px from the viewport become a height-locked shell (same estimate the column already uses) and drop their live DOM. Scrolling back, or focusing the shell, restores the card. Keyboard order is the shell itself until it restores into the media link | `components/masonry.js`, `app.css` |
+| **Route enter/exit**: hash views fade and rise a few pixels with `--spring-glide`. Reduced motion, Reels, Galaxy, and an in-flight avatar/card flight skip it | `main.js`, `components/transitions.js`, `app.css` |
+| **Staggered page arrival**: the first eight cards of a newly placed page fade up. Off under reduced motion and Data Saver | `components/masonry.js`, `app.css` |
+| **First-row images**: `decoding=async` on cards; `fetchpriority=high` only for the first viewport row (one per column) and the first four cards of the first Home rail | `components/card.js`, `components/feed.js`, `views/home.js` |
+| **Explore bar**: display title, specular top edge, tabular loading count | `views/explore.js`, `app.css` |
+
 ## Unreleased — v5 Horizon iteration: paid parity, identity, perf, operability
 
 | Change | Files |

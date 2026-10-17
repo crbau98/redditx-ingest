@@ -511,6 +511,10 @@ const linkInBioAdapter = {
         avatarUrl: page.image,
         links: discovered,
       },
+      feedUrl: page.feedUrl || null,
+      feeds: page.feeds || [],
+      discoveredFeed: page.feedUrl ? { platform: 'rss', kind: 'feed', target: page.feedUrl } : null,
+      discoveredFeeds: (page.feeds || []).map((u) => ({ platform: 'rss', kind: 'feed', target: u })),
       via: 'html',
     };
   },

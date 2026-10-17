@@ -94,13 +94,19 @@ bus.on('fav', (d) => {
   }
 });
 
-/** One media card. `open(item)` is called when the media is activated. */
-// The first few cards a page renders are above the fold: load them eagerly at high priority so the
-// largest paint is not held back by lazy-loading heuristics. The router re-arms this per page.
-let eagerLeft = 0;
-export function primeEager(n = 6) { eagerLeft = n; }
+/** Release any observers and active preview held for a card before removing or parking it. */
+export function releaseCard(card) {
+  const media = card && card._media;
+  if (!media) return;
+  stopPreview(media);
+  if (io) io.unobserve(media);
+  if (reliefIo) reliefIo.unobserve(media);
+}
 
-export function mediaCard(item, { open, compact = false, why = null } = {}) {
+/** One media card. `open(item)` is called when the media is activated. */
+// `eager: true` is only the first viewport row (one card per column). Everything else stays lazy
+// at the default fetch priority so a long page does not compete with that first row.
+export function mediaCard(item, { open, compact = false, why = null, eager = false } = {}) {
   const ratio = item.width && item.height ? Math.min(Math.max(item.width / item.height, 0.55), 1.9) : 0.8;
   const isVideo = item.media_type === 'video';
   // Grids load the small thumbnail build when it exists (engine/thumbs.js, ~360px WebP),
@@ -119,7 +125,6 @@ export function mediaCard(item, { open, compact = false, why = null } = {}) {
   const ph = h('div', { class: 'ph', style: item.tint && /^#[0-9a-f]{6}$/i.test(item.tint) ? { background: item.tint } : { '--h': String(hue) } });
   media.appendChild(ph);
   if (src) {
-    const eager = eagerLeft > 0 && eagerLeft--;
     const img = h('img', { class: 'loading', alt: item.title || '', loading: eager ? 'eager' : 'lazy', fetchpriority: eager ? 'high' : 'auto', decoding: 'async', src, srcset });
     media._img = img; media._src = src; media._srcset = srcset;
     // The placeholder's shimmer stops as soon as the image is in: a grid of finished cards must not
@@ -159,6 +164,7 @@ export function mediaCard(item, { open, compact = false, why = null } = {}) {
     } }, icon('heart'));
 
   const card = h('article', { class: `card${compact ? ' compact' : ''}`, dataset: { id: item.id } }, media, fav);
+  card._media = media;
   if (!compact) {
     card.appendChild(h('div', { class: 'card-foot' },
       whyChip,

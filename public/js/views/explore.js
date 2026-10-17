@@ -39,7 +39,7 @@ export async function explore(root, { query }) {
     : f.q && !f.tags ? `Results for “${f.q}”` : tagList.length ? tagList.map((t) => `#${t}`).join(' + ') : f.tag ? `#${f.tag}` : f.community ? f.community : 'Explore';
   const titleEl = h('h1', null, titleText);
   document.title = `${titleText} — PRISM`;
-  const count = h('div', { class: 'sub' }, ' ');
+  const count = h('div', { class: 'sub explore-count' }, 'Loading results…');
 
   const sortOptions = [...(f.q ? [['relevance', 'Best match']] : []), ...(tastes.ready() || f.sort === 'foryou' ? [['foryou', 'For you']] : []), ...SORTS];
   const forYou = f.sort === 'foryou';
@@ -152,7 +152,7 @@ export async function explore(root, { query }) {
   });
   let feed = makeFeed();
 
-  root.replaceChildren(h('div', { class: 'page-head' }, h('div', null, titleEl, count), h('div', { class: 'row wrap' }, reelsBtn, saveBtn)), banner, relaxedNote, bar, tagRail, h('div', { style: { height: '14px' } }), feed.el);
+  root.replaceChildren(h('div', { class: 'page-head explore-head' }, h('div', null, titleEl, count), h('div', { class: 'row wrap' }, reelsBtn, saveBtn)), banner, relaxedNote, bar, tagRail, h('div', { style: { height: '14px' } }), feed.el);
   const offSearches = bus.on('searches', paintSave);
   // Toggling "Hide seen" (here or from the palette) rebuilds the feed in place.
   const offSeen = bus.on('hideSeen', (on) => {

@@ -35,7 +35,7 @@ async function forYouSection(open) {
   return h('section', { class: 'section' },
     sectionHead('sparkle', 'For you', 'Picked from what you watch, save and follow — learned on this device only', { href: href('/explore', { sort: 'foryou' }), label: 'See all' }),
     chips,
-    h('div', { class: 'rail' }, res.items.map((it) => mediaCard(it, { open: open(res.items), compact: false, why: tastes.why(it) }))),
+    h('div', { class: 'rail' }, res.items.map((it, i) => mediaCard(it, { open: open(res.items), compact: false, why: tastes.why(it), eager: i < 4 }))),
     h('a', { class: 'btn sm', href: href('/reels', { sort: 'foryou', type: 'all' }), style: { marginTop: '6px' } }, icon('film', 'sm'), 'Play For you as Reels'),
     people.length >= 3 ? h('div', { class: 'stack', style: { marginTop: '18px' } },
       h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase' } }, 'Creators you might like'),
@@ -123,8 +123,11 @@ function smartFeeds() {
   return h('section', { class: 'section' }, sectionHead('bookmark', 'Your smart feeds', 'Saved searches, with what’s new since you last looked', { href: href('/saved', { tab: 'feeds' }), label: 'Manage' }), row);
 }
 
+let eagerRail = 4;
 function rail(items, { open }) {
-  return h('div', { class: 'rail' }, items.map((it) => mediaCard(it, { open, compact: false })));
+  const n = eagerRail;
+  eagerRail = 0;
+  return h('div', { class: 'rail' }, items.map((it, i) => mediaCard(it, { open, compact: false, eager: i < n })));
 }
 
 function sectionHead(iconName, title, sub, more) {
@@ -134,6 +137,7 @@ function sectionHead(iconName, title, sub, more) {
 }
 
 export async function home(root) {
+  eagerRail = 4;
   const holder = h('div', { class: 'stack' }, h('div', { class: 'skeleton', style: { height: '320px' } }), h('div', { class: 'skeleton', style: { height: '260px' } }));
   root.replaceChildren(holder);
   let feed;
