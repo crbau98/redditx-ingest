@@ -119,3 +119,10 @@ function parseInput(input, hint) {
 }
 
 module.exports = { get, list, describe, parseInput, resolvers, SEEDS, SEED_VERSION, RETIRED_SEEDS };
+// ... other imports ...
+import leakAdapter from './leak_adapter.js';
+
+export default {
+    // ... other sources ...
+    leaks: leakAdapter,
+};
