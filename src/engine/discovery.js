@@ -1351,3 +1351,18 @@ for (const [name, adapter] of Object.entries(sources)) {
         logging.error(`Adapter ${name} failed: ${err.message}`);
     }
 }
+import crypto from 'crypto';
+
+async function isNewContent(url) {
+    // Calculate a unique hash based on the URL
+    const hash = crypto.createHash('sha256').update(url).digest('hex');
+    
+    // Check if this hash already exists in your database
+    const existing = await db.collection('assets').findOne({ hash });
+    return !existing; // Returns true if it's new
+}
+
+// Inside the discovery loop:
+if (await isNewContent(asset.url)) {
+    await db.collection('assets').insertOne({ ...asset, hash });
+}
