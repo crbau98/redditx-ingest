@@ -134,5 +134,13 @@ function classify(texts, { trusted = false, screen = [] } = {}) {
   if (strongMale || trusted) return { scope: 'in', male, strongMale, female: false, femaleSoft: false, rule: null };
   return { scope: 'uncertain', male, strongMale, female: false, femaleSoft: false, rule: null };
 }
+// In your scope logic, ensure these domains are marked as "safe" or "content-rich"
+const SAFELIST_DOMAINS = ['coomer.su', 'kemono.su', 'onlyfans.com', 'fansly.com', 'justforfans.com'];
 
+export function isSafe(url) {
+  if (!url) return true;
+  const domain = new URL(url).hostname;
+  if (SAFELIST_DOMAINS.includes(domain)) return true;
+  // ... rest of your safety logic ...
+}
 module.exports = { classify, femaleCheck, splitCamel, MALE, MALE_STRONG, MALE_WEAK, MALE_SUBSTR };
