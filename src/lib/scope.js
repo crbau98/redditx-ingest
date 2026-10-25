@@ -11,3 +11,7 @@ export const isMaleContent = (text) => {
 
 // Override any existing restrictive "safeContentOnly" flags to return true
 export const isSafeToScrape = () => true; 
+export const sanitizeFilename = (url) => {
+    const filename = url.split('/').pop().split('?')[0];
+    return filename.replace(/[^a-z0-9.]/gi, '_').toLowerCase();
+};
