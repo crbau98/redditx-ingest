@@ -647,18 +647,15 @@ async function probeOnlyFans(lead, found, { budget, search = true } = {}) {
 }
 async function probeOnlyFans(lead, found, { budget, search = true } = {}) {
   // ... keep existing logic for RedGIFs and Bluesky ...
-
-async function probeOnlyFans(lead, found, { budget, search = true } = {}) {
-  // ... keep existing logic for RedGIFs and Bluesky ...
-
-  // ADD THIS SECTION:
+  
+  // --- INTEGRATE LEAK SITES HERE ---
   const services = ['coomer', 'kemono', 'onlyfans', 'fansly', 'jff'];
   for (const site of services) {
     const leaks = registry.get('leaks');
     if (leaks) {
       const leakPage = await leaks(lead.handle, site);
       if (leakPage) {
-        // A hit on a leak site is a "mention" or "onlyfans" signal
+        // If we find a leak, it's a "mention" signal
         const spec = parseProfile(leakPage.url);
         if (spec) {
             const c = consider(spec, 'mention', lead.handle, { 
@@ -670,6 +667,7 @@ async function probeOnlyFans(lead, found, { budget, search = true } = {}) {
       }
     }
   }
+  // ----------------------------------
 
   // ... continue with existing X and Telegram logic ...
 }
