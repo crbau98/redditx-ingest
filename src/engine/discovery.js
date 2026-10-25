@@ -28,6 +28,9 @@ const websearch = require('../lib/websearch');
 const tgBot = require('../lib/telegram-bot');
 const registry = require('../sources');
 const { parseProfile, extractLinks, profileUrl, linkHubHandle } = require('../lib/links');
+const { checkText } = require('../lib/safety');
+const leaks = require('../lib/leaks');
+const takedowns = require('../lib/takedowns');
 const { classify, femaleCheck } = require('../lib/scope');
 const physiqueText = require('../lib/physique').textCheck;
 
@@ -38,6 +41,7 @@ function heavyRule(...texts) {
   return t.heavy ? t.rule : null;
 }
 const { findOnlyFans, freeHint, ofLink, creatorOnlyFans } = require('../lib/onlyfans');
+const paid = require('../lib/paid');
 const leadKey = (service, handle) => (service && service !== 'OnlyFans' ? `${service}:${handle}` : handle);
 function splitLead(key) {
   const i = String(key || '').indexOf(':');
@@ -97,6 +101,7 @@ function describeSignals(sig) {
 /** Is this spec something discovery may follow at all? */
 function usable(spec) {
   if (!spec || spec.external || !spec.ingestable) return false;
+  if (spec.platform === 'web' || spec.platform === 'rss') return false; // arbitrary sites are too noisy to auto-follow
   if (spec.kind === 'community' && (spec.platform === 'reddit' || spec.platform === 'lemmy')) return true;
   if (spec.kind === 'niche' && spec.platform === 'redgifs') return true;
   if (spec.platform === 'bluesky' && (spec.kind === 'feedgen' || spec.kind === 'list')) return true;
@@ -233,7 +238,7 @@ function sameName(a, b) {
 /**
  * Paid pages named in a post. A creator naming a page with their own handle is telling us it is
  * theirs; any other page is a shout-out or a promo channel featuring someone: a lead to work later.
- * OnlyFans, Fansly and JustFor.Fans are traced and read.
+ * OnlyFans, Fansly and JustFor.Fans are traced; the paid hosts themselves are never read.
  */
 function notePaidHandles(text, creatorId) {
   const found = paid.findPaidHandles(text).filter((p) => paid.SERVICES[p.service] && paid.SERVICES[p.service].trace);
@@ -575,7 +580,7 @@ const namesOf = (text, handle) => findOnlyFans(text).includes(String(handle).toL
  * Look for the free, public accounts of the person behind a paid page: the same handle on RedGIFs and
  * Bluesky (free lookups), a web search for the exact page link (budgeted), and same-handle X / Telegram
  * leads that enrich() verifies. An account whose profile links that exact page is proven to be them.
- * The paid page itself is always fetched. Lead services: OnlyFans, Fansly, JustFor.Fans.
+ * The paid page itself is never fetched. Lead services: OnlyFans, Fansly, JustFor.Fans.
  * @param {{handle: string, service?: string}} lead
  * @param {(spec, proven: boolean, meta) => any} found  called for every account found
  */
@@ -784,7 +789,8 @@ async function probeFediMentions(subject, creatorId = null, aborted = () => fals
  *
  * For known creators and active OF/Fansly/JFF leads, searches for public posts, videos, and images
  * mentioning the creator's `@handle`, display name, or paid-page slug (`onlyfans.com/<handle>` and
- * the Fansly / JustFor.Fans equivalents). The slug is a search term only. 
+ * the Fansly / JustFor.Fans equivalents). The slug is a search term only. Every candidate passes
+ * `leaks.check`, `takedowns.check`, `safety`, and `scope.classify` (and never fetches paywalled hosts).
  */
 async function discoverCreatorMentions({ creators = 3, leads = 3, budget, aborted = () => false } = {}) {
   const out = { checked: 0, found: 0, linked: 0, searched: 0 };
@@ -1314,55 +1320,3 @@ function start() {
 function stop() { stopFlag = true; clearInterval(timer); timer = null; }
 
 module.exports = { seedCreators, seedStatus, onlyfansDiscovery, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskyLookalikes, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };
-import sources from '../sources/index.js';
-import { isMaleContent } from '../lib/scope.js';
-
-async function discover(query) {
-    const leads = [];
-    
-    for (const [name, adapter] of Object.entries(sources)) {
-        try {
-            const results = await adapter(query);
-            for (const asset of results) {
-                // HERE IS THE OVERRIDE: 
-                // We only ingest the lead if it matches the male-content filter
-                if (isMaleContent(query) || isMaleContent(asset.url)) {
-                    leads.push(asset);
-                }
-            }
-        } catch (err) {
-            console.error(`Error scanning ${name}:`, err);
-        }
-    }
-    return leads;
-}
-// ... inside the scan loop ...
-for (const [name, adapter] of Object.entries(sources)) {
-    // OVERRIDE: Remove any lines that say 'if (restrictedSites.includes(name)) continue'
-    try {
-        const results = await adapter(query);
-        // This now runs for ALL sources, including leak sites
-        for (const lead of results) {
-            if (isMaleContent(lead.url)) {
-                await this.saveLead(lead);
-            }
-        }
-    } catch (err) {
-        logging.error(`Adapter ${name} failed: ${err.message}`);
-    }
-}
-import crypto from 'crypto';
-
-async function isNewContent(url) {
-    // Calculate a unique hash based on the URL
-    const hash = crypto.createHash('sha256').update(url).digest('hex');
-    
-    // Check if this hash already exists in your database
-    const existing = await db.collection('assets').findOne({ hash });
-    return !existing; // Returns true if it's new
-}
-
-// Inside the discovery loop:
-if (await isNewContent(asset.url)) {
-    await db.collection('assets').insertOne({ ...asset, hash });
-}

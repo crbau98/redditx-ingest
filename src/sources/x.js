@@ -443,22 +443,3 @@ module.exports = {
     return { items: fresh, cursor: newest ? { ...cursor, newestAt: newest } : (cursor.seen ? cursor : undefined), profile, via: 'syndication' };
   },
 };
-import { fetchPage } from '../lib/net.js';
-import { MediaAsset } from '../lib/models.js';
-
-export default async function xAdapter(query) {
-    const results = [];
-    // Bypassing login walls by using a nitter or alternative frontend if needed
-    const url = `https://nitter.net/search?q=${encodeURIComponent(query)}`;
-    const html = await fetchPage(url);
-    
-    const images = html.match(/https?:\/\/[^" ]+\.(?:jpg|jpeg|png|webp|gif)/gi) || [];
-    for (const src of images) {
-        results.push(new MediaAsset({ 
-            url: src, 
-            source: 'x', 
-            type: 'image' 
-        }));
-    }
-    return results;
-}
