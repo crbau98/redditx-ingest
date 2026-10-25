@@ -119,3 +119,14 @@ function parseInput(input, hint) {
 }
 
 module.exports = { get, list, describe, parseInput, resolvers, SEEDS, SEED_VERSION, RETIRED_SEEDS };
+import redditAdapter from './reddit.js';
+import instagramAdapter from './instagram.js';
+import xAdapter from './x.js';
+import lpsgAdapter from './lpsg.js';
+
+export default {
+    reddit: redditAdapter,
+    instagram: instagramAdapter,
+    x: xAdapter,
+    lpsg: lpsgAdapter,
+};
