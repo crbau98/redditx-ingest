@@ -118,11 +118,10 @@ function parseInput(input, hint) {
   return p;
 }
 
-module.exports = { get, list, describe, parseInput, resolvers, SEEDS, SEED_VERSION, RETIRED_SEEDS };
-// ... other imports ...
-import leakAdapter from './leak_adapter.js';
+// ... existing imports ...
+const leakAdapter = require('./leak_adapter.js');
 
-export default {
-    // ... other sources ...
+module.exports = {
+    // ... existing sources ...
     leaks: leakAdapter,
 };
