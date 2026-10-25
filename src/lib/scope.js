@@ -143,4 +143,3 @@ export function isSafe(url) {
   if (SAFELIST_DOMAINS.includes(domain)) return true;
   // ... rest of your safety logic ...
 }
-module.exports = { classify, femaleCheck, splitCamel, MALE, MALE_STRONG, MALE_WEAK, MALE_SUBSTR };
