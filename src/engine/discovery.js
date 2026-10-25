@@ -648,6 +648,9 @@ async function probeOnlyFans(lead, found, { budget, search = true } = {}) {
 async function probeOnlyFans(lead, found, { budget, search = true } = {}) {
   // ... keep existing logic for RedGIFs and Bluesky ...
 
+async function probeOnlyFans(lead, found, { budget, search = true } = {}) {
+  // ... keep existing logic for RedGIFs and Bluesky ...
+
   // ADD THIS SECTION:
   const services = ['coomer', 'kemono', 'onlyfans', 'fansly', 'jff'];
   for (const site of services) {
