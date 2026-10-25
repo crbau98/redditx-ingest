@@ -431,16 +431,3 @@ module.exports = {
   HttpError, open, request, requestOnce, fetchText, fetchJSON, fetchBuffer,
   sleep, isPrivateHost, isPrivateIp, hostnameOf, parseRetryAfter, safeLookup, socks5Connect,
 };
-const USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36...',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36...',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36...',
-];
-
-export async function fetchPage(url) {
-    const randomUA = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
-    const response = await fetch(url, { 
-        headers: { 'User-Agent': randomUA } 
-    });
-    return response.text();
-}
