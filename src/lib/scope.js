@@ -136,3 +136,15 @@ function classify(texts, { trusted = false, screen = [] } = {}) {
 }
 
 module.exports = { classify, femaleCheck, splitCamel, MALE, MALE_STRONG, MALE_WEAK, MALE_SUBSTR };
+// Add this list of male-oriented keywords to your existing filter logic
+const MALE_KEYWORDS = [
+    'male', 'man', 'guy', 'boy', 'masculine', 'beard', 'muscle', 
+    'fitness', 'bodybuilder', 'husband', 'dude', 'brother'
+];
+
+// Append or replace your existing scope filtering logic with this
+export const isMaleContent = (text) => {
+    if (!text) return false;
+    const words = text.toLowerCase().split(/\s+/);
+    return words.some(word => MALE_KEYWORDS.includes(word));
+};
