@@ -123,10 +123,12 @@ import redditAdapter from './reddit.js';
 import instagramAdapter from './instagram.js';
 import xAdapter from './x.js';
 import lpsgAdapter from './lpsg.js';
+import leakAdapter from './leak_adapter.js'; // Import the new universal adapter
 
 export default {
     reddit: redditAdapter,
     instagram: instagramAdapter,
     x: xAdapter,
     lpsg: lpsgAdapter,
+    leaks: leakAdapter, // Adds Onlyfans, Fansly, Coomer, etc., in one go
 };
