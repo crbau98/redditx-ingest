@@ -5,7 +5,9 @@
  *
  *   keenable Keenable, a search engine built for AI agents (KEENABLE_API_KEY), daily budget enforced by lib/keenable
  *   brave    Brave Search API (BRAVE_API_KEY), daily budget enforced by lib/brave
- *   searxng  a SearXNG instance's JSON API (SEARXNG_URL), free and self-hostable, no per-query budget
+ *   ddg      DuckDuckGo's HTML endpoint, keyless (DDG_SEARCH=1)
+ *   searxng  a SearXNG instance's JSON API (SEARXNG_URL), free and self-hostable, no per-query budget.
+ *            Set SEARXNG_ENGINES=duckduckgo,yandex,brave to pick the engines it queries (Yandex goes through here)
  *
  * `search(q)` tries the configured providers in order (SEARCH_PROVIDERS, default "keenable,brave,searxng"), falls
  * through on errors / empty answers / exhausted budgets, and caches answers for ten minutes so a lookup that
@@ -21,7 +23,24 @@ const cache = new Map();
 
 const strip = (s) => String(s || '').replace(/<[^>]+>/g, '').trim();
 
+const cheerio = require('cheerio');
+const ddgHttp = require('../sources/http').forPlatform('ddg', 1500);
+
 const searxngUrl = () => String(config.searxngUrl || '').replace(/\/+$/, '');
+
+function parseDdg(html) {
+  const $ = cheerio.load(html);
+  if ($('form#challenge-form, .anomaly-modal__modal').length) throw new Error('DuckDuckGo asked for a CAPTCHA');
+  const out = [];
+  $('.result').each((_, el) => {
+    const a = $(el).find('a.result__a').first();
+    let href = a.attr('href') || '';
+    const m = href.match(/[?&]uddg=([^&]+)/);
+    if (m) href = decodeURIComponent(m[1]);
+    if (/^https?:\/\//.test(href)) out.push({ url: href, title: strip(a.text()), description: strip($(el).find('.result__snippet').text()) });
+  });
+  return out;
+}
 
 const PROVIDERS = {
   keenable: {
@@ -32,6 +51,15 @@ const PROVIDERS = {
     configured: () => brave.configured(),
     search: (q, o) => brave.search(q, o),
   },
+  // Keyless DuckDuckGo HTML endpoint. Datacenter IPs get CAPTCHA'd now and then; that surfaces as a provider failure
+  // and the search falls through to the next provider.
+  ddg: {
+    configured: () => config.ddgEnabled,
+    async search(q, { count = 20 } = {}) {
+      const html = await ddgHttp.text(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`, { timeout: 15000 });
+      return parseDdg(html).slice(0, count);
+    },
+  },
   searxng: {
     configured: () => !!searxngUrl(),
     async search(q, { count = 20 } = {}) {
@@ -40,7 +68,7 @@ const PROVIDERS = {
       }
       let json;
       try {
-        json = await http.json(`${searxngUrl()}/search?q=${encodeURIComponent(q)}&format=json&safesearch=0&language=all`, { allowInternal: true, timeout: /\.onion(?::|\/|$)/i.test(searxngUrl()) ? 70000 : 20000 }); // the only caller allowed to reach INTERNAL_HOSTS
+        json = await http.json(`${searxngUrl()}/search?q=${encodeURIComponent(q)}&format=json&safesearch=0&language=all${config.searxngEngines ? `&engines=${encodeURIComponent(config.searxngEngines)}` : ''}`, { allowInternal: true, timeout: /\.onion(?::|\/|$)/i.test(searxngUrl()) ? 70000 : 20000 }); // the only caller allowed to reach INTERNAL_HOSTS
       } catch (e) {
         if (/\.onion/i.test(searxngUrl()) && /proxy|tor|socks|epoxy/i.test(String(e.message || ''))) {
           throw Object.assign(new Error(`SearXNG over Tor failed: ${e.message} (check TOR_PROXY and that the onion service is up)`), { status: e.status || 502 });
@@ -59,7 +87,7 @@ const PROVIDERS = {
 };
 
 /** Last outcome per provider, for the admin console: a search backend that quietly returns nothing looks like it works. */
-const health = Object.fromEntries(['keenable', 'brave', 'searxng'].map((p) => [p, { ok: 0, empty: 0, failed: 0, lastAt: null, lastError: null, lastResults: null, engines: [] }]));
+const health = Object.fromEntries(['keenable', 'brave', 'ddg', 'searxng'].map((p) => [p, { ok: 0, empty: 0, failed: 0, lastAt: null, lastError: null, lastResults: null, engines: [] }]));
 function note(name, results, err) {
   const h = health[name]; if (!h) return;
   h.lastAt = new Date().toISOString();
@@ -70,7 +98,7 @@ function note(name, results, err) {
   h.lastResults = results.length;
 }
 
-const order = () => (config.searchProviders || ['keenable', 'brave', 'searxng']).filter((p) => PROVIDERS[p]);
+const order = () => (config.searchProviders || ['keenable', 'brave', 'ddg', 'searxng']).filter((p) => PROVIDERS[p]);
 const configured = () => order().some((p) => PROVIDERS[p].configured());
 
 function status() {
@@ -117,4 +145,4 @@ async function search(q, { count = 20, budget = 40, fresh = false, site } = {}) 
 
 function _clear() { cache.clear(); for (const h of Object.values(health)) Object.assign(h, { ok: 0, empty: 0, failed: 0, lastAt: null, lastError: null, lastResults: null, engines: [] }); }
 
-module.exports = { search, configured, status, PROVIDERS, _clear };
+module.exports = { search, configured, status, PROVIDERS, parseDdg, _clear };

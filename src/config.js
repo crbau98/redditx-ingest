@@ -81,7 +81,9 @@ module.exports = {
 
   // Web search backends (discovery + creator lookup), tried in this order. SearXNG needs no key: point it at any instance with the JSON format enabled.
   searxngUrl: String(env.SEARXNG_URL || '').trim(),
-  searchProviders: list(env.SEARCH_PROVIDERS, ['keenable', 'brave', 'searxng']),
+  searxngEngines: String(env.SEARXNG_ENGINES || '').trim(),
+  ddgEnabled: /^(1|true|yes|on)$/i.test(String(env.DDG_SEARCH || '')),
+  searchProviders: list(env.SEARCH_PROVIDERS, ['keenable', 'brave', 'ddg', 'searxng']),
 
   // Federated sources: instances that adapters may talk to by default. Every hashtag/keyword feed is queried
   // on EACH instance below, so a longer list means more surface (and more requests): override from the
