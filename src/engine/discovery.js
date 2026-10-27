@@ -645,32 +645,6 @@ async function probeOnlyFans(lead, found, { budget, search = true } = {}) {
   }
   return { searched: false };
 }
-async function probeOnlyFans(lead, found, { budget, search = true } = {}) {
-  // ... keep existing logic for RedGIFs and Bluesky ...
-  
-  // --- INTEGRATE LEAK SITES HERE ---
-  const services = ['coomer', 'kemono', 'onlyfans', 'fansly', 'jff'];
-  for (const site of services) {
-    const leaks = registry.get('leaks');
-    if (leaks) {
-      const leakPage = await leaks(lead.handle, site);
-      if (leakPage) {
-        // If we find a leak, it's a "mention" signal
-        const spec = parseProfile(leakPage.url);
-        if (spec) {
-            const c = consider(spec, 'mention', lead.handle, { 
-                displayName: leakPage.media.length > 0 ? 'leaked content' : null,
-                bio: `Found on ${site}` 
-            });
-            if (c) found(spec, false, { source_site: site });
-        }
-      }
-    }
-  }
-  // ----------------------------------
-
-  // ... continue with existing X and Telegram logic ...
-}
 /**
  * Work the paid leads: (1) pages creators promote that we do not follow yet become discovery
  * candidates for that person's public accounts; (2) followed creators who have a paid page but few
