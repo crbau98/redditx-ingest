@@ -5,6 +5,7 @@
  *
  *   keenable Keenable, a search engine built for AI agents (KEENABLE_API_KEY), daily budget enforced by lib/keenable
  *   brave    Brave Search API (BRAVE_API_KEY), daily budget enforced by lib/brave
+ *   brightdata Bright Data Discover (BRIGHTDATA_API_TOKEN): intent-ranked results, daily budget enforced by lib/brightdata
  *   ddg      DuckDuckGo's HTML endpoint, keyless (DDG_SEARCH=1)
  *   searxng  a SearXNG instance's JSON API (SEARXNG_URL), free and self-hostable, no per-query budget.
  *            Set SEARXNG_ENGINES=duckduckgo,yandex,brave to pick the engines it queries (Yandex goes through here)
@@ -16,6 +17,7 @@
 const config = require('../config');
 const brave = require('./brave');
 const keenable = require('./keenable');
+const brightdata = require('./brightdata');
 const http = require('../sources/http').forPlatform('searxng', 800);
 
 const CACHE_MS = 10 * 60 * 1000;
@@ -50,6 +52,11 @@ const PROVIDERS = {
   brave: {
     configured: () => brave.configured(),
     search: (q, o) => brave.search(q, o),
+  },
+  // Bright Data Discover: results ranked by relevance to an intent ("public creator pages, not paywalled or leaked"), one credit each.
+  brightdata: {
+    configured: () => brightdata.configured(),
+    search: (q, o) => brightdata.search(q, o),
   },
   // Keyless DuckDuckGo HTML endpoint. Datacenter IPs get CAPTCHA'd now and then; that surfaces as a provider failure
   // and the search falls through to the next provider.
@@ -87,7 +94,7 @@ const PROVIDERS = {
 };
 
 /** Last outcome per provider, for the admin console: a search backend that quietly returns nothing looks like it works. */
-const health = Object.fromEntries(['keenable', 'brave', 'ddg', 'searxng'].map((p) => [p, { ok: 0, empty: 0, failed: 0, lastAt: null, lastError: null, lastResults: null, engines: [] }]));
+const health = Object.fromEntries(['keenable', 'brave', 'brightdata', 'ddg', 'searxng'].map((p) => [p, { ok: 0, empty: 0, failed: 0, lastAt: null, lastError: null, lastResults: null, engines: [] }]));
 function note(name, results, err) {
   const h = health[name]; if (!h) return;
   h.lastAt = new Date().toISOString();
@@ -98,7 +105,7 @@ function note(name, results, err) {
   h.lastResults = results.length;
 }
 
-const order = () => (config.searchProviders || ['keenable', 'brave', 'ddg', 'searxng']).filter((p) => PROVIDERS[p]);
+const order = () => (config.searchProviders || ['keenable', 'brave', 'brightdata', 'ddg', 'searxng']).filter((p) => PROVIDERS[p]);
 const configured = () => order().some((p) => PROVIDERS[p].configured());
 
 function status() {
@@ -108,6 +115,7 @@ function status() {
     working: order().some((p) => PROVIDERS[p].configured() && health[p].ok > 0 && !health[p].lastError),
     brave: { configured: brave.configured(), usage: brave.usage() },
     keenable: { configured: keenable.configured(), usage: keenable.usage() },
+    brightdata: { configured: brightdata.configured(), usage: brightdata.usage() },
   };
 }
 
@@ -121,7 +129,7 @@ async function search(q, { count = 20, budget = 40, fresh = false, site } = {}) 
   const hit = cache.get(key);
   if (!fresh && hit && hit.results.length && Date.now() - hit.at < CACHE_MS) return hit.results;
   const providers = order().filter((p) => PROVIDERS[p].configured());
-  if (!providers.length) throw Object.assign(new Error('No web search configured: set KEENABLE_API_KEY, BRAVE_API_KEY or SEARXNG_URL'), { skip: true });
+  if (!providers.length) throw Object.assign(new Error('No web search configured: set KEENABLE_API_KEY, BRAVE_API_KEY, BRIGHTDATA_API_TOKEN or SEARXNG_URL'), { skip: true });
   let lastErr;
   for (const name of providers) {
     try {

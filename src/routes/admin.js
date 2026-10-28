@@ -17,6 +17,7 @@ const discovery = require('../engine/discovery');
 const lookup = require('../engine/lookup');
 const identity = require('../engine/identity');
 const browser4 = require('../lib/browser4');
+const brightdata = require('../lib/brightdata');
 const expand = require('../engine/expand');
 const { adminRateLimit, adminCredentialAuth } = require('../middleware/auth');
 
@@ -67,7 +68,17 @@ router.get('/sources', (req, res) => {
 router.get('/sources/health', (req, res) => res.json({ ...require('../engine/sourcehealth').report(), thumbnails: require('../engine/thumbs').progress() }));
 
 /* ---------------------------------------------------------------- browser4 */
-router.get('/browser4', async (req, res) => res.json({ ...(await browser4.status()), mode: settingsStore.get().browser4Mode, expand: expand.status() }));
+router.get('/browser4', async (req, res) => {
+  const cfg = settingsStore.get();
+  res.json({
+    ...(await browser4.status()), mode: cfg.browser4Mode, expand: expand.status(),
+    strategy: require('../engine/hoststrategy').summary(),   // what PRISM has learned about which hosts need a browser
+    brightdata: {   // booleans and usage only: the token, zone and browser endpoint are never returned
+      discover: { configured: brightdata.configured(), usage: brightdata.usage() },
+      unlocker: { mode: cfg.brightdataUnlocker, budgetPerDay: cfg.brightdataUnlockBudget, configured: brightdata.unlockerConfigured(), browserApi: brightdata.browserConfigured(), usage: brightdata.unlockUsage() },
+    },
+  });
+});
 /** Read a page in the browser and add the pages it links to (same site) as feeds. Runs in the background; see GET /browser4. */
 router.post('/browser4/expand', async (req, res) => {
   const { url, depth, limit, trusted } = req.body || {};

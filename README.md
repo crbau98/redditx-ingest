@@ -167,7 +167,7 @@ BROWSER4_ENABLED=1 npm start                        # BROWSER4_HEADED=1 shows th
 
 **What it will not do:**
 
-- **Get around a refusal.** A `403`/`429` is never retried through the browser, and a page that answers with a bot-challenge (Cloudflare, CAPTCHA…) ends the render. Nothing is solved or evaded.
+- **Get around a refusal, by itself.** On its own, Browser4 never retries a `403`/`429` and a bot-challenge page ends the render. Getting past refusals is a separate, opt-in, paid step through Bright Data, described [below](#bright-data-discovery-and-opt-in-unblocking).
 - **Go where PRISM does not go.** A browser bypasses `lib/net.js`'s connect-time DNS guard, so there are three layers:
   1. *Before navigation* (the start URL and every "next page" / expansion URL): non-http(s) schemes, URLs with credentials, private/loopback/link-local/metadata addresses **including what the name resolves to**, leak sites, paywalled hosts and takedown matches are refused.
   2. *Inside the browser* (on whenever private hosts are refused, i.e. production; `BROWSER4_BLOCK_PRIVATE` overrides): requests to literal private, loopback and link-local addresses and local names (`127.*`, `10.*`, `172.16–31.*`, `192.168.*`, `169.254.*`, `localhost`, `*.local`, `*.internal`, IPv6 loopback/ULA/link-local) are **aborted before they are sent**, via CDP request interception. That covers redirect hops, images, scripts and XHR. If the routes cannot be registered, no page is loaded.
@@ -175,6 +175,8 @@ BROWSER4_ENABLED=1 npm start                        # BROWSER4_HEADED=1 shows th
 
   *Limits, stated plainly:* the browser-level block matches URL patterns, not resolved addresses, so a public-looking **name** that resolves to a private address inside a redirect or sub-request is not stopped; redirect hops to leak/paywalled hosts are noticed only afterwards (the page is discarded, but the request was made); and carrier-grade NAT (`100.64.0.0/10`) is not in the pattern list. On a shared network also firewall the Browser4 host away from private ranges.
 - **Run a shell.** The CLI is started with an argument array; URLs are only ever arguments.
+
+**It learns which hosts need a browser.** A render takes 10–60 s, so PRISM remembers per host (table `host_strategy`, nothing to tune) how often rendering found *more* than the plain download and spends the browser accordingly: in `always` mode a new host gets 3 renders, after which rendering continues only while it beats the plain read in at least 1 run in 5, and a written-off host is looked at again after 14 days; a render that finds nothing rests the host for 6 h, 12 h, 24 h … up to 3 days; a bot-challenge rests it for 1 day, doubling to 7. Admin → `GET /api/admin/browser4` shows what it has learned. Expansion likewise ranks a page's links by how much they look like content (a thumbnail inside the link, a path like `/gallery/…` or `/@name`, many links of the same shape, not `/tag/…` or `/page/2`), so the small feed budget goes to the best pages instead of the first ones in the document.
 
 **Growing the library.** Besides per-run pagination and scrolling:
 
@@ -189,6 +191,24 @@ curl -X POST -H "x-admin-key: $ADMIN_KEY" -H 'content-type: application/json' \
 Expansion is bounded on purpose (same site only, depth ≤ 2, ≤ 100 feeds per call, never past the feed cap, login/cart/legal pages and files skipped) and every feed it creates is untrusted: each item still needs a male-focus signal before the other gates apply.
 
 **Tests.** `npm test` includes the Browser4 suites against a fake `browser4-cli` (no Chrome needed). The real browser is exercised by an opt-in suite against a JavaScript-built fixture site: `BROWSER4_LIVE=1 node --test tests/browser4.live.test.js` (with a `DISPLAY`, the window is shown).
+
+---
+
+## Bright Data: discovery, and opt-in unblocking
+
+[Bright Data](https://brightdata.com) adds two separate things. Both need an account; neither is on by default.
+
+**1. Discover (search).** `BRIGHTDATA_API_TOKEN` adds Bright Data's *Discover* API as one more web-search provider (`SEARCH_PROVIDERS`, default `keenable,brave,brightdata,ddg,searxng`). It ranks results by relevance to an **intent**, not by keywords, so discovery and creator lookup find public creator pages, galleries and link hubs the other engines rank poorly. The default intent (`BRIGHTDATA_DISCOVER_INTENT`) asks for public creator pages and excludes paywalled and leaked content, leak sites and paywalled hosts are also filtered out of what comes back, and `BRIGHTDATA_MIN_RELEVANCE` can drop weak results. Each search costs credit and counts against the same *Metered web searches per day* budget as Brave and Keenable.
+
+**2. Unblocking (opt-in, paid).** Some public pages refuse a server's own requests. With **Admin → Settings → Bright Data Unblocker = fallback** (`brightdataUnlocker`; default `off`), PRISM fetches such a page through Bright Data's unblocking network instead:
+
+- *Web Unlocker* (`BRIGHTDATA_UNLOCKER_ZONE` + the token): the page's HTML. If that comes back as an empty JavaScript shell and `BRIGHTDATA_BROWSER_WSS` (a `wss://brd-customer-…@brd.superproxy.io:9222` endpoint, **a secret**: it is redacted from logs and errors, and visible in this host's process list while a page loads) is set, the *Browser API* runs the page in Bright Data's remote browser through Browser4 (`attach --cdp`, one connection per page, as Bright Data requires).
+- **When it fires, and only then:** the plain request got **HTTP 403, 429 or 503**, or the local Browser4 was met with a **bot-challenge**. Never for `401` (login wall), `404`/`410` (gone) or `451` (legal block).
+- **What stays out of bounds regardless**, checked inside the function that sends the URL so no caller can skip it: paywalled hosts, leak sites, takedown matches, robots.txt disallows, and private/internal addresses (an internal URL is never handed to a third party). `noindex`/`nopin`/takedown opt-outs in what comes back are still honoured, and every item still passes the safety, male-only, picture and duplicate gates.
+- **It spends carefully:** `brightdataUnlockBudget` (default 100 a day) is a hard stop, and a host where unlocking comes back empty is backed off 12 h, 24 h … 3 days instead of paying for the same nothing on every run. Bright Data answering with a block page is treated as a failure, never as content.
+- *Not verified against Bright Data's live service* (it needs an account): the tests use a mock of its API, and the remote-browser mechanism is verified with a real remote Chromium standing in for Bright Data's browser.
+
+This is a decision for the operator: unblocking fetches pages their owners tried to keep automated clients away from. Check the terms of the sites you read and of your Bright Data account before enabling it.
 
 ---
 

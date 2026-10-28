@@ -635,7 +635,34 @@ function v14(db) {
   `);
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14];
+/**
+ * v15: what PRISM has learned about HOW to read each host (engine/hoststrategy.js): whether a plain download is enough,
+ * whether a browser render ever found more, and when to leave a host alone (empty renders back off, a bot-challenge rests it).
+ */
+function v15(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS host_strategy (
+      host TEXT PRIMARY KEY,
+      plain_runs INTEGER NOT NULL DEFAULT 0,
+      plain_media INTEGER NOT NULL DEFAULT 0,
+      render_runs INTEGER NOT NULL DEFAULT 0,
+      render_media INTEGER NOT NULL DEFAULT 0,
+      render_wins INTEGER NOT NULL DEFAULT 0,
+      empty_streak INTEGER NOT NULL DEFAULT 0,
+      challenges INTEGER NOT NULL DEFAULT 0,
+      render_after TEXT,
+      challenged_until TEXT,
+      last_render_at TEXT,
+      unlock_runs INTEGER NOT NULL DEFAULT 0,
+      unlock_wins INTEGER NOT NULL DEFAULT 0,
+      unlock_empty_streak INTEGER NOT NULL DEFAULT 0,
+      unlock_after TEXT,
+      updated_at TEXT NOT NULL DEFAULT (${NOW})
+    );
+  `);
+}
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

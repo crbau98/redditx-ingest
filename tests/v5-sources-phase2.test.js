@@ -263,7 +263,7 @@ test('the ingest queue runs new feeds first, then the most overdue, weighting fo
 test('thumbnails: a large picture gets a small stored WebP and its tint; a small one only a tint; a missing one is marked', async () => {
   const thumbs = require('../src/engine/thumbs');
   const store = require('../src/lib/objectstore');
-  assert.equal(repo.db.pragma('user_version', { simple: true }), 14);
+  assert.equal(repo.db.pragma('user_version', { simple: true }), 15);
   repo.db.prepare("UPDATE media SET tint = '' WHERE tint IS NULL").run(); // earlier tests' rows are not part of this one
   const ins = repo.db.prepare(`INSERT INTO media (id, platform, media_type, media_url, preview_url, hash, title) VALUES (?, 'reddit', ?, ?, ?, ?, 'x')`);
   const add = (id, type, url, preview = null) => ins.run(id, type, url, preview, crypto.createHash('md5').update(id).digest('hex'));

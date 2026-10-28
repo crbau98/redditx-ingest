@@ -18,7 +18,9 @@ const { extractLinks } = require('../lib/links');
 const { hostOf, hostBlocked, looksLikeDirectMedia, looksLikeVideo } = require('../lib/mediaurl');
 const { checkHtmlOptOut } = require('../lib/takedowns');
 const browser4 = require('../lib/browser4');
+const brightdata = require('../lib/brightdata');
 const settingsStore = require('../settings');
+const hoststrategy = require('../engine/hoststrategy');
 const rss = require('./rss');
 
 /* --------------------------------------------------------------- robots.txt */
@@ -426,26 +428,86 @@ function mergeRendered(pages) {
 }
 
 /**
- * Read the page in a real browser if the settings ask for it. Returns null when it is not wanted, or
- * {page, notes} (page = the merged, parsed render) / {error} (the plain result then stands; the reason becomes a run note).
+ * Read the page in a real browser if the settings ask for it AND what PRISM has learned about this host says it pays
+ * (engine/hoststrategy.js). Returns null when it is not wanted, or
+ *   {page, notes, pages, scrolls}  the merged, parsed render
+ *   {error}                        the render failed (the plain result then stands; the reason becomes a run note)
+ *   {skipped}                      the plain read showed nothing but the host's history says rendering will not help now
  *   need 'media'  web pages: wanted in 'fallback' mode when the plain download showed no media
  *   need 'links'  link-in-bio hubs: wanted when it showed no profile links
- * The browser is never used to get around a refusal: it runs only after a plain download that SUCCEEDED but showed nothing.
+ * The browser is never used to get around a refusal: it runs only after a plain download that SUCCEEDED but showed nothing,
+ * and a bot-challenge page makes PRISM leave that host alone for a while (never solves or evades it).
  */
 async function browserRead(feed, plain, need) {
   if (!browser4.enabled()) return null;
   const cfg = settingsStore.get();
   if (cfg.browser4Mode === 'off') return null;
-  const empty = need === 'media' ? !plain.media.length : !plain.links.length;
-  if (cfg.browser4Mode !== 'always' && !empty) return null;
+  const found = need === 'media' ? plain.media.length : plain.links.length;
+  const host = hostOf(feed.target);
+  const verdict = hoststrategy.decide(host, { mode: cfg.browser4Mode, found });
+  if (!verdict.render) {
+    hoststrategy.record(host, { found });
+    return found === 0 ? { skipped: verdict.why } : null;
+  }
   try {
     const r = await browser4.renderPages(feed.target, {
       scrolls: need === 'media' ? cfg.browser4Scrolls : Math.min(2, cfg.browser4Scrolls),
       pages: need === 'media' ? cfg.browser4Pages : 1,
       allowUrl: robotsAllows,
     });
-    return { page: mergeRendered(r.pages), notes: r.notes, pages: r.pages.length, scrolls: r.pages.reduce((n, p) => n + Math.max(0, p.scrolls), 0) };
+    const page = mergeRendered(r.pages);
+    // a page that opts out says nothing about whether rendering works on this host
+    hoststrategy.record(host, { found, rendered: page.optedOut ? null : (need === 'media' ? page.media.length : page.links.length) });
+    return { page, notes: r.notes, pages: r.pages.length, scrolls: r.pages.reduce((n, p) => n + Math.max(0, p.scrolls), 0) };
   } catch (e) {
+    if (e.challenge) hoststrategy.record(host, { found, challenge: true });
+    return { error: e };
+  }
+}
+
+/** Did the plain download get a REFUSAL (as opposed to a missing page, a login wall or a legal block)? */
+const REFUSED_STATUS = new Set([403, 429, 503]);
+
+/**
+ * A public page that REFUSED PRISM - the plain request got 403 / 429 / 503, or the local browser was met with a bot-challenge -
+ * read through Bright Data instead: the Web Unlocker (HTML) and, when BRIGHTDATA_BROWSER_WSS is set and the page needs
+ * JavaScript, the remote Browser API. Opt-in (setting brightdataUnlocker) and paid, so:
+ *   - it runs only AFTER robots.txt allowed the page and only for those refusals (never 401 login walls, 404/410 gone, 451 legal);
+ *   - lib/brightdata.unlock() and the remote render refuse leak sites, paywalled hosts, takedowns and private addresses before
+ *     anything leaves PRISM, and extractPage still applies noindex / nopin / takedown opt-outs to what comes back;
+ *   - a daily budget caps the spend and a host where unlocking keeps finding nothing is backed off (engine/hoststrategy.js).
+ * Returns null when not applicable, else {page, via, notes, info} / {skipped} / {error}.
+ */
+async function unlockedRead(feed, need) {
+  const cfg = settingsStore.get();
+  if (cfg.brightdataUnlocker !== 'fallback' || !cfg.brightdataUnlockBudget) return null;
+  if (!brightdata.unlockerConfigured() && !(brightdata.browserConfigured() && browser4.enabled())) return null;
+  // robots.txt first, inside this function, because the link-in-bio adapter does not consult it on its own
+  if (!(await robotsAllows(feed.target))) return { skipped: 'robots.txt disallows this page' };
+  const host = hostOf(feed.target);
+  const verdict = hoststrategy.decideUnlock(host);
+  if (!verdict.unlock) return { skipped: verdict.why };
+  const count = (pg) => (need === 'media' ? pg.media.length : pg.links.length);
+  let spent = false; // credit was used: whatever happens next, an empty outcome must feed the back-off
+  try {
+    let page = null; let via = null; const notes = [];
+    if (brightdata.unlockerConfigured()) {
+      let u;
+      try { u = await brightdata.unlock(feed.target, { budget: cfg.brightdataUnlockBudget }); spent = true; } catch (e) { if (e.status && !e.skip && !e.budget) spent = true; throw e; }
+      page = extractPage(u.html, feed.target, { headers: {}, status: 200, maxMedia: RENDERED_MAX_MEDIA });
+      via = 'brightdata-unlocker';
+    }
+    // The unlocked HTML holds nothing but the page is a JavaScript shell: let the remote browser run it.
+    if ((!page || (!page.optedOut && count(page) === 0)) && brightdata.browserConfigured() && browser4.enabled()) {
+      brightdata.reserveUnlock(cfg.brightdataUnlockBudget); spent = true;
+      const r = await browser4.renderPages(feed.target, { remote: true, scrolls: need === 'media' ? cfg.browser4Scrolls : 2, pages: need === 'media' ? cfg.browser4Pages : 1, allowUrl: robotsAllows });
+      page = mergeRendered(r.pages); via = r.via; notes.push(...r.notes);
+    }
+    if (!page) return null;
+    if (!page.optedOut) hoststrategy.recordUnlock(host, { found: count(page) }); // an opt-out says nothing about whether unlocking pays
+    return { page, via, notes };
+  } catch (e) {
+    if (spent) hoststrategy.recordUnlock(host, { found: 0 });
     return { error: e };
   }
 }
@@ -495,9 +557,11 @@ const webAdapter = {
     let via = 'html';
     const notes = []; // problems and limits (the engine keeps notes[0] as the feed's last_error)
     const info = [];  // what went well (the engine logs it)
+    let refused = REFUSED_STATUS.has(status);
     if (!page.optedOut && status < 400) {
       const b = await browserRead(feed, page, 'media');
-      if (b && b.error) notes.push(`Browser4: ${b.error.message}`);
+      if (b && b.skipped) info.push(`Browser4 not used: ${b.skipped}`);
+      else if (b && b.error) { notes.push(`Browser4: ${b.error.message}`); if (b.error.challenge) refused = true; }
       else if (b) {
         notes.push(...b.notes.map((n) => `Browser4: ${n}`));
         if (b.page.optedOut) page = b.page;
@@ -505,6 +569,16 @@ const webAdapter = {
           page = b.page; via = 'browser4';
           info.push(`Browser4 read ${b.pages} page${b.pages === 1 ? '' : 's'}, scrolled ${b.scrolls}×, found ${page.media.length} media`);
         }
+      }
+    }
+    if (refused && !page.optedOut) {
+      const u = await unlockedRead(feed, 'media');
+      if (u && u.skipped) info.push(`Bright Data not used: ${u.skipped}`);
+      else if (u && u.error) notes.push(`Bright Data: ${u.error.message}`);
+      else if (u) {
+        notes.push(...u.notes.map((n) => `Bright Data: ${n}`));
+        if (u.page.optedOut) page = u.page;
+        else if (u.page.media.length) { page = u.page; via = u.via; info.push(`${u.via === 'brightdata-browser' ? 'Bright Data Browser API' : 'Bright Data Web Unlocker'} got past the refusal: ${page.media.length} media`); }
       }
     }
     if (page.optedOut) {
@@ -568,13 +642,24 @@ const linkInBioAdapter = {
     let via = 'html';
     const notes = [];
     const info = [];
+    let refused = REFUSED_STATUS.has(status);
     // Hubs built by JavaScript (Beacons, Bento and friends) have no links in their HTML: read the finished page.
     if (!page.optedOut && status < 400) {
       const b = await browserRead(feed, page, 'links');
-      if (b && b.error) notes.push(`Browser4: ${b.error.message}`);
+      if (b && b.skipped) info.push(`Browser4 not used: ${b.skipped}`);
+      else if (b && b.error) { notes.push(`Browser4: ${b.error.message}`); if (b.error.challenge) refused = true; }
       else if (b) {
         if (b.page.optedOut) page = b.page;
         else if (b.page.links.length >= page.links.length) { page = b.page; via = 'browser4'; info.push(`Browser4 found ${page.links.length} profile links`); }
+      }
+    }
+    if (refused && !page.optedOut) {
+      const u = await unlockedRead(feed, 'links');
+      if (u && u.skipped) info.push(`Bright Data not used: ${u.skipped}`);
+      else if (u && u.error) notes.push(`Bright Data: ${u.error.message}`);
+      else if (u) {
+        if (u.page.optedOut) page = u.page;
+        else if (u.page.links.length) { page = u.page; via = u.via; info.push(`Bright Data got past the refusal: ${page.links.length} profile links`); }
       }
     }
     if (page.optedOut) {

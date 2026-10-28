@@ -43,7 +43,7 @@ const SCHEMA = {
   discoveryAutoFollowScore: { type: 'int', default: 8, min: 3, max: 60, label: 'Auto-follow a candidate at this score', group: 'discovery' },
   discoveryMaxFollowsPerRun: { type: 'int', default: 10, min: 0, max: 100, label: 'Max creators auto-followed per run', group: 'discovery' },
   discoveryGraph: { type: 'bool', default: true, label: 'Read who followed Bluesky creators follow', group: 'discovery' },
-  braveDailyBudget: { type: 'int', default: 40, min: 0, max: 2000, label: 'Metered web searches per day (Brave + Keenable budget; 0 = free SearXNG only)', group: 'discovery' },
+  braveDailyBudget: { type: 'int', default: 40, min: 0, max: 2000, label: 'Metered web searches per day (Brave + Keenable + Bright Data budget; 0 = free SearXNG only)', group: 'discovery' },
   discoveryQueries: {
     type: 'text', group: 'discovery', label: 'Web-search topics (one per line; rotated, one per run)',
     default: ['gay male model bluesky', 'male fitness model onlyfans x.com', 'gay creator linktree 18+', 'muscle model telegram channel', 'gay twink creator redgifs', 'muscle daddy creator onlyfans bluesky', 'gay amateur couple onlyfans twitter', 'male model throne wishlist',
@@ -81,6 +81,8 @@ const SCHEMA = {
   browser4Pages: { type: 'int', default: 3, min: 1, max: 10, label: 'Browser4: pages followed through "next page" links in one run (same site only, robots.txt honoured)', group: 'sources' },
   browser4AutoExpand: { type: 'bool', default: false, label: 'Browser4: follow a page’s same-site links as new web feeds (untrusted: every item still passes the safety, male-only and picture gates). Feeds made this way never expand further', group: 'sources' },
   browser4ExpandPerRun: { type: 'int', default: 5, min: 0, max: 50, label: 'Browser4: new feeds one run may add through auto-expand (also bounded by "Cap on enabled feeds")', group: 'sources' },
+  brightdataUnlocker: { type: 'enum', values: ['off', 'fallback'], default: 'off', label: 'Bright Data Unlocker: when a site REFUSES PRISM (HTTP 403 / 429 / 503 on the plain read, or a bot-challenge page in Browser4), fetch the public page through Bright Data\'s unblocking network (Web Unlocker; the Browser API too when BRIGHTDATA_BROWSER_WSS is set). Costs credits per request. Never used for paywalled or leak hosts, takedowns, robots.txt disallows or login walls. Needs BRIGHTDATA_API_TOKEN + BRIGHTDATA_UNLOCKER_ZONE', group: 'sources' },
+  brightdataUnlockBudget: { type: 'int', default: 100, min: 0, max: 100000, label: 'Bright Data Unlocker: most unlocked requests per day (each one costs credit; 0 = none)', group: 'sources' },
   leakDomains: { type: 'text', default: '', label: 'Extra leak domains to block (one per line). GayForFans, its sister sites, OnlyFans leak mirrors and file lockers are always blocked', group: 'sources' },
   discoveryKeywords: {
     type: 'text', group: 'discovery', label: 'Community keywords (one per line; two are searched per run, in rotation)',
