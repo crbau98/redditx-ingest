@@ -87,7 +87,8 @@ describe('web pages', () => {
     setRoutes({ ...JSON.parse(fs.readFileSync(path.join(b4dir, 'routes.json'), 'utf8')) });
     const r3 = await fetchWeb(p1);
     assert.equal(r3.items.length, 12);
-    assert.ok(!gotos().includes('https://elsewhere.example/page4'), 'a next link to another site is never followed');
+    assert.ok(gotos().every((u) => new URL(u).hostname === '127.0.0.1'), 'a next link to another site is never followed');
+    assert.equal(gotos().length, 3, 'exactly the three pages of the site');
   });
 
   test('a follow-up page that robots.txt disallows is not fetched', async () => {
