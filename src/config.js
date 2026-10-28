@@ -85,6 +85,22 @@ module.exports = {
   ddgEnabled: /^(1|true|yes|on)$/i.test(String(env.DDG_SEARCH || '')),
   searchProviders: list(env.SEARCH_PROVIDERS, ['keenable', 'brave', 'ddg', 'searxng']),
 
+  // Browser4 (https://browser4.io): a real Chrome driven through `browser4-cli`, used to read pages whose media only exists after
+  // their JavaScript has run (SPAs, infinite scroll, lazy galleries). Off unless BROWSER4_ENABLED=1: it needs Chrome/Chromium and the
+  // CLI on the same host (see README, "Browser4 rendering"). Whether a feed actually uses it is the `browser4Mode` setting.
+  browser4: {
+    enabled: bool(env.BROWSER4_ENABLED, false),
+    bin: String(env.BROWSER4_CLI || 'browser4-cli').trim(),
+    session: String(env.BROWSER4_SESSION || 'prism-ingest').trim(),
+    // A visible window (demos, or a human solving a challenge). Without a display Browser4 itself falls back to headless.
+    headed: bool(env.BROWSER4_HEADED, false),
+    timeoutMs: int(env.BROWSER4_TIMEOUT_MS, 60000),   // one CLI call
+    // Worst case for one feed run = plain download (~20 s) + waiting for the shared browser + the render itself, and the
+    // engine cuts a feed run off at 150 s: 20 + 40 + 80 stays under it.
+    renderBudgetMs: int(env.BROWSER4_RENDER_BUDGET_MS, 80000),        // everything one render may spend
+    maxQueueWaitMs: int(env.BROWSER4_MAX_QUEUE_WAIT_MS, 40000),       // how long a render may wait for the browser before the page is read without it
+  },
+
   // Federated sources: instances that adapters may talk to by default. Every hashtag/keyword feed is queried
   // on EACH instance below, so a longer list means more surface (and more requests): override from the
   // environment to narrow or widen it. The first Mastodon instance is the one MASTODON_ACCESS_TOKEN applies to.

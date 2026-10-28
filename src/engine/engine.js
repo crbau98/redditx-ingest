@@ -282,6 +282,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     const skipSummary = Object.entries(reasons).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k}×${v}`).join(', ');
     events.log(stats.added ? 'OK' : 'INFO', `${tag} [${result.via || 'n/a'}] fetched ${stats.fetched} · +${stats.added} · dupes ${stats.dupes} · skipped ${stats.skipped}${stats.blocked ? ` · blocked ${stats.blocked}` : ''}${skipSummary ? ` (${skipSummary})` : ''}`);
     if (zeroWhy) events.log('INFO', `${tag}: ${zeroWhy}`);
+    if (result.info && result.info.length) events.log('INFO', `${tag}: ${result.info.join(' · ')}`);
     return finish(status, { via: result.via, notes: result.notes, why: zeroWhy });
   } catch (e) {
     if (e.skip) {

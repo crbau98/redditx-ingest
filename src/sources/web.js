@@ -17,6 +17,8 @@ const { absUrl, clip, uniq, bestSrcset } = require('./util');
 const { extractLinks } = require('../lib/links');
 const { hostOf, hostBlocked, looksLikeDirectMedia, looksLikeVideo } = require('../lib/mediaurl');
 const { checkHtmlOptOut } = require('../lib/takedowns');
+const browser4 = require('../lib/browser4');
+const settingsStore = require('../settings');
 const rss = require('./rss');
 
 /* --------------------------------------------------------------- robots.txt */
@@ -396,12 +398,66 @@ function extractPage(html, pageUrl0, opts = {}) {
     siteName,
     feedUrl: feeds[0] || null,
     feeds,
-    media: media.slice(0, 40),
+    media: media.slice(0, opts.maxMedia || 40),
     links,
     optedOut: false,
     optOutReason: null,
     $,
+    pageUrl,
   };
+}
+
+/* ------------------------------------------------------- Browser4 rendering */
+const RENDERED_MAX_MEDIA = 120; // a scrolled gallery holds far more than the 40 a static page is capped at
+
+/** Fold the pages of one render (the page plus its "next page" follow-ups) into the shape extractPage returns. */
+function mergeRendered(pages) {
+  const parsed = pages.map((p) => extractPage(p.html, p.url, { headers: {}, status: 200, maxMedia: RENDERED_MAX_MEDIA }));
+  const first = parsed[0];
+  if (first.optedOut) return first; // the rendered DOM opts out (noindex, nopin ...): same rule as the plain path
+  const media = []; const seen = new Set(); const links = []; const seenLinks = new Set(); const feeds = [];
+  for (const p of parsed) {
+    if (p.optedOut) continue;
+    for (const m of p.media) if (!seen.has(m.url)) { seen.add(m.url); media.push(m); }
+    for (const l of p.links) { const k = l.url || l.target; if (!seenLinks.has(k)) { seenLinks.add(k); links.push(l); } }
+    for (const f of p.feeds || []) if (!feeds.includes(f)) feeds.push(f);
+  }
+  return { ...first, media: media.slice(0, RENDERED_MAX_MEDIA), links: links.slice(0, 40), feeds, feedUrl: feeds[0] || null, docs: parsed.filter((p) => !p.optedOut).map((p) => ({ $: p.$, url: p.pageUrl })) };
+}
+
+/**
+ * Read the page in a real browser if the settings ask for it. Returns null when it is not wanted, or
+ * {page, notes} (page = the merged, parsed render) / {error} (the plain result then stands; the reason becomes a run note).
+ *   need 'media'  web pages: wanted in 'fallback' mode when the plain download showed no media
+ *   need 'links'  link-in-bio hubs: wanted when it showed no profile links
+ * The browser is never used to get around a refusal: it runs only after a plain download that SUCCEEDED but showed nothing.
+ */
+async function browserRead(feed, plain, need) {
+  if (!browser4.enabled()) return null;
+  const cfg = settingsStore.get();
+  if (cfg.browser4Mode === 'off') return null;
+  const empty = need === 'media' ? !plain.media.length : !plain.links.length;
+  if (cfg.browser4Mode !== 'always' && !empty) return null;
+  try {
+    const r = await browser4.renderPages(feed.target, {
+      scrolls: need === 'media' ? cfg.browser4Scrolls : Math.min(2, cfg.browser4Scrolls),
+      pages: need === 'media' ? cfg.browser4Pages : 1,
+      allowUrl: robotsAllows,
+    });
+    return { page: mergeRendered(r.pages), notes: r.notes, pages: r.pages.length, scrolls: r.pages.reduce((n, p) => n + Math.max(0, p.scrolls), 0) };
+  } catch (e) {
+    return { error: e };
+  }
+}
+
+/** Follow a page's same-site links as new web feeds (opt-in setting; feeds made this way never expand further). */
+function maybeExpand(feed, page) {
+  const cfg = settingsStore.get();
+  if (!browser4.enabled() || !cfg.browser4AutoExpand || feed.origin === 'expand' || !cfg.browser4ExpandPerRun) return 0;
+  try {
+    const docs = page.docs || (page.$ ? [{ $: page.$, url: page.pageUrl || feed.target }] : []);
+    return require('../engine/expand').adoptLinks(feed, docs, cfg).created;
+  } catch { return 0; }
 }
 
 async function fetchHtmlWithMeta(targetUrl, maxBytes = 3_000_000) {
@@ -435,7 +491,22 @@ const webAdapter = {
   async fetch(feed, ctx) {
     if (!(await robotsAllows(feed.target))) throw Object.assign(new Error('Blocked by robots.txt'), { skip: true });
     const { html, headers, status } = await fetchHtmlWithMeta(feed.target, 3_000_000);
-    const page = extractPage(html, feed.target, { headers, status });
+    let page = extractPage(html, feed.target, { headers, status });
+    let via = 'html';
+    const notes = []; // problems and limits (the engine keeps notes[0] as the feed's last_error)
+    const info = [];  // what went well (the engine logs it)
+    if (!page.optedOut && status < 400) {
+      const b = await browserRead(feed, page, 'media');
+      if (b && b.error) notes.push(`Browser4: ${b.error.message}`);
+      else if (b) {
+        notes.push(...b.notes.map((n) => `Browser4: ${n}`));
+        if (b.page.optedOut) page = b.page;
+        else if (b.page.media.length >= page.media.length) {
+          page = b.page; via = 'browser4';
+          info.push(`Browser4 read ${b.pages} page${b.pages === 1 ? '' : 's'}, scrolled ${b.scrolls}×, found ${page.media.length} media`);
+        }
+      }
+    }
     if (page.optedOut) {
       return {
         items: [],
@@ -445,9 +516,11 @@ const webAdapter = {
         optedOut: true,
         optOutReason: page.optOutReason,
         notes: [`Skipped page (${page.optOutReason})`],
-        via: 'html',
+        via,
       };
     }
+    const expanded = maybeExpand(feed, page);
+    if (expanded) info.push(`Browser4 auto-expand added ${expanded} same-site page feed${expanded === 1 ? '' : 's'}`);
     const items = page.media.map((m, i) => ({
       sourceId: `${feed.target}#${m.url}`.slice(0, 220),
       position: i,
@@ -473,7 +546,9 @@ const webAdapter = {
       feeds: page.feeds || [],
       discoveredFeed: page.feedUrl ? { platform: 'rss', kind: 'feed', target: page.feedUrl } : null,
       discoveredFeeds: (page.feeds || []).map((u) => ({ platform: 'rss', kind: 'feed', target: u })),
-      via: 'html',
+      notes,
+      info,
+      via,
     };
   },
 };
@@ -489,7 +564,19 @@ const linkInBioAdapter = {
   /** Never yields media; yields profile + discovered links. */
   async fetch(feed) {
     const { html, headers, status } = await fetchHtmlWithMeta(feed.target, 2_000_000);
-    const page = extractPage(html, feed.target, { headers, status });
+    let page = extractPage(html, feed.target, { headers, status });
+    let via = 'html';
+    const notes = [];
+    const info = [];
+    // Hubs built by JavaScript (Beacons, Bento and friends) have no links in their HTML: read the finished page.
+    if (!page.optedOut && status < 400) {
+      const b = await browserRead(feed, page, 'links');
+      if (b && b.error) notes.push(`Browser4: ${b.error.message}`);
+      else if (b) {
+        if (b.page.optedOut) page = b.page;
+        else if (b.page.links.length >= page.links.length) { page = b.page; via = 'browser4'; info.push(`Browser4 found ${page.links.length} profile links`); }
+      }
+    }
     if (page.optedOut) {
       return {
         items: [],
@@ -498,7 +585,7 @@ const linkInBioAdapter = {
         optedOut: true,
         optOutReason: page.optOutReason,
         notes: [`Skipped link-in-bio (${page.optOutReason})`],
-        via: 'html',
+        via,
       };
     }
     const discovered = page.links.slice(0, 30);
@@ -515,7 +602,9 @@ const linkInBioAdapter = {
       feeds: page.feeds || [],
       discoveredFeed: page.feedUrl ? { platform: 'rss', kind: 'feed', target: page.feedUrl } : null,
       discoveredFeeds: (page.feeds || []).map((u) => ({ platform: 'rss', kind: 'feed', target: u })),
-      via: 'html',
+      notes,
+      info,
+      via,
     };
   },
 };
