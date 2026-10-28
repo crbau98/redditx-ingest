@@ -77,7 +77,15 @@ describe('what triggers an unlock', () => {
     assert.deepEqual(bdState.requests, []); assert.equal(r.via, 'html');
   });
 
-  test('with the setting off (the default) nothing is ever sent to Bright Data', async () => {
+  test('it is ON by default: with credentials and nothing stored, a refused page is unlocked', async () => {
+    repo.db.prepare("DELETE FROM settings WHERE key IN ('brightdataUnlocker', 'brightdataUnlockBudget', 'browser4Mode')").run(); // factory settings
+    assert.equal(settingsStore.get().brightdataUnlocker, 'fallback');
+    const r = await web(`${site.url}/refused`);
+    assert.equal(bdState.requests.length, 1);
+    assert.equal(r.via, 'brightdata-unlocker'); assert.equal(r.items.length, 5);
+  });
+
+  test('with the setting switched off nothing is ever sent to Bright Data', async () => {
     settingsStore.update({ brightdataUnlocker: 'off' });
     const r = await web(`${site.url}/refused`);
     assert.deepEqual(bdState.requests, []); assert.deepEqual(r.items, []);

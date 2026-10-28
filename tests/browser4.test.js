@@ -141,6 +141,18 @@ describe('web pages', () => {
     assert.deepEqual(calls(), [], 'the browser is for pages that loaded but are empty, not for getting past a 403');
   });
 
+  test('Bright Data unlocking is on by default but inert without credentials: a refusal just stays a refusal', async () => {
+    repo.db.prepare("DELETE FROM settings WHERE key = 'brightdataUnlocker'").run();
+    assert.equal(settingsStore.get().brightdataUnlocker, 'fallback');
+    const brightdata = require('../src/lib/brightdata');
+    assert.equal(brightdata.unlockerConfigured(), false); assert.equal(brightdata.browserConfigured(), false);
+    setRoutes({});
+    const r = await fetchWeb(`${site.url}/forbidden`);
+    assert.deepEqual(r.items, []); assert.equal(r.via, 'html');
+    assert.deepEqual(r.notes, [], 'no error, no attempt, nothing sent anywhere');
+    assert.deepEqual(calls(), []);
+  });
+
   test('the rendered page can opt out, and the opt-out wins', async () => {
     const url = `${site.url}/shell`;
     setRoutes({ [url]: { html: page(imgs(1, 5), '<meta name="robots" content="noindex">') } });
