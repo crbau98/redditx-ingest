@@ -16,6 +16,8 @@ const backup = require('../engine/backup');
 const discovery = require('../engine/discovery');
 const lookup = require('../engine/lookup');
 const identity = require('../engine/identity');
+const browser4 = require('../lib/browser4');
+const expand = require('../engine/expand');
 const { adminRateLimit, adminCredentialAuth } = require('../middleware/auth');
 
 const router = express.Router();
@@ -63,6 +65,18 @@ router.get('/sources', (req, res) => {
 });
 /** Feed-level health: failing, stale, dead (ran often, added nothing in a month) and top feeds. */
 router.get('/sources/health', (req, res) => res.json({ ...require('../engine/sourcehealth').report(), thumbnails: require('../engine/thumbs').progress() }));
+
+/* ---------------------------------------------------------------- browser4 */
+router.get('/browser4', async (req, res) => res.json({ ...(await browser4.status()), mode: settingsStore.get().browser4Mode, expand: expand.status() }));
+/** Read a page in the browser and add the pages it links to (same site) as feeds. Runs in the background; see GET /browser4. */
+router.post('/browser4/expand', async (req, res) => {
+  const { url, depth, limit, trusted } = req.body || {};
+  if (typeof url !== 'string' || !/^https?:\/\//i.test(url.trim())) return bad(res, 'A full http(s) URL is required');
+  if (!browser4.enabled()) return bad(res, 'Browser4 is not enabled on this server (set BROWSER4_ENABLED=1)', 409);
+  try { await browser4.assertAllowed(url.trim()); } catch (e) { return bad(res, e.message, e.skip ? 400 : 502); }
+  const r = expand.start(url.trim(), { depth, limit, trustSeed: !!trusted });
+  return r.started ? res.status(202).json({ ok: true }) : bad(res, r.reason, 409);
+});
 
 /* ------------------------------------------------------------------- feeds */
 router.get('/feeds', (req, res) => {

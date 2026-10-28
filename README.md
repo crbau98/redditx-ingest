@@ -135,10 +135,55 @@ No system can enumerate "the whole web". PRISM grows its coverage in layers:
 | Telegram | user (public channel) | – | Public web preview (`t.me/s/<channel>`); channels that disable it report an error. |
 | Telegram | channel (joined by your account) | `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, a one-time login (`scripts/telegram-login.js`), `MEDIA_STORE_*` | Every channel/group your account has joined, public or private (MTProto via GramJS): full history back-filled gradually, original photos and videos copied into your R2/B2 bucket (Telegram files cannot be hotlinked). Feeds are created and retired by the sync. |
 | RSS / Atom / JSON Feed | feed | – | Creator sites, Tumblr `/rss`, Mastodon `.rss`, Bluesky `/rss`, … Bulk import accepts **OPML** exported from any feed reader. |
-| Web page | page | – | OpenGraph, `<video>`, linked images; honours `robots.txt`. |
-| Link-in-bio | page | – | Discovers a creator's other accounts; never yields media itself. |
+| Web page | page | – (optional Browser4) | OpenGraph, `<video>`, linked images; honours `robots.txt`. JavaScript-built pages (SPAs, infinite scroll, lazy galleries) are read in a real browser when [Browser4](#browser4-rendering-javascript-built-pages) is enabled. |
+| Link-in-bio | page | – (optional Browser4) | Discovers a creator's other accounts; never yields media itself. Hubs built by JavaScript are read in the browser. |
 
 **Deliberately not supported:** paywalled/subscription platforms (OnlyFans, Fansly, Patreon…). Reading them means circumventing access control and republishing paid content. PRISM keeps those links on a creator's profile so fans can support them directly.
+
+---
+
+## Browser4 rendering (JavaScript-built pages)
+
+Many sites ship an empty HTML shell and build their pictures, "next page" link and lists of galleries with JavaScript, and load more as you scroll. A plain download sees nothing. With [Browser4](https://browser4.io) (`browser4-cli`: a real Chrome driven over CDP) PRISM loads the page, scrolls it, and hands the **finished DOM** to the same parser the plain path uses, so everything downstream (robots.txt, `noindex`/`nopin` opt-outs, takedowns, leak and paywall hosts, the safety, male-only, picture and duplicate gates) behaves exactly as before. Browser4 changes *how a page is read*, never *what is allowed*.
+
+**Set it up** (on the machine that runs PRISM; it is **not** in the default Docker image, which has no Chrome):
+
+```bash
+npm i -g browser4-cli && browser4-cli install      # the CLI + its runtime (bundles its own JRE)
+# needs Chrome or Chromium on the host. Use version <= 153 for now: Browser4 4.15.1 rejects the
+# "File-Path-Style" field Chrome 156+ adds to /json/version and fails with "createDevTools".
+BROWSER4_ENABLED=1 npm start                        # BROWSER4_HEADED=1 shows the window (needs a display)
+```
+
+**How it is used** (Admin → Settings → Sources, all runtime-editable):
+
+| Setting | Default | |
+|---|---|---|
+| `browser4Mode` | `fallback` | `off` · `fallback` = only when the plain download **succeeded but showed no media** · `always` = every web page (the richer of the two reads wins) |
+| `browser4Scrolls` | 8 | scrolls to the bottom per page (stops early once the page stops growing) |
+| `browser4Pages` | 3 | "next page" links followed per run (same site only, `robots.txt` honoured) |
+| `browser4AutoExpand` | off | follow a page's same-site links as new **untrusted** web feeds; feeds made this way never expand again |
+| `browser4ExpandPerRun` | 5 | new feeds one run may add (also bounded by *Cap on enabled feeds*) |
+
+**What it will not do:**
+
+- **Get around a refusal.** A `403`/`429` is never retried through the browser, and a page that answers with a bot-challenge (Cloudflare, CAPTCHA…) ends the render. Nothing is solved or evaded.
+- **Go where PRISM does not go.** A browser bypasses `lib/net.js`'s connect-time DNS guard, so every URL is checked before navigation **and where the browser ended up after redirects**: private/loopback/link-local/metadata addresses, non-http(s) schemes, URLs with credentials, leak sites, paywalled hosts and takedown matches are refused. *Limit, stated plainly:* a page's own sub-requests and a DNS-rebinding trick are not intercepted, so on a shared network also firewall the Browser4 host away from private ranges.
+- **Run a shell.** The CLI is started with an argument array; URLs are only ever arguments.
+
+**Growing the library.** Besides per-run pagination and scrolling:
+
+```bash
+# a human-facing run: visible browser, read a page, follow its links, ingest everything through the real engine
+node scripts/browser4-ingest.js --headed --expand --depth 1 --limit 25 https://example.com/gallery
+# or from the admin API (runs in the background; poll GET /api/admin/browser4)
+curl -X POST -H "x-admin-key: $ADMIN_KEY" -H 'content-type: application/json' \
+     -d '{"url":"https://example.com/gallery","depth":1,"limit":25}' http://localhost:3141/api/admin/browser4/expand
+```
+
+Expansion is bounded on purpose (same site only, depth ≤ 2, ≤ 100 feeds per call, never past the feed cap, login/cart/legal pages and files skipped) and every feed it creates is untrusted: each item still needs a male-focus signal before the other gates apply.
+
+**Tests.** `npm test` includes the Browser4 suites against a fake `browser4-cli` (no Chrome needed). The real browser is exercised by an opt-in suite against a JavaScript-built fixture site: `BROWSER4_LIVE=1 node --test tests/browser4.live.test.js` (with a `DISPLAY`, the window is shown).
 
 ---
 

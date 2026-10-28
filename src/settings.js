@@ -75,6 +75,12 @@ const SCHEMA = {
   reposts: { type: 'bool', default: true, label: 'Keep reposts (Tumblr reblogs, X reposts and quotes, Bluesky reposts, Reddit crossposts), credited to the original poster', group: 'sources' },
   thumbnails: { type: 'bool', default: true, label: 'Make small thumbnails (kept in the media store) and a colour tint for every picture, so grids load fast', group: 'sources' },
   thumbnailsPerMinute: { type: 'int', default: 30, min: 0, max: 600, label: 'Thumbnails made per minute in the background', group: 'sources' },
+  // --- Browser4 rendering (needs BROWSER4_ENABLED=1 on the host; see README) ---
+  browser4Mode: { type: 'enum', values: ['off', 'fallback', 'always'], default: 'fallback', label: 'Browser4: read web pages in a real browser — off, fallback = only when the plain download shows no media (JavaScript-built pages), always = every web page. Needs BROWSER4_ENABLED=1', group: 'sources' },
+  browser4Scrolls: { type: 'int', default: 8, min: 0, max: 40, label: 'Browser4: times a page is scrolled to the bottom to load more (infinite scroll, lazy galleries)', group: 'sources' },
+  browser4Pages: { type: 'int', default: 3, min: 1, max: 10, label: 'Browser4: pages followed through "next page" links in one run (same site only, robots.txt honoured)', group: 'sources' },
+  browser4AutoExpand: { type: 'bool', default: false, label: 'Browser4: follow a page’s same-site links as new web feeds (untrusted: every item still passes the safety, male-only and picture gates). Feeds made this way never expand further', group: 'sources' },
+  browser4ExpandPerRun: { type: 'int', default: 5, min: 0, max: 50, label: 'Browser4: new feeds one run may add through auto-expand (also bounded by "Cap on enabled feeds")', group: 'sources' },
   leakDomains: { type: 'text', default: '', label: 'Extra leak domains to block (one per line). GayForFans, its sister sites, OnlyFans leak mirrors and file lockers are always blocked', group: 'sources' },
   discoveryKeywords: {
     type: 'text', group: 'discovery', label: 'Community keywords (one per line; two are searched per run, in rotation)',

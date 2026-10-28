@@ -1,3 +1,4 @@
+'use strict';
 // src/sources/_policy.js
 // Central policy gate. Registrable-suffix match: foo.onlyfans.com -> onlyfans.com
 const PAYWALL_SUFFIXES = new Set([
@@ -25,9 +26,9 @@ function matchesSuffix(host, set){
   for(const s of set) if(h === s || h.endsWith('.'+s)) return true;
   return false;
 }
-export function isPaywall(host){ return matchesSuffix(host, PAYWALL_SUFFIXES); }
-export function isLeakAggregator(host){ return matchesSuffix(host, LEAK_SUFFIXES); }
-export function isDenied(host){ return isPaywall(host) || isLeakAggregator(host); }
+function isPaywall(host){ return matchesSuffix(host, PAYWALL_SUFFIXES); }
+function isLeakAggregator(host){ return matchesSuffix(host, LEAK_SUFFIXES); }
+function isDenied(host){ return isPaywall(host) || isLeakAggregator(host); }
 // Extractor allowed = not denied. Extend here if you want explicit allowlist.
-export function isExtractorAllowed(host){ return !isDenied(host); }
-export default { isDenied, isPaywall, isLeakAggregator, isExtractorAllowed };
+function isExtractorAllowed(host){ return !isDenied(host); }
+module.exports = { isDenied, isPaywall, isLeakAggregator, isExtractorAllowed };
