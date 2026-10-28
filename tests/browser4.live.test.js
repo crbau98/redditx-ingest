@@ -12,7 +12,7 @@
  */
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { prepareEnv } = require('./helpers/mock');
+const { prepareEnv, start } = require('./helpers/mock');
 
 if (process.env.BROWSER4_LIVE !== '1') {
   test('live Browser4 tests are opt-in: set BROWSER4_LIVE=1', { skip: true }, () => {});
@@ -76,5 +76,37 @@ describe('real Browser4 against a JavaScript-built site', { timeout: 300000 }, (
 
   test('a bot-challenge page is recognised and left alone', async () => {
     await assert.rejects(browser4.renderPages(`${site.url}/challenge`, { scrolls: 0 }), (e) => e.skip === true && e.challenge === true);
+  });
+
+  // Last: it registers browser-level routes that would also block the 127.0.0.1 fixture the tests above use.
+  test('the browser aborts a redirect hop and sub-requests aimed at a private address BEFORE they are sent', async () => {
+    const config = require('../src/config');
+    const internal = await start({ '/secret': () => ({ body: 'internal service' }), '/sub.png': () => ({ body: 'x' }), '/xhr': () => ({ body: 'x' }) });
+    const pub = await start({
+      '/redirect': () => ({ status: 302, headers: { location: `${internal.url}/secret` } }),
+      '/page': () => ({ headers: { 'content-type': 'text/html' }, body: `<html><body>page<img src="${internal.url}/sub.png"><script>fetch('${internal.url}/xhr').catch(() => {})</script></body></html>` }),
+    });
+    const target = (p) => `http://localhost:${pub.port}${p}`; // "public-looking" name; the internal service is the literal 127.0.0.1
+    const reached = () => internal.hits.filter((h) => !/favicon/.test(h)).length;
+    try {
+      // CONTROL: with no browser-level block the very same page DOES reach the internal service (so the test can fail)
+      config.browser4.blockPrivate = false;
+      await browser4.renderPages(target('/redirect'), { scrolls: 0 });
+      await browser4.renderPages(target('/page'), { scrolls: 0 });
+      assert.ok(internal.hits.some((h) => h.includes('/secret')) && internal.hits.some((h) => h.includes('/sub.png')) && internal.hits.some((h) => h.includes('/xhr')), `control must reach it: ${internal.hits}`);
+
+      // BLOCKED: only the 127.* pattern is used here (the real list also covers localhost, which this fixture needs)
+      config.browser4.blockPrivate = true; config.browser4.blockPatterns = ['*://127.*'];
+      const before = reached();
+      await assert.rejects(browser4.renderPages(target('/redirect'), { scrolls: 0 }), 'the redirect hop is aborted, so the navigation fails');
+      assert.equal(reached(), before, 'the redirect never reached the internal service');
+      const r = await browser4.renderPages(target('/page'), { scrolls: 0 });
+      assert.equal(r.pages.length, 1, 'the public page itself still loads');
+      assert.equal(reached(), before, 'its image and XHR to the internal service were never sent');
+    } finally {
+      config.browser4.blockPrivate = false; delete config.browser4.blockPatterns;
+      await browser4._unblock();
+      await internal.close(); await pub.close();
+    }
   });
 });

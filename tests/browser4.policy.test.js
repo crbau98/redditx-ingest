@@ -19,7 +19,7 @@ const repo = require('../src/db/repo');
 const browser4 = require('../src/lib/browser4');
 const { createApp } = require('../src/app');
 
-const setRoutes = (routes) => { fs.writeFileSync(path.join(b4dir, 'routes.json'), JSON.stringify(routes)); fs.rmSync(path.join(b4dir, 'calls.jsonl'), { force: true }); };
+const setRoutes = (routes) => { fs.writeFileSync(path.join(b4dir, 'routes.json'), JSON.stringify(routes)); fs.rmSync(path.join(b4dir, 'calls.jsonl'), { force: true }); fs.rmSync(path.join(b4dir, 'netroutes.txt'), { force: true }); };
 const calls = () => (fs.existsSync(path.join(b4dir, 'calls.jsonl')) ? fs.readFileSync(path.join(b4dir, 'calls.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
 const refuses = async (url, re) => assert.rejects(browser4.assertAllowed(url), (e) => e.skip === true && re.test(e.message), url);
 
@@ -101,6 +101,40 @@ describe('renderPages', () => {
     assert.equal(r.pages.length, 1);
     assert.match(r.notes.join(' '), /not allowed/);
     assert.equal(calls().filter((c) => c.cmd === 'goto').length, 1);
+  });
+});
+
+describe('the browser itself aborts requests to private addresses (redirect hops and sub-requests cannot be pre-checked)', () => {
+  beforeEach(() => browser4._reset());
+  const url = 'http://93.184.216.34/gallery';
+  const routeCalls = () => calls().filter((c) => c.cmd === 'network' && c.sub === 'route');
+
+  test('every private-range pattern is registered, as an abort, BEFORE the first page loads', async () => {
+    assert.equal(config.browser4.blockPrivate, true, 'on by default when PRISM refuses private hosts');
+    setRoutes({ [url]: { html: '<html></html>' } });
+    await browser4.renderPages(url, { scrolls: 0 });
+    assert.deepEqual(routeCalls().map((c) => c.pattern), browser4.PRIVATE_URL_PATTERNS);
+    assert.ok(routeCalls().every((c) => c.abort));
+    const seq = calls();
+    assert.ok(seq.findIndex((c) => c.cmd === 'goto') > seq.map((c) => c.cmd === 'network' && c.sub === 'route').lastIndexOf(true), 'navigation comes after the last route');
+    for (const must of ['*://127.*', '*://169.254.*', '*://10.*', '*://192.168.*', '*://172.31.*', '*://localhost*', '*://[::*', '*://[fe8*']) assert.ok(browser4.PRIVATE_URL_PATTERNS.includes(must), must);
+  });
+
+  test('later renders only re-check; routes lost with a restarted backend are registered again', async () => {
+    setRoutes({ [url]: { html: '<html></html>' } });
+    await browser4.renderPages(url, { scrolls: 0 });
+    const first = routeCalls().length;
+    await browser4.renderPages(url, { scrolls: 0 });
+    assert.equal(routeCalls().length, first, 'nothing missing: no new route calls');
+    fs.rmSync(path.join(b4dir, 'netroutes.txt'), { force: true }); // the backend lost them
+    await browser4.renderPages(url, { scrolls: 0 });
+    assert.equal(routeCalls().length, first * 2, 'all registered again');
+  });
+
+  test('fails CLOSED: if the routes cannot be registered, nothing is loaded', async () => {
+    setRoutes({ [url]: { html: '<html>never</html>' }, __routeFail: true });
+    await assert.rejects(browser4.renderPages(url, { scrolls: 0 }), /cannot block private addresses/);
+    assert.equal(calls().filter((c) => c.cmd === 'goto').length, 0);
   });
 });
 
