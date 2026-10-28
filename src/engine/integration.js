@@ -103,48 +103,6 @@ async function saveCursor(source, cursor) {
   try { cursors().set.run(source, String(cursor), Date.now()); return true; }
   catch (e) { mkLogger('integration').warn('saveCursor failed', source, e.message); return false; }
 }
-// src/engine/integration.js - resolves real repo/pipeline symbols, loud fail
-let _repo=null;
-async function loadRepo(){
-  if(_repo) return _repo;
-  for(const p of ['../db/repo.js','../db/index.js','./repo.js']){
-    try{ _repo=await import(p); return _repo; }catch{}
-  }
-  return null;
-}
-async function pick(mod, names){
-  if(!mod) return null;
-  for(const n of names) if(typeof mod[n]==='function') return mod[n].bind(mod);
-  if(mod.default) for(const n of names) if(typeof mod.default[n]==='function') return mod.default[n].bind(mod.default);
-  return null;
-}
-export function log(level,msg){
-  try{ const c=console[level]||console.log; c(`[${level}] ${msg}`);}catch{}
-}
-export async function getFirehoseCursor(key){
-  const r=await loadRepo(); const fn=await pick(r,['getFirehoseCursor','getSetting','getCursor','getMeta']);
-  if(!fn) throw new Error('UNBOUND getFirehoseCursor'); return fn(key);
-}
-export async function setFirehoseCursor(key,val){
-  const r=await loadRepo(); const fn=await pick(r,['setFirehoseCursor','setSetting','setCursor','setMeta']);
-  if(!fn) throw new Error('UNBOUND setFirehoseCursor'); return fn(key,val);
-}
-export async function addLead(lead){
-  const r=await loadRepo(); const fn=await pick(r,['addLead','addDiscoveryLead','enqueueLead','createLead','insertLead']);
-  if(!fn) throw new Error('UNBOUND addLead - grep CREATE TABLE src/db/schema.js | grep -i lead to find real table/name');
-  return fn(lead);
-}
-export async function resolveBskyHandle(did){
-  const r=await loadRepo(); const fn=await pick(r,['resolveBskyHandle','didToHandle','resolveHandle']);
-  if(!fn) return did; return fn(did);
-}
-export function livePressure(){ return 0; } // wired later to src/engine/health.js
-export async function selfTest(){
-  const checks=[];
-  try{ await loadRepo(); checks.push('repo: ok'); }catch(e){ checks.push('repo UNBOUND '+e.message); }
-  for(const fn of [getFirehoseCursor,setFirehoseCursor,addLead]) checks.push(fn.name+': probed');
-  return checks.join('\n');
-}
 // --------------------------------------------------------------- settings ---
 // Precedence: env (hard override, no DB needed) > settings table (no redeploy) > default.
 const _settingGet = repoMod
@@ -167,13 +125,17 @@ function settingBool(key, envKey, dflt) {
 
 // ------------------------------------------------------------------ leads ---
 let _upsertLead = null;
-function emitLead(lead) {
+/** Resolves the lead writer without calling it, so probes never write. */
+function leadWriter() {
   if (!_upsertLead) {
     _upsertLead = pick(repoMod,
       ['upsertDiscoveryLead', 'upsertLead', 'insertLead', 'addLead', 'recordLead', 'saveLead'],
       'emitLead');
   }
-  return _upsertLead(lead);
+  return _upsertLead;
+}
+function emitLead(lead) {
+  return leadWriter()(lead);
 }
 
 function leadExists(platform, externalId) {
@@ -185,13 +147,17 @@ function leadExists(platform, externalId) {
 // --------------------------------------------------------------- pipeline ---
 // EVERY media item from every new module goes through here. No other write path.
 let _ingest = null;
-async function ingest(item, ctx) {
+/** Resolves the pipeline entry point without calling it, so probes never process items. */
+function pipelineWriter() {
   if (!_ingest) {
     _ingest = pick(pipelineMod,
       ['processItem', 'runItem', 'ingestItem', 'handleItem', 'process', 'run'],
       'pipeline.processItem');
   }
-  return _ingest(item, ctx);
+  return _ingest;
+}
+async function ingest(item, ctx) {
+  return pipelineWriter()(item, ctx);
 }
 
 // --------------------------------------------------------------- creators ---
@@ -243,8 +209,8 @@ function selfTest() {
   const checks = [
     ['db', () => db()],
     ['loadCursor', () => cursors()],
-    ['emitLead', () => emitLead.call(null, { __probe: true })],
-    ['ingest', () => ingest({ __probe: true })],
+    ['emitLead', () => leadWriter()],
+    ['ingest', () => pipelineWriter()],
     ['listCreators', () => listCreators(1, 0)],
   ];
   for (const [name, fn] of checks) {
@@ -259,6 +225,7 @@ function selfTest() {
 module.exports = {
   log, mkLogger, db,
   loadCursor, saveCursor, settingBool,
+  getFirehoseCursor: loadCursor, setFirehoseCursor: saveCursor,
   emitLead, leadExists, ingest,
   listCreators, findCreatorByHandle, livePressure,
   fetchJSON, fetchText, selfTest,

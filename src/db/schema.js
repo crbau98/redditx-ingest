@@ -609,7 +609,33 @@ function v12(db) {
   `);
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12];
+/** v13: resume position per firehose/stream source, so restarts pick up where they left off. */
+function v13(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS firehose_cursor (
+      source TEXT PRIMARY KEY,
+      cursor TEXT,
+      updated_at INTEGER
+    );
+  `);
+}
+
+/** v14: leads discovered by firehose/stream sources, deduped on (platform, external_id). */
+function v14(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS discovery_leads (
+      platform TEXT NOT NULL,
+      external_id TEXT NOT NULL,
+      handle TEXT,
+      payload TEXT,
+      first_seen_at INTEGER,
+      last_seen_at INTEGER,
+      PRIMARY KEY (platform, external_id)
+    );
+  `);
+}
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

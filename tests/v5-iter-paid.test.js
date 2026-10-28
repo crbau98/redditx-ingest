@@ -46,7 +46,7 @@ const post = (creator, text, platform = 'telegram') => {
 
 describe('iter2: paid-lead tracing parity (Fansly/JFF)', () => {
   test('migration v11 gives leads a service column keyed per service', () => {
-    assert.equal(repo.db.pragma('user_version', { simple: true }), 12);
+    assert.equal(repo.db.pragma('user_version', { simple: true }), 14);
     const cols = repo.db.prepare('PRAGMA table_info(onlyfans_leads)').all().map((c) => c.name);
     assert.ok(cols.includes('service'));
     repo.onlyfans.note('samehandle', { origin: 'post' });

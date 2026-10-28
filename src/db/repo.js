@@ -1666,8 +1666,26 @@ function discoveryTargets({ platform, prefix, staleDays, limit, minMedia = 1, ma
     ORDER BY ds.updated_at IS NOT NULL, ds.updated_at ASC, c.media_count DESC LIMIT @limit`).all({ platform: platform || null, prefix, since, limit, minMedia, maxAccounts });
 }
 
+/** Insert or refresh a firehose/stream lead. Keeps first_seen_at, bumps last_seen_at. */
+function upsertDiscoveryLead({ platform, externalId, handle = null, payload = null }) {
+  if (!platform || !externalId) throw new Error('upsertDiscoveryLead: platform and externalId required');
+  const now = Date.now();
+  db.prepare(`INSERT INTO discovery_leads (platform, external_id, handle, payload, first_seen_at, last_seen_at)
+    VALUES (@platform, @externalId, @handle, @payload, @now, @now)
+    ON CONFLICT(platform, external_id) DO UPDATE SET
+      handle = COALESCE(excluded.handle, discovery_leads.handle),
+      payload = COALESCE(excluded.payload, discovery_leads.payload),
+      last_seen_at = excluded.last_seen_at`)
+    .run({ platform, externalId: String(externalId), handle, payload: payload == null ? null : JSON.stringify(payload), now });
+  return { platform, externalId: String(externalId) };
+}
+
+function getDiscoveryLead(platform, externalId) {
+  return db.prepare('SELECT * FROM discovery_leads WHERE platform = ? AND external_id = ?').get(platform, String(externalId)) || null;
+}
+
 module.exports = {
-  db, nowIso, clampInt, cleanTag, ftsQuery, settings, hosts, blocklist, logAction, suggest, audit,
+  db, nowIso, clampInt, upsertDiscoveryLead, getDiscoveryLead, cleanTag, ftsQuery, settings, hosts, blocklist, logAction, suggest, audit,
   creators, feeds, runs, media, reports, addTags, publicStats, adminOverview, discover,
   candidates, discoveryState, onlyfans, takedowns, mentionSource, discoveryTargets, communityHangouts, PLATFORM_TAGS, GENERIC_TAGS, tagIntel, library,
   serializeMedia, serializeCreator, SELECT_CREATOR_CARD,
