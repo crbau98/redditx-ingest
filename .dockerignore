@@ -16,3 +16,6 @@ tests
 scripts/perf-audit.js
 scripts/seed-demo.js
 docs
+engine.py
+strategies.py
+main.py
