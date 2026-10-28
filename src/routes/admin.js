@@ -16,10 +16,10 @@ const backup = require('../engine/backup');
 const discovery = require('../engine/discovery');
 const lookup = require('../engine/lookup');
 const identity = require('../engine/identity');
-const { adminAuth } = require('../middleware/auth');
+const { adminRateLimit, adminCredentialAuth } = require('../middleware/auth');
 
 const router = express.Router();
-router.use(adminAuth);
+router.use(adminRateLimit, adminCredentialAuth);
 
 const int = repo.clampInt;
 const page = (req, max = 200) => ({ page: int(req.query.page, 0, 100000, 0), limit: int(req.query.limit, 1, max, 50) });

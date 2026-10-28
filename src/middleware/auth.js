@@ -36,6 +36,7 @@ function adminCredentialAuth(req, res, next) {
 
 module.exports = {
   adminAuth: [failedAttempts, adminAuth],
+  adminRateLimit: failedAttempts,
   adminCredentialAuth,
   safeEqual,
 };
