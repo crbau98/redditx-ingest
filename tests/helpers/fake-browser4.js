@@ -50,6 +50,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       envelope({ result: scroll ? { rounds: 2, height: 1200 } : { url: route.final || current(), title: route.title || '', html: route.html || '', next: route.next || null }, expression: 'script' });
       break;
     }
+    case 'network': { // route <pattern> --abort | routes | unroute; routes.json "__routeFail": true makes `route` fail
+      const sub = rest[0]; const file = path.join(dir, 'netroutes.txt');
+      const have = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean) : [];
+      record({ sub, pattern: rest[1], abort: rest.includes('--abort') });
+      if (sub === 'routes') console.log(have.length ? `Request routes (${have.length} registered):\n${have.map((p) => `abort  ${p}`).join('\n')}` : 'No request routes are registered on this tab.');
+      else if (sub === 'route') {
+        if (routes.__routeFail) { console.error('Fetch interception unavailable'); process.exit(1); }
+        fs.appendFileSync(file, `${rest[1]}\n`); console.log(JSON.stringify({ routed: rest[1], action: 'abort', routes: have.length + 1 }));
+      } else if (sub === 'unroute') { fs.rmSync(file, { force: true }); console.log('{"unrouted":"all"}'); }
+      break;
+    }
     default: // open, wait, close ...
       record();
       console.log('ok');
