@@ -168,7 +168,12 @@ BROWSER4_ENABLED=1 npm start                        # BROWSER4_HEADED=1 shows th
 **What it will not do:**
 
 - **Get around a refusal.** A `403`/`429` is never retried through the browser, and a page that answers with a bot-challenge (Cloudflare, CAPTCHA…) ends the render. Nothing is solved or evaded.
-- **Go where PRISM does not go.** A browser bypasses `lib/net.js`'s connect-time DNS guard, so every URL is checked before navigation **and where the browser ended up after redirects**: private/loopback/link-local/metadata addresses, non-http(s) schemes, URLs with credentials, leak sites, paywalled hosts and takedown matches are refused. *Limit, stated plainly:* a page's own sub-requests and a DNS-rebinding trick are not intercepted, so on a shared network also firewall the Browser4 host away from private ranges.
+- **Go where PRISM does not go.** A browser bypasses `lib/net.js`'s connect-time DNS guard, so there are three layers:
+  1. *Before navigation* (the start URL and every "next page" / expansion URL): non-http(s) schemes, URLs with credentials, private/loopback/link-local/metadata addresses **including what the name resolves to**, leak sites, paywalled hosts and takedown matches are refused.
+  2. *Inside the browser* (on whenever private hosts are refused, i.e. production; `BROWSER4_BLOCK_PRIVATE` overrides): requests to literal private, loopback and link-local addresses and local names (`127.*`, `10.*`, `172.16–31.*`, `192.168.*`, `169.254.*`, `localhost`, `*.local`, `*.internal`, IPv6 loopback/ULA/link-local) are **aborted before they are sent**, via CDP request interception. That covers redirect hops, images, scripts and XHR. If the routes cannot be registered, no page is loaded.
+  3. *Afterwards*: where the browser ended up is checked again.
+
+  *Limits, stated plainly:* the browser-level block matches URL patterns, not resolved addresses, so a public-looking **name** that resolves to a private address inside a redirect or sub-request is not stopped; redirect hops to leak/paywalled hosts are noticed only afterwards (the page is discarded, but the request was made); and carrier-grade NAT (`100.64.0.0/10`) is not in the pattern list. On a shared network also firewall the Browser4 host away from private ranges.
 - **Run a shell.** The CLI is started with an argument array; URLs are only ever arguments.
 
 **Growing the library.** Besides per-run pagination and scrolling:

@@ -94,6 +94,9 @@ module.exports = {
     session: String(env.BROWSER4_SESSION || 'prism-ingest').trim(),
     // A visible window (demos, or a human solving a challenge). Without a display Browser4 itself falls back to headless.
     headed: bool(env.BROWSER4_HEADED, false),
+    // Abort browser requests (redirect hops, sub-resources, XHR) to literal private / loopback / link-local addresses and local names.
+    // On whenever PRISM itself refuses private hosts (the production default); there is no point when ALLOW_PRIVATE_HOSTS is set.
+    blockPrivate: bool(env.BROWSER4_BLOCK_PRIVATE, !bool(env.ALLOW_PRIVATE_HOSTS, false)),
     timeoutMs: int(env.BROWSER4_TIMEOUT_MS, 60000),   // one CLI call
     // Worst case for one feed run = plain download (~20 s) + waiting for the shared browser + the render itself, and the
     // engine cuts a feed run off at 150 s: 20 + 40 + 80 stays under it.

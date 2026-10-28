@@ -106,6 +106,8 @@ async function run(seedUrl, { depth = 1, limit = 25, creatorId = null, trustSeed
     const next = [];
     for (const url of frontier) {
       if (result.created >= limit) break;
+      // allowUrl below only guards pagination AFTER a page's first load, so every page entering the browser is checked here
+      if (!(await robotsAllows(url))) { result.notes.push(`${url}: robots.txt disallows this page`); continue; }
       let r;
       try { r = await browser4.renderPages(url, { scrolls: cfg.browser4Scrolls, pages: 1, allowUrl: robotsAllows }); } catch (e) { result.notes.push(`${url}: ${e.message}`); continue; }
       result.visited.push(url);

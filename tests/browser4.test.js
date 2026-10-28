@@ -179,6 +179,23 @@ describe('web pages', () => {
   });
 });
 
+describe('expansion honours robots.txt for every page it renders', () => {
+  test('a depth-2 frontier page that robots.txt disallows is never loaded in the browser', async () => {
+    const seed = `${site.url}/home2`; const open = `${site.url}/open/b`; const hidden = `${site.url}/private/a`; const deep = `${site.url}/deep/1`;
+    setRoutes({
+      [seed]: { html: page('<a href="/private/a">hidden</a><a href="/open/b">open</a>') },
+      [open]: { html: page('<a href="/deep/1">deeper</a>') },
+      [hidden]: { html: page('<a href="/never/1">secret</a>') },
+      [deep]: { html: page('') },
+    });
+    const r = await expand.run(seed, { depth: 2, limit: 10 });
+    assert.deepEqual(gotos(), [seed, open], 'the seed and its allowed child are rendered; the disallowed child never is');
+    assert.ok(repo.feeds.find('web', 'page', deep), 'the allowed child\'s own links are adopted as feeds (not rendered: that would be depth 3)');
+    assert.ok(r.notes.some((n) => n.startsWith(hidden) && /robots\.txt/.test(n)));
+    assert.equal(repo.feeds.find('web', 'page', `${site.url}/never/1`), null, 'nothing was mined from it');
+  });
+});
+
 describe('a busy browser', () => {
   test('a render that waited too long for the shared browser is skipped, not failed', async () => {
     const config = require('../src/config');

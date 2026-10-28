@@ -9,9 +9,13 @@
  *
  * What it will NOT do, on purpose:
  *   - fight access controls. A bot-challenge page (Cloudflare, CAPTCHA ...) ends the render; nothing is solved or evaded.
- *   - visit anything the rest of PRISM refuses to: private / internal addresses (a real browser does not go through
- *     lib/net.js's DNS guard, so every URL is checked here before AND after navigation), leak sites, paywalled hosts and
- *     takedown matches.
+ *   - visit anything the rest of PRISM refuses to. A real browser does not go through lib/net.js's connect-time DNS
+ *     guard, so: (1) the start URL and every "next page" URL are checked before navigation (private/internal addresses
+ *     including what the name resolves to, leak sites, paywalled hosts, takedowns); (2) requests to literal private,
+ *     loopback and link-local addresses and local names are ABORTED INSIDE THE BROWSER (CDP Fetch interception), which
+ *     covers redirect hops, sub-resources and XHR before anything is sent; (3) where the browser ended up is checked
+ *     again afterwards. Not covered: a public-looking NAME that resolves to a private address inside a redirect or
+ *     sub-request, and redirect hops to leak/paywall hosts (found only afterwards) - firewall the host for those.
  *   - run a shell. The CLI is started with execFile and an argument array; page URLs are only ever arguments.
  *
  * One browser session serves the whole process, so renders are strictly serialised.
@@ -116,6 +120,39 @@ async function evalJs(source, { await: wait = false, timeoutMs } = {}) {
   return r;
 }
 
+/* ------------------------------------------------- network-level private blocks */
+// Glob patterns (the documented "plain text = contains" form does not match in Browser4 4.15.1; globs do). A leading `*`
+// also matches the scheme, so http and https are both covered. Chrome canonicalises 2130706433 / 0x7f.1 to 127.0.0.1 first.
+// Deliberately conservative: `*://10.*` also aborts a URL that merely CONTAINS "://10." (a query string, say).
+// Not covered: 100.64.0.0/10 (carrier-grade NAT), which would need 64 patterns.
+const PRIVATE_URL_PATTERNS = (() => {
+  const v4 = ['127.', '0.', '10.', '169.254.', '192.168.', ...Array.from({ length: 16 }, (_, i) => `172.${16 + i}.`)];
+  const out = v4.map((h) => `*://${h}*`);
+  for (const h of ['127.', '10.', '169.254.', '192.168.', 'localhost']) out.push(`*@${h}*`); // credentials in front of the host
+  out.push('*://localhost*', '*://*.localhost*', '*://*.local/*', '*://*.local:*', '*://*.internal/*', '*://*.internal:*',
+    '*://[::*', '*://[fc*', '*://[fd*', '*://[fe8*', '*://[fe9*', '*://[fea*', '*://[feb*', '*://[ff*');
+  return out;
+})();
+const blockPatterns = () => config.browser4.blockPatterns || PRIVATE_URL_PATTERNS; // blockPatterns: tests only
+
+/**
+ * Make sure the browser aborts requests to private addresses before anything navigates. Cheap to repeat (one listing call
+ * when nothing is missing), so it runs before every render: routes belong to a tab and a restarted backend loses them.
+ * Fails CLOSED: if the routes cannot be registered, the page is not loaded.
+ */
+async function ensureBlocks() {
+  if (!config.browser4.blockPrivate) return;
+  const patterns = blockPatterns();
+  const listing = await cli(['network', 'routes'], { json: false, timeoutMs: 20000 });
+  const have = new Set(String(listing).split('\n').map((l) => l.replace(/^abort\s+/, '').trim()));
+  for (const pattern of patterns) {
+    if (have.has(pattern)) continue;
+    try { await cli(['network', 'route', pattern, '--abort'], { json: false, timeoutMs: 20000 }); } catch (e) {
+      throw Object.assign(new Error(`cannot block private addresses in the browser (${e.message}); not loading the page`), { status: 0 });
+    }
+  }
+}
+
 /* ------------------------------------------------------- scripts run in-page */
 const scrollScript = (rounds, settleMs) => `(async () => {
   let last = -1, stable = 0, done = 0;
@@ -180,7 +217,7 @@ function renderPages(url, opts = {}) {
     if (Date.now() - queuedAt > config.browser4.maxQueueWaitMs) throw skip('Browser4 is busy with another page');
     const first = await assertAllowed(url);
     const deadline = Date.now() + budgetMs;
-    try { await ensureOpen(budgetMs); } catch (e) { opened = false; throw e; }
+    try { await ensureOpen(budgetMs); await ensureBlocks(); } catch (e) { opened = false; throw e; }
     const pages = []; const notes = []; const seen = new Set();
     let target = first;
     try {
@@ -235,4 +272,7 @@ async function close() {
   return exclusive(async () => { if (!opened) return; opened = false; try { await cli(['close'], { json: false, timeoutMs: 20000 }); } catch { /* already gone */ } });
 }
 
-module.exports = { enabled, available, status, renderPages, assertAllowed, close, sameSite, _reset: () => { opened = false; availCache = null; } };
+/** Remove the private-address routes (tests that need the browser to reach a local fixture afterwards). */
+const _unblock = () => cli(['network', 'unroute'], { json: false, timeoutMs: 20000 }).catch(() => {});
+
+module.exports = { enabled, available, status, renderPages, assertAllowed, close, sameSite, PRIVATE_URL_PATTERNS, _unblock, _reset: () => { opened = false; availCache = null; } };
