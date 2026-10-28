@@ -45,38 +45,8 @@ function createApp() {
   }));
   app.use(compression({ filter: (req, res) => (req.path.startsWith('/api/stream') || req.path.startsWith('/api/admin/stream') || req.path === '/api/proxy' ? false : compression.filter(req, res)) }));
   if (!config.isTest) app.use(morgan(config.isProd ? 'tiny' : 'dev', { skip: (req) => req.path === '/api/health' || req.path === '/api/proxy' }));
-  import crypto from 'node:crypto';
-import rateLimit from 'express-rate-limit';
-
-// Railway is 1 hop - never true
-app.set('trust proxy', 1);
-
-const adminAuthLimiter = rateLimit({
-  windowMs: 15*60*1000, max: 10, skipSuccessfulRequests: true,
-  standardHeaders:true, legacyHeaders:false
-});
-const adminAuthedLimiter = rateLimit({
-  windowMs: 15*60*1000, max: 200,
-  standardHeaders:true, legacyHeaders:false
-});
-function adminGate(req,res,next){
-  // if your config.js has no adminOpen, delete next line
-  if(config.adminOpen) return next();
-  const expected = config.adminKey || config.adminToken || process.env.ADMIN_KEY || '';
-  if(!expected) return res.status(500).json({error:'admin not configured'});
-  const sent = (req.get('x-admin-key') || (req.get('authorization')||'').replace(/^Bearer\s+/i,'') || '');
-  const a=Buffer.from(String(sent)), b=Buffer.from(String(expected));
-  let ok=false; try{ ok=a.length===b.length && crypto.timingSafeEqual(a,b); }catch{ ok=false; }
-  if(!ok) return res.status(401).json({error:'unauthorized'});
-  next();
-}
-
-// Order matters: limiter -> auth -> limiter -> parser -> routes
-app.use('/api/admin', adminAuthLimiter, adminGate, adminAuthedLimiter, express.json({limit:'12mb'}), adminRoutes);
-
-// apiLimiter must NOT have skip
-const apiLimiter = rateLimit({ windowMs: 60*1000, max: 120, standardHeaders:true, legacyHeaders:false });
-app.use(apiLimiter);
+  app.use('/api/admin/import', express.json({ limit: '12mb' })); // curated configs can be large; everything else stays at 1mb
+  app.use(express.json({ limit: '1mb' }));
 
   // Generous limiter for the JSON API; the media proxy has its own, much higher ceiling
   // (a single page of results legitimately fires dozens of image requests).

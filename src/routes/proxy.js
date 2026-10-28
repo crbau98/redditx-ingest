@@ -30,16 +30,17 @@ const KNOWN_SUFFIXES = [
 ];
 const HLS_TYPES = /^(application\/(vnd\.apple\.mpegurl|x-mpegurl|octet-stream)|audio\/mpegurl|video\/mp2t)/i;
 
-import * as policy from '../sources/_policy.js';
-
-function parseTarget(req){
-  const raw = req.query.url || req.query.target;
-  if(!raw) throw Object.assign(new Error('missing url'),{status:400});
-  const u = new URL(raw);
+function parseTarget(req) {
+  const raw = req.query.url;
+  if (!raw || typeof raw !== 'string' || raw.length > 2048) return { error: [400, 'Missing or invalid url'] };
+  let u;
+  try { u = new URL(raw); } catch { return { error: [400, 'Invalid url'] }; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return { error: [400, 'Invalid protocol'] };
+  if (net.isPrivateHost(u.hostname)) return { error: [403, 'Blocked host'] };
   const host = u.hostname.toLowerCase();
-  if(policy.isDenied(host)) throw Object.assign(new Error(`denied by policy: ${host}`),{status:403});
-  return u;
-}
+  const known = host === config.storeHost || KNOWN_SUFFIXES.some((d) => host === d || host.endsWith(`.${d}`)) || repo.hosts.has(host);
+  if (!known) return { error: [403, 'Host not allowed'] };
+  return { url: u.toString(), host, origin: u.origin };
 }
 
 function sendError(res, [status, message]) {
@@ -117,28 +118,30 @@ router.get('/proxy', async (req, res) => {
 });
 
 /** HLS: rewrite playlist URIs so every segment/variant is fetched through us. */
-router.get('/hls', async (req,res)=>{
-  const depth = parseInt(req.query.d||'0',10)||0;
-  if(depth>4) return res.status(400).send('depth exceeded');
-  const target = parseTarget(req).toString();
-  // fetch via net.open - already re-validates redirects and strips auth cross-host
-  const upstream = await net.open(target, { timeout: 10000 });
-  let text = await upstream.text();
-  // depth-capped rewrite, per-playlist seen set prevents A->B->A loop
-  const seen = new Set();
-  const base = new URL(target);
-  text = text.split('\n').map(line=>{
-    const t=line.trim();
-    if(t && !t.startsWith('#') && t.endsWith('.m3u8')){
-      if(seen.has(t)) return line;
-      seen.add(t);
-      const abs = new URL(t, base).toString();
-      return `/api/hls?url=${encodeURIComponent(abs)}&d=${depth+1}`;
-    }
-    return line;
+router.get('/hls', async (req, res) => {
+  const t = parseTarget(req);
+  if (t.error) return sendError(res, t.error);
+  let r;
+  try { r = await net.request(t.url, { headers: { referer: `${t.origin}/`, accept: 'application/vnd.apple.mpegurl, */*' }, timeout: 15000, maxBytes: 1_500_000, retries: 1 }); }
+  catch (e) { return sendError(res, e.code === 'EBLOCKED' ? [403, 'Blocked host'] : [502, 'Upstream unreachable']); }
+  if (r.status >= 400) return sendError(res, [r.status === 404 ? 404 : 502, 'Upstream error']);
+  const text = r.body.toString('utf8');
+  if (!text.startsWith('#EXTM3U')) return sendError(res, [415, 'Not an HLS playlist']);
+
+  const base = r.url;
+  const rewrite = (uri) => {
+    let abs;
+    try { abs = new URL(uri, base).toString(); } catch { return uri; }
+    const isPlaylist = /\.m3u8(\?|$)/i.test(abs);
+    return `/api/${isPlaylist ? 'hls' : 'proxy'}?url=${encodeURIComponent(abs)}`;
+  };
+  const out = text.split(/\r?\n/).map((line) => {
+    if (!line.trim()) return line;
+    if (line.startsWith('#')) return line.replace(/URI="([^"]+)"/g, (_, u) => `URI="${rewrite(u)}"`);
+    return rewrite(line.trim());
   }).join('\n');
-  res.setHeader('content-type','application/vnd.apple.mpegurl');
-  res.send(text);
+  res.set({ 'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'public, max-age=30', 'Cross-Origin-Resource-Policy': 'same-origin' });
+  res.send(out);
 });
 
 module.exports = router;
