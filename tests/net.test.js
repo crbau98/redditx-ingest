@@ -39,3 +39,8 @@ test('isPrivateHost mirrors the rules for hostnames', () => {
   for (const h of ['localhost', 'a.local', 'x.internal', '[::1]', '127.0.0.1', '10.1.2.3']) assert.equal(net.isPrivateHost(h), true, h);
   for (const h of ['example.com', 'i.redd.it', '8.8.8.8']) assert.equal(net.isPrivateHost(h), false, h);
 });
+
+test('reserved 6to4 and relay-anycast ranges are blocked', () => {
+  assert.equal(net.isPrivateHost('192.88.99.1'), true);
+  assert.equal(net.isPrivateHost('2002:7f00:1::'), true);
+});

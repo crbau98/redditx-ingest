@@ -20,6 +20,7 @@ const net = require('../lib/net');
 const cache = require('../lib/media-cache');
 const repo = require('../db/repo');
 const playback = require('../engine/playback');
+const policy = require('../sources/_policy');
 
 const router = express.Router();
 
@@ -35,6 +36,7 @@ function parseTarget(req) {
   if (!raw || typeof raw !== 'string' || raw.length > 2048) return { error: [400, 'Missing or invalid url'] };
   let u;
   try { u = new URL(raw); } catch { return { error: [400, 'Invalid url'] }; }
+  if (policy.isDenied(u.hostname)) return { error: [403, 'Denied host'] };
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return { error: [400, 'Invalid protocol'] };
   if (net.isPrivateHost(u.hostname)) return { error: [403, 'Blocked host'] };
   const host = u.hostname.toLowerCase();
@@ -119,6 +121,8 @@ router.get('/proxy', async (req, res) => {
 
 /** HLS: rewrite playlist URIs so every segment/variant is fetched through us. */
 router.get('/hls', async (req, res) => {
+  const depth = Math.max(0, Math.min(4, Number.parseInt(req.query.d, 10) || 0));
+  if (Number.parseInt(req.query.d, 10) > 4) return sendError(res, [400, 'HLS playlist depth exceeded']);
   const t = parseTarget(req);
   if (t.error) return sendError(res, t.error);
   let r;
@@ -133,7 +137,8 @@ router.get('/hls', async (req, res) => {
     let abs;
     try { abs = new URL(uri, base).toString(); } catch { return uri; }
     const isPlaylist = /\.m3u8(\?|$)/i.test(abs);
-    return `/api/${isPlaylist ? 'hls' : 'proxy'}?url=${encodeURIComponent(abs)}`;
+    if (isPlaylist) return `/api/hls?url=${encodeURIComponent(abs)}&d=${depth + 1}`;
+    return `/api/proxy?url=${encodeURIComponent(abs)}`;
   };
   const out = text.split(/\r?\n/).map((line) => {
     if (!line.trim()) return line;

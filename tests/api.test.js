@@ -303,6 +303,7 @@ describe('media proxy', () => {
     const variant = await pub(`/api/hls?url=${encodeURIComponent(`${upstream.url}/hls/variant.m3u8`)}`);
     assert.match(variant.text, /URI="\/api\/proxy\?url=[^"]*init\.mp4"/, 'init segment rewritten inside tag attributes');
     assert.match(variant.text, /^\/api\/proxy\?url=.*seg0\.ts/m, 'segments go via /api/proxy');
+    assert.equal((await pub(`/api/hls?d=5&url=${encodeURIComponent(`${upstream.url}/hls/master.m3u8`)}`)).status, 400);
     assert.equal((await pub(`/api/hls?url=${encodeURIComponent(`${upstream.url}/hls/notaplaylist.m3u8`)}`)).status, 415);
   });
 });
