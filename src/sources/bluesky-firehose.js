@@ -1,278 +1,276 @@
-'use strict';
-/**
- * Bluesky Jetstream consumer -> discovery LEADS ONLY. Never writes media rows.
- *
- * Why: polling a seed list structurally cannot surface a creator nobody you
- * already follow has ever mentioned. Jetstream is the whole network, keyless,
- * no API budget.
- *
- * Gate: an adult SELF-LABEL and a real media embed. Self-labels are the only
- * reliable signal; we never infer adultness from post text.
- *
- * Cursor is `time_us`, advanced on EVERY event including discarded ones — it
- * tracks stream position, not interest. Reconnect rewinds by CURSOR_OVERLAP_US
- * so the gap is replayed rather than lost.
- *
- * Steady-state memory at defaults: ~10 MB.
- *   event ring 2000 x ~1.2 KB = 2.4 MB | seen LRU 50k x ~130 B = 6.5 MB
- *   profile LRU 20k x ~60 B = 1.2 MB   | WS frames bounded by MAX_FRAME
- * Nothing grows with uptime. Verified by construction, not by live soak.
- *
- * Fixture-tested against a local mock WS server. NOT live-verified.
- */
+// src/sources/bluesky-firehose.js
+// Bluesky Jetstream firehose -> discovery leads only. Never writes media.
+// Gate: adult self-label AND real media embed. Cursor tracks stream position, not interest.
+// Memory-bounded: RingBuffer, LruSet, TokenBucket. Defaults OFF.
+import * as integration from '../engine/integration.js';
+import { RingBuffer, LruSet, TokenBucket, Backoff, sleep, safeJson, resolveWebSocket } from '../engine/netutil.js';
 
-const policy = require('./_policy');
-const {
-  RingBuffer, LruSet, TokenBucket, Backoff,
-  sleep, safeJson, envNum, envBool, envList, resolveWebSocket,
-} = require('../engine/netutil');
+export const platform = 'bluesky-firehose';
+export const kinds = ['firehose'];
+export const isConfigured = () => envBool('BLUESKY_FIREHOSE_ENABLED', false);
 
-const ID = 'bluesky-firehose';
-const COLLECTION = 'app.bsky.feed.post';
-const MAX_FRAME = 256 * 1024;
-const PUBLIC_API = 'https://public.api.bsky.app';
-
-const DEFAULT_ENDPOINTS = [
-  'wss://jetstream1.us-east.bsky.network/subscribe',
-  'wss://jetstream2.us-east.bsky.network/subscribe',
-  'wss://jetstream1.us-west.bsky.network/subscribe',
-  'wss://jetstream2.us-west.bsky.network/subscribe',
+const ENDPOINTS = [
+  'wss://jetstream1.us-east.bsky.network/subscribe?wantedCollections=app.bsky.feed.post',
+  'wss://jetstream2.us-east.bsky.network/subscribe?wantedCollections=app.bsky.feed.post',
+  'wss://jetstream1.us-west.bsky.network/subscribe?wantedCollections=app.bsky.feed.post',
+  'wss://jetstream2.us-west.bsky.network/subscribe?wantedCollections=app.bsky.feed.post',
 ];
 
-const ADULT = new Set(['porn', 'sexual', 'nudity', 'graphic-media']);
+const ADULT_LABELS = new Set(['porn', 'sexual', 'nudity', 'graphic-media']);
+const CURSOR_KEY = 'bluesky_jetstream_cursor_us';
+const CURSOR_REWIND_US = 5_000_000; // 5s
+const IDLE_TIMEOUT_MS = 90_000;
+const MAX_DEPTH_RECONNECT = 4; // guard against tight loop
+const SEEN_DID_CACHE = 5000;
+const LEAD_DEDUPE_MS = 60_000 * 30;
 
-// ------------------------------------------------------------ record gates ---
+function envBool(k, d){ const v=process.env[k]; if(v==null) return d; return /^(1|true|yes|on)$/i.test(String(v).trim()); }
+function envInt(k, d){ const v=parseInt(process.env[k],10); return Number.isFinite(v)?v:d; }
 
-function selfLabels(record) {
-  const out = [];
-  const vals = record && record.labels && Array.isArray(record.labels.values)
-    ? record.labels.values : [];
-  for (const v of vals) if (v && typeof v.val === 'string') out.push(v.val.toLowerCase());
-  return out;
-}
-
-function hasMediaEmbed(record) {
-  const e = record && record.embed;
-  if (!e || typeof e.$type !== 'string') return false;
-  const t = e.$type;
-  if (t === 'app.bsky.embed.images') return Array.isArray(e.images) && e.images.length > 0;
-  if (t === 'app.bsky.embed.video') return Boolean(e.video);
-  if (t === 'app.bsky.embed.recordWithMedia') {
-    const m = e.media;
-    if (!m || typeof m.$type !== 'string') return false;
-    if (m.$type === 'app.bsky.embed.images') return Array.isArray(m.images) && m.images.length > 0;
-    return m.$type === 'app.bsky.embed.video' ? Boolean(m.video) : false;
+function hasAdultSelfLabel(record){
+  if(!record) return false;
+  const labels = record.labels?.values || record.labels || [];
+  // labels can be [{val:'porn'}, 'porn'] etc
+  for(const l of labels){
+    const v = typeof l==='string' ? l : (l.val || l.value || l.$type || '');
+    if(ADULT_LABELS.has(String(v).toLowerCase())) return true;
   }
-  if (t === 'app.bsky.embed.external') {
-    // Bare link card only counts with a thumbnail and an allowed host.
-    const ext = e.external;
-    if (!ext || !ext.thumb || typeof ext.uri !== 'string') return false;
-    return !policy.isDenied(ext.uri);
-  }
+  // also check record.embed labels fallback? no — only self-labels, per spec
   return false;
 }
 
-function embedKind(record) {
-  const e = record && record.embed;
-  if (!e) return null;
-  if (e.$type === 'app.bsky.embed.recordWithMedia' && e.media) return e.media.$type;
-  return e.$type;
+function hasRealMediaEmbed(record){
+  if(!record?.embed) return false;
+  const t = record.embed.$type || record.embed.type || '';
+  // app.bsky.embed.images, app.bsky.embed.video, app.bsky.embed.recordWithMedia
+  if(t.includes('images') || t.includes('video') || t.includes('recordWithMedia')) return true;
+  // Jetstream may inline images array
+  if(Array.isArray(record.embed.images) && record.embed.images.length>0) return true;
+  if(record.embed.external && record.embed.external.thumb) return false; // link card != media gate unless video/images present
+  return false;
 }
 
-function externalUrls(record) {
-  const urls = [];
-  for (const f of (Array.isArray(record.facets) ? record.facets : [])) {
-    for (const feat of (Array.isArray(f && f.features) ? f.features : [])) {
-      if (feat && feat.$type === 'app.bsky.richtext.facet#link' && typeof feat.uri === 'string') {
-        urls.push(feat.uri);
-      }
-    }
-  }
-  const e = record && record.embed;
-  if (e && e.$type === 'app.bsky.embed.external' && e.external && typeof e.external.uri === 'string') {
-    urls.push(e.external.uri);
-  }
-  return urls.slice(0, 8);
+function extractAtUri(evt){
+  // commit path: at://did/app.bsky.feed.post/rkey
+  const did = evt.did || evt.commit?.repo || '';
+  const rkey = evt.commit?.rkey || evt.commit?.cid || '';
+  const collection = evt.commit?.collection || 'app.bsky.feed.post';
+  if(!did || !rkey) return null;
+  return `at://${did}/${collection}/${rkey}`;
 }
 
-// ------------------------------------------------------------------ source ---
-
-function create(opts = {}) {
-  const I = opts.integration || require('../engine/integration');
-
-  const cfg = {
-    enabled: opts.enabled != null ? opts.enabled : envBool('BLUESKY_FIREHOSE_ENABLED', false),
-    endpoints: opts.endpoints || envList('BLUESKY_JETSTREAM_ENDPOINTS', DEFAULT_ENDPOINTS),
-    leadsPerMinute: opts.leadsPerMinute != null ? opts.leadsPerMinute : envNum('BLUESKY_FIREHOSE_LEADS_PER_MIN', 60),
-    queueSize: opts.queueSize != null ? opts.queueSize : envNum('BLUESKY_FIREHOSE_QUEUE', 2000),
-    seenSize: opts.seenSize != null ? opts.seenSize : envNum('BLUESKY_FIREHOSE_SEEN', 50000),
-    profileCacheSize: envNum('BLUESKY_PROFILE_CACHE', 20000),
-    cursorOverlapUs: opts.cursorOverlapUs != null ? opts.cursorOverlapUs : envNum('BLUESKY_CURSOR_OVERLAP_US', 5_000_000),
-    cursorFlushMs: envNum('BLUESKY_CURSOR_FLUSH_MS', 5000),
-    maxCursorAgeUs: envNum('BLUESKY_MAX_CURSOR_AGE_US', 6 * 3600 * 1_000_000),
-    resolveBatch: 25,
-    resolveIntervalMs: opts.resolveIntervalMs != null ? opts.resolveIntervalMs : 1200,
-    minFollowers: envNum('BLUESKY_MIN_FOLLOWERS', 0),
-    requireAdultLabel: opts.requireAdultLabel != null ? opts.requireAdultLabel : true,
-    publicApi: opts.publicApi || process.env.BLUESKY_PUBLIC_API || PUBLIC_API,
-    idleMs: envNum('BLUESKY_IDLE_MS', 90000),
-  };
-
-  const WS = resolveWebSocket(opts.WebSocketImpl);
-  const log = (lvl, msg, meta) => { try { I.log(lvl, `[${ID}] ${msg}`, meta); } catch { /* never throw */ } };
-
-  const cursorStore = opts.cursorStore || {
-    load: () => I.loadCursor(ID),
-    save: (v) => I.saveCursor(ID, v),
-  };
-
-  const pending = new RingBuffer(cfg.queueSize);
-  const seenDid = new LruSet(cfg.seenSize);
-  const queuedDid = new LruSet(Math.min(cfg.queueSize * 4, 20000));
-  const profileMiss = new LruSet(cfg.profileCacheSize);
-  const bucket = opts.bucket || new TokenBucket({
-    capacity: Math.max(1, cfg.leadsPerMinute),
-    refillPerSec: Math.max(1, cfg.leadsPerMinute) / 60,
-  });
-  const backoff = opts.backoff || new Backoff({ baseMs: 500, maxMs: 60000, jitter: 'full' });
-
-  const stats = {
-    id: ID, running: false, connects: 0, disconnects: 0, messages: 0, commits: 0,
-    adultPosts: 0, queued: 0, dropsQueueFull: 0, dropsRateCap: 0, dropsDenied: 0,
-    leads: 0, resolveCalls: 0, resolveErrors: 0, wsErrors: 0,
-    endpointIndex: 0, cursorUs: null, lastEventAt: null,
-  };
-
-  let running = false;
-  let socket = null;
-  let endpointIdx = 0;
-  let cursorUs = null;
-  let lastSaved = null;
-  let cursorTimer = null;
-  let resolveTimer = null;
-  let loopPromise = null;
-  const ac = new AbortController();
-
-  // ------------------------------------------------------------- cursor ---
-  async function loadCursor() {
-    try {
-      const raw = await cursorStore.load();
-      const n = Number(raw);
-      if (!raw || !Number.isFinite(n) || n <= 0) return null;
-      const ageUs = Date.now() * 1000 - n;
-      if (cfg.maxCursorAgeUs > 0 && ageUs > cfg.maxCursorAgeUs) {
-        log('info', 'cursor older than replay window, starting live', { ageSec: Math.round(ageUs / 1e6) });
-        return null;
-      }
-      return n;
-    } catch (e) { log('warn', 'cursor load failed', { err: e.message }); return null; }
+export class BlueskyFirehose {
+  constructor(opts={}){
+    this.endpoints = opts.endpoints || ENDPOINTS;
+    this.idx = 0;
+    this.ws = null;
+    this.running = false;
+    this.idleTimer = null;
+    this.backoff = new Backoff({ baseMs: 1000, maxMs: 60_000, jitter: true });
+    this.bucket = new TokenBucket({ capacity: envInt('BLUESKY_FIREHOSE_RPS', 20), refillPerSec: envInt('BLUESKY_FIREHOSE_RPS', 20) });
+    this.seenAtUri = new LruSet(SEEN_DID_CACHE);
+    this.recentLeads = new LruSet(2000);
+    this.stats = { received:0, gated:0, leads:0, errors:0, reconnects:0 };
+    this.ring = new RingBuffer(200);
+    this.cursorUs = null;
   }
 
-  async function flushCursor(force) {
-    if (cursorUs == null || (!force && cursorUs === lastSaved)) return;
-    try { await cursorStore.save(String(cursorUs)); lastSaved = cursorUs; }
-    catch (e) { log('warn', 'cursor save failed', { err: e.message }); }
-  }
-
-  // ---------------------------------------------------------- connection ---
-  function buildUrl(base) {
-    const u = new URL(base);
-    u.searchParams.set('wantedCollections', COLLECTION);
-    if (cursorUs != null) {
-      u.searchParams.set('cursor', String(Math.floor(Math.max(1, cursorUs - cfg.cursorOverlapUs))));
+  async start(){
+    if(this.running) return;
+    if(!isConfigured()){
+      integration.log?.('info', '[bluesky-firehose] disabled BLUESKY_FIREHOSE_ENABLED!=true');
+      return;
     }
-    return u.toString();
+    this.running = true;
+    this.cursorUs = await integration.getFirehoseCursor?.(CURSOR_KEY) ?? integration.getSetting?.(CURSOR_KEY) ?? null;
+    // load persisted before loop
+    this.loop();
   }
 
-  function closeSocket(sock, code = 1000, reason = 'shutdown') {
-    if (!sock) return;
-    try {
-      if (sock.readyState === 0 || sock.readyState === 1) sock.close(code, reason);
-      else if (typeof sock.terminate === 'function') sock.terminate();
-    } catch { /* ignore */ }
+  async stop(){
+    this.running = false;
+    clearTimeout(this.idleTimer);
+    try{ this.ws?.close(1000, 'shutdown'); }catch{}
+    this.ws = null;
   }
 
-  function connectOnce(url) {
-    return new Promise((resolve) => {
-      let settled = false;
-      let sock;
-      let idle;
+  endpointUrl(){
+    const base = this.endpoints[this.idx % this.endpoints.length];
+    if(this.cursorUs){
+      const u = String(BigInt(this.cursorUs) - BigInt(CURSOR_REWIND_US) > 0n ? BigInt(this.cursorUs) - BigInt(CURSOR_REWIND_US) : 0n);
+      return base + `&cursor=${encodeURIComponent(u)}`;
+    }
+    return base;
+  }
 
-      const done = (why, meta) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(idle);
-        stats.disconnects++;
-        if (socket === sock) socket = null;
-        closeSocket(sock, 1000, 'cycle');
-        resolve({ why, meta });
-      };
-
-      try { sock = new WS(url); }
-      catch (err) { stats.wsErrors++; return resolve({ why: 'construct', meta: err.message }); }
-
-      socket = sock;
-      try { if ('binaryType' in sock) sock.binaryType = 'arraybuffer'; } catch { /* lib differs */ }
-
-      const bump = () => { clearTimeout(idle); idle = setTimeout(() => done('idle'), cfg.idleMs); };
-      bump();
-
-      const onOpen = () => {
-        stats.connects++;
-        backoff.reset();
-        log('info', 'connected', { url: url.split('?')[0], cursor: cursorUs });
-      };
-      const onMessage = (ev) => {
-        bump();
-        let data = ev && ev.data !== undefined ? ev.data : ev;
-        if (data instanceof ArrayBuffer) data = Buffer.from(data);
-        if (Buffer.isBuffer(data)) {
-          if (data.length > MAX_FRAME) return;
-          data = data.toString('utf8');
+  async loop(){
+    let consecutiveFails = 0;
+    while(this.running){
+      // respect live pressure — yield to ingestion
+      if(integration.livePressure?.() > 0.85){
+        await sleep(5000);
+        continue;
+      }
+      const url = this.endpointUrl();
+      try{
+        await this.connectOnce(url);
+        consecutiveFails = 0;
+        this.backoff.reset();
+      }catch(e){
+        consecutiveFails++;
+        this.stats.errors++;
+        this.ring.push({ t: Date.now(), e: String(e).slice(0,300), url });
+        integration.log?.('warn', `[bluesky-firehose] connect fail ${consecutiveFails} ${e.message} ${url}`);
+        if(consecutiveFails >= MAX_DEPTH_RECONNECT){
+          // rotate endpoint on tight failures
+          this.idx = (this.idx+1) % this.endpoints.length;
+          consecutiveFails = 0;
         }
-        if (typeof data !== 'string' || data.length > MAX_FRAME) return;
-        handleMessage(data);
-      };
-      const onError = (err) => { stats.wsErrors++; done('error', (err && (err.message || err.type)) || 'ws error'); };
-      const onClose = (ev) => done('close', ev && ev.code);
-
-      if (typeof sock.addEventListener === 'function') {
-        sock.addEventListener('open', onOpen);
-        sock.addEventListener('message', onMessage);
-        sock.addEventListener('error', onError);
-        sock.addEventListener('close', onClose);
-      } else {
-        sock.on('open', onOpen);
-        sock.on('message', (d) => onMessage({ data: d }));
-        sock.on('error', onError);
-        sock.on('close', onClose);
+        const delay = this.backoff.next();
+        await sleep(delay);
+        this.idx = (this.idx+1) % this.endpoints.length;
+        this.stats.reconnects++;
       }
+    }
+  }
+
+  async connectOnce(url){
+    const WS = resolveWebSocket();
+    if(!WS) throw new Error('ws missing: npm install ws');
+    return new Promise((resolve, reject)=>{
+      const ws = new WS(url, { handshakeTimeout: 15000 });
+      this.ws = ws;
+      let settled = false;
+      let lastMsgAt = Date.now();
+
+      const armIdle = ()=>{
+        clearTimeout(this.idleTimer);
+        this.idleTimer = setTimeout(()=>{
+          try{ ws.terminate?.() || ws.close(); }catch{}
+        }, IDLE_TIMEOUT_MS);
+      };
+      armIdle();
+
+      ws.on('open', ()=> {
+        integration.log?.('info', `[bluesky-firehose] open ${url} cursor=${this.cursorUs||0}`);
+      });
+
+      ws.on('message', async (data)=>{
+        lastMsgAt = Date.now();
+        armIdle();
+        // ingress rate limit BEFORE any DID->handle HTTP
+        if(!this.bucket.tryConsume(1)){
+          this.stats.received++;
+          // still advance cursor even when rate-limited — cursor = stream position
+          try{
+            const peek = safeJson(data);
+            if(peek?.time_us) this.cursorUs = String(peek.time_us);
+          }catch{}
+          return;
+        }
+        await this.handleMessage(data);
+      });
+
+      ws.on('error', (err)=>{
+        clearTimeout(this.idleTimer);
+        if(!settled){ settled=true; reject(err); }
+      });
+
+      ws.on('close', (code, reason)=>{
+        clearTimeout(this.idleTimer);
+        // persist cursor on close
+        if(this.cursorUs){
+          integration.setFirehoseCursor?.(CURSOR_KEY, this.cursorUs).catch(()=>{});
+          integration.setSetting?.(CURSOR_KEY, this.cursorUs).catch(()=>{});
+        }
+        if(!settled){
+          settled=true;
+          // treat clean close as reconnect case
+          reject(new Error(`ws close ${code} ${String(reason).slice(0,100)}`));
+        }
+      });
+
+      // watchdog extra: if no msg for IDLE_TIMEOUT, close handled above
     });
   }
 
-  function handleMessage(text) {
-    stats.messages++;
-    const evt = safeJson(text, MAX_FRAME);
-    if (!evt || typeof evt !== 'object') return;
+  async handleMessage(raw){
+    let evt;
+    try{ evt = safeJson(raw); }catch{ return; }
+    if(!evt || evt.kind !== 'commit') {
+      // still advance cursor if present — even non-commit events track position
+      if(evt?.time_us) {
+        this.cursorUs = String(evt.time_us);
+        if(this.stats.received % 500 === 0) integration.setFirehoseCursor?.(CURSOR_KEY, this.cursorUs).catch(()=>{});
+      }
+      return;
+    }
+    this.stats.received++;
+    // ADVANCE CURSOR ON EVERY EVENT INCLUDING DISCARDED — tracks stream, not interest
+    if(evt.time_us) this.cursorUs = String(evt.time_us);
 
-    // Cursor advances on EVERY event, kept or discarded.
-    if (typeof evt.time_us === 'number' && evt.time_us > 0) {
-      if (cursorUs == null || evt.time_us > cursorUs) { cursorUs = evt.time_us; stats.cursorUs = cursorUs; }
-      stats.lastEventAt = Date.now();
+    const record = evt.commit?.record;
+    if(!record) return;
+    // collection filter already via wantedCollections, but double-check
+    if(evt.commit.collection !== 'app.bsky.feed.post') return;
+
+    // GATE: adult self-label AND real media embed
+    const adult = hasAdultSelfLabel(record);
+    const media = hasRealMediaEmbed(record);
+    if(!(adult && media)){
+      return;
+    }
+    this.stats.gated++;
+
+    const atUri = extractAtUri(evt);
+    if(!atUri || this.seenAtUri.has(atUri)) return;
+    this.seenAtUri.add(atUri);
+
+    // dedupe lead by did+time bucket
+    const leadKey = `${evt.did}:${record.text?.slice(0,40) || ''}`;
+    if(this.recentLeads.has(leadKey)) return;
+
+    // Optional DID->handle resolution — token-bucketed already, do not spend if under pressure
+    // Integration shim resolves real symbol; if unbound it throws.
+    const handle = await integration.resolveBskyHandle?.(evt.did).catch(()=>null) || evt.did;
+
+    const lead = {
+      source_module: 'bluesky-firehose',
+      platform: 'bluesky',
+      kind: 'post',
+      url: `https://bsky.app/profile/${handle}/post/${evt.commit.rkey}`,
+      at_uri: atUri,
+      did: evt.did,
+      handle,
+      text: (record.text || '').slice(0,600),
+      time_us: this.cursorUs,
+      evidence_json: JSON.stringify({ adultLabel: true, hasMedia: true, via: 'jetstream', time_us: this.cursorUs }),
+    };
+
+    // Leads only — never auto-follow, never media rows
+    try{
+      await integration.addLead?.(lead) ?? integration.addDiscoveryLead?.(lead) ?? integration.enqueueLead?.(lead);
+      this.recentLeads.add(leadKey);
+      this.stats.leads++;
+      if(this.stats.leads % 100 === 0){
+        integration.log?.('info', `[bluesky-firehose] leads=${this.stats.leads} received=${this.stats.received} gated=${this.stats.gated}`);
+      }
+    }catch(e){
+      // integration not bound yet — loud fail per shim design
+      integration.log?.('error', `[bluesky-firehose] addLead UNBOUND ${e.message}`);
+      throw e;
     }
 
-    if (evt.kind !== 'commit') return;
-    const c = evt.commit;
-    if (!c || c.operation !== 'create' || c.collection !== COLLECTION) return;
-    stats.commits++;
+    // periodic cursor persist (not every event to avoid SQLite pressure)
+    if(this.stats.received % 200 === 0 && this.cursorUs){
+      integration.setFirehoseCursor?.(CURSOR_KEY, this.cursorUs).catch(()=>{});
+    }
+  }
 
-    const record = c.record;
-    if (!record || typeof record !== 'object') return;
+  getStats(){ return { ...this.stats, cursorUs: this.cursorUs, endpoint: this.endpointUrl() }; }
+}
 
-    const labels = selfLabels(record);
-    if (cfg.requireAdultLabel && !labels.some((l) => ADULT.has(l))) return;
-    if (!hasMediaEmbed(record)) return;
-    stats.adultPosts++;
-
-    const did = typeof evt.did === 'string' ? evt.did : null;
-    if (
+let singleton = null;
+export function start(opts){ singleton = new BlueskyFirehose(opts); return singleton.start(); }
+export function stop(){ return singleton?.stop(); }
+export default BlueskyFirehose;
