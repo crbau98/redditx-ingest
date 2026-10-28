@@ -14,6 +14,7 @@ const followRoutes = require('./routes/follow');
 const proxyRoutes = require('./routes/proxy');
 const adminRoutes = require('./routes/admin');
 const age = require('./middleware/age');
+const { adminCredentialAuth } = require('./middleware/auth');
 
 function createApp() {
   const app = express();
@@ -45,6 +46,8 @@ function createApp() {
   }));
   app.use(compression({ filter: (req, res) => (req.path.startsWith('/api/stream') || req.path.startsWith('/api/admin/stream') || req.path === '/api/proxy' ? false : compression.filter(req, res)) }));
   if (!config.isTest) app.use(morgan(config.isProd ? 'tiny' : 'dev', { skip: (req) => req.path === '/api/health' || req.path === '/api/proxy' }));
+  // Auth runs before the large body parser so unauthenticated uploads are rejected without being read.
+  app.use('/api/admin/import', adminCredentialAuth);
   app.use('/api/admin/import', express.json({ limit: '12mb' })); // curated configs can be large; everything else stays at 1mb
   app.use(express.json({ limit: '1mb' }));
 

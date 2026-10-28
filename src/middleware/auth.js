@@ -20,6 +20,10 @@ const failedAttempts = rateLimit({
 });
 
 function adminAuth(req, res, next) {
+  return adminCredentialAuth(req, res, next);
+}
+
+function adminCredentialAuth(req, res, next) {
   if (!config.adminKey) {
     if (config.adminOpen) return next(); // development convenience only
     return res.status(503).json({ error: 'Admin is disabled. Set the ADMIN_KEY environment variable.' });
@@ -30,4 +34,9 @@ function adminAuth(req, res, next) {
   return res.status(401).json({ error: 'Unauthorized: invalid or missing admin key' });
 }
 
-module.exports = { adminAuth: [failedAttempts, adminAuth], safeEqual };
+module.exports = {
+  adminAuth: [failedAttempts, adminAuth],
+  adminRateLimit: failedAttempts,
+  adminCredentialAuth,
+  safeEqual,
+};
