@@ -10,6 +10,9 @@ const age = require('../middleware/age');
 const { publicAccounts } = require('../services/targets');
 const { understand, buildVocabulary, PAID } = require('../lib/query');
 const { search } = require('../engine/search');
+const ai = require('../engine/ai');
+const claude = require('../lib/claude');
+const settingsStore = require('../settings');
 const { creatorOnlyFans } = require('../lib/onlyfans');
 const { creatorPaid } = require('../lib/paid');
 const { normAlias } = require('../lib/alias');
@@ -148,6 +151,7 @@ router.get('/meta', (req, res) => {
     name: 'PRISM', version: config.version,
     ageGate: { enforce: config.ageGateEnforce, verified: age.isVerified(req) },
     platforms: registry.list().filter((a) => !['web', 'linkinbio'].includes(a.platform)).map((a) => ({ platform: a.platform, label: a.label, color: a.color })),
+    ai: { search: claude.configured() && settingsStore.get().aiSearch },
   });
 });
 
@@ -311,36 +315,73 @@ router.get('/recommend/creators', (req, res) => {
 
 router.get('/graph', (req, res) => res.json(graphCached()));
 
-/** Plain-language search → structured filters (see src/lib/query.js). */
-router.get('/understand', (req, res) => {
-  const q = typeof req.query.q === 'string' ? req.query.q : '';
-  const u = understand(q, vocabCached());
+/** /api/understand's answer for an understood query. */
+function understoodPayload(u) {
   const query = {
     type: u.type, sort: u.sort, since: u.since, platform: u.platform, community: u.community, paid: u.paid, build: u.build,
     tags: u.tags.length ? u.tags.join(',') : undefined, creator: u.creator ? u.creator.id : undefined, q: u.text || undefined,
   };
-  res.json({
+  return {
     understood: u.understood, query, chips: u.chips.map((c) => ({ key: c.key, value: c.key === 'creator' ? c.value.id : c.value, label: c.label })),
     creator: u.creator ? { id: u.creator.id, handle: u.creator.handle, display_name: u.creator.display_name } : null,
     text: u.text, corrections: u.corrections,
-  });
+  };
+}
+
+/** Plain-language search → structured filters (see src/lib/query.js). */
+router.get('/understand', (req, res) => {
+  const q = typeof req.query.q === 'string' ? req.query.q : '';
+  res.json(understoodPayload(understand(q, vocabCached())));
 });
 
-/** One search box: Creators, Posts and Tags for the understood query (see src/engine/search.js). */
-router.get('/search', (req, res) => {
+// Each AI reading is one paid API request (answers are cached, and lib/claude enforces a daily budget on top). Over the
+// limit, the rules' reading is answered instead: a search box never shows a 429.
+const aiLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 60, standardHeaders: false, legacyHeaders: false, handler: (req, res, next) => { req.aiLimited = true; next(); } });
+
+/**
+ * The same, read by Claude (engine/ai.js) for a search the rules left words over in. Answers {ai: null} when Claude is
+ * off, unavailable, or adds nothing over the rules; otherwise the understood query plus {ai: {rewritten, note}}.
+ */
+router.get('/understand/ai', aiLimiter, async (req, res, next) => { try {
   const q = typeof req.query.q === 'string' ? req.query.q.slice(0, 200) : '';
-  if (!q.trim()) return res.json({ understood: false, query: {}, relaxed: false, chips: [], corrections: [], creators: [], tags: [], posts: { items: [], total: 0, page: 0, limit: 0 } });
-  const r = search(q, vocabCached(), {
+  const vocab = vocabCached();
+  const rules = understand(q, vocab);
+  if (!q.trim() || !rules.text || req.aiLimited) return res.json({ ...understoodPayload(rules), ai: null });
+  const r = await ai.readSearch(q, vocab);
+  if (!r || !r.rewritten || !r.u.understood) return res.json({ ...understoodPayload(rules), ai: r ? { rewritten: '', note: r.note } : null });
+  res.json({ ...understoodPayload(r.u), ai: { rewritten: r.rewritten, note: r.note } });
+} catch (e) { next(e); } });
+
+/**
+ * One search box: Creators, Posts and Tags for the understood query (see src/engine/search.js). With ai=1, a search the
+ * rules left words over in is read by Claude first, and its reading is used when it finds anything.
+ */
+const aiSearchLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 60, standardHeaders: false, legacyHeaders: false, skip: (req) => req.query.ai !== '1', handler: (req, res, next) => { req.aiLimited = true; next(); } });
+router.get('/search', aiSearchLimiter, async (req, res, next) => { try {
+  const q = typeof req.query.q === 'string' ? req.query.q.slice(0, 200) : '';
+  if (!q.trim()) return res.json({ understood: false, query: {}, relaxed: false, chips: [], corrections: [], creators: [], tags: [], posts: { items: [], total: 0, page: 0, limit: 0 }, ai: null });
+  const opts = {
     page: repo.clampInt(req.query.page, 0, 1000, 0), limit: repo.clampInt(req.query.limit, 1, 60, 24),
     type: req.query.type === 'image' || req.query.type === 'video' ? req.query.type : undefined,
     sort: SORTS.has(req.query.sort) ? req.query.sort : undefined,
-  });
+  };
+  const vocab = vocabCached();
+  let r = search(q, vocab, opts);
+  let aiInfo = null;
+  if (req.query.ai === '1' && !req.aiLimited && understand(q, vocab).text) {
+    const read = await ai.readSearch(q, vocab).catch(() => null);
+    if (read && read.rewritten) {
+      const alt = search(read.rewritten, vocab, opts);
+      if (alt.posts.items.length || alt.creators.length) { r = alt; aiInfo = { rewritten: read.rewritten, note: read.note }; }
+    }
+  }
   res.json({
     ...r,
+    ai: aiInfo,
     creators: r.creators.map((c) => ({ ...publicCreator(c), match: c.match })),
     posts: { ...r.posts, items: r.posts.items.map(publicMedia) },
   });
-});
+} catch (e) { next(e); } });
 
 router.get('/tags/related', (req, res) => {
   const names = typeof req.query.tags === 'string' ? req.query.tags.split(',').slice(0, 4) : [];

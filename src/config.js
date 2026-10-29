@@ -77,6 +77,9 @@ module.exports = {
     keenableKey: env.KEENABLE_API_KEY || '',
     // Bright Data (https://brightdata.com) Discover API: intent-ranked web search. BRIGHTDATA_API_KEY is accepted too (same token).
     brightdataKey: env.BRIGHTDATA_API_TOKEN || env.BRIGHTDATA_API_KEY || '',
+    // Anthropic API key: Claude reads searches, plans discovery queries, triages discovered accounts and (as a last-resort
+    // search provider) searches the web. Everything AI is inert without it.
+    anthropicKey: env.ANTHROPIC_API_KEY || '',
     // Telegram Bot API token (from @BotFather, "123456:ABC…"): channel metadata and existence checks.
     telegramBot: env.TELEGRAM_API_KEY || env.TELEGRAM_BOT_TOKEN || '',
   },
@@ -85,8 +88,15 @@ module.exports = {
   searxngUrl: String(env.SEARXNG_URL || '').trim(),
   searxngEngines: String(env.SEARXNG_ENGINES || '').trim(),
   ddgEnabled: /^(1|true|yes|on)$/i.test(String(env.DDG_SEARCH || '')),
-  searchProviders: list(env.SEARCH_PROVIDERS, ['keenable', 'brave', 'brightdata', 'ddg', 'searxng']),
+  searchProviders: list(env.SEARCH_PROVIDERS, ['keenable', 'brave', 'brightdata', 'ddg', 'searxng', 'claude']),
   // What Discover ranks results against: the intent steers it toward public creator pages and away from paid / pirated sites.
+  // Claude (Anthropic API). Text only: PRISM never sends pictures or videos to it.
+  anthropic: {
+    model: String(env.ANTHROPIC_MODEL || 'claude-opus-5-5').trim(),
+    timeoutMs: int(env.ANTHROPIC_TIMEOUT_MS, 60000),
+    // Ask the API to retry a request a safety classifier declined on a fallback model (server-side, beta; Claude API only).
+    fallbacks: !/^(0|false|no|off)$/i.test(String(env.ANTHROPIC_FALLBACKS || '1')),
+  },
   brightdata: {
     intent: String(env.BRIGHTDATA_DISCOVER_INTENT || 'Public creator profiles, portfolios, galleries and link-in-bio pages, and the creator\'s own public social accounts. Not paywalled subscription sites and not leaked or pirated copies of paid content.').trim(),
     minRelevance: parseFloat(env.BRIGHTDATA_MIN_RELEVANCE) || 0,   // drop results scored below this (0 = keep all, ranked)
@@ -157,6 +167,7 @@ module.exports = {
     telegramWeb: String(env.TELEGRAM_WEB_BASE_URL || 'https://t.me').replace(/\/+$/, ''),
     keenable: env.KEENABLE_BASE_URL || 'https://api.keenable.ai/mcp',
     brightdata: String(env.BRIGHTDATA_BASE_URL || 'https://api.brightdata.com').replace(/\/+$/, ''),
+    anthropic: String(env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/+$/, ''),
     // Tumblr's global tag feeds (blog feeds live on <blog>.tumblr.com or the blog's own domain).
     tumblr: String(env.TUMBLR_BASE_URL || 'https://www.tumblr.com').replace(/\/+$/, ''),
   },
