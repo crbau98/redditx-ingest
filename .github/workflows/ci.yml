@@ -3,6 +3,9 @@ on:
   push:
     branches: [main]
   pull_request:
+# Both jobs only read the repository (artifact upload does not use GITHUB_TOKEN permissions).
+permissions:
+  contents: read
 jobs:
   test:
     runs-on: ubuntu-latest
