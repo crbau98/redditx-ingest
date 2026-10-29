@@ -20,11 +20,20 @@ export async function understand(text) {
   return p;
 }
 
+// Set at boot from /api/meta: the server has Claude read searches the rules leave words over in.
+let aiSearch = false;
+export function setAiSearch(on) { aiSearch = !!on; }
+
 /** Explore parameters for a typed query (falls back to plain words). */
 export async function smartQuery(text) {
   const raw = String(text || '').trim();
   if (!raw) return {};
   const u = await understand(raw);
+  // Words the rules could not place: ask for Claude's reading (one request, on Enter only, never while typing).
+  if (aiSearch && u && u.text) {
+    const a = await Promise.race([get('/api/understand/ai', { q: raw }).catch(() => null), new Promise((r) => setTimeout(() => r(null), 16000))]);
+    if (a && a.ai && a.ai.rewritten && a.understood) return { ...a.query, smart: '1', raw, ai: a.ai.note || 'Read by AI' };
+  }
   if (!u || !u.understood) return { q: raw };
   return { ...u.query, smart: '1', raw };
 }

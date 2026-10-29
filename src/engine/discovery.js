@@ -54,8 +54,9 @@ const bskyHttp = require('../sources/http').forPlatform('bluesky', 400);
 // hangout: a community where several followed creators post (per creator, max 6)
 // ofconfirmed: the account links to the exact OnlyFans page we were looking for (same person, proven)
 // onlyfans: the account has the same handle as an OnlyFans page creators promote (likely the same person)
-const WEIGHTS = { identity: 6, mention: 3, cofollow: 1.5, search: 2, similar: 2, hangout: 1.5, ofconfirmed: 8, onlyfans: 2 };
-const CAPS = { identity: 1, mention: 5, cofollow: 8, search: 3, similar: 4, hangout: 6, ofconfirmed: 1, onlyfans: 1 };
+// ai: Claude read the public name and bio and judged it an adult male creator (engine/ai.js triage).
+const WEIGHTS = { identity: 6, mention: 3, cofollow: 1.5, search: 2, similar: 2, hangout: 1.5, ofconfirmed: 8, onlyfans: 2, ai: 2 };
+const CAPS = { identity: 1, mention: 5, cofollow: 8, search: 3, similar: 4, hangout: 6, ofconfirmed: 1, onlyfans: 1, ai: 1 };
 const FOLLOWABLE_KINDS = new Set(['user', 'page']);
 // Communities and custom feeds mix many posters, so they are held to a stricter bar than people.
 const SHARED_KINDS = new Set(['community', 'feedgen', 'list', 'niche']);
@@ -335,7 +336,9 @@ async function braveIdentity({ creators = 3, budget, aborted = () => false } = {
 
 /** Rotate through the admin's topic searches; every profile link in the results becomes a lead. */
 async function braveTopics({ queries = 1, budget, aborted = () => false } = {}) {
-  const list = String(settingsStore.get().discoveryQueries || '').split('\n').map((q) => q.trim()).filter(Boolean);
+  // The admin's queries first, then the ones Claude planned today (engine/ai.js; empty without it).
+  const own = String(settingsStore.get().discoveryQueries || '').split('\n').map((q) => q.trim()).filter(Boolean);
+  const list = [...own, ...require('./ai').plannedQueries().filter((q) => !own.some((o) => o.toLowerCase() === q.toLowerCase()))];
   if (!list.length) return { searched: 0, found: 0 };
   let idx = parseInt(repo.discoveryState.get('brave.topics.index', '0'), 10) || 0;
   let found = 0; let searched = 0;
@@ -1241,6 +1244,7 @@ async function run({ trigger = 'schedule' } = {}) {
     if (websearch.configured() && (s.braveDailyBudget > 0 || websearch.PROVIDERS.searxng.configured())) {
       // SearXNG costs nothing per query: search more per run when it is there (metered providers keep the daily budget either way).
       const free = websearch.PROVIDERS.searxng.configured();
+      report.aiQueries = await require('./ai').planQueries();
       report.identity = await braveIdentity({ creators: free ? 5 : 3, budget: s.braveDailyBudget, aborted });
       report.topics = await braveTopics({ queries: free ? 3 : 1, budget: s.braveDailyBudget, aborted });
     }
@@ -1255,6 +1259,7 @@ async function run({ trigger = 'schedule' } = {}) {
     }
     report.identities = require('./identity').scan();
     report.enrich = await enrich();
+    report.aiTriage = await require('./ai').triage();
     report.promote = s.autoDiscover || trigger === 'manual' ? promote(s) : { followed: 0, linked: 0 };
     report.pruned = repo.candidates.prune();
     events.log('INFO', `Discovery ${trigger === 'manual' ? '(manual) ' : ''}finished: ${report.mentions.found} mention leads, ${report.graph ? report.graph.found : 0} graph leads, ${report.topics ? report.topics.found : 0} search leads, ${report.communities ? report.communities.found : 0} community/feed leads, ${report.hangouts ? report.hangouts.found : 0} hangouts, ${report.lookalikes ? report.lookalikes.found : 0} lookalikes, ${report.people ? report.people.found : 0} people-search leads, ${report.identity ? report.identity.linked : 0} identity matches, ${report.seeds ? report.seeds.followed : 0} named creators found, ${report.onlyfans ? report.onlyfans.found : 0} OnlyFans creators traced (${report.onlyfans ? report.onlyfans.linked : 0} accounts linked), ${report.identities.links} same-creator links (${report.identities.merged} merged); followed ${report.promote.followed}, linked ${report.promote.linked}`);
@@ -1300,6 +1305,7 @@ function status() {
     telegramBot: tgBot.configured(), xApi: !!config.creds.xBearer, communities: s.discoveryCommunities, autoCommunities: s.discoveryAutoCommunities, expand: s.discoveryExpand,
     onlyfans: { enabled: s.discoveryOnlyFans, ...repo.onlyfans.counts() },
     seeds: seedStatus(),
+    ai: { ...require('../lib/claude').status(), discovery: s.aiDiscovery, plannedQueries: require('./ai').plannedQueries() },
     auto: s.autoDiscover, intervalMin: s.discoveryIntervalMin, threshold: s.discoveryAutoFollowScore,
   };
 }

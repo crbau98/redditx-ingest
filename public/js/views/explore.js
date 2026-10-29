@@ -15,7 +15,7 @@ export async function explore(root, { query }) {
     type: query.get('type') || '', sort: query.get('sort') || (query.get('q') ? 'relevance' : 'recent'), platform: query.get('platform') || '',
     community: query.get('community') || '', tag: query.get('tag') || '', q: query.get('q') || '', since: query.get('since') || '', following: query.get('following') || '',
     tags: query.get('tags') || '', anytags: query.get('anytags') || '', creator: query.get('creator') || '', after: query.get('after') || '',
-    smart: query.get('smart') || '', raw: query.get('raw') || '', relaxed: query.get('relaxed') || '', from: query.get('from') || '', norelax: query.get('norelax') || '', label: query.get('label') || '',
+    smart: query.get('smart') || '', raw: query.get('raw') || '', ai: query.get('ai') || '', relaxed: query.get('relaxed') || '', from: query.get('from') || '', norelax: query.get('norelax') || '', label: query.get('label') || '',
   };
   const filterOnly = (x) => Object.fromEntries(Object.entries(x).filter(([k]) => !UI_KEYS.includes(k)));
   // Changing a filter by hand ends the "relaxed" notice (the new filters are the user's own now).
@@ -83,7 +83,7 @@ export async function explore(root, { query }) {
     banner = h('div', { class: 'understood', role: 'status' },
       h('div', { class: 'u-head' }, h('span', { class: 'u-spark' }, icon('sparkle', 'sm')), h('span', null, 'Understood as'), h('div', { class: 'u-chips' }, active.splice(0)),
         h('a', { class: 'u-raw', href: href('/explore', { q: f.raw }), title: 'Run a plain full-text search instead' }, 'Search the exact words')),
-      fixes);
+      fixes, f.ai ? h('div', { class: 'u-fixes u-ai' }, icon('sparkle', 'sm'), `Read by AI: ${f.ai}`) : null);
     understand(f.raw).then((u) => {
       if (u && u.corrections && u.corrections.length) fixes.replaceChildren(icon('check', 'sm'), 'Spelling fixed: ', ...u.corrections.map((c, i) => h('span', null, i ? ', ' : '', h('s', null, c.from), ' → ', h('b', null, `#${c.to}`))));
     });

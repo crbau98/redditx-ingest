@@ -11,7 +11,7 @@ import { openMenu } from './components/menu.js';
 import { dropFeedStash } from './components/feed.js';
 import { attachSuggest } from './components/suggest.js';
 import { dur, sharedMotionBusy, spring } from './components/transitions.js';
-import { smartSearch } from './smart.js';
+import { smartSearch, setAiSearch } from './smart.js';
 import { home } from './views/home.js';
 import { explore } from './views/explore.js';
 import { creators } from './views/creators.js';
@@ -276,6 +276,7 @@ async function boot() {
   let meta;
   try { meta = await get('/api/meta'); } catch { meta = { ageGate: { enforce: false, verified: true }, platforms: [] }; }
   for (const pl of meta.platforms || []) platforms.map[pl.platform] = pl;
+  setAiSearch(!!(meta.ai && meta.ai.search));
   if (meta.ageGate && meta.ageGate.enforce && !meta.ageGate.verified) await ensureAgeGate();
 
   const shell = buildShell();
