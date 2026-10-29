@@ -192,6 +192,42 @@ Expansion is bounded on purpose (same site only, depth ≤ 2, ≤ 100 feeds per 
 
 **Tests.** `npm test` includes the Browser4 suites against a fake `browser4-cli` (no Chrome needed). The real browser is exercised by an opt-in suite against a JavaScript-built fixture site: `BROWSER4_LIVE=1 node --test tests/browser4.live.test.js` (with a `DISPLAY`, the window is shown).
 
+## Playwright: the second browser engine, UI tests and audits
+
+PRISM can read JavaScript-built pages with either browser. **`RENDER_ENGINE`** picks one; the default `auto` uses Browser4 when `BROWSER4_ENABLED=1`, otherwise Playwright when `PLAYWRIGHT_ENABLED=1`. Every setting above ("Browser rendering: …") applies to both, and so does everything said about what is never fetched.
+
+**Playwright** (`lib/playwright.js`) runs Chromium inside PRISM's own process through the [Playwright](https://playwright.dev) library: no external CLI, no JVM, and a fresh isolated browser context for every page.
+- *Set it up:* `npx playwright install --with-deps chromium`, then `PLAYWRIGHT_ENABLED=1`. Playwright is an optional dependency. On Alpine (the Docker image) use the system Chromium instead: `apk add chromium` and `PLAYWRIGHT_CHROMIUM_PATH=/usr/bin/chromium-browser`. `PLAYWRIGHT_HEADED=1` shows the window.
+- *Network policy (stronger than Browser4's):* every request the browser makes goes through **PRISM's guard proxy** (`lib/guardproxy.js`), a small proxy on 127.0.0.1 with a per-process random credential. That covers navigations, redirect hops, images, `fetch()`, workers and WebSockets. The proxy resolves each name itself and connects to the checked address. So a private, loopback or link-local address is refused, and so is a public-looking name that resolves to one. There is no DNS-rebinding window, and leak, paywalled and takedown hosts are refused at every hop, not just noticed afterwards. Chromium runs with loopback *not* exempt from the proxy, QUIC off and non-proxied WebRTC UDP disabled, and service workers are blocked.
+- *Not yet supported:* hosts that may only reach the internet through `OUTBOUND_PROXY`. The guard proxy connects directly, so use Browser4 there.
+- *Bright Data's Browser API* works with Playwright too (`chromium.connectOverCDP`, one connection per page).
+- *Admin → Sources → Engines* shows which engine reads pages, both engines' state, Bright Data, and Claude's usage today. It also has "Plan queries now" and "Triage accounts now" buttons.
+
+**UI tests in a real browser:** `npm run test:e2e` runs two suites:
+- `tests/playwright.test.js`: the engine against a JavaScript-built fixture site. It also checks that the guard refuses redirect hops, sub-requests, workers, WebSockets and private-resolving names, and that a control run proves the test can fail.
+- `tests/e2e-ui.test.js`: PRISM's own UI on the demo library. It covers the age gate, smart search, the AI search reading (mock Claude), the viewer, creators, the takedown form, the admin login and console, phone layout and the theme toggle, with zero console errors allowed.
+
+Both skip inside `npm test` where no Chromium is installed. CI runs them in their own `e2e` job and uploads screenshots.
+
+**UI audit:** `npm run ui:audit -- http://localhost:3999 --out ./ui-audit --admin-key dev` visits every page in three views: desktop light, desktop dark and phone. For each it saves a screenshot and records console and page errors, failed requests, sideways scrolling, missing alt text, unnamed buttons and links, unlabelled form fields, duplicate ids, first paint and LCP. Results go to `ui-audit/report.md` and `report.json`, and the exit code is 1 on any error. `scripts/perf-audit.js` remains the phone performance benchmark.
+
+**Driving PRISM by hand or from an agent:** [`playwright-cli`](https://www.npmjs.com/package/@playwright/cli) (`npm i -g @playwright/cli`) controls a browser from the terminal. Typical commands:
+
+```bash
+playwright-cli open http://localhost:3999/        # add --headed to watch
+playwright-cli snapshot                           # the page as an accessibility tree, with element refs (e12 …)
+playwright-cli click e10                          # "I'm 18 or older"
+playwright-cli fill "#global-search" "bearded guys at the beach, videos" --submit
+playwright-cli screenshot --filename=explore.png
+playwright-cli console error                      # anything the page logged
+```
+
+It uses the Chrome channel by default. Where only Playwright's Chromium is installed, create `.playwright/cli.config.json` in the directory you run it from:
+
+```json
+{ "browser": { "browserName": "chromium", "launchOptions": { "executablePath": "<output of: node -e \"console.log(require('playwright').chromium.executablePath())\">" } } }
+```
+
 ---
 
 ## Bright Data: discovery and unblocking

@@ -5,7 +5,7 @@ import { table, pager, platBadge, pageHead, act } from './ui.js';
 
 function addCreatorDialog(onDone) {
   const name = h('input', { class: 'input', placeholder: 'Display name (optional)', autofocus: true });
-  const links = h('textarea', { class: 'textarea', rows: 7, placeholder: 'Paste any of their public profile links — one per line:\nhttps://x.com/name\nhttps://bsky.app/profile/name.bsky.social\nu/name\nhttps://www.redgifs.com/users/name\nhttps://linktr.ee/name   ← hubs are crawled for more accounts\nhttps://onlyfans.com/name   ← shown on their profile, never scraped' });
+  const links = h('textarea', { class: 'textarea', rows: 7, 'aria-label': 'Public profile links', placeholder: 'Paste any of their public profile links — one per line:\nhttps://x.com/name\nhttps://bsky.app/profile/name.bsky.social\nu/name\nhttps://www.redgifs.com/users/name\nhttps://linktr.ee/name   ← hubs are crawled for more accounts\nhttps://onlyfans.com/name   ← shown on their profile, never scraped' });
   const result = h('div');
   const m = openModal({
     title: 'Add a creator', sub: 'One person, many accounts. PRISM follows every public account you give it and keeps their media together on one profile.', wide: true,
@@ -142,9 +142,9 @@ export async function render(root) {
   const q = parse().query;
   const f = { q: q.get('q') || '', page: parseInt(q.get('page') || '0', 10), sort: q.get('sort') || 'recent' };
   const set = (patch) => navigate('/admin/creators', { ...f, ...patch }, { replace: true });
-  const search = h('input', { class: 'input sm', type: 'search', placeholder: 'Search creators…', value: f.q, style: { maxWidth: '240px' } });
+  const search = h('input', { class: 'input sm', type: 'search', 'aria-label': 'Search creators', placeholder: 'Search creators…', value: f.q, style: { maxWidth: '240px' } });
   search.addEventListener('input', debounce(() => set({ q: search.value.trim(), page: 0 }), 350));
-  const sort = h('select', { class: 'select sm', style: { width: 'auto' }, onchange: (e) => set({ sort: e.target.value, page: 0 }) }, [['recent', 'Recently active'], ['media', 'Most posts'], ['new', 'Newest'], ['name', 'A–Z']].map(([v, l]) => h('option', { value: v, selected: f.sort === v }, l)));
+  const sort = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Sort creators', onchange: (e) => set({ sort: e.target.value, page: 0 }) }, [['recent', 'Recently active'], ['media', 'Most posts'], ['new', 'Newest'], ['name', 'A–Z']].map(([v, l]) => h('option', { value: v, selected: f.sort === v }, l)));
   const host = h('div');
   const dupBtn = h('button', { class: 'btn sm', hidden: true, onclick: () => duplicatesDialog(load) }, icon('users', 'sm'), 'Possible duplicates');
   root.append(pageHead('Creators', 'People, not just feeds. Add a creator once and PRISM follows all of their public accounts.', h('button', { class: 'btn', onclick: () => findCreatorDialog(load) }, icon('search', 'sm'), 'Find a creator'), h('button', { class: 'btn primary', onclick: () => addCreatorDialog(load) }, icon('plus', 'sm'), 'Add creator')), h('div', { class: 'toolbar' }, search, sort, dupBtn), host);

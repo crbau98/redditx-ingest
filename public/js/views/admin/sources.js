@@ -60,16 +60,42 @@ function healthPanel(r, reload) {
         h('a', { href: href('/admin/feeds', { platform: f.platform, q: f.target }) }, f.label), h('span', { class: 'muted', style: { fontSize: '12.5px' } }, `${fmt.int(f.added)} added in ${f.runs} runs`)))) : null);
 }
 
+const dot = (ok) => h('span', { class: `dot ${ok ? 'good' : 'warn'}` });
+const line = (ok, label, text) => h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } }, dot(ok), h('span', null, h('b', null, `${label}: `), h('span', { class: 'muted' }, text)));
+
+/** Browser rendering engines, Claude and Bright Data: what is switched on, what is spent today. Never shows a key. */
+function enginesPanel(b, a, reload) {
+  const r = b.render || { engine: 'browser4', browser4: b, playwright: { enabled: false, reason: 'not reported' } };
+  const eng = (e) => (e.ok ? `ready${e.version ? ` (v${e.version})` : ''}${e.running ? ' · running' : ''}` : (e.reason || 'off'));
+  const u = a.usage || { calls: 0, input: 0, output: 0, refusals: 0 };
+  return h('div', { class: 'panel' },
+    h('h3', null, icon('sparkle', 'sm'), 'Engines: browsers and AI'),
+    h('div', { class: 'meta', style: { display: 'grid', gap: '6px' } },
+      line(true, 'Pages built by JavaScript are read with', `${r.engine === 'playwright' ? 'Playwright' : 'Browser4'} (RENDER_ENGINE=${r.setting || 'auto'}, mode ${b.mode})`),
+      line(r.browser4.ok, 'Browser4', eng(r.browser4)),
+      line(r.playwright.ok, 'Playwright', eng(r.playwright)),
+      b.brightdata ? line(b.brightdata.discover.configured || b.brightdata.unlocker.configured, 'Bright Data', `Discover ${b.brightdata.discover.configured ? 'on' : 'off'} · Unlocker ${b.brightdata.unlocker.configured ? `${b.brightdata.unlocker.mode}, ${b.brightdata.unlocker.usage.count || 0}/${b.brightdata.unlocker.budgetPerDay} today` : 'off'}`) : null,
+      line(a.configured, 'Claude', a.configured ? `${a.model} · ${fmt.int(u.calls)}/${fmt.int(a.budget)} requests today · ${fmt.int(u.input)} in / ${fmt.int(u.output)} out tokens${u.refusals ? ` · ${u.refusals} declined` : ''}` : 'off (set ANTHROPIC_API_KEY)'),
+      a.configured ? line(a.search || a.discovery, 'Claude does', [a.search ? 'search reading' : null, a.discovery ? 'discovery queries + account triage' : null].filter(Boolean).join(' · ') || 'nothing (both settings off)') : null,
+      (a.plannedQueries || []).length ? h('details', null, h('summary', { style: { cursor: 'pointer' } }, `${a.plannedQueries.length} discovery queries Claude planned today`),
+        h('ul', { class: 'muted', style: { fontSize: '13px', margin: '4px 0 0 18px' } }, a.plannedQueries.map((q) => h('li', null, q)))) : null),
+    a.configured ? h('div', { class: 'row wrap', style: { marginTop: '8px' } },
+      h('button', { class: 'btn sm', title: 'Ask Claude for new discovery searches now', onclick: (e) => act(e.currentTarget, async () => { const x = await adminPost('/ai/plan'); toast(`${x.planned} new queries planned`); await reload(); }) }, icon('sparkle', 'sm'), 'Plan queries now'),
+      h('button', { class: 'btn sm', title: 'Judge the next discovered accounts from their public name and bio', onclick: (e) => act(e.currentTarget, async () => { const x = await adminPost('/ai/triage'); toast(`${x.judged} judged · ${x.boosted} boosted · ${x.held} held · ${x.rejected} rejected`); await reload(); }) }, icon('shield', 'sm'), 'Triage accounts now')) : null);
+}
+
 export async function render(root) {
   const grid = h('div', { class: 'source-grid' });
   const health = h('div');
+  const engines = h('div');
   root.append(pageHead('Sources', 'The platforms PRISM can pull from, and how healthy each connection is.',
-    h('button', { class: 'btn sm', onclick: (e) => act(e.currentTarget, async () => { await adminPost('/engine/breakers/reset'); await load(); }, 'Circuit breakers reset') }, icon('refresh', 'sm'), 'Reset circuit breakers')), grid, health,
+    h('button', { class: 'btn sm', onclick: (e) => act(e.currentTarget, async () => { await adminPost('/engine/breakers/reset'); await load(); }, 'Circuit breakers reset') }, icon('refresh', 'sm'), 'Reset circuit breakers')), grid, engines, health,
   h('div', { class: 'panel' }, h('h3', null, icon('shield', 'sm'), 'What PRISM will not do'),
     h('p', { class: 'muted', style: { fontSize: '14px' } }, 'PRISM only reads content that is public without logging in. It does not scrape paywalled or subscription platforms (OnlyFans, Fansly, Patreon…) — those links are kept on a creator’s profile so fans can support them directly. Everything passes a safety gate (anything suggesting a person may be under 18 is dropped) and every item can be reported and permanently blocklisted.')));
 
   async function load() {
     adminGet('/sources/health').then((r) => health.replaceChildren(healthPanel(r, load))).catch(() => {});
+    Promise.all([adminGet('/browser4'), adminGet('/ai')]).then(([b, a]) => engines.replaceChildren(enginesPanel(b, a, load))).catch(() => {});
     const sources = await adminGet('/sources');
     grid.replaceChildren(...sources.map((s) => {
       const confs = Object.entries(s.config);

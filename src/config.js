@@ -127,6 +127,19 @@ module.exports = {
     renderBudgetMs: int(env.BROWSER4_RENDER_BUDGET_MS, 80000),        // everything one render may spend
     maxQueueWaitMs: int(env.BROWSER4_MAX_QUEUE_WAIT_MS, 40000),       // how long a render may wait for the browser before the page is read without it
   },
+  // Playwright: the second rendering engine (lib/playwright.js), in-process Chromium. Every request the browser makes goes
+  // through PRISM's own guard proxy (lib/guardproxy.js), which applies the same DNS-validated private-address check as
+  // plain downloads plus the content policy, to redirect hops, sub-resources, XHR, workers and WebSockets alike.
+  playwright: {
+    enabled: bool(env.PLAYWRIGHT_ENABLED, false),
+    headed: bool(env.PLAYWRIGHT_HEADED, false),
+    executablePath: String(env.PLAYWRIGHT_CHROMIUM_PATH || '').trim(),   // empty = Playwright's own Chromium
+    timeoutMs: int(env.PLAYWRIGHT_TIMEOUT_MS, 45000),                    // one navigation
+    renderBudgetMs: int(env.PLAYWRIGHT_RENDER_BUDGET_MS, 80000),
+    maxQueueWaitMs: int(env.PLAYWRIGHT_MAX_QUEUE_WAIT_MS, 40000),
+  },
+  // Which engine reads JavaScript-built pages: browser4, playwright, or auto (Browser4 when enabled, else Playwright).
+  renderEngine: ['auto', 'browser4', 'playwright'].includes(String(env.RENDER_ENGINE || '').trim()) ? String(env.RENDER_ENGINE).trim() : 'auto',
 
   // Federated sources: instances that adapters may talk to by default. Every hashtag/keyword feed is queried
   // on EACH instance below, so a longer list means more surface (and more requests): override from the

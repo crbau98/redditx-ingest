@@ -15,11 +15,14 @@ function form({ withLink }) {
   const reason = h('textarea', { class: 'textarea', rows: 4, placeholder: 'Tell us what is wrong. For takedowns, explain how you are connected to the content.', style: { fontFamily: 'inherit', fontSize: '14px' }, maxlength: 2000 });
   const contact = h('input', { class: 'input', type: 'text', placeholder: 'Email (optional — only if you want a reply)', maxlength: 200, autocomplete: 'email' });
   const link = withLink ? h('input', { class: 'input', type: 'text', placeholder: 'Paste the link to the item or creator page' }) : null;
+  // Each label is tied to its control, so screen readers (and the select, which has no placeholder) get a name.
+  let n = 0;
+  const field = (label, control) => { const id = `report-f${++n}-${Date.now().toString(36)}`; control.id = id; return h('div', { class: 'field' }, h('label', { for: id }, label), control); };
   const body = h('div', null,
-    link ? h('div', { class: 'field' }, h('label', null, 'Link'), link) : null,
-    h('div', { class: 'field' }, h('label', null, 'What is this about?'), kind),
-    h('div', { class: 'field' }, h('label', null, 'Details'), reason),
-    h('div', { class: 'field' }, h('label', null, 'Contact'), contact),
+    link ? field('Link', link) : null,
+    field('What is this about?', kind),
+    field('Details', reason),
+    field('Contact', contact),
     h('p', { class: 'muted', style: { fontSize: '12.5px' } }, 'Reports about minors or lack of consent hide the content immediately while we review. Removed content is blocklisted and will not be re-imported.'));
   return { body, kind, reason, contact, link };
 }

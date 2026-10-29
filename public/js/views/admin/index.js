@@ -21,11 +21,12 @@ const TABS = [
 
 function keyGate(root, message, retry) {
   const input = h('input', { class: 'input', type: 'password', placeholder: 'Admin key', autocomplete: 'current-password', 'aria-label': 'Admin key' });
-  const go = () => { adminSession.key = input.value.trim(); retry(); };
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
-  root.replaceChildren(h('div', { class: 'panel keycard stack' },
+  // A real form: Enter submits, and password managers recognise the field.
+  const go = (e) => { if (e) e.preventDefault(); adminSession.key = input.value.trim(); retry(); };
+  root.replaceChildren(h('form', { class: 'panel keycard stack', onsubmit: go },
     h('div', { class: 'empty', style: { padding: '8px' } }, h('div', { class: 'ico' }, icon('lock')), h('h3', null, 'Admin console'), h('p', null, message)),
-    input, h('button', { class: 'btn primary lg', onclick: go }, 'Unlock')));
+    h('input', { type: 'text', name: 'username', autocomplete: 'username', value: 'admin', hidden: true, 'aria-hidden': 'true' }),
+    input, h('button', { class: 'btn primary lg', type: 'submit' }, 'Unlock')));
   setTimeout(() => input.focus(), 30);
 }
 
@@ -45,6 +46,7 @@ export function adminStyles() {
   return styles;
 }
 
+let attempts = 0;
 export async function admin(root, { params }) {
   document.title = 'Admin — PRISM';
   await adminStyles();
@@ -52,13 +54,19 @@ export async function admin(root, { params }) {
   const tab = TABS.find((t) => t[0] === tabKey);
   if (!tab) { navigate('/admin/overview', {}, { replace: true }); return () => {}; }
 
+  // Only the newest attempt may act on its answer: a slow 401 for an earlier, wrong key must not clear the key typed
+  // after it, nor cover the console the newer attempt is already showing.
+  const attempt = ++attempts;
+  const tried = adminSession.key;
   let overview;
   try { overview = await adminGet('/overview'); } catch (e) {
-    if (e.status === 401) { adminSession.key = ''; keyGate(root, adminSession.key ? 'That key was not accepted.' : 'Enter the ADMIN_KEY to continue.', () => admin(root, { params })); return () => {}; }
+    if (attempt !== attempts) return () => {};
+    if (e.status === 401) { adminSession.key = ''; keyGate(root, tried ? 'That key was not accepted.' : 'Enter the ADMIN_KEY to continue.', () => admin(root, { params })); return () => {}; }
     if (e.status === 503) { root.replaceChildren(emptyState({ icon: 'lock', title: 'Admin is disabled', text: 'Set the ADMIN_KEY environment variable on the server (or ADMIN_OPEN=true for a private dev box), then reload.' })); return () => {}; }
     root.replaceChildren(emptyState({ icon: 'alert', title: 'Couldn’t reach the admin API', text: e.message })); return () => {};
   }
 
+  if (attempt !== attempts) return () => {};
   const badge = (n, tone) => (n ? h('span', { class: `badge ${tone}` }, n > 99 ? '99+' : n) : null);
   const side = h('nav', { class: 'adm-side', 'aria-label': 'Admin sections' },
     h('h4', null, 'Manage'),
