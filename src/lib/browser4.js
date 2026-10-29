@@ -305,4 +305,4 @@ async function close() {
 /** Remove the private-address routes (tests that need the browser to reach a local fixture afterwards). */
 const _unblock = () => cli(['network', 'unroute'], { json: false, timeoutMs: 20000 }).catch(() => {});
 
-module.exports = { enabled, available, status, renderPages, assertAllowed, close, sameSite, PRIVATE_URL_PATTERNS, _unblock, _reset: () => { opened = false; availCache = null; } };
+module.exports = { enabled, available, status, renderPages, assertAllowed, close, sameSite, scrollScript, documentScript, PRIVATE_URL_PATTERNS, _unblock, _reset: () => { opened = false; availCache = null; } };

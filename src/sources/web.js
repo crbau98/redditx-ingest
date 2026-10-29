@@ -17,7 +17,7 @@ const { absUrl, clip, uniq, bestSrcset } = require('./util');
 const { extractLinks } = require('../lib/links');
 const { hostOf, hostBlocked, looksLikeDirectMedia, looksLikeVideo } = require('../lib/mediaurl');
 const { checkHtmlOptOut } = require('../lib/takedowns');
-const browser4 = require('../lib/browser4');
+const render = require('../lib/render'); // Browser4 or Playwright (RENDER_ENGINE)
 const brightdata = require('../lib/brightdata');
 const settingsStore = require('../settings');
 const hoststrategy = require('../engine/hoststrategy');
@@ -438,8 +438,11 @@ function mergeRendered(pages) {
  * The browser is never used to get around a refusal: it runs only after a plain download that SUCCEEDED but showed nothing,
  * and a bot-challenge page makes PRISM leave that host alone for a while (never solves or evades it).
  */
+const ENGINE_LABEL = { browser4: 'Browser4', playwright: 'Playwright' };
+const engineLabel = () => ENGINE_LABEL[render.engineName()] || 'Browser';
+
 async function browserRead(feed, plain, need) {
-  if (!browser4.enabled()) return null;
+  if (!render.enabled()) return null;
   const cfg = settingsStore.get();
   if (cfg.browser4Mode === 'off') return null;
   const found = need === 'media' ? plain.media.length : plain.links.length;
@@ -450,7 +453,7 @@ async function browserRead(feed, plain, need) {
     return found === 0 ? { skipped: verdict.why } : null;
   }
   try {
-    const r = await browser4.renderPages(feed.target, {
+    const r = await render.renderPages(feed.target, {
       scrolls: need === 'media' ? cfg.browser4Scrolls : Math.min(2, cfg.browser4Scrolls),
       pages: need === 'media' ? cfg.browser4Pages : 1,
       allowUrl: robotsAllows,
@@ -458,7 +461,7 @@ async function browserRead(feed, plain, need) {
     const page = mergeRendered(r.pages);
     // a page that opts out says nothing about whether rendering works on this host
     hoststrategy.record(host, { found, rendered: page.optedOut ? null : (need === 'media' ? page.media.length : page.links.length) });
-    return { page, notes: r.notes, pages: r.pages.length, scrolls: r.pages.reduce((n, p) => n + Math.max(0, p.scrolls), 0) };
+    return { page, via: r.via, notes: r.notes, pages: r.pages.length, scrolls: r.pages.reduce((n, p) => n + Math.max(0, p.scrolls), 0) };
   } catch (e) {
     if (e.challenge) hoststrategy.record(host, { found, challenge: true });
     return { error: e };
@@ -481,7 +484,7 @@ const REFUSED_STATUS = new Set([403, 429, 503]);
 async function unlockedRead(feed, need) {
   const cfg = settingsStore.get();
   if (cfg.brightdataUnlocker !== 'fallback' || !cfg.brightdataUnlockBudget) return null;
-  if (!brightdata.unlockerConfigured() && !(brightdata.browserConfigured() && browser4.enabled())) return null;
+  if (!brightdata.unlockerConfigured() && !(brightdata.browserConfigured() && render.enabled())) return null;
   // robots.txt first, inside this function, because the link-in-bio adapter does not consult it on its own
   if (!(await robotsAllows(feed.target))) return { skipped: 'robots.txt disallows this page' };
   const host = hostOf(feed.target);
@@ -498,9 +501,9 @@ async function unlockedRead(feed, need) {
       via = 'brightdata-unlocker';
     }
     // The unlocked HTML holds nothing but the page is a JavaScript shell: let the remote browser run it.
-    if ((!page || (!page.optedOut && count(page) === 0)) && brightdata.browserConfigured() && browser4.enabled()) {
+    if ((!page || (!page.optedOut && count(page) === 0)) && brightdata.browserConfigured() && render.enabled()) {
       brightdata.reserveUnlock(cfg.brightdataUnlockBudget); spent = true;
-      const r = await browser4.renderPages(feed.target, { remote: true, scrolls: need === 'media' ? cfg.browser4Scrolls : 2, pages: need === 'media' ? cfg.browser4Pages : 1, allowUrl: robotsAllows });
+      const r = await render.renderPages(feed.target, { remote: true, scrolls: need === 'media' ? cfg.browser4Scrolls : 2, pages: need === 'media' ? cfg.browser4Pages : 1, allowUrl: robotsAllows });
       page = mergeRendered(r.pages); via = r.via; notes.push(...r.notes);
     }
     if (!page) return null;
@@ -515,7 +518,7 @@ async function unlockedRead(feed, need) {
 /** Follow a page's same-site links as new web feeds (opt-in setting; feeds made this way never expand further). */
 function maybeExpand(feed, page) {
   const cfg = settingsStore.get();
-  if (!browser4.enabled() || !cfg.browser4AutoExpand || feed.origin === 'expand' || !cfg.browser4ExpandPerRun) return 0;
+  if (!render.enabled() || !cfg.browser4AutoExpand || feed.origin === 'expand' || !cfg.browser4ExpandPerRun) return 0;
   try {
     const docs = page.docs || (page.$ ? [{ $: page.$, url: page.pageUrl || feed.target }] : []);
     return require('../engine/expand').adoptLinks(feed, docs, cfg).created;
@@ -560,14 +563,15 @@ const webAdapter = {
     let refused = REFUSED_STATUS.has(status);
     if (!page.optedOut && status < 400) {
       const b = await browserRead(feed, page, 'media');
-      if (b && b.skipped) info.push(`Browser4 not used: ${b.skipped}`);
-      else if (b && b.error) { notes.push(`Browser4: ${b.error.message}`); if (b.error.challenge) refused = true; }
+      const engine = engineLabel();
+      if (b && b.skipped) info.push(`${engine} not used: ${b.skipped}`);
+      else if (b && b.error) { notes.push(`${engine}: ${b.error.message}`); if (b.error.challenge) refused = true; }
       else if (b) {
-        notes.push(...b.notes.map((n) => `Browser4: ${n}`));
+        notes.push(...b.notes.map((n) => `${engine}: ${n}`));
         if (b.page.optedOut) page = b.page;
         else if (b.page.media.length >= page.media.length) {
-          page = b.page; via = 'browser4';
-          info.push(`Browser4 read ${b.pages} page${b.pages === 1 ? '' : 's'}, scrolled ${b.scrolls}×, found ${page.media.length} media`);
+          page = b.page; via = b.via;
+          info.push(`${engine} read ${b.pages} page${b.pages === 1 ? '' : 's'}, scrolled ${b.scrolls}×, found ${page.media.length} media`);
         }
       }
     }
@@ -646,11 +650,12 @@ const linkInBioAdapter = {
     // Hubs built by JavaScript (Beacons, Bento and friends) have no links in their HTML: read the finished page.
     if (!page.optedOut && status < 400) {
       const b = await browserRead(feed, page, 'links');
-      if (b && b.skipped) info.push(`Browser4 not used: ${b.skipped}`);
-      else if (b && b.error) { notes.push(`Browser4: ${b.error.message}`); if (b.error.challenge) refused = true; }
+      const engine = engineLabel();
+      if (b && b.skipped) info.push(`${engine} not used: ${b.skipped}`);
+      else if (b && b.error) { notes.push(`${engine}: ${b.error.message}`); if (b.error.challenge) refused = true; }
       else if (b) {
         if (b.page.optedOut) page = b.page;
-        else if (b.page.links.length >= page.links.length) { page = b.page; via = 'browser4'; info.push(`Browser4 found ${page.links.length} profile links`); }
+        else if (b.page.links.length >= page.links.length) { page = b.page; via = b.via; info.push(`${engine} found ${page.links.length} profile links`); }
       }
     }
     if (refused && !page.optedOut) {

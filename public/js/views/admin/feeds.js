@@ -37,7 +37,7 @@ function addDialog(onDone, preset = {}) {
 }
 
 function importDialog(onDone) {
-  const text = h('textarea', { class: 'textarea', rows: 10, placeholder: 'One per line, or comma separated:\nr/gaybrosgonewild\nu/somecreator\nhttps://bsky.app/profile/someone.bsky.social\nhttps://bsky.app/profile/someone.bsky.social/feed/hot\nhttps://example.com/feed.xml\n@name@mastodon.social\n@name@misskey.io' });
+  const text = h('textarea', { class: 'textarea', rows: 10, 'aria-label': 'Feeds to add', placeholder: 'One per line, or comma separated:\nr/gaybrosgonewild\nu/somecreator\nhttps://bsky.app/profile/someone.bsky.social\nhttps://bsky.app/profile/someone.bsky.social/feed/hot\nhttps://example.com/feed.xml\n@name@mastodon.social\n@name@misskey.io' });
   const file = h('input', { type: 'file', accept: '.opml,.xml,.txt,text/xml,application/xml,text/plain', hidden: true });
   file.addEventListener('change', async () => { const f = file.files[0]; if (f) { text.value = await f.text(); toast(`Loaded ${f.name}`); } file.value = ''; });
   const m = openModal({
@@ -58,7 +58,7 @@ export async function render(root) {
   const f = { platform: q.get('platform') || '', kind: q.get('kind') || '', status: q.get('status') || '', q: q.get('q') || '', page: parseInt(q.get('page') || '0', 10) };
   const set = (patch) => navigate('/admin/feeds', { ...f, ...patch }, { replace: true });
 
-  const search = h('input', { class: 'input sm', type: 'search', placeholder: 'Search feeds…', value: f.q, style: { maxWidth: '220px' } });
+  const search = h('input', { class: 'input sm', type: 'search', 'aria-label': 'Search feeds', placeholder: 'Search feeds…', value: f.q, style: { maxWidth: '220px' } });
   search.addEventListener('input', debounce(() => set({ q: search.value.trim(), page: 0 }), 350));
   const sel = (key, options, label) => h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': label, onchange: (e) => set({ [key]: e.target.value, page: 0 }) }, options.map(([v, l]) => h('option', { value: v, selected: f[key] === v }, l)));
 
@@ -81,7 +81,7 @@ export async function render(root) {
         { label: 'Last run', render: (x) => h('div', null, x.last_run_at ? fmt.ago(x.last_run_at) : 'never', x.last_error ? h('div', { class: 'sub', style: { color: x.last_status === 'error' ? 'var(--bad)' : 'var(--muted)', maxWidth: '240px' }, title: x.last_error }, h('span', { class: 'truncate', style: { display: 'block' } }, x.last_error)) : null) },
         { label: 'Next', render: (x) => (x.enabled ? fmt.until(x.next_run_at) : '—') },
         { label: 'Items', class: 'num', render: (x) => fmt.int(x.items_total) },
-        { label: 'Every', render: (x) => h('select', { class: 'select sm', style: { width: '104px' }, onchange: (e) => adminPatch(`/feeds/${x.id}`, { intervalMin: Number(e.target.value) }).then(() => toast('Interval saved', 'ok')).catch((er) => toast(er.message, 'err')) }, [...new Set([...INTERVALS.map((i) => i[0]), x.interval_min])].sort((a, b) => a - b).map((v) => h('option', { value: v, selected: v === x.interval_min }, (INTERVALS.find((i) => i[0] === v) || [0, `${v} min`])[1]))) },
+        { label: 'Every', render: (x) => h('select', { class: 'select sm', style: { width: '104px' }, 'aria-label': `How often ${x.label || 'this feed'} is read`, onchange: (e) => adminPatch(`/feeds/${x.id}`, { intervalMin: Number(e.target.value) }).then(() => toast('Interval saved', 'ok')).catch((er) => toast(er.message, 'err')) }, [...new Set([...INTERVALS.map((i) => i[0]), x.interval_min])].sort((a, b) => a - b).map((v) => h('option', { value: v, selected: v === x.interval_min }, (INTERVALS.find((i) => i[0] === v) || [0, `${v} min`])[1]))) },
         { label: 'On', render: (x) => toggle(x.enabled, (on) => adminPatch(`/feeds/${x.id}`, { enabled: on, resetErrors: on }).catch((er) => toast(er.message, 'err'))) },
         { label: '', render: (x) => h('div', { class: 'actions' },
           h('button', { class: 'btn icon sm ghost', title: 'Sync now', 'aria-label': 'Sync now', onclick: (e) => act(e.currentTarget, () => adminPost(`/feeds/${x.id}/run`, { force: false }), 'Queued') }, icon('refresh', 'sm')),

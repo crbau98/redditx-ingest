@@ -14,3 +14,25 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+  # The browser suites (lib/playwright.js against a JavaScript-built site, and PRISM's own UI driven end to end).
+  # They skip themselves in the job above, which has no browser.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: node --test tests/playwright.test.js tests/e2e-ui.test.js
+        env:
+          E2E_REQUIRED: '1'
+          E2E_SHOTS: e2e-screenshots
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-screenshots
+          path: e2e-screenshots
+          if-no-files-found: ignore

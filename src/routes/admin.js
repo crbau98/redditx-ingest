@@ -72,6 +72,7 @@ router.get('/browser4', async (req, res) => {
   const cfg = settingsStore.get();
   res.json({
     ...(await browser4.status()), mode: cfg.browser4Mode, expand: expand.status(),
+    render: await require('../lib/render').status(),       // which engine reads pages (Browser4 or Playwright), and both engines' state
     strategy: require('../engine/hoststrategy').summary(),   // what PRISM has learned about which hosts need a browser
     brightdata: {   // booleans and usage only: the token, zone and browser endpoint are never returned
       discover: { configured: brightdata.configured(), usage: brightdata.usage() },
@@ -83,7 +84,7 @@ router.get('/browser4', async (req, res) => {
 router.post('/browser4/expand', async (req, res) => {
   const { url, depth, limit, trusted } = req.body || {};
   if (typeof url !== 'string' || !/^https?:\/\//i.test(url.trim())) return bad(res, 'A full http(s) URL is required');
-  if (!browser4.enabled()) return bad(res, 'Browser4 is not enabled on this server (set BROWSER4_ENABLED=1)', 409);
+  if (!require('../lib/render').enabled()) return bad(res, 'No browser engine is enabled on this server (set BROWSER4_ENABLED=1 or PLAYWRIGHT_ENABLED=1)', 409);
   try { await browser4.assertAllowed(url.trim()); } catch (e) { return bad(res, e.message, e.skip ? 400 : 502); }
   const r = expand.start(url.trim(), { depth, limit, trustSeed: !!trusted });
   return r.started ? res.status(202).json({ ok: true }) : bad(res, r.reason, 409);

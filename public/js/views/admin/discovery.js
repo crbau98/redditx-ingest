@@ -42,7 +42,7 @@ export async function render(root) {
   const runBtn = h('button', { class: 'btn primary', onclick: (e) => act(e.currentTarget, async () => { await adminPost('/discovery/run'); toast('Discovery started — watch the Live log', 'ok'); setTimeout(load, 2500); }) }, icon('sparkle', 'sm'), 'Run discovery now');
   head.append(pageHead('Discovery', 'Finds creators, communities and custom feeds you are not following yet — from who your creators mention and follow, keyword searches on Reddit, Lemmy and Bluesky, and web searches — scores them, and follows the strong ones automatically.', runBtn));
 
-  const search = h('input', { class: 'input sm', type: 'search', placeholder: 'Search candidates…', value: f.q, style: { maxWidth: '220px' } });
+  const search = h('input', { class: 'input sm', type: 'search', 'aria-label': 'Search candidates', placeholder: 'Search candidates…', value: f.q, style: { maxWidth: '220px' } });
   search.addEventListener('input', debounce(() => set({ q: search.value.trim(), page: 0 }), 350));
   const PLATFORMS = [['', 'All platforms'], ['bluesky', 'Bluesky'], ['reddit', 'Reddit'], ['redgifs', 'RedGIFs'], ['x', 'X'], ['telegram', 'Telegram'], ['mastodon', 'Mastodon'], ['misskey', 'Misskey'], ['lemmy', 'Lemmy'], ['tumblr', 'Tumblr'], ['peertube', 'PeerTube'], ['linkinbio', 'Link pages']];
   const bar = h('div', { class: 'toolbar' },
@@ -105,9 +105,9 @@ export async function render(root) {
   function paintTune(d, settings) {
     const v = settings.values;
     const save = async (patch) => { try { await adminPut('/settings', patch); toast('Saved', 'ok'); } catch (e) { toast(e.message, 'err'); } };
-    const num = (key, min, max) => { const el = h('input', { class: 'input sm', type: 'number', min, max, value: v[key], style: { width: '96px' } }); el.addEventListener('change', () => save({ [key]: el.value })); return el; };
-    const queries = h('textarea', { class: 'textarea', rows: 6, spellcheck: 'false' }); queries.value = v.discoveryQueries || '';
-    const keywords = h('textarea', { class: 'textarea', rows: 5, spellcheck: 'false' }); keywords.value = v.discoveryKeywords || '';
+    const num = (key, min, max, label) => { const el = h('input', { class: 'input sm', type: 'number', min, max, value: v[key], 'aria-label': label, style: { width: '96px' } }); el.addEventListener('change', () => save({ [key]: el.value })); return el; };
+    const queries = h('textarea', { class: 'textarea', rows: 6, spellcheck: 'false', 'aria-label': 'Topic searches' }); queries.value = v.discoveryQueries || '';
+    const keywords = h('textarea', { class: 'textarea', rows: 5, spellcheck: 'false', 'aria-label': 'Community keywords' }); keywords.value = v.discoveryKeywords || '';
     const keyBadge = (ok, label, hint) => h('span', { class: `badge ${ok ? 'good' : ''}`, title: hint }, ok ? icon('check', 'sm') : null, label);
     tune.replaceChildren(h('details', { class: 'panel', open: !d.counts.followed && !d.counts.pending ? true : null },
       h('summary', null, h('b', null, 'Tune discovery'), h('span', { class: 'muted', style: { marginLeft: '10px', fontSize: '13px' } }, 'signals, thresholds, search topics')),
@@ -124,10 +124,10 @@ export async function render(root) {
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Lookalikes and people search'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Accounts Bluesky rates as similar to your creators, plus Bluesky and RedGIFs people matching your keywords')), toggle(v.discoveryExpand, (on) => save({ discoveryExpand: on }))),
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Trace OnlyFans creators'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'OnlyFans pages your creators promote lead to the same men’s free accounts on RedGIFs, Bluesky, X, Telegram and link pages. onlyfans.com itself is never read')), toggle(v.discoveryOnlyFans, (on) => save({ discoveryOnlyFans: on }))),
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Auto-follow strong communities'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Only male-focused ones; every post from them is still checked on its own')), toggle(v.discoveryAutoCommunities, (on) => save({ discoveryAutoCommunities: on }))),
-      h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Auto-follow at score'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'same name = 6 · each creator who mentions them = 3 · Bluesky lookalike (per creator) = 2 · each who follows them = 1.5 · each creator posting there = 1.5 · each search hit = 2 · audience up to +3 · male-focused bio = +2')), num('discoveryAutoFollowScore', 3, 60)),
-      h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Max follows per run'), num('discoveryMaxFollowsPerRun', 0, 100)),
-      h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Run every (minutes)'), num('discoveryIntervalMin', 15, 1440)),
-      h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Brave searches per day'), num('braveDailyBudget', 0, 2000)),
+      h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Auto-follow at score'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'same name = 6 · each creator who mentions them = 3 · Bluesky lookalike (per creator) = 2 · each who follows them = 1.5 · each creator posting there = 1.5 · each search hit = 2 · audience up to +3 · male-focused bio = +2')), num('discoveryAutoFollowScore', 3, 60, 'Auto-follow at score')),
+      h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Max follows per run'), num('discoveryMaxFollowsPerRun', 0, 100, 'Max follows per run')),
+      h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Run every (minutes)'), num('discoveryIntervalMin', 15, 1440, 'Run every (minutes)')),
+      h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Brave searches per day'), num('braveDailyBudget', 0, 2000, 'Brave searches per day')),
       h('div', { class: 'field', style: { marginTop: '10px' } }, h('label', null, 'Web-search topics (one per line — one is searched per run, in rotation)'), queries,
         h('button', { class: 'btn sm', style: { marginTop: '8px' }, onclick: () => save({ discoveryQueries: queries.value }) }, 'Save topics')),
       h('div', { class: 'field', style: { marginTop: '10px' } }, h('label', null, 'Community keywords (one per line — two are searched per run on Reddit and Bluesky)'), keywords,
@@ -140,14 +140,14 @@ export async function render(root) {
   const leadAction = (l, action) => adminPost(`/discovery/onlyfans/${encodeURIComponent(l.handle)}`, { action, service: l.service || 'OnlyFans' });
   async function loadOnlyFans() {
     const r = await adminGet('/discovery/onlyfans', { limit: 15 });
-    const paste = h('textarea', { class: 'textarea', rows: 3, spellcheck: 'false', placeholder: 'onlyfans.com/name, fansly.com/name or justfor.fans/name — or just the handle, one per line' });
+    const paste = h('textarea', { class: 'textarea', rows: 3, spellcheck: 'false', 'aria-label': 'Paid profile links', placeholder: 'onlyfans.com/name, fansly.com/name or justfor.fans/name — or just the handle, one per line' });
     const add = h('button', { class: 'btn sm primary', onclick: (e) => act(e.currentTarget, async () => {
       const out = await adminPost('/discovery/onlyfans', { handles: paste.value });
       toast(`${out.added} added${out.claimed ? ` · ${out.claimed} already followed` : ''}${out.invalid.length ? ` · ${out.invalid.length} not recognised` : ''}`, 'ok');
       paste.value = ''; loadOnlyFans();
     }) }, icon('plus', 'sm'), 'Trace these');
     const c = r.counts;
-    const seeds = h('textarea', { class: 'textarea', rows: 4, spellcheck: 'false', placeholder: 'Christian Hogue\n@somehandle\nhttps://x.com/someone' });
+    const seeds = h('textarea', { class: 'textarea', rows: 4, spellcheck: 'false', 'aria-label': 'Creators to find by name', placeholder: 'Christian Hogue\n@somehandle\nhttps://x.com/someone' });
     seeds.value = seedsText;
     const seedRows = ((data && data.seeds) || []).map((sd) => h('div', { class: 'row', style: { gap: '8px', fontSize: '13px', padding: '3px 0' } },
       h('b', null, sd.name),

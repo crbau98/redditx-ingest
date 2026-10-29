@@ -8,10 +8,10 @@ export async function render(root) {
   const values = { ...s.values };
   const rows = s.schema.filter((d) => d.group !== 'discovery').map((d) => {
     let control;
-    if (d.type === 'text') { control = h('textarea', { class: 'textarea', rows: 5 }); control.value = values[d.key] || ''; control.addEventListener('change', () => save({ [d.key]: control.value })); }
+    if (d.type === 'text') { control = h('textarea', { class: 'textarea', rows: 5, 'aria-label': d.label }); control.value = values[d.key] || ''; control.addEventListener('change', () => save({ [d.key]: control.value })); }
     else if (d.type === 'bool') control = toggle(values[d.key], (on) => save({ [d.key]: on }));
-    else if (d.type === 'enum') control = h('select', { class: 'select sm', onchange: (e) => save({ [d.key]: e.target.value }) }, d.values.map((v) => h('option', { value: v, selected: values[d.key] === v }, v)));
-    else { control = h('input', { class: 'input sm', type: 'number', min: d.min, max: d.max, value: values[d.key] }); control.addEventListener('change', () => save({ [d.key]: control.value })); }
+    else if (d.type === 'enum') control = h('select', { class: 'select sm', 'aria-label': d.label, onchange: (e) => save({ [d.key]: e.target.value }) }, d.values.map((v) => h('option', { value: v, selected: values[d.key] === v }, v)));
+    else { control = h('input', { class: 'input sm', type: 'number', min: d.min, max: d.max, value: values[d.key], 'aria-label': d.label }); control.addEventListener('change', () => save({ [d.key]: control.value })); }
     return h('div', { class: 'setting' }, h('div', { class: 'l' }, d.label), control);
   });
   async function save(patch) { try { const r = await adminPut('/settings', patch); Object.assign(values, r.values); toast('Saved', 'ok'); } catch (e) { toast(e.message, 'err'); } }

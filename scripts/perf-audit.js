@@ -4,9 +4,9 @@
  *
  *     DEMO_ART=1 DB_PATH=./data/demo.db node scripts/seed-demo.js
  *     DEMO_ART=1 DB_PATH=./data/demo.db ADMIN_KEY=dev PORT=3999 node server.js &
- *     NODE_PATH=$(npm root -g) node scripts/perf-audit.js http://localhost:3999 [runs] > perf.json
+ *     node scripts/perf-audit.js http://localhost:3999 [runs] > perf.json
  *
- * Needs Playwright (not a dependency of the app: install it globally or with `npm i --no-save playwright`).
+ * Needs Playwright with Chromium (an optional dependency: `npx playwright install chromium`).
  * Conditions: phone viewport (390×844 @2x, touch), 4× CPU slowdown, and for the load test a
  * 150 ms RTT / 12 Mbps link. The GPU tier is reported as 'high' (the path real phones take), so
  * the effects the app trims on software rendering are included in what is measured.

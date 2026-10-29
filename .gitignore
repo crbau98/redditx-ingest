@@ -146,3 +146,6 @@ vite.config.ts.timestamp-*
 
 # Browser4 CLI accessibility snapshots (written to the working directory of whoever runs browser4-cli)
 .browser4-cli/
+.playwright-cli/
+ui-audit/
+e2e-screenshots/

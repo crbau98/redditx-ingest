@@ -18,7 +18,7 @@ const cheerio = require('cheerio');
 const repo = require('../db/repo');
 const settingsStore = require('../settings');
 const events = require('./events');
-const browser4 = require('../lib/browser4');
+const render = require('../lib/render'); // Browser4 or Playwright (RENDER_ENGINE)
 const leaks = require('../lib/leaks');
 const takedowns = require('../lib/takedowns');
 const { isPaywalledHost } = require('../lib/brave');
@@ -62,7 +62,7 @@ function rankLinks(docs, seedUrl) {
       let u;
       try { u = new URL(href); } catch { return; }
       if (u.protocol !== 'http:' && u.protocol !== 'https:') return;
-      if (!browser4.sameSite(u.href, seedUrl)) return;
+      if (!render.sameSite(u.href, seedUrl)) return;
       u.hash = '';
       for (const k of [...u.searchParams.keys()]) if (TRACKING_PARAM.test(k)) u.searchParams.delete(k);
       if (NOT_A_PAGE.test(u.pathname) || NOISE_PATH.test(u.pathname) || u.href.length > 300) return;
@@ -130,7 +130,7 @@ async function run(seedUrl, { depth = 1, limit = 25, creatorId = null, trustSeed
   depth = clamp(depth, 1, 2, 1); limit = clamp(limit, 1, 100, 25);
   const cfg = settingsStore.get();
   const { robotsAllows } = require('../sources/web');
-  const seed = await browser4.assertAllowed(seedUrl);
+  const seed = await render.assertAllowed(seedUrl);
   if (!(await robotsAllows(seed))) throw Object.assign(new Error('robots.txt disallows this page'), { skip: true });
 
   const result = { seed, visited: [], created: 0, urls: [], skipped: { policy: 0, existing: 0, cap: 0 }, notes: [] };
@@ -146,7 +146,7 @@ async function run(seedUrl, { depth = 1, limit = 25, creatorId = null, trustSeed
       // allowUrl below only guards pagination AFTER a page's first load, so every page entering the browser is checked here
       if (!(await robotsAllows(url))) { result.notes.push(`${url}: robots.txt disallows this page`); continue; }
       let r;
-      try { r = await browser4.renderPages(url, { scrolls: cfg.browser4Scrolls, pages: 1, allowUrl: robotsAllows }); } catch (e) { result.notes.push(`${url}: ${e.message}`); continue; }
+      try { r = await render.renderPages(url, { scrolls: cfg.browser4Scrolls, pages: 1, allowUrl: robotsAllows }); } catch (e) { result.notes.push(`${url}: ${e.message}`); continue; }
       result.visited.push(url);
       const docs = r.pages.map((p) => ({ $: cheerio.load(p.html), url: p.url }));
       const a = adoptLinks({ target: url, creator_id: creatorId }, docs, cfg, { limit: limit - result.created });
