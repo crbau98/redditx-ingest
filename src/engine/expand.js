@@ -31,9 +31,29 @@ const clamp = (n, lo, hi, d) => { const v = parseInt(n, 10); return Number.isFin
 
 const state = { running: false, last: null };
 
-/** Same-site, page-like links of parsed documents ([{$, url}]), in document order, without the page itself. */
-function candidateLinks(docs, seedUrl) {
-  const out = new Map();
+// What a gallery / profile / post page looks like in a URL, and what a navigation or listing page looks like.
+const CONTENT_PATH = /(?:^|\/)(?:gallery|galleries|album|albums|photos?|pics?|pictures?|images?|sets?|shoots?|videos?|clips?|posts?|p|u|user|users|profiles?|models?|creators?|performers?|@[^/]+)(?:\/|$)/i;
+const LISTING_PATH = /(?:^|\/)(?:tags?|categor(?:y|ies)|archives?|pages?|search|sort|filter|latest|popular|top|random)(?:\/|$)|[?&](?:page|sort|q|s|order|filter)=/i;
+const ID_SEGMENT = /^(?:\d+|[0-9a-f]{8,}|[0-9a-f-]{32,})$/i;
+
+/** A URL's "shape": numeric ids collapsed and the last segment wildcarded, so /set/alpha and /set/beta are one shape. */
+function shapeOf(u) {
+  const segs = u.pathname.split('/').filter(Boolean).map((x) => (ID_SEGMENT.test(x) ? '#' : x.toLowerCase()));
+  if (segs.length >= 2) segs[segs.length - 1] = '*';
+  return `/${segs.join('/')}`;
+}
+
+/**
+ * Same-site, page-like links of parsed documents ([{$, url}]), best first, without the page itself. Ranked by how much they
+ * look like a page of content rather than navigation (the feed budget is small, so the order decides what is read):
+ *   +3 the link wraps a picture or video (a thumbnail card)         +2 a path word like gallery / set / video / profile / @name
+ *   +2 three or more links share its URL shape (an item in a listing)  +1 two or more path segments
+ *   -2 a listing or navigation path (tag, category, page, search, sort ...)
+ * Ties keep document order, so a plain page with no signals behaves exactly as before.
+ * @returns {{url: string, score: number}[]}
+ */
+function rankLinks(docs, seedUrl) {
+  const found = new Map();
   const seedKey = keyOf(seedUrl);
   for (const { $, url } of docs) {
     $('a[href]').each((_, a) => {
@@ -48,12 +68,29 @@ function candidateLinks(docs, seedUrl) {
       if (NOT_A_PAGE.test(u.pathname) || NOISE_PATH.test(u.pathname) || u.href.length > 300) return;
       if (u.pathname === '/' && !u.search) return; // the home page is navigation, not a page of content
       const key = keyOf(u.href);
-      if (key === seedKey || out.has(key)) return;
-      out.set(key, u.href);
+      if (key === seedKey) return;
+      const thumb = $(a).find('img, picture, video, source').length > 0;
+      const prev = found.get(key);
+      if (prev) { prev.thumb = prev.thumb || thumb; return; } // the same page linked twice: any thumbnail counts
+      found.set(key, { url: u.href, u, thumb, order: found.size });
     });
   }
-  return [...out.values()];
+  const shapes = new Map();
+  for (const f of found.values()) { const sh = shapeOf(f.u); shapes.set(sh, (shapes.get(sh) || 0) + 1); }
+  return [...found.values()].map((f) => {
+    const path = f.u.pathname + f.u.search;
+    let score = 0;
+    if (f.thumb) score += 3;
+    if (CONTENT_PATH.test(f.u.pathname)) score += 2;
+    if ((shapes.get(shapeOf(f.u)) || 0) >= 3) score += 2;
+    if (f.u.pathname.split('/').filter(Boolean).length >= 2) score += 1;
+    if (LISTING_PATH.test(path)) score -= 2;
+    return { url: f.url, score, order: f.order };
+  }).sort((a, b) => b.score - a.score || a.order - b.order).map(({ url, score }) => ({ url, score }));
 }
+
+/** The ranked URLs only. */
+const candidateLinks = (docs, seedUrl) => rankLinks(docs, seedUrl).map((l) => l.url);
 
 function keyOf(href) { try { const u = new URL(href); return `${u.hostname.replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}${u.search}`.toLowerCase(); } catch { return String(href); } }
 
@@ -137,4 +174,4 @@ function start(seedUrl, opts = {}) {
 
 const status = () => ({ running: state.running, last: state.last });
 
-module.exports = { run, start, status, adoptLinks, candidateLinks };
+module.exports = { run, start, status, adoptLinks, candidateLinks, rankLinks };

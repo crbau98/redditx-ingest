@@ -75,6 +75,8 @@ module.exports = {
     braveKey: env.BRAVE_API_KEY || env.BRAVE_SEARCH_API_KEY || '',
     // Keenable web search (an AI-agent search engine, MCP over HTTP). Used by creator lookup and discovery.
     keenableKey: env.KEENABLE_API_KEY || '',
+    // Bright Data (https://brightdata.com) Discover API: intent-ranked web search. BRIGHTDATA_API_KEY is accepted too (same token).
+    brightdataKey: env.BRIGHTDATA_API_TOKEN || env.BRIGHTDATA_API_KEY || '',
     // Telegram Bot API token (from @BotFather, "123456:ABC…"): channel metadata and existence checks.
     telegramBot: env.TELEGRAM_API_KEY || env.TELEGRAM_BOT_TOKEN || '',
   },
@@ -83,7 +85,19 @@ module.exports = {
   searxngUrl: String(env.SEARXNG_URL || '').trim(),
   searxngEngines: String(env.SEARXNG_ENGINES || '').trim(),
   ddgEnabled: /^(1|true|yes|on)$/i.test(String(env.DDG_SEARCH || '')),
-  searchProviders: list(env.SEARCH_PROVIDERS, ['keenable', 'brave', 'ddg', 'searxng']),
+  searchProviders: list(env.SEARCH_PROVIDERS, ['keenable', 'brave', 'brightdata', 'ddg', 'searxng']),
+  // What Discover ranks results against: the intent steers it toward public creator pages and away from paid / pirated sites.
+  brightdata: {
+    intent: String(env.BRIGHTDATA_DISCOVER_INTENT || 'Public creator profiles, portfolios, galleries and link-in-bio pages, and the creator\'s own public social accounts. Not paywalled subscription sites and not leaked or pirated copies of paid content.').trim(),
+    minRelevance: parseFloat(env.BRIGHTDATA_MIN_RELEVANCE) || 0,   // drop results scored below this (0 = keep all, ranked)
+    pollMs: int(env.BRIGHTDATA_POLL_MS, 2000),
+    timeoutMs: int(env.BRIGHTDATA_TIMEOUT_MS, 60000),
+    // Web Unlocker: fetches a page through Bright Data's unblocking network. The ZONE is the name of the Web Unlocker zone in the
+    // Bright Data control panel. Browser API: a remote browser that unblocks as it loads; the value is the full
+    // wss://brd-customer-...:password@brd.superproxy.io:9222 endpoint (a secret: never logged).
+    unlockerZone: String(env.BRIGHTDATA_UNLOCKER_ZONE || '').trim(),
+    browserWss: String(env.BRIGHTDATA_BROWSER_WSS || '').trim(),
+  },
 
   // Browser4 (https://browser4.io): a real Chrome driven through `browser4-cli`, used to read pages whose media only exists after
   // their JavaScript has run (SPAs, infinite scroll, lazy galleries). Off unless BROWSER4_ENABLED=1: it needs Chrome/Chromium and the
@@ -142,6 +156,7 @@ module.exports = {
     telegramBot: env.TELEGRAM_BOT_BASE_URL || 'https://api.telegram.org',
     telegramWeb: String(env.TELEGRAM_WEB_BASE_URL || 'https://t.me').replace(/\/+$/, ''),
     keenable: env.KEENABLE_BASE_URL || 'https://api.keenable.ai/mcp',
+    brightdata: String(env.BRIGHTDATA_BASE_URL || 'https://api.brightdata.com').replace(/\/+$/, ''),
     // Tumblr's global tag feeds (blog feeds live on <blog>.tumblr.com or the blog's own domain).
     tumblr: String(env.TUMBLR_BASE_URL || 'https://www.tumblr.com').replace(/\/+$/, ''),
   },

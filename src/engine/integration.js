@@ -2,7 +2,7 @@
 /**
  * THE ONLY MODULE THAT TOUCHES EXISTING PRISM INTERNALS.
  *
- * Every new module (firehoses, nostr, extractor, backfill, harvest CLI) talks
+ * Every new module (firehoses, nostr, extractor, backfill) talks
  * to the app through here. Written without repo access: each binding probes a
  * list of plausible export names and FAILS LOUDLY rather than silently no-op.
  *

@@ -20,6 +20,7 @@ const registry = require('../src/sources');
 const settingsStore = require('../src/settings');
 const browser4 = require('../src/lib/browser4');
 const expand = require('../src/engine/expand');
+const hoststrategy = require('../src/engine/hoststrategy');
 const { createApp } = require('../src/app');
 
 let site; let api; let apiBase;
@@ -51,7 +52,7 @@ before(async () => {
 after(async () => { await new Promise((r) => api.close(r)); await site.close(); await browser4.close(); });
 beforeEach(() => {
   settingsStore.update({ browser4Mode: 'fallback', browser4Scrolls: 8, browser4Pages: 3, browser4AutoExpand: false, browser4ExpandPerRun: 5 });
-  browser4._reset();
+  browser4._reset(); hoststrategy._reset();
 });
 
 describe('web pages', () => {
@@ -140,6 +141,18 @@ describe('web pages', () => {
     assert.deepEqual(calls(), [], 'the browser is for pages that loaded but are empty, not for getting past a 403');
   });
 
+  test('Bright Data unlocking is on by default but inert without credentials: a refusal just stays a refusal', async () => {
+    repo.db.prepare("DELETE FROM settings WHERE key = 'brightdataUnlocker'").run();
+    assert.equal(settingsStore.get().brightdataUnlocker, 'fallback');
+    const brightdata = require('../src/lib/brightdata');
+    assert.equal(brightdata.unlockerConfigured(), false); assert.equal(brightdata.browserConfigured(), false);
+    setRoutes({});
+    const r = await fetchWeb(`${site.url}/forbidden`);
+    assert.deepEqual(r.items, []); assert.equal(r.via, 'html');
+    assert.deepEqual(r.notes, [], 'no error, no attempt, nothing sent anywhere');
+    assert.deepEqual(calls(), []);
+  });
+
   test('the rendered page can opt out, and the opt-out wins', async () => {
     const url = `${site.url}/shell`;
     setRoutes({ [url]: { html: page(imgs(1, 5), '<meta name="robots" content="noindex">') } });
@@ -210,6 +223,69 @@ describe('a busy browser', () => {
       assert.match(rb.reason.message, /busy/);
       assert.deepEqual(gotos(), [a], 'the waiting page never reached the browser');
     } finally { config.browser4.maxQueueWaitMs = 40000; }
+  });
+});
+
+describe('the browser is only spent where it pays (learned per host)', () => {
+  test('"always" stops starting the browser on a host where rendering never beats the plain read', async () => {
+    const url = `${site.url}/static`;
+    setRoutes({ [url]: { html: page(imgs(1, 3)) } }); // the render finds exactly what the plain page already shows
+    settingsStore.update({ browser4Mode: 'always' });
+    for (let i = 0; i < hoststrategy.EXPLORE; i++) await fetchWeb(url);
+    assert.equal(gotos().length, hoststrategy.EXPLORE, 'each of the exploring runs rendered');
+    const r = await fetchWeb(url);
+    assert.equal(gotos().length, hoststrategy.EXPLORE, 'the next run did not start the browser');
+    assert.equal(r.via, 'html'); assert.equal(r.items.length, 3, 'and lost nothing');
+    assert.match(r.info.join(' ') + hoststrategy.decide('127.0.0.1', { mode: 'always', found: 3 }).why, /only 0\/3 runs/);
+  });
+
+  test('a host where rendering finds MORE keeps being rendered in "always" mode', async () => {
+    const url = `${site.url}/static`;
+    setRoutes({ [url]: { html: page(imgs(1, 20)) } });
+    settingsStore.update({ browser4Mode: 'always' });
+    for (let i = 0; i < hoststrategy.EXPLORE + 2; i++) await fetchWeb(url);
+    assert.equal(gotos().length, hoststrategy.EXPLORE + 2, 'every run rendered: it keeps paying off');
+  });
+
+  test('a host that answers the browser with a bot-challenge is left alone afterwards - nothing is retried', async () => {
+    const url = `${site.url}/shell`;
+    setRoutes({ [url]: { html: '<html>Just a moment...</html>', challenge: true } });
+    const r1 = await fetchWeb(url);
+    assert.match(r1.notes.join(' '), /bot-challenge/);
+    assert.equal(gotos().length, 1);
+    const r2 = await fetchWeb(url);
+    assert.equal(gotos().length, 1, 'the second run never opened the page');
+    assert.match(r2.info.join(' '), /Browser4 not used: .*bot-challenge; resting it until/);
+  });
+
+  test('a host where renders keep coming back empty is rested, so the browser is not started for nothing', async () => {
+    const url = `${site.url}/shell`;
+    setRoutes({ [url]: { html: page('<p>nothing</p>') } });
+    await fetchWeb(url);
+    assert.equal(gotos().length, 1);
+    const r = await fetchWeb(url);
+    assert.equal(gotos().length, 1);
+    assert.match(r.info.join(' '), /found nothing 1x in a row/);
+  });
+});
+
+describe('expansion ranks links by how much they look like content', () => {
+  const doc = (html, url) => ({ $: cheerio.load(html), url });
+  test('thumbnail cards, gallery paths and listings of siblings come before navigation and paging', () => {
+    const html = `<a href="/tag/muscle">tag</a> <a href="/page/2">older</a> <a href="/shoots/rooftop"><img src="/t1.jpg"></a> <a href="/misc">misc</a>
+      <a href="/set/a">a</a> <a href="/set/b">b</a> <a href="/set/c">c</a> <a href="/archive/2024">archive</a> <a href="/gallery/summer"><picture><img src="/t2.jpg"></picture></a> <a href="/gallery/summer">summer again</a>`;
+    const ranked = expand.rankLinks([doc(html, 'https://example.org/start')], 'https://example.org/start');
+    const order = ranked.map((l) => l.url.replace('https://example.org', ''));
+    assert.deepEqual(order.slice(0, 2).sort(), ['/gallery/summer', '/shoots/rooftop'], 'the two thumbnail cards lead');
+    assert.deepEqual(order.slice(2, 5), ['/set/a', '/set/b', '/set/c'], 'then the listing of siblings, in page order');
+    assert.ok(order.indexOf('/misc') < order.indexOf('/tag/muscle') && order.indexOf('/misc') < order.indexOf('/archive/2024') && order.indexOf('/misc') < order.indexOf('/page/2'), 'navigation and paging come last');
+    assert.equal(order.filter((u) => u === '/gallery/summer').length, 1, 'a page linked twice is one candidate, and any thumbnail counts');
+  });
+  test('the feed budget goes to the best pages, not the first ones in the document', () => {
+    const html = `<a href="/tag/a">t</a><a href="/tag/b">t</a><a href="/page/2">p</a><a href="/gallery/one"><img src="/1.jpg"></a><a href="/gallery/two"><img src="/2.jpg"></a>`;
+    const seed = repo.feeds.upsert({ platform: 'web', kind: 'page', target: 'https://rank.example/start', origin: 'admin' }).feed;
+    const a = expand.adoptLinks(seed, [doc(html, seed.target)], settingsStore.get(), { limit: 2 });
+    assert.deepEqual(a.urls.sort(), ['https://rank.example/gallery/one', 'https://rank.example/gallery/two']);
   });
 });
 

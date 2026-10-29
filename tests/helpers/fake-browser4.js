@@ -61,6 +61,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       } else if (sub === 'unroute') { fs.rmSync(file, { force: true }); console.log('{"unrouted":"all"}'); }
       break;
     }
+    case 'attach': // attach --cdp <wss>; routes.json "__attachFail" makes it fail, echoing the endpoint like a real CLI error would
+      record();
+      if (routes.__attachFail) { console.error(`cannot attach to ${rest[1]}`); process.exit(1); }
+      console.log('Attached');
+      break;
     default: // open, wait, close ...
       record();
       console.log('ok');

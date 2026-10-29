@@ -31,6 +31,7 @@ const limiter = require('./limiter');
 const leaks = require('./leaks');
 const takedowns = require('./takedowns');
 const { isPaywalledHost } = require('./brave');
+const { redact } = require('./brightdata');
 
 const MAX_HTML = 3_500_000;
 const HOST_GAP_MS = 2000; // politeness: at least this long between two page loads on one host
@@ -76,15 +77,15 @@ const workDir = () => {
 };
 
 /** Run `browser4-cli -s <session> [--json] ...args`. Resolves with the parsed envelope (json) or stdout (text). */
-function cli(args, { json = true, input = null, timeoutMs = config.browser4.timeoutMs } = {}) {
-  const full = ['-s', config.browser4.session, ...(json ? ['--json'] : []), ...args];
+function cli(args, { json = true, input = null, timeoutMs = config.browser4.timeoutMs, session = config.browser4.session } = {}) {
+  const full = ['-s', session, ...(json ? ['--json'] : []), ...args];
   return new Promise((resolve, reject) => {
     const child = execFile(config.browser4.bin, full, {
       cwd: workDir(), timeout: Math.max(1000, timeoutMs), maxBuffer: 24 * 1024 * 1024, env: process.env, windowsHide: true,
     }, (err, stdout, stderr) => {
       if (err) {
         const detail = String(stderr || stdout || err.message).trim().split('\n').filter(Boolean).slice(-3).join(' | ').slice(0, 300);
-        const e = new Error(`browser4-cli ${args[0]}: ${err.killed ? `timed out after ${Math.round(timeoutMs / 1000)}s` : detail || err.message}`);
+        const e = new Error(redact(`browser4-cli ${args[0]}: ${err.killed ? `timed out after ${Math.round(timeoutMs / 1000)}s` : detail || err.message}`)); // a remote endpoint's credentials never reach a log
         e.code = err.code; e.status = 0; e.timedOut = !!err.killed;
         if (err.code === 'ENOENT') { e.message = `browser4-cli not found (${config.browser4.bin}); install it with: npm i -g browser4-cli && browser4-cli install`; e.missing = true; }
         return reject(e);
@@ -113,8 +114,8 @@ async function ensureOpen(budgetMs) {
 }
 
 /** Run JavaScript in the page. Objects come back as objects; a JSON string is parsed. */
-async function evalJs(source, { await: wait = false, timeoutMs } = {}) {
-  const env = await cli(['eval', '--stdin', ...(wait ? ['--await'] : [])], { input: source, timeoutMs });
+async function evalJs(source, { await: wait = false, timeoutMs, session } = {}) {
+  const env = await cli(['eval', '--stdin', ...(wait ? ['--await'] : [])], { input: source, timeoutMs, session });
   let r = env && env.output ? env.output.result : null;
   if (typeof r === 'string' && /^[[{]/.test(r)) { try { r = JSON.parse(r); } catch { /* keep the string */ } }
   return r;
@@ -174,22 +175,22 @@ const documentScript = `(() => {
 })()`;
 
 /* ------------------------------------------------------------------ render */
-async function renderOne(url, { scrolls, settleMs, deadline }) {
+async function renderOne(url, { scrolls, settleMs, deadline, session }) {
   const left = () => Math.max(1500, deadline - Date.now());
-  await limiter.schedule(`browser4:${hostOf(url)}`, HOST_GAP_MS, () => cli(['goto', url], { json: false, timeoutMs: Math.min(config.browser4.timeoutMs, left()) }));
+  await limiter.schedule(`browser4:${hostOf(url)}`, HOST_GAP_MS, () => cli(['goto', url], { json: false, timeoutMs: Math.min(config.browser4.timeoutMs, left()), session }));
 
   // Never press on through a challenge page: that is a "no", not an obstacle.
-  const info = await cli(['page-info'], { timeoutMs: Math.min(15000, left()) });
+  const info = await cli(['page-info'], { timeoutMs: Math.min(15000, left()), session });
   if (info && info.output && info.output.challenge_detected) throw skip('the site answered with a bot-challenge page', { challenge: true });
 
-  await cli(['wait', '--load', 'networkidle', '--timeout', '15000'], { json: false, timeoutMs: Math.min(20000, left()) }).catch(() => { /* a page with a live connection never idles: carry on */ });
+  await cli(['wait', '--load', 'networkidle', '--timeout', '15000'], { json: false, timeoutMs: Math.min(20000, left()), session }).catch(() => { /* a page with a live connection never idles: carry on */ });
 
   let scrolled = { rounds: 0, height: 0 };
   if (scrolls > 0) {
-    try { scrolled = (await evalJs(scrollScript(scrolls, settleMs), { await: true, timeoutMs: Math.min(scrolls * (settleMs + 1500) + 5000, left()) })) || scrolled; } catch (e) { if (e.timedOut) scrolled = { rounds: -1, height: 0 }; else throw e; }
+    try { scrolled = (await evalJs(scrollScript(scrolls, settleMs), { await: true, timeoutMs: Math.min(scrolls * (settleMs + 1500) + 5000, left()), session })) || scrolled; } catch (e) { if (e.timedOut) scrolled = { rounds: -1, height: 0 }; else throw e; }
   }
 
-  const doc = await evalJs(documentScript, { timeoutMs: Math.min(30000, left()) });
+  const doc = await evalJs(documentScript, { timeoutMs: Math.min(30000, left()), session });
   if (!doc || typeof doc.html !== 'string' || !doc.html) throw new Error('the browser returned no page');
 
   // A redirect may have taken the browser somewhere PRISM must not go: check where it really ended up.
@@ -198,11 +199,39 @@ async function renderOne(url, { scrolls, settleMs, deadline }) {
 }
 
 /**
+ * The page loop shared by the local browser and the remote Browser API: render, then follow the page's own "next page" link
+ * (same site only) up to `maxPages`. `around(fn)` wraps ONE page's render (the remote browser attaches and detaches per page).
+ */
+async function renderLoop(first, { scrolls, maxPages, settleMs, deadline, allowUrl, session, around = (fn) => fn() }) {
+  const pages = []; const notes = []; const seen = new Set();
+  let target = first;
+  while (target && pages.length < maxPages && !seen.has(target)) {
+    seen.add(target);
+    if (pages.length) {
+      if (Date.now() > deadline - 8000) { notes.push('time budget reached'); break; }
+      try { await assertAllowed(target); if (allowUrl && !(await allowUrl(target))) { notes.push(`next page not allowed: ${target}`); break; } } catch (e) { notes.push(`next page skipped: ${e.message}`); break; }
+    }
+    let p;
+    try { p = await around(() => renderOne(target, { scrolls, settleMs, deadline, session })); } catch (e) {
+      if (pages.length && !e.challenge) { notes.push(`page ${pages.length + 1} failed: ${e.message}`); break; }
+      throw e;
+    }
+    pages.push(p);
+    target = p.next && sameSite(p.next, first) ? p.next : null;
+  }
+  return { pages, notes };
+}
+
+/**
  * Render a page - and, through "next page" links on the same site, up to `pages` of them - in the browser.
  * @param {string} url
- * @param {{scrolls?:number, pages?:number, settleMs?:number, budgetMs?:number, allowUrl?:(u:string)=>Promise<boolean>}} opts
+ * @param {{scrolls?:number, pages?:number, settleMs?:number, budgetMs?:number, allowUrl?:(u:string)=>Promise<boolean>, remote?:boolean}} opts
  *   allowUrl: extra permission check for follow-up pages (the web adapter passes robots.txt).
- * @returns {Promise<{via:'browser4', pages:Array<{requested,url,title,html,next,scrolls}>, notes:string[]}>}
+ *   remote:   render in Bright Data's Browser API (BRIGHTDATA_BROWSER_WSS) instead of the local Chrome. That browser unblocks
+ *             as it loads, so it is only for a page that REFUSED the local one (see sources/web.js unlockedRead). It runs on
+ *             Bright Data's machines, so the local private-address routes do not apply, and the URL is checked here before it
+ *             leaves PRISM (a private address is never handed to a third party).
+ * @returns {Promise<{via:'browser4'|'brightdata-browser', pages:Array<{requested,url,title,html,next,scrolls}>, notes:string[]}>}
  */
 function renderPages(url, opts = {}) {
   const scrolls = Math.min(Math.max(opts.scrolls ?? 8, 0), 40);
@@ -217,32 +246,33 @@ function renderPages(url, opts = {}) {
     if (Date.now() - queuedAt > config.browser4.maxQueueWaitMs) throw skip('Browser4 is busy with another page');
     const first = await assertAllowed(url);
     const deadline = Date.now() + budgetMs;
-    try { await ensureOpen(budgetMs); await ensureBlocks(); } catch (e) { opened = false; throw e; }
-    const pages = []; const notes = []; const seen = new Set();
-    let target = first;
     try {
-      while (target && pages.length < maxPages && !seen.has(target)) {
-        seen.add(target);
-        if (pages.length) {
-          if (Date.now() > deadline - 8000) { notes.push('time budget reached'); break; }
-          try { await assertAllowed(target); if (opts.allowUrl && !(await opts.allowUrl(target))) { notes.push(`next page not allowed: ${target}`); break; } } catch (e) { notes.push(`next page skipped: ${e.message}`); break; }
-        }
-        let p;
-        try { p = await renderOne(target, { scrolls, settleMs, deadline }); } catch (e) {
-          if (pages.length && !e.challenge) { notes.push(`page ${pages.length + 1} failed: ${e.message}`); break; }
-          throw e;
-        }
-        pages.push(p);
-        target = p.next && sameSite(p.next, first) ? p.next : null;
+      if (opts.remote) {
+        const wss = config.brightdata.browserWss;
+        if (!wss) throw skip('BRIGHTDATA_BROWSER_WSS is not set');
+        const session = `${config.browser4.session}-brd`;
+        const loop = await renderLoop(first, {
+          scrolls, maxPages, settleMs, deadline, allowUrl: opts.allowUrl, session,
+          // Bright Data's Browser API allows ONE navigation per connection: a fresh attach for every page, closed after it.
+          around: async (fn) => {
+            await cli(['attach', '--cdp', wss], { json: false, timeoutMs: 60000, session });
+            try { return await fn(); } finally { await cli(['close'], { json: false, timeoutMs: 20000, session }).catch(() => {}); }
+          },
+        });
+        return { via: 'brightdata-browser', ...loop };
       }
-    } catch (e) {
-      if (e.timedOut || /not found|unreadable|session/i.test(e.message)) opened = false; // re-open next time (backend restarted, session lost)
-      throw e;
+      try { await ensureOpen(budgetMs); await ensureBlocks(); } catch (e) { opened = false; throw e; }
+      try {
+        const loop = await renderLoop(first, { scrolls, maxPages, settleMs, deadline, allowUrl: opts.allowUrl, session: config.browser4.session });
+        return { via: 'browser4', ...loop };
+      } catch (e) {
+        if (e.timedOut || /not found|unreadable|session/i.test(e.message)) opened = false; // re-open next time (backend restarted, session lost)
+        throw e;
+      }
     } finally {
       // goto/open leave accessibility snapshots in the working directory; nothing here reads them.
       fs.rm(path.join(workDir(), '.browser4-cli'), { recursive: true, force: true }, () => {});
     }
-    return { via: 'browser4', pages, notes };
   });
 }
 

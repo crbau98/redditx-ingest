@@ -78,6 +78,33 @@ describe('real Browser4 against a JavaScript-built site', { timeout: 300000 }, (
     await assert.rejects(browser4.renderPages(`${site.url}/challenge`, { scrolls: 0 }), (e) => e.skip === true && e.challenge === true);
   });
 
+  // A local remote-debugging Chromium stands in for Bright Data's Browser API: the real mechanism (attach over CDP, one page per
+  // connection, scroll, read, detach, repeat) with a real browser - but not Bright Data's own service, which needs an account.
+  test('the remote Browser API path works against a real remote browser: a fresh attach per page, 24 media over two pages', async (t) => {
+    const fs = require('fs'); const os = require('os'); const path = require('path'); const { spawn } = require('child_process');
+    const bin = [process.env.CHROME_BIN, '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome-stable'].find((b) => b && fs.existsSync(b));
+    if (!bin) return t.skip('no Chrome/Chromium binary found (set CHROME_BIN)');
+    const config = require('../src/config');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-chrome-'));
+    const proc = spawn(bin, ['--headless=new', '--no-sandbox', '--disable-gpu', '--remote-debugging-port=0', `--user-data-dir=${dir}`, 'about:blank'], { stdio: 'ignore' });
+    try {
+      let ws = null;
+      for (let i = 0; i < 60 && !ws; i++) {
+        try { const [port, p] = fs.readFileSync(path.join(dir, 'DevToolsActivePort'), 'utf8').trim().split('\n'); ws = `ws://127.0.0.1:${port}${p}`; } catch { await new Promise((r) => setTimeout(r, 250)); }
+      }
+      assert.ok(ws, 'the remote browser exposed its DevTools endpoint');
+      config.brightdata.browserWss = ws;
+      const r = await browser4.renderPages(`${site.url}/gallery`, { remote: true, scrolls: 8, pages: 3 });
+      assert.equal(r.via, 'brightdata-browser');
+      assert.equal(r.pages.length, 2, 'the JS-built "next page" link was followed, on a second connection');
+      const media = new Set(r.pages.flatMap((p) => [...p.html.matchAll(/\/img\/(\d+)\.jpg/g)].map((m) => m[1])));
+      assert.equal(media.size, 24);
+    } finally {
+      config.brightdata.browserWss = '';
+      proc.kill('SIGKILL');
+    }
+  });
+
   // Last: it registers browser-level routes that would also block the 127.0.0.1 fixture the tests above use.
   test('the browser aborts a redirect hop and sub-requests aimed at a private address BEFORE they are sent', async () => {
     const config = require('../src/config');

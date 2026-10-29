@@ -12,7 +12,9 @@ const { prepareEnv } = require('./helpers/mock');
 
 const b4dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-b4-policy-'));
 const fake = path.join(__dirname, 'helpers', 'fake-browser4.js');
-prepareEnv({ ALLOW_PRIVATE_HOSTS: 'false', BROWSER4_ENABLED: '1', BROWSER4_CLI: fake, FAKE_B4_DIR: b4dir, BROWSER4_TIMEOUT_MS: '10000' });
+// BRIGHTDATA_BASE_URL points at a closed port: if a URL below were ever SENT, the failure would be a connection error, not the policy refusal asserted.
+prepareEnv({ ALLOW_PRIVATE_HOSTS: 'false', BROWSER4_ENABLED: '1', BROWSER4_CLI: fake, FAKE_B4_DIR: b4dir, BROWSER4_TIMEOUT_MS: '10000',
+  BRIGHTDATA_API_TOKEN: 'bd-token', BRIGHTDATA_UNLOCKER_ZONE: 'zone1', BRIGHTDATA_BASE_URL: 'http://127.0.0.1:9', BRIGHTDATA_BROWSER_WSS: 'wss://brd-customer-c1-zone-z:s3cret@brd.superproxy.io:9222' });
 
 const config = require('../src/config');
 const repo = require('../src/db/repo');
@@ -101,6 +103,23 @@ describe('renderPages', () => {
     assert.equal(r.pages.length, 1);
     assert.match(r.notes.join(' '), /not allowed/);
     assert.equal(calls().filter((c) => c.cmd === 'goto').length, 1);
+  });
+});
+
+describe('nothing private is ever handed to Bright Data (private hosts blocked, as in production)', () => {
+  const brightdata = require('../src/lib/brightdata');
+  const refused = ['http://169.254.169.254/latest/meta-data/', 'http://10.0.0.5/admin', 'http://localhost:8080/', 'http://127.0.0.1/', 'http://[::1]/', 'http://192.168.1.1/', 'http://printer.local/'];
+  test('the Web Unlocker refuses private addresses before sending anything', async () => {
+    for (const url of refused) await assert.rejects(brightdata.unlock(url), (e) => e.skip === true && /private|internal/.test(e.message), url);
+    assert.equal(brightdata.unlockUsage().count, 0);
+  });
+  test('so does the remote Browser API path (the URL would leave this machine)', async () => {
+    for (const url of refused) await assert.rejects(browser4.renderPages(url, { remote: true, scrolls: 0 }), (e) => e.skip === true && /private|internal/.test(e.message), url);
+    assert.equal(calls().filter((c) => c.cmd === 'attach').length, 0, 'no remote connection was even opened');
+  });
+  test('the remote browser endpoint\'s credentials never appear in an error', async () => {
+    setRoutes({ 'http://93.184.216.34/p': { html: '<html></html>' }, __attachFail: true });
+    await assert.rejects(browser4.renderPages('http://93.184.216.34/p', { remote: true, scrolls: 0 }), (e) => !/s3cret|customer-c1/.test(e.message) && /\*\*\*@brd\.superproxy\.io/.test(e.message));
   });
 });
 
