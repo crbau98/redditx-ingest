@@ -132,7 +132,8 @@ describe('the guard proxy: nothing private is reached, by any route', { timeout:
 
   test('the proxy serves nobody without its per-process credential', async () => {
     const { server } = await guard.start();
-    const res = await new Promise((resolve) => require('http').get(`${server.replace('http://', 'http://')}/`, { headers: {}, path: `http://localhost:${pub.port}/page`, host: '127.0.0.1', port: new URL(server).port }, resolve).on('error', () => resolve({ statusCode: 0 })));
+    // a proxy request (absolute URL as the path) with no Proxy-Authorization header
+    const res = await new Promise((resolve) => require('http').get({ host: '127.0.0.1', port: new URL(server).port, path: `http://localhost:${pub.port}/page` }, resolve).on('error', () => resolve({ statusCode: 0 })));
     assert.equal(res.statusCode, 407);
   });
 });
