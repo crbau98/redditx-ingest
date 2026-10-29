@@ -17,6 +17,7 @@
  */
 const crypto = require('crypto');
 const http = require('http');
+const dns = require('dns');
 const nodeNet = require('net');
 const config = require('../config');
 const net = require('./net');
@@ -46,16 +47,34 @@ function policy(host, href) {
   return null;
 }
 
-/** Resolve and validate a destination. @returns {Promise<string>} the address to connect to */
+/**
+ * Resolve and validate a destination. @returns {Promise<string[]>} the addresses to try, in order (a dual-stack name
+ * often lists an IPv6 address first that the network cannot reach: the next one is tried, as a browser would)
+ */
 function resolve(host) {
   const h = String(host).replace(/^\[|\]$/g, '');
-  if (testAllow(h)) return Promise.resolve(h === 'localhost' ? '127.0.0.1' : h);
+  if (testAllow(h)) return new Promise((ok, fail) => dns.lookup(h, { all: true }, (err, list) => (err ? fail(err) : ok(list.map((a) => a.address)))));
   if (net.isPrivateHost(h)) return Promise.reject(Object.assign(new Error(`${h} is a private or internal host`), { code: 'EBLOCKED' }));
   if (nodeNet.isIP(h)) {
     if (!config.allowPrivateHosts && net.isPrivateIp(h)) return Promise.reject(Object.assign(new Error(`${h} is a private address`), { code: 'EBLOCKED' }));
-    return Promise.resolve(h);
+    return Promise.resolve([h]);
   }
-  return new Promise((ok, fail) => net.safeLookup(h, {}, (err, address) => (err ? fail(err) : ok(address))));
+  return new Promise((ok, fail) => net.safeLookup(h, { all: true }, (err, list) => (err ? fail(err) : ok(list.map((a) => a.address)))));
+}
+
+/** A TCP connection to the first of `addresses` that answers. */
+function connectFirst(addresses, port) {
+  return new Promise((ok, fail) => {
+    let i = 0; let lastErr = null;
+    const next = () => {
+      if (i >= addresses.length) return fail(lastErr || new Error('no address to connect to'));
+      const sock = nodeNet.connect({ host: addresses[i++], port });
+      sock.setTimeout(10000, () => sock.destroy(Object.assign(new Error('connect timed out'), { code: 'ETIMEDOUT' })));
+      sock.once('connect', () => { sock.setTimeout(60000); sock.removeAllListeners('error'); ok(sock); });
+      sock.once('error', (e) => { lastErr = e; sock.destroy(); next(); });
+    };
+    next();
+  });
 }
 
 function authorized(req) {
@@ -74,16 +93,17 @@ async function onConnect(req, socket, head) {
   const host = m[1].toLowerCase(); const port = Number(m[2]);
   const why = policy(host);
   if (why) return deny(403, why, host);
-  let address;
-  try { address = await resolve(host); } catch (e) { return deny(403, e.message, host); }
-  const upstream = nodeNet.connect({ host: address, port });
-  upstream.setTimeout(60000, () => upstream.destroy());
-  upstream.once('connect', () => {
-    socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-    if (head && head.length) upstream.write(head);
-    upstream.pipe(socket); socket.pipe(upstream);
-  });
+  let addresses;
+  try { addresses = await resolve(host); } catch (e) { return deny(403, e.message, host); }
+  let upstream;
+  try { upstream = await connectFirst(addresses, port); } catch (e) {
+    return socket.end(`HTTP/1.1 502 Bad Gateway\r\nX-Prism-Unreachable: ${String(e.code || e.message).replace(/[\r\n]/g, ' ')}\r\n\r\n`);
+  }
+  socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+  if (head && head.length) upstream.write(head);
+  upstream.pipe(socket); socket.pipe(upstream);
   upstream.on('error', () => socket.destroy());
+  upstream.on('timeout', () => upstream.destroy());
   socket.on('close', () => upstream.destroy());
 }
 
@@ -97,11 +117,17 @@ async function onRequest(req, res) {
   const host = u.hostname.toLowerCase();
   const why = policy(host, u.href);
   if (why) return deny(403, why, host);
-  let address;
-  try { address = await resolve(host); } catch (e) { return deny(403, e.message, host); }
+  let addresses;
+  try { addresses = await resolve(host); } catch (e) { return deny(403, e.message, host); }
+  let sock;
+  try { sock = await connectFirst(addresses, Number(u.port) || 80); } catch (e) {
+    // Marked, so the browser engine reports "unreachable" instead of reading this answer as the page.
+    res.writeHead(502, { 'content-type': 'text/plain', 'x-prism-unreachable': String(e.code || e.message).replace(/[\r\n]/g, ' ') });
+    return res.end(`unreachable: ${host}`);
+  }
   const headers = { ...req.headers };
   delete headers['proxy-authorization']; delete headers['proxy-connection'];
-  const up = http.request({ host: address, port: u.port || 80, method: req.method, path: `${u.pathname}${u.search}`, headers, setHost: false, timeout: 60000 }, (r) => {
+  const up = http.request({ createConnection: () => sock, method: req.method, path: `${u.pathname}${u.search}`, headers, setHost: false, timeout: 60000 }, (r) => {
     res.writeHead(r.statusCode, r.headers);
     r.pipe(res);
   });
@@ -128,4 +154,4 @@ function stop() { return new Promise((r) => { if (!server) return r(); const s =
 /** Refusals since `since` (ms timestamp). */
 const refusedSince = (since) => blocked.filter((b) => b.at >= since);
 
-module.exports = { start, stop, refusedSince, _policy: policy, _resolve: resolve };
+module.exports = { start, stop, refusedSince, _policy: policy, _resolve: resolve, _connectFirst: connectFirst };

@@ -99,6 +99,8 @@ async function readPage(page, url, { scrolls, settleMs, deadline, started }) {
   // A plain-http hop the guard refused comes back as the guard's own 403 page: that is a refusal, not content.
   const refusedBy = resp && resp.headers()['x-prism-refused'];
   if (refusedBy) throw skip(`the page led to a refused address (${hostOf(resp.url()) || 'unknown'}: ${refusedBy})`);
+  const unreachable = resp && resp.headers()['x-prism-unreachable'];
+  if (unreachable) throw Object.assign(new Error(`could not reach ${hostOf(resp.url()) || 'the page'} (${unreachable})`), { status: 0 });
   if (await page.evaluate(CHALLENGE).catch(() => false)) throw skip('the site answered with a bot-challenge page', { challenge: true });
   await page.waitForLoadState('networkidle', { timeout: Math.min(15000, left()) }).catch(() => { /* a live connection never idles */ });
   let scrolled = { rounds: 0, height: 0 };
