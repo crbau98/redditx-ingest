@@ -17,6 +17,7 @@ const adapters = [
   require('./youtube'),
   require('./rss'),
   require('./coomer'),
+  require('./gff'),
   webAdapter,
   linkInBioAdapter,
 ];

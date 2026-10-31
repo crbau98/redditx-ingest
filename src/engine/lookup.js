@@ -197,6 +197,9 @@ function directSpecs(q) {
       specs.push({ platform: 'redgifs', kind: 'user', target: handle, label: handle, ingestable: true });
       specs.push({ platform: 'x', kind: 'user', target: handle, label: `@${handle}`, ingestable: true });
       specs.push({ platform: 'telegram', kind: 'user', target: handle, label: handle, ingestable: true });
+      // The public mirror (Coomer) answers for any handle: the same paid-page content, publicly indexed.
+      specs.push({ platform: 'coomer', kind: 'user', target: `onlyfans/${handle}`, label: `${handle} (OnlyFans on Coomer)`, ingestable: true });
+      specs.push({ platform: 'coomer', kind: 'user', target: `fansly/${handle}`, label: `${handle} (Fansly on Coomer)`, ingestable: true });
       for (const inst of instancesFor('mastodon')) specs.push({ platform: 'mastodon', kind: 'user', target: `${handle}@${inst}`, label: `@${handle}@${inst}`, ingestable: true });
       for (const inst of instancesFor('misskey')) specs.push({ platform: 'misskey', kind: 'user', target: `${handle}@${inst}`, label: `@${handle}@${inst}`, ingestable: true });
     }

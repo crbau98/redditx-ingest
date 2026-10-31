@@ -67,6 +67,11 @@ const SCHEMA = {
     default: config.isTest ? '' : ['Christian Hogue', 'Jakipz', 'Michael Yerger', 'Chase Stobbe', 'HotAlex'].join('\n'),
   },
   discoveryOnlyFans: { type: 'bool', default: true, label: 'Trace OnlyFans creators: find the free public accounts (RedGIFs, Bluesky, X, Telegram, link pages) behind OnlyFans pages that creators promote. Paid pages named in a creator’s own posts or bios are read like any other public page', group: 'discovery' },
+  // --- ingest depth + cross-web content matching (v4.17) ---
+  coomerPages: { type: 'int', default: 40, min: 1, max: 200, label: 'Coomer: most pages read per run (50 posts each; creator pages go this deep, keyword feeds a quarter of it)', group: 'sources' },
+  imageMatch: { type: 'bool', default: true, label: 'AI image match: after a creator is found, search the web for pictures of his and keep the pages where his content shows up', group: 'discovery' },
+  imageMatchPerRun: { type: 'int', default: 4, min: 0, max: 30, label: 'AI image match: creators matched per discovery run', group: 'discovery' },
+  imageMatchSimilarity: { type: 'int', default: 62, min: 40, max: 99, label: 'AI image match: visual similarity (%) needed to call a web picture his (a page must also name him)', group: 'discovery' },
   discoveryExpand: { type: 'bool', default: true, label: 'Find lookalike creators (Bluesky) and search Bluesky and RedGIFs for new people', group: 'discovery' },
   discoveryAutoCommunities: { type: 'bool', default: true, label: 'Auto-follow strong communities and feeds (their posts are still checked one by one)', group: 'discovery' },
   // --- sources and playback (v5) ---

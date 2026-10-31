@@ -131,7 +131,7 @@ function ddgUrls(html) {
  */
 async function ddgWeb(query, { count = 20 } = {}) {
   const q = String(query || '').trim();
-  if (!q) return [];
+  if (!q || !ddgReachable()) return [];
   const rawBase = String(process.env.DDG_HTML_URL || process.env.DDG_BASE_URL || (config.baseUrls && config.baseUrls.ddg) || 'https://html.duckduckgo.com').replace(/\/+$/, '');
   const url = rawBase.endsWith('/html')
     ? `${rawBase}/?q=${encodeURIComponent(q)}&kp=-2`
@@ -142,13 +142,17 @@ async function ddgWeb(query, { count = 20 } = {}) {
         accept: 'text/html,application/xhtml+xml',
         'accept-language': 'en-US,en;q=0.9',
       },
-      retries: 1,
+      timeout: 8000,
+      retries: 0,
     });
     return ddgUrls(html).slice(0, count);
   } catch {
     return [];
   }
 }
+
+/** DDG's HTML endpoint is unreachable from some hosts (tests, some networks): skip the wait there. */
+const ddgReachable = () => !config.isTest || !!(process.env.DDG_BASE_URL || process.env.DDG_HTML_URL);
 
 async function braveRequest(path, params, { budget = 40 } = {}) {
   const key = apiKey();
@@ -212,26 +216,86 @@ async function web(q, { count = 20, budget = 40 } = {}) {
 }
 
 /**
- * Brave Image Search (`https://api.search.brave.com/res/v1/images/search`) with automatic DDG fallback.
+ * Keyless Bing image search: DuckDuckGo's HTML endpoint times out from many hosts, so Bing's
+ * `/images/async` feed (HTML with `murl` / `purl` / `t` fields, HTML-escaped) is the out-of-the-box
+ * fallback. Results carry the picture URL, the page it came from and its title — exactly the shape
+ * Brave's image search returns.
+ */
+async function bingImages(query, { count = 30 } = {}) {
+  const q = String(query || '').trim();
+  if (!q) return [];
+  const url = `https://www.bing.com/images/async?q=${encodeURIComponent(q)}&first=1&count=${Math.min(Math.max(count, 10), 60)}&mmasync=1`;
+  const html = await ddgHttp.text(url, {
+    timeout: 15000,
+    headers: { 'accept-language': 'en-US,en;q=0.9', accept: 'text/html,application/xhtml+xml' },
+    retries: 1,
+  });
+  const text = String(html || '');
+  const out = [];
+  const seen = new Set();
+  const field = (block, key) => {
+    const m = block.match(new RegExp(`${key}&quot;:&quot;([\\s\\S]*?)(?:&quot;|")`));
+    return m ? m[1].replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"') : null;
+  };
+  for (const block of text.split('m="').slice(1, Math.max(count, 10) + 10)) {
+    const img = field(block, 'murl') || field(block, 'mediaurl');
+    const page = field(block, 'purl');
+    const title = field(block, 't');
+    if (!img || !/^https?:\/\//i.test(img)) continue;
+    const key = `${img}|${page || ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      url: page || img,
+      pageUrl: page || img,
+      title: title || '',
+      description: '',
+      source: hostOf(page || img) || 'bing',
+      imageUrl: img,
+      mediaUrl: img,
+      thumbnailUrl: null,
+      width: null,
+      height: null,
+      type: 'image',
+      mediaType: looksLikeVideo(img) ? 'video' : 'image',
+    });
+    if (out.length >= count) break;
+  }
+  return out;
+}
+
+/**
+ * Brave Image Search (`https://api.search.brave.com/res/v1/images/search`) with automatic DDG/Bing fallback.
  */
 async function images(q, { count = 20, budget = 40 } = {}) {
   if (!configured()) {
-    const hits = await ddgWeb(q, { count });
-    return hits
-      .filter((r) => r.url)
-      .map((r) => ({
-        url: r.url,
-        pageUrl: r.url,
-        title: r.title,
-        description: r.description || '',
-        source: hostOf(r.url) || 'ddg',
-        imageUrl: looksLikeDirectMedia(r.url) && !looksLikeVideo(r.url) ? r.url : null,
-        mediaUrl: looksLikeDirectMedia(r.url) ? r.url : null,
-        thumbnailUrl: null,
-        width: null,
-        height: null,
-        type: 'image',
-      }));
+    // Image search needs actual picture URLs: DDG's HTML results rarely carry them, Bing's image feed does.
+    if (config.bingEnabled) {
+      try {
+        const bingHits = await bingImages(q, { count });
+        if (bingHits.length) return bingHits;
+      } catch { /* fall back to DDG */ }
+    }
+    try {
+      const hits = await ddgWeb(q, { count });
+      if (hits.length) {        return hits
+          .filter((r) => r.url)
+          .map((r) => ({
+            url: r.url,
+            pageUrl: r.url,
+            title: r.title,
+            description: r.description || '',
+            source: hostOf(r.url) || 'ddg',
+            imageUrl: looksLikeDirectMedia(r.url) && !looksLikeVideo(r.url) ? r.url : null,
+            mediaUrl: looksLikeDirectMedia(r.url) ? r.url : null,
+            thumbnailUrl: null,
+            width: null,
+            height: null,
+            type: 'image',
+          }));
+      }
+    } catch { /* fall through to Bing */ }
+    return config.bingEnabled ? bingImages(q, { count }) : [];
   }
 
   let json;
@@ -240,22 +304,27 @@ async function images(q, { count = 20, budget = 40 } = {}) {
     json = await braveRequest('/res/v1/images/search', qs, { budget });
   } catch (e) {
     if (e && (e.skip || e.budget)) {
-      const hits = await ddgWeb(q, { count });
-      return hits
-        .filter((r) => r.url)
-        .map((r) => ({
-          url: r.url,
-          pageUrl: r.url,
-          title: r.title,
-          description: r.description || '',
-          source: hostOf(r.url) || 'ddg',
-          imageUrl: null,
-          mediaUrl: null,
-          thumbnailUrl: null,
-          width: null,
-          height: null,
-          type: 'image',
-        }));
+      try {
+        const hits = await ddgWeb(q, { count });
+        if (hits.length) {
+          return hits
+            .filter((r) => r.url)
+            .map((r) => ({
+              url: r.url,
+              pageUrl: r.url,
+              title: r.title,
+              description: r.description || '',
+              source: hostOf(r.url) || 'ddg',
+              imageUrl: null,
+              mediaUrl: null,
+              thumbnailUrl: null,
+              width: null,
+              height: null,
+              type: 'image',
+            }));
+        }
+      } catch { /* fall through to Bing */ }
+      return config.bingEnabled ? bingImages(q, { count }) : [];
     }
     throw e;
   }
@@ -353,6 +422,7 @@ module.exports = {
   videos,
   ddgWeb,
   ddgUrls,
+  bingImages,
   usage,
   configured,
 };

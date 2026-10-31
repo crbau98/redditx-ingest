@@ -1252,6 +1252,57 @@ function reject(id, { reason = 'rejected by admin', actor = 'admin', block = fal
   return repo.candidates.update(id, { status: 'rejected', reason, decided_at: new Date().toISOString() });
 }
 
+/**
+ * GayForFans directory: the public /performer index ranks every gay male performer on the site
+ * (~3,500 across 75 pages). Walk it a page or two per run, take the ranked names we do not follow
+ * yet, gate them (safety + male-scope), and register each performer page as a feed — his page then
+ * pulls his whole video library through the gff adapter.
+ */
+async function gffDiscovery({ pages = 2, perPage = 12, aborted = () => false } = {}) {
+  const out = { scanned: 0, followed: 0, rejected: 0, seen: 0 };
+  const t = require('../services/targets');
+  const http = require('../sources/http').forPlatform('gff', 1000);
+  let page = parseInt(repo.discoveryState.get('gff.page', '0'), 10) || 0;
+  for (let p = 0; p < Math.max(1, pages); p++) {
+    if (aborted()) break;
+    let html;
+    try {
+      html = await http.text(`https://gayforfans.com/performer${page ? `?page=${page + 1}` : ''}`, { maxBytes: 3_000_000, retries: 1, headers: { accept: 'text/html' } });
+    } catch (e) { events.log('WARN', `Discovery: gayforfans directory — ${e.message}`); break; }
+    const cheerio = require('cheerio');
+    const $ = cheerio.load(String(html));
+    const seen = new Set();
+    const links = [];
+    $('a[href*="/performer/"]').each((_, el) => {
+      const href = $(el).attr('href') || '';
+      const m = href.match(/\/performer\/([a-z0-9-]{3,})/i);
+      if (!m || seen.has(m[1])) return;
+      seen.add(m[1]);
+      const label = ($(el).text() || '').replace(/#\d+\s*/, '').replace(/\s+/g, ' ').trim();
+      links.push({ url: /^https?:/i.test(href) ? href : `https://gayforfans.com${href}`, slug: m[1], label });
+    });
+    out.scanned += links.length;
+    let added = 0;
+    for (const l of links) {
+      if (added >= perPage || aborted()) break;
+      const name = l.label || l.slug.replace(/-[a-z0-9]{4,6}$/i, '').replace(/[-_]+/g, ' ');
+      // Same gates as every other discovery: safety first, then male-only scope, then the body filter.
+      const verdict = gate(name, l.slug);
+      const gender = femaleCheck(name, l.slug);
+      if (verdict.level === 'block' || gender.level === 'hard') { out.rejected++; continue; }
+      if (settingsStore.get().physiqueFilter && heavyRule(name, l.slug)) { out.rejected++; continue; }
+      const r = t.addSpec({ platform: 'gff', kind: 'user', target: l.url, label: name, ingestable: true }, { origin: 'discovered', trusted: true });
+      if (r.status === 'created') { added++; out.followed++; }
+    }
+    out.seen += links.length;
+    page = page + 1;
+    repo.discoveryState.set('gff.page', String(page));
+    if (page >= 74) page = -1; // wrap: -1 + 1 = 0 (page 1) next run
+    if (links.length < 10) break;
+  }
+  return out;
+}
+
 /** Auto-follow the strongest pending candidates, within the feed cap. */
 function promote(s = settingsStore.get()) {
   const capacity = Math.max(0, s.maxFeeds - repo.feeds.countEnabled());
@@ -1307,7 +1358,9 @@ async function run({ trigger = 'schedule' } = {}) {
     }
     report.seeds = await seedCreators({ aborted });
     if (s.discoveryOnlyFans) report.onlyfans = await onlyfansDiscovery({ budget: s.braveDailyBudget, aborted });
-    if (s.discoveryOnlyFans) report.coomer = await coomerDiscovery({ aborted });
+    if (s.discoveryOnlyFans && !config.isTest) report.coomer = await coomerDiscovery({ aborted });
+    if (!config.isTest) report.gff = await gffDiscovery({ aborted });
+    if (s.imageMatch && !config.isTest) report.imageMatch = await require('./imagematch').run({ aborted, budget: s.braveDailyBudget });
     if (s.discoveryCommunities) report.communities = await communityDiscovery({ aborted });
     if (s.discoveryCommunities) report.hangouts = creatorHangouts();
     if (s.discoveryExpand) {
@@ -1382,4 +1435,4 @@ function start() {
 }
 function stop() { stopFlag = true; clearInterval(timer); timer = null; }
 
-module.exports = { seedCreators, seedStatus, onlyfansDiscovery, coomerDiscovery, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskyLookalikes, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };
+module.exports = { seedCreators, seedStatus, onlyfansDiscovery, coomerDiscovery, gffDiscovery, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskyLookalikes, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };

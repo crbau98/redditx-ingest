@@ -18,7 +18,12 @@ const { toIso, clip } = require('./util');
 const BASE = 'https://coomer.st';
 const SERVICES = new Set(['onlyfans', 'fansly', 'patreon', 'subscribestar', 'gd', 'justforfans']);
 const PAGE = 50;
-const MAX_PAGES = 4; // 200 posts per feed run, newest first; coomer rate-limits hard (429)
+/** Pages read per run: creator pages go deep (a whole backlog), keyword feeds stay shallow. */
+function maxPages(feed) {
+  const settings = require('../settings').get();
+  const cap = Number(settings.coomerPages) > 0 ? Number(settings.coomerPages) : 40;
+  return feed.kind === 'user' ? cap : Math.min(cap, Math.max(4, Math.round(cap / 4)));
+}
 
 // Coomer's API asks scrapers to identify with a stylesheet Accept header.
 const HEADERS = { accept: 'text/css' };
@@ -111,15 +116,26 @@ module.exports = {
       ? `service=${encodeURIComponent(svc0)}&q=${encodeURIComponent(handle0)}` // `user=` is ignored by the API; handle query + filter below
       : `q=${encodeURIComponent(feed.target)}`;
     const mine = feed.kind === 'user' ? handle0 : null;
+    // A creator's own page reads deep (his whole backlog over the first runs); keyword feeds stay shallow.
+    const pageCap = maxPages(feed);
+    const itemCap = feed.kind === 'user' ? Math.max(Number(ctx.limit) || 0, 400) : Number(ctx.limit) || 100;
 
-    for (let page = 0; page < MAX_PAGES; page++) {
-      let json;
-      try {
-        json = await api(`/api/v1/posts?${opt}&sort=new&o=${page * PAGE}`);
-      } catch (e) {
-        notes.push(page === 0 ? `coomer: ${e.message}` : `coomer: stopped at page ${page + 1} (${e.message})`);
-        break;
+    for (let page = 0; page < pageCap; page++) {
+      let json = null;
+      for (let attempt = 0; attempt < 3 && !json; attempt++) {
+        try {
+          json = await api(`/api/v1/posts?${opt}&sort=new&o=${page * PAGE}`);
+        } catch (e) {
+          const rate = e && (e.status === 429 || /429|rate/i.test(String(e.message)));
+          if (rate && attempt < 2) { // coomer rate-limits hard: wait it out instead of ending the run
+            notes.push(`coomer: rate limited at page ${page + 1}, waiting`);
+            await new Promise((r) => setTimeout(r, 15000 * (attempt + 1)));
+            continue;
+          }
+          notes.push(page === 0 ? `coomer: ${e.message}` : `coomer: stopped at page ${page + 1} (${e.message})`);
+        }
       }
+      if (!json) break;
       const posts = Array.isArray(json.posts) ? json.posts : [];
       if (!posts.length) break;
       let fresh = 0;
@@ -135,11 +151,10 @@ module.exports = {
         // Coomer mirrors what a logged-in viewer sees; the engine's safety / takedown / male-scope
         // gates re-check every item (tombstones and creator takedowns are recorded there, not fetched
         // per post — a request per post would blow the site's rate limit immediately).
-        const itemSet = itemsFromPost(p, feed);
-        items.push(...itemSet.slice(0, ctx.limit ? Math.max(1, ctx.limit - items.length) : 20));
-        if (ctx.limit && items.length >= ctx.limit) break;
+        items.push(...itemsFromPost(p, feed));
+        if (items.length >= itemCap) break;
       }
-      if (ctx.limit && items.length >= ctx.limit) break;
+      if (items.length >= itemCap) break;
       if (posts.length < PAGE) break;
       // A creator feed's query only names him in some posts: keep paging until the mirror runs dry.
       if (!fresh && !mine) break; // fully behind the cursor: no newer content

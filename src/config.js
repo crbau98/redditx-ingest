@@ -88,7 +88,10 @@ module.exports = {
   searxngUrl: String(env.SEARXNG_URL || '').trim(),
   searxngEngines: String(env.SEARXNG_ENGINES || '').trim(),
   ddgEnabled: /^(1|true|yes|on)$/i.test(String(env.DDG_SEARCH || '')),
-  searchProviders: list(env.SEARCH_PROVIDERS, ['keenable', 'brave', 'brightdata', 'ddg', 'searxng', 'claude']),
+  // Keyless Bing HTML search (default on: it is the provider that works without any API key). BING_SEARCH=0 turns it off.
+  // Never on under test: unit tests must not reach the live web.
+  bingEnabled: !isTest && !/^(0|false|no|off)$/i.test(String(env.BING_SEARCH ?? '1')),
+  searchProviders: list(env.SEARCH_PROVIDERS, ['keenable', 'brave', 'brightdata', 'bing', 'ddg', 'searxng', 'claude']),
   // What Discover ranks results against: the intent steers it toward public creator pages and personal galleries.
   // Claude (Anthropic API). Text only: PRISM never sends pictures or videos to it.
   anthropic: {

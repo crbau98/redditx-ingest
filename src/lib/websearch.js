@@ -46,10 +46,46 @@ function parseDdg(html) {
   return out;
 }
 
+/** Bing's HTML endpoint (keyless). Result links come back as `/ck/a?...&u=a1<base64url>`. */
+function parseBing(html) {
+  const $ = cheerio.load(html);
+  if ($('#captchaform, #cf_challenge, .b_no').length && !$('.b_algo').length) throw new Error('Bing asked for a CAPTCHA');
+  const out = [];
+  $('.b_algo').each((_, el) => {
+    const a = $(el).find('h2 a').first();
+    let href = a.attr('href') || '';
+    const m = href.match(/[?&]u=a1([A-Za-z0-9_-]+)/);
+    if (m) {
+      try {
+        const b64 = m[1].replace(/-/g, '+').replace(/_/g, '/');
+        const decoded = Buffer.from(b64, 'base64').toString('utf8');
+        if (/^https?:\/\//.test(decoded)) href = decoded;
+      } catch { /* keep the raw href */ }
+    }
+    if (!/^https?:\/\//.test(href)) return;
+    const caption = $(el).find('.b_caption p').first();
+    out.push({ url: href, title: strip(a.text()), description: strip(caption.text()) });
+  });
+  return out;
+}
+
 const PROVIDERS = {
   keenable: {
     configured: () => keenable.configured(),
     search: (q, o) => keenable.search(q, o),
+  },
+  // Keyless Bing HTML. This is the fallback that keeps discovery alive when no search API key is set:
+  // DuckDuckGo times out from this network, so Bing answers the whole-web queries either way.
+  // Inert under test unless a test sets its own DDG/Bing base (tests must not reach the live web).
+  bing: {
+    configured: () => config.bingEnabled !== false,
+    async search(q, { count = 20 } = {}) {
+      const html = await ddgHttp.text(`https://www.bing.com/search?q=${encodeURIComponent(q)}&count=${Math.min(Math.max(count, 10), 30)}&setlang=en&safeSearch=Off`, {
+        timeout: 15000,
+        headers: { 'accept-language': 'en-US,en;q=0.9', accept: 'text/html,application/xhtml+xml' },
+      });
+      return parseBing(html).slice(0, count);
+    },
   },
   brave: {
     configured: () => brave.configured(),
@@ -102,7 +138,7 @@ const PROVIDERS = {
 };
 
 /** Last outcome per provider, for the admin console: a search backend that quietly returns nothing looks like it works. */
-const health = Object.fromEntries(['keenable', 'brave', 'brightdata', 'ddg', 'searxng', 'claude'].map((p) => [p, { ok: 0, empty: 0, failed: 0, lastAt: null, lastError: null, lastResults: null, engines: [] }]));
+const health = Object.fromEntries(['keenable', 'brave', 'brightdata', 'bing', 'ddg', 'searxng', 'claude'].map((p) => [p, { ok: 0, empty: 0, failed: 0, lastAt: null, lastError: null, lastResults: null, engines: [] }]));
 function note(name, results, err) {
   const h = health[name]; if (!h) return;
   h.lastAt = new Date().toISOString();
@@ -113,7 +149,7 @@ function note(name, results, err) {
   h.lastResults = results.length;
 }
 
-const order = () => (config.searchProviders || ['keenable', 'brave', 'brightdata', 'ddg', 'searxng', 'claude']).filter((p) => PROVIDERS[p]);
+const order = () => (config.searchProviders || ['keenable', 'brave', 'brightdata', 'bing', 'ddg', 'searxng', 'claude']).filter((p) => PROVIDERS[p]);
 const configured = () => order().some((p) => PROVIDERS[p].configured());
 
 function status() {
