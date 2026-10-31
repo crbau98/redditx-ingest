@@ -10,7 +10,7 @@ import { rememberFlip, heartBurst } from './fx.js';
  * Touch: play when the card is mostly in view. */
 const canHover = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
 const live = new Set();
-const MAX_LIVE = 2;
+const MAX_LIVE = canHover ? 2 : 1; // phones: one clip at a time (the screen is small; every live clip costs battery and frames)
 
 // Touch previews (which start on their own) wait until the page has loaded and settled, so clips
 // never compete with the first screen of images. None at all on data saver or a 2G/3G link.
@@ -49,12 +49,24 @@ function stopPreview(media) {
   live.delete(media);
 }
 
+// Touch: previews pause while the page is moving and resume once it settles. A clip sliding past under a flinging
+// thumb is never watched, and decoding it competes with scrolling (two clips in view halved the frame rate on a
+// throttled phone).
+let scrollIdle = 0;
+if (!canHover) {
+  window.addEventListener('scroll', () => {
+    if (!scrollIdle) for (const m of live) { const v = m.querySelector('video'); if (v) v.pause(); }
+    clearTimeout(scrollIdle);
+    scrollIdle = setTimeout(() => { scrollIdle = 0; for (const m of live) { const v = m.querySelector('video'); if (v) v.play().catch(() => {}); } }, 200);
+  }, { passive: true });
+}
+
 const io = !canHover && 'IntersectionObserver' in window
   ? new IntersectionObserver((entries) => {
     for (const e of entries) {
       const media = e.target;
-      if (e.isIntersecting && e.intersectionRatio > 0.65) startPreview(media, media._item);
-      else stopPreview(media);
+      // a dwell: a card the thumb is flicking past never starts downloading its clip
+      if (e.isIntersecting && e.intersectionRatio > 0.65) { if (!media._dwell) media._dwell = setTimeout(() => { media._dwell = 0; startPreview(media, media._item); }, 450); } else { clearTimeout(media._dwell); media._dwell = 0; stopPreview(media); }
     }
   }, { threshold: [0, 0.65, 1] })
   : null;

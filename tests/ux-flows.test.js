@@ -21,8 +21,10 @@ test('every page the footer links to is reachable from the phone menu (the foote
   const menu = read('js', 'components', 'menu.js');
   for (const route of ['/browse', '/galaxy', '/admin']) assert.ok(menu.includes(`'${route}'`), `phone menu links ${route}`);
   for (const fn of ['openDisplaySettings', 'openTakedownForm']) assert.ok(menu.includes(fn), `phone menu offers ${fn}`);
+  // the menu is loaded on first use (components/ondemand.js) and fetched in the background once the page is idle
   const graph = staticGraph(path.join(pub, 'js'), 'main.js').map((f) => path.basename(f));
-  assert.ok(graph.includes('menu.js'), 'menu is preloaded with the shell');
+  assert.ok(!graph.includes('menu.js') && graph.includes('ondemand.js'), 'menu is on demand');
+  assert.match(read('js', 'components', 'ondemand.js'), /import\('\.\/menu\.js'\)[\s\S]*export function warm/);
 });
 
 test('feeds stash what they loaded and rebuild it synchronously, and Explore no longer opts out of scroll restore', () => {

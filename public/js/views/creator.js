@@ -6,7 +6,7 @@ import { createFeed } from '../components/feed.js';
 import { creatorCard } from '../components/creator-card.js';
 import { dominantColor, countUp } from '../components/fx.js';
 import { landAvatar } from '../components/transitions.js';
-import { openReport } from '../components/report.js';
+import { openReport } from '../components/ondemand.js';
 import { platformSwitcher } from '../components/platform-switcher.js';
 
 /** Year-long posting heatmap, source split and usual posting hours (UTC → local). */

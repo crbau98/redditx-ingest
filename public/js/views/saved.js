@@ -4,7 +4,7 @@ import { navigate, href } from '../router.js';
 import { favorites, follows, collections, searches, history, prefs, platformLabel, recentSearches } from '../store.js';
 import { createFeed } from '../components/feed.js';
 import { creatorCard } from '../components/creator-card.js';
-import { openLightbox } from '../components/lightbox.js';
+import { openLightbox } from '../components/ondemand.js';
 
 function download(name, text) {
   const a = h('a', { href: URL.createObjectURL(new Blob([text], { type: 'application/json' })), download: name });

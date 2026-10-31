@@ -79,6 +79,11 @@ function createApp() {
   const shell = () => (config.isProd && built ? built : (built = assets.build(pub)));
   const sendShell = (req, res) => res.set({ 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' }).send(shell().html);
   app.get(['/', '/index.html'], sendShell);
+  // The stylesheets as one minified file (lib/assets.js), from memory.
+  app.get('/v/:ver/css/bundle.css', (req, res) => {
+    const current = req.params.ver === shell().version;
+    res.set({ 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': current ? 'public, max-age=31536000, immutable' : 'no-cache' }).send(shell().css);
+  });
   app.use('/v/:ver', (req, res, next) => {
     // Current version: cache forever. An older version (a tab open across a deploy) still loads,
     // but must revalidate, since the files on disk are now the new ones.

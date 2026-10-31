@@ -13,7 +13,14 @@ const reduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matc
 let tier = null;
 export function gpuTier() {
   if (tier) return tier;
-  tier = 'high';
+  // Creating a WebGL context costs tens of ms on a phone: the answer is kept for a week.
+  try { const c = JSON.parse(localStorage.getItem('prism.gpu') || 'null'); if (c && Date.now() - c.at < 7 * 864e5 && /^(high|low|software)$/.test(c.tier)) return (tier = c.tier); } catch { /* storage blocked */ }
+  tier = probeGpu();
+  try { localStorage.setItem('prism.gpu', JSON.stringify({ tier, at: Date.now() })); } catch { /* storage blocked */ }
+  return tier;
+}
+function probeGpu() {
+  let tier = 'high';
   try {
     // failIfMajorPerformanceCaveat: no context at all on software rendering, instead of a slow,
     // console-warning fallback — which is exactly what we want to detect.

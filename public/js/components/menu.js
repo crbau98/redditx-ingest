@@ -1,8 +1,6 @@
 import { h, icon, openModal } from '../dom.js';
 import { href } from '../router.js';
-import { openPalette, surpriseMe } from './palette.js';
-import { openDisplaySettings } from './display.js';
-import { openTakedownForm } from './report.js';
+import { openPalette, surpriseMe, openDisplaySettings, openTakedownForm } from './ondemand.js';
 import { repaintFollowBadges } from '../following.js';
 
 /**

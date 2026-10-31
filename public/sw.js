@@ -3,8 +3,8 @@
  * always loads fresh when online and still opens (showing its own error states)
  * when offline. API calls, media and admin traffic are NEVER cached: adult
  * content must not linger in a shared device cache. */
-const VERSION = 'prism-shell-v4.16';
-const SHELL = ['/', '/css/app.css', '/css/ux.css', '/js/main.js', '/favicon.svg', '/manifest.webmanifest'];
+const VERSION = 'prism-shell-v6';
+const SHELL = ['/', '/css/app.css', '/css/ux.css', '/css/v6.css', '/js/main.js', '/favicon.svg', '/manifest.webmanifest'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
