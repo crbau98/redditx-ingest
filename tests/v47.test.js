@@ -82,7 +82,13 @@ describe('app shell: versioned immutable assets + modulepreload', () => {
     const m = html.match(/src="\/v\/([0-9a-f]{10})\/js\/main\.js"/);
     assert.ok(m, 'main.js is versioned');
     const ver = m[1];
-    assert.match(html, new RegExp(`href="/v/${ver}/css/app\\.css"`));
+    // the stylesheets arrive as one minified, immutable bundle
+    assert.match(html, new RegExp(`href="/v/${ver}/css/bundle\\.css"`));
+    assert.doesNotMatch(html, /href="[^"]*\/css\/(app|ux|v6)\.css"/);
+    const css = await fetch(`${base}/v/${ver}/css/bundle.css`);
+    assert.equal(css.status, 200); assert.match(css.headers.get('content-type'), /text\/css/); assert.match(css.headers.get('cache-control'), /immutable/);
+    const cssText = await css.text();
+    assert.ok(!cssText.includes('/*') && cssText.includes('.appbar') && cssText.includes('.nav-ind'), 'minified, and carries all three sheets');
     const preloads = [...html.matchAll(/rel="modulepreload" href="([^"]+)"/g)].map((x) => x[1]);
     for (const mod of ['/js/main.js', '/js/dom.js', '/js/api.js', '/js/views/home.js', '/js/components/card.js']) assert.ok(preloads.includes(`/v/${ver}${mod}`), mod);
     assert.ok(!preloads.some((p) => p.includes('/views/admin/')), 'the admin console is not preloaded (dynamic import)');
@@ -112,5 +118,13 @@ describe('app shell: versioned immutable assets + modulepreload', () => {
     assert.deepEqual(one.modules.sort(), ['/js/a.js', '/js/main.js']);
     fs.writeFileSync(path.join(dir, 'js', 'a.js'), 'export const a = 2;\n');
     assert.notEqual(assets.build(dir).version, one.version);
+  });
+});
+
+describe('CSS minifier', () => {
+  const { minifyCss } = require('../src/lib/assets');
+  test('drops comments and whitespace but never touches strings, url() or calc() operators', () => {
+    const src = `/* top */\n.a ,\n .b  {\n  content: 'a, b  /* not a comment */';\n  width: calc(100% - 32px);\n  background: url('/x y.png') ;\n}\n@media (max-width: 600px) { .c { color: red; } }`;
+    assert.equal(minifyCss(src), `.a,.b{content: 'a, b  /* not a comment */';width: calc(100% - 32px);background: url('/x y.png')}@media (max-width: 600px){.c{color: red}}`);
   });
 });

@@ -5,8 +5,7 @@ import { platformLabel, platformColor, follows, searches, tastes, history as vie
 import { mediaCard } from '../components/card.js';
 import { creatorCard } from '../components/creator-card.js';
 import { createFeed } from '../components/feed.js';
-import { openLightbox } from '../components/lightbox.js';
-import { surpriseMe } from '../components/palette.js';
+import { openLightbox, surpriseMe } from '../components/ondemand.js';
 import { mountPrismBackground } from '../components/prism-bg.js';
 import { createOrbit } from '../components/orbit.js';
 import { countUp } from '../components/fx.js';

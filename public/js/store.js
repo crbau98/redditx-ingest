@@ -31,7 +31,7 @@ export const prefs = {
   set accent(v) { write('prism.accent', v); document.documentElement.dataset.accent = v; bus.emit('accent', v); },
   get historyOff() { return read('prism.historyOff', false); },
   set historyOff(v) { write('prism.historyOff', !!v); },
-  get theme() { return read('prism.theme', 'auto'); },
+  get theme() { return read('prism.theme', 'dark'); }, // dark by default: it is a media app
   set theme(v) {
     write('prism.theme', v);
     const light = v === 'light' || (v === 'auto' && window.matchMedia('(prefers-color-scheme: light)').matches);

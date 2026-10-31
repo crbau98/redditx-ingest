@@ -2,25 +2,24 @@ import { h, icon, $, toast, fmt, openModal } from './dom.js';
 import { get, post, onAgeRequired, streamPublic, ApiError, clearApiCache, prefetch } from './api.js';
 import { parse, href, navigate, matchRoute, routeKey } from './router.js';
 import { prefs, favorites, follows, platforms, bus, visits } from './store.js';
-import { syncFromUrl, isOpen } from './components/lightbox.js';
-import { openPalette, paletteOpen, surpriseMe } from './components/palette.js';
-import { openDisplaySettings } from './components/display.js';
+import { syncFromUrl, lightboxOpen as isOpen, openPalette, paletteOpen, surpriseMe, openDisplaySettings, openTakedownForm, openMenu, warm } from './components/ondemand.js';
 import { initTilt, initRails, gpuTier } from './components/fx.js';
-import { openTakedownForm } from './components/report.js';
-import { openMenu } from './components/menu.js';
 import { dropFeedStash } from './components/feed.js';
 import { attachSuggest } from './components/suggest.js';
 import { dur, sharedMotionBusy, spring } from './components/transitions.js';
 import { smartSearch, setAiSearch } from './smart.js';
 import { home } from './views/home.js';
-import { explore } from './views/explore.js';
-import { creators } from './views/creators.js';
-import { creator } from './views/creator.js';
-import { saved } from './views/saved.js';
-import { browse } from './views/browse.js';
-import { reels } from './views/reels.js';
-import { following } from './views/following.js';
-import { find } from './views/find.js';
+// Home ships with the app (most visits start there); every other view is fetched on its first visit and
+// prefetched in the background once the first screen has painted (see warm() below).
+const lazy = (load, name) => (...a) => load().then((m) => m[name](...a));
+const VIEWS = {
+  explore: () => import('./views/explore.js'), creators: () => import('./views/creators.js'), creator: () => import('./views/creator.js'),
+  saved: () => import('./views/saved.js'), browse: () => import('./views/browse.js'), reels: () => import('./views/reels.js'),
+  following: () => import('./views/following.js'), find: () => import('./views/find.js'),
+};
+const explore = lazy(VIEWS.explore, 'explore'); const creators = lazy(VIEWS.creators, 'creators'); const creator = lazy(VIEWS.creator, 'creator');
+const saved = lazy(VIEWS.saved, 'saved'); const browse = lazy(VIEWS.browse, 'browse'); const reels = lazy(VIEWS.reels, 'reels');
+const following = lazy(VIEWS.following, 'following'); const find = lazy(VIEWS.find, 'find');
 import { wireFollowBadges, followNewContent } from './following.js';
 
 const routes = [
@@ -117,7 +116,18 @@ function buildShell() {
 
   const themeBtn = h('button', { class: 'btn icon ghost', 'aria-label': 'Toggle theme', title: 'Toggle theme' });
   const paintTheme = () => themeBtn.replaceChildren(icon(document.documentElement.dataset.theme === 'light' ? 'moon' : 'sun'));
-  themeBtn.addEventListener('click', () => { prefs.theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'; paintTheme(); });
+  themeBtn.addEventListener('click', (e) => {
+    const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+    const apply = () => { prefs.theme = next; paintTheme(); };
+    if (!document.startViewTransition || window.matchMedia('(prefers-reduced-motion: reduce)').matches) { apply(); return; }
+    // the new theme spreads out from the button as a circle
+    const r = themeBtn.getBoundingClientRect();
+    const x = e.clientX || r.left + r.width / 2; const y = e.clientY || r.top + r.height / 2;
+    const end = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
+    const vt = document.startViewTransition(apply);
+    vt.ready.then(() => document.documentElement.animate({ clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${end}px at ${x}px ${y}px)`] },
+      { duration: 560, easing: 'cubic-bezier(.22, .8, .2, 1)', pseudoElement: '::view-transition-new(root)' })).catch(() => {});
+  });
   paintTheme();
   bus.on('theme', paintTheme);
 
@@ -127,7 +137,7 @@ function buildShell() {
 
   const header = h('header', { class: 'appbar' }, h('div', { class: 'scroll-progress', 'aria-hidden': 'true' }),
     h('a', { class: 'brand', href: href('/'), 'aria-label': 'PRISM home' }, icon('logo'), h('span', null, 'PRISM')),
-    h('nav', { class: 'nav', 'aria-label': 'Primary' }, NAV.map(([key, path, label, ic]) => h('a', { href: href(path), dataset: { nav: key }, title: label }, icon(ic, 'sm'), h('span', { class: 'nav-label' }, label), key === 'saved' ? savedBadge : key === 'following' ? h('span', { class: 'badge follow-badge', hidden: true, dataset: { followBadge: 'count' } }) : null))),
+    h('nav', { class: 'nav', 'aria-label': 'Primary' }, h('span', { class: 'nav-ind', 'aria-hidden': 'true' }), NAV.map(([key, path, label, ic]) => h('a', { href: href(path), dataset: { nav: key }, title: label }, icon(ic, 'sm'), h('span', { class: 'nav-label' }, label), key === 'saved' ? savedBadge : key === 'following' ? h('span', { class: 'badge follow-badge', hidden: true, dataset: { followBadge: 'count' } }) : null))),
     h('div', { class: 'search' }, icon('search'), searchInput, h('span', { class: 'kbd hide-mobile' }, '/')),
     h('div', { class: 'appbar-actions' }, h('button', { class: 'btn icon ghost hide-mobile', 'aria-label': 'Command palette', title: 'Command palette (Ctrl/⌘ K)', onclick: openPalette }, icon('command')), themeBtn, h('button', { class: 'btn icon ghost', 'aria-label': 'Display settings', title: 'Display settings', onclick: openDisplaySettings }, icon('palette')), h('a', { class: 'btn icon ghost hide-mobile', href: href('/admin'), 'aria-label': 'Admin', title: 'Admin' }, icon('sliders')),
       h('button', { class: 'btn icon ghost only-mobile more-btn', 'aria-label': 'More', title: 'More', 'aria-haspopup': 'dialog', onclick: openMenu }, icon('more'), h('span', { class: 'nav-dot', hidden: true, dataset: { followBadge: 'dot' } }))));
@@ -171,12 +181,25 @@ function setNav(key) {
   currentNav = key;
   document.querySelectorAll('[data-nav]').forEach((a) => { if (a.dataset.nav === key) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   // slide the phone tab bar's highlight under the current tab
-  const ind = document.querySelector('.bn-ind');
-  const on = document.querySelector(`.bottomnav [data-nav="${key}"]`);
-  if (ind) {
-    if (on) { ind.style.width = `${on.offsetWidth - 12}px`; ind.style.transform = `translateX(${on.offsetLeft + 6}px)`; ind.style.opacity = '1'; } else ind.style.opacity = '0';
+  // measured in the next frame, with that frame's own layout, instead of forcing one now
+  requestAnimationFrame(placeNavIndicators);
+}
+/** Slide the tab highlights (phone tab bar, desktop nav) under the current tab. */
+function placeNavIndicators() {
+  const bn = document.querySelector('.bn-ind');
+  const bnOn = document.querySelector(`.bottomnav [data-nav="${currentNav}"]`);
+  if (bn) {
+    if (bnOn && bnOn.offsetWidth) { bn.style.width = `${bnOn.offsetWidth - 12}px`; bn.style.transform = `translateX(${bnOn.offsetLeft + 6}px)`; bn.style.opacity = '1'; } else bn.style.opacity = '0';
+  }
+  const nv = document.querySelector('.nav-ind');
+  const nvOn = document.querySelector(`.nav [data-nav="${currentNav}"]`);
+  if (nv) {
+    if (nvOn && nvOn.offsetWidth) { nv.style.width = `${nvOn.offsetWidth}px`; nv.style.transform = `translateX(${nvOn.offsetLeft}px)`; nv.style.opacity = '1'; } else nv.style.opacity = '0';
   }
 }
+let navResize = 0;
+window.addEventListener('resize', () => { cancelAnimationFrame(navResize); navResize = requestAnimationFrame(placeNavIndicators); }, { passive: true });
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => requestAnimationFrame(placeNavIndicators)); // labels change width when the web font arrives
 
 /* --------------------------------------------------------- route motion */
 // A short opacity + translate on <main>. Skipped for Reels/Galaxy (a transform on main
@@ -191,7 +214,7 @@ function routeMotionBlocked() {
 
 async function routeMotionExit(main) {
   if (!main || typeof main.animate !== 'function' || routeMotionBlocked() || !main.childElementCount) return;
-  main.getAnimations().forEach((a) => a.cancel());
+  if (enterAnim) { enterAnim.cancel(); enterAnim = null; }
   const anim = main.animate(
     [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(-8px)' }],
     { duration: dur('quick'), easing: spring('glide'), fill: 'forwards' },
@@ -200,12 +223,13 @@ async function routeMotionExit(main) {
   anim.cancel();
 }
 
+// Web Animations, not a CSS class restart: re-adding a class needs a forced synchronous layout of the whole new page
+// first (measured at ~270 ms on a throttled phone), an element.animate() call does not.
+let enterAnim = null; // kept, so a new route cancels it without getAnimations() (which forces a style recalc)
 function routeMotionEnter(main) {
-  if (!main) return;
-  main.classList.remove('view-enter');
-  if (routeMotionBlocked()) return;
-  void main.offsetWidth;
-  main.classList.add('view-enter');
+  if (!main || typeof main.animate !== 'function' || routeMotionBlocked()) return;
+  if (enterAnim) enterAnim.cancel();
+  enterAnim = main.animate([{ opacity: 0, transform: 'translateY(10px)' }, { opacity: 1, transform: 'none' }], { duration: dur('base'), easing: spring('glide') });
 }
 
 /* ----------------------------------------------------------------- router */
@@ -238,8 +262,9 @@ async function render(shell) {
     routeMotionEnter(shell.main);
     // Back from a creator or a search lands where you were: feeds rebuild from their stash
     // synchronously (see feed.js), so the old scroll position exists again by now.
-    const y = scrollMemory.get(key);
-    window.scrollTo({ top: y || 0 });
+    // (already at the top on a first load: scrolling there anyway would force a layout of the new page)
+    const y = scrollMemory.get(key) || 0;
+    if (y || window.scrollY) window.scrollTo({ top: y });
   } catch (e) {
     if (token !== renderToken) return;
     console.error(e);
@@ -316,6 +341,7 @@ async function boot() {
   }, { passive: true });
   window.addEventListener('hashchange', () => render(shell));
   await render(shell);
+  warm(Object.values(VIEWS)); // the other views and on-demand components, fetched while the browser is idle
   wireFollowBadges();
   wireLiveUpdates(shell);
   registerServiceWorker();

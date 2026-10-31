@@ -3,7 +3,7 @@ import { get } from '../api.js';
 import { prefs, history, bus } from '../store.js';
 import { createMasonry } from './masonry.js';
 import { mediaCard } from './card.js';
-import { openLightbox } from './lightbox.js';
+import { openLightbox } from './ondemand.js';
 import { routeKey } from '../router.js';
 
 /* Feeds remember what they had loaded, per page, for a while after you leave. Coming back

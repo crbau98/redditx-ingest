@@ -4,7 +4,7 @@ import { navigate, href } from '../router.js';
 import { prefs, favorites, follows, history as viewHistory, tastes, collections, platformLabel, bus } from '../store.js';
 import { attachVideo, releaseVideo } from '../components/video.js';
 import { openCollectionPicker } from '../components/collections.js';
-import { openLightbox, isOpen as lightboxOpen } from '../components/lightbox.js';
+import { openLightbox, lightboxOpen } from '../components/ondemand.js';
 import { heartBurst, ambientBackdrop } from '../components/fx.js';
 
 const SORTS = [['foryou', 'For you'], ['trending', 'Trending'], ['random', 'Shuffle'], ['recent', 'Newest'], ['top', 'Top']];

@@ -1,5 +1,76 @@
 # UI changelog
 
+## 2026-10-31 — v6 "Noir": performance pass and design refresh
+
+### Measured (phone: 390×844, 4× CPU slowdown, 150 ms / 12 Mbps link; median of 5, `scripts/perf-audit.js`; base = main)
+
+| Page | Metric | Before | After |
+|---|---|---|---|
+| Home | LCP | 3292 ms | 2760 ms |
+| Home | DOMContentLoaded | 1466 ms | 996 ms |
+| Home | JS transferred | 156.9 KB | 124.3 KB |
+| Home | Requests | 94 | 86 |
+| Home | Total blocking time | 488 ms | 549 ms (within run-to-run noise; not improved) |
+| Explore | LCP | 2308 ms | 1820 ms |
+| Explore | Total blocking time | 332 ms | 237 ms |
+| Reels | LCP | 2188 ms | 1928 ms |
+| Reels | First video playing | 1080 ms | 986 ms |
+| Feed scroll | Frame rate / long tasks | 60 fps / 634 ms | 59.8 fps / 195 ms |
+| All | CSS transferred | 32.6 KB | 26.7 KB |
+
+### Performance
+- **Lazy views.** Only Home ships with the app. Every other view loads on its first visit and is prefetched while the browser is idle.
+- **On-demand components.** The viewer, command palette, phone menu, display settings and report dialogs load on first use (`components/ondemand.js`). The startup module graph fell from 36 files / 320 KB to 19 files / 165 KB.
+- **Deep links.** `theme-init.js` preloads the view for the address being opened (e.g. `#/explore`), in parallel with `main.js`.
+- **No forced layouts on the first render.**
+  - The page-enter animation uses Web Animations instead of restarting a CSS class. The restart needed a synchronous layout of the whole new page, about 270 ms on a throttled phone.
+  - The tab-highlight measurement runs in the next frame.
+  - A no-op `scrollTo(0)` was dropped.
+  - The WebGL GPU probe is cached for a week.
+- **One stylesheet.** `app.css` + `ux.css` + `v6.css` are served as one minified file (`/v/<hash>/css/bundle.css`, immutable): 31.5 KB → 24.8 KB gzipped, and one request fewer.
+- **Video previews on phones** start only after a card has stayed in view for 450 ms, so flicking past a clip no longer downloads it.
+  - At most one preview plays at a time on touch screens (two on desktop).
+  - Previews pause while the feed is scrolling and resume 200 ms after it stops. In a first version, two previews in view dropped the feed to 31 fps.
+
+### Design
+- **Dark by default.** New visitors start dark; stored choices and the Auto/Light options are unchanged. The canvas is deeper and cooler, the surfaces are lifted, and a faint aurora at the top is painted once.
+- **One type scale and one spacing scale.** These are `--fs-*` and `--s-*` tokens; phone heroes keep their own smaller sizes.
+- **App bar.**
+  - Clear glass at the top of the page, frosting with a hairline as you scroll. This is a scroll-driven animation with no JavaScript.
+  - The desktop nav has one highlight that slides between tabs.
+  - At mid widths, inactive tabs show only their icon.
+- **Phone tab bar.** A denser glass that stays readable over any picture, and a glowing active icon.
+- **Explore on phones.** Title, count and actions sit on one line, and the actions are icon buttons. Pictures start roughly 150 px higher.
+- **Cards.**
+  - One radius and a deeper caption scrim.
+  - The save button appears on hover on desktop, and stays visible while an item is saved.
+  - No blur behind card controls.
+- **Primary buttons** have a slow sheen on hover: a background layer, with no layout change.
+- **Creator pages.** The banner melts into the page in both themes, the avatar has an accent ring, and the name is set larger.
+- **Theme switch.** The new theme spreads out from the button as a circle (View Transitions API), and switches instantly where that API is missing or motion is reduced.
+
+### Fixes found while driving the UI
+- Explore on phones spent about 40% of the first screen on its header.
+- Glass bars on software-rendered devices (no GPU blur) let page text show through. They are now opaque there.
+- Home on phones scrolled sideways by up to 150 px. The cause was the hero's drifting glow, which is 420 px wide and scales to 115%. The overflow showed only at some points in the animation, so earlier audits missed it. `#app` now clips horizontal overflow; `clip` rather than `hidden`, so the sticky app bar keeps working.
+
+### Verification
+- `node --test "tests/*.test.js"`: 945 passed, 0 failed, 1 skipped.
+- `npm run test:e2e`: the first run had one failure, in the admin slow-key race test; that code is untouched on this branch. The failure did not reproduce in five later runs: two full runs at 20/20 and three runs of `e2e-ui` alone at 10/10.
+- `scripts/ui-audit.js` (desktop light, desktop dark, phone; 40 page views): 0 errors, 0 sideways scrolling, 0 accessibility findings.
+
+### Files
+- `public/css/v6.css` (new)
+- `public/js/components/ondemand.js` (new)
+- `public/js/main.js`, `public/js/theme-init.js`, `public/js/store.js`
+- `public/js/components/{card,feed,fx,menu}.js`
+- `public/js/views/{home,saved,reels,creator}.js`
+- `src/lib/assets.js` (CSS bundle and minifier), `src/app.js` (bundle route)
+- `public/index.html`, `public/sw.js`
+
+### Rollback
+Revert the merge commit. Nothing in the API or data changed.
+
 ## Unreleased — v5 Horizon reach + motion
 
 | Change | Files |

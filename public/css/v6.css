@@ -1,0 +1,209 @@
+/* ==========================================================================
+   v6 "Noir": a cinematic finish on the Lumen system (app.css v4.16)
+   - Dark is the default; colour comes from the media and one accent, not the chrome.
+   - One type scale and one spacing scale; the app bar, tab bar and page heads take less room,
+     so the first screen of every page is mostly pictures.
+   - Motion: chrome reacts to scroll (scroll-driven, no JS), the nav highlight slides, the theme
+     switch reveals from the button (View Transitions). Everything stays transform/opacity and
+     honours prefers-reduced-motion.
+   ========================================================================== */
+
+:root {
+  /* palette: a cooler, deeper black with lifted surfaces, so cards and media separate cleanly */
+  --bg: #050508;
+  --bg-elev: #0c0c12;
+  --surface: #111118;
+  --surface-2: #17171f;
+  --surface-3: #22222c;
+  --text: #f6f6fa;
+  --text-2: #c4c4d3;
+  --muted: #8a8aa1;
+  --line: rgba(255, 255, 255, .068);
+  --line-strong: rgba(255, 255, 255, .13);
+  /* type scale */
+  --fs-xs: 12px;
+  --fs-sm: 13.5px;
+  --fs-base: 15px;
+  --fs-md: 17px;
+  --fs-lg: clamp(19px, 1.7vw, 22px);
+  --fs-xl: clamp(26px, 3.2vw, 38px);
+  --fs-display: clamp(40px, 6.2vw, 80px);
+  /* spacing scale */
+  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 24px; --s-6: 32px; --s-7: 48px;
+  --radius: 18px;
+  --radius-card: 16px;
+  --appbar-h: 62px;
+  --glass: color-mix(in srgb, var(--bg) 66%, transparent);
+  --glass-strong: color-mix(in srgb, var(--bg-elev) 86%, transparent);
+  --glass-blur: blur(22px) saturate(1.8);
+  --aurora-1: color-mix(in srgb, var(--accent-2) 16%, transparent);
+  --aurora-2: color-mix(in srgb, var(--accent) 11%, transparent);
+}
+:root[data-theme='light'] {
+  --bg: #f4f4f7;
+  --bg-elev: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #eeeef4;
+  --surface-3: #e3e3ec;
+  --text: #0e0e16;
+  --text-2: #36364a;
+  --muted: #66667e;
+  --glass: color-mix(in srgb, var(--bg) 72%, transparent);
+  --glass-strong: color-mix(in srgb, #ffffff 88%, transparent);
+  --aurora-1: color-mix(in srgb, var(--accent-2) 9%, transparent);
+  --aurora-2: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+/* ---------- page canvas: a faint aurora at the top, painted once (it scrolls away with the page) ---------- */
+body {
+  background:
+    radial-gradient(1100px 520px at 8% -140px, var(--aurora-1), transparent 70%),
+    radial-gradient(900px 480px at 100% -120px, var(--aurora-2), transparent 70%),
+    var(--bg);
+  background-repeat: no-repeat;
+}
+body.reels-mode, body.galaxy-mode { background: var(--bg); }
+
+/* ---------- type ---------- */
+.page-head h1, .explore-head h1 { font-size: var(--fs-xl); letter-spacing: -.035em; }
+.section-head h2 { font-size: var(--fs-lg); letter-spacing: -.025em; }
+@media (min-width: 561px) {
+  /* phones keep the hero's own smaller sizes (app.css), so the feed starts sooner */
+  .hero h1 { font-size: var(--fs-display); line-height: .98; letter-spacing: -.045em; }
+  .hero p.lead { font-size: var(--fs-md); line-height: 1.55; }
+}
+
+/* ---------- app bar: clear glass at the top, frosting and a hairline once the page scrolls ---------- */
+.appbar {
+  height: var(--appbar-h);
+  background: var(--glass);
+  backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: 0 1px 0 var(--line);
+}
+@supports (animation-timeline: scroll()) {
+  .appbar { animation: appbar-scroll linear both; animation-timeline: scroll(root block); animation-range: 0 140px; }
+  @keyframes appbar-scroll {
+    from { background-color: color-mix(in srgb, var(--bg) 18%, transparent); box-shadow: 0 1px 0 transparent; }
+    to { background-color: color-mix(in srgb, var(--bg-elev) 92%, transparent); box-shadow: 0 1px 0 var(--line), 0 12px 32px -20px rgba(0, 0, 0, .7); }
+  }
+  :root[data-theme='light'] .appbar { animation-name: appbar-scroll-light; }
+  @keyframes appbar-scroll-light {
+    from { background-color: color-mix(in srgb, var(--bg) 30%, transparent); box-shadow: 0 1px 0 transparent; }
+    to { background-color: color-mix(in srgb, #ffffff 92%, transparent); box-shadow: 0 1px 0 var(--line), 0 12px 30px -20px rgba(24, 16, 56, .3); }
+  }
+}
+.brand span { background: linear-gradient(90deg, var(--text), color-mix(in srgb, var(--text) 70%, var(--accent))); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+/* desktop nav: one highlight that slides between tabs (positioned by main.js) */
+.nav { position: relative; isolation: isolate; }
+.nav-ind {
+  position: absolute; z-index: -1; top: 50%; left: 0; height: 36px; width: 0; margin-top: -18px; border-radius: 999px; pointer-events: none; opacity: 0;
+  background: var(--raise), var(--surface-2); box-shadow: var(--hi), 0 0 0 1px var(--line), 0 6px 18px -10px rgba(0, 0, 0, .6);
+  transition: transform var(--dur-slow) var(--spring-settle), width var(--dur-slow) var(--spring-settle), opacity var(--dur-base);
+}
+.nav a, .nav a[aria-current='page'] { background: transparent; box-shadow: none; }
+.nav a[aria-current='page'] { color: var(--text); }
+.nav a svg { transition: color var(--dur-base), transform var(--dur-slow) var(--spring-snap); }
+.nav a:hover svg { transform: translateY(-1px); }
+@media (max-width: 1240px) and (min-width: 900px) {
+  /* mid widths: icons only for the less used tabs, so the search keeps its room */
+  .nav a { padding: 8px 11px; }
+  .nav a:not([aria-current='page']) .nav-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+}
+.search input { height: 42px; background: color-mix(in srgb, var(--surface-2) 64%, transparent); border-color: var(--line); }
+.search input:focus { border-color: color-mix(in srgb, var(--accent) 45%, var(--line-strong)); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent); }
+
+/* the sticky filter row under the app bar uses the same glass */
+.filterbar { background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); }
+
+/* ---------- phone tab bar: solid enough to read over any picture ---------- */
+@media (max-width: 899px) {
+  .bottomnav {
+    background: var(--glass-strong);
+    backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+    border-color: var(--line-strong);
+    box-shadow: var(--hi), 0 20px 48px -12px rgba(0, 0, 0, .7);
+  }
+  .bn-ind { background: color-mix(in srgb, var(--accent) 16%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent), 0 6px 18px -8px color-mix(in srgb, var(--accent) 60%, transparent); }
+  .bottomnav a { font-size: 10.5px; letter-spacing: .01em; }
+  .bottomnav a[aria-current='page'] { color: var(--text); }
+  .bottomnav a[aria-current='page'] svg { color: var(--accent); filter: drop-shadow(0 2px 8px color-mix(in srgb, var(--accent) 55%, transparent)); }
+  :root[data-theme='light'] .bottomnav { box-shadow: var(--hi), 0 18px 40px -14px rgba(24, 16, 56, .28); }
+}
+
+/* ---------- page heads: Explore keeps its title and actions on one line on phones ---------- */
+.explore-head { align-items: center; margin-bottom: var(--s-4); }
+.explore-head .explore-count { margin-top: 4px; font-size: var(--fs-sm); }
+@media (max-width: 639px) {
+  main { padding-top: var(--s-4); }
+  .explore-head { flex-wrap: nowrap; gap: var(--s-3); margin-bottom: var(--s-3); }
+  .explore-head > div:first-child { min-width: 0; }
+  .explore-head h1 { font-size: 26px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .explore-head .explore-count { margin-top: 2px; font-size: 12.5px; }
+  .explore-head .row { flex-wrap: nowrap; gap: 6px; }
+  /* the actions shrink to icon buttons (their text stays as the accessible name) */
+  .explore-head .row .btn { width: 38px; height: 38px; padding: 0; font-size: 0; gap: 0; }
+  .explore-head .row .btn svg { width: 18px; height: 18px; }
+  .filterbar { padding-top: 8px; padding-bottom: 8px; }
+}
+
+/* ---------- media cards ---------- */
+.card, .card-media { border-radius: var(--radius-card); }
+.card { transition: box-shadow var(--dur-base) var(--ease-out), transform var(--dur-slow) var(--spring-settle); }
+.card-foot { background: linear-gradient(180deg, rgba(5, 5, 8, 0) 0%, rgba(5, 5, 8, .35) 40%, rgba(5, 5, 8, .88) 100%); }
+.card-title { font-weight: 650; letter-spacing: -.01em; }
+.card-fav { backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(8, 8, 12, .42); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .14); transition: transform var(--dur-base) var(--spring-snap), background-color var(--dur-quick); }
+.card-fav:hover { background: rgba(8, 8, 12, .62); transform: scale(1.06); }
+.card-fav:active { transform: scale(.9); }
+@media (hover: hover) {
+  .card-fav { opacity: 0; transform: scale(.86); }
+  .card:hover .card-fav, .card:focus-within .card-fav, .card-fav[aria-pressed='true'] { opacity: 1; transform: none; }
+}
+.card-badges .pill { backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(8, 8, 12, .5); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12); }
+@media (max-width: 639px) { .card, .card-media { border-radius: 14px; } }
+
+/* creator cards, collections, tiles: one radius, one lift */
+.creator-card, .coll-card, .since-tile, .browse-tile, .topic-card { border-radius: var(--radius); }
+@media (hover: hover) {
+  .creator-card:hover, .coll-card:hover, .browse-tile:hover, .topic-card:hover { transform: translateY(-3px); }
+}
+
+/* ---------- buttons: the primary carries a slow sheen on hover ----------
+   A second background layer that slides across: no pseudo-element and no change to the button's own
+   positioning (some primaries sit absolutely positioned inside a search field). */
+.btn.primary, .btn.primary:hover {
+  background-image: linear-gradient(110deg, transparent 38%, rgba(255, 255, 255, .26) 50%, transparent 62%), var(--grad);
+  background-size: 260% 100%, 100% 100%;
+  background-repeat: no-repeat;
+}
+.btn.primary { background-position: 130% 0, 0 0; transition: background-position .9s var(--ease-out), box-shadow var(--dur-base), filter var(--dur-base), transform var(--dur-slow) var(--spring); }
+@media (hover: hover) { .btn.primary:hover { background-position: -30% 0, 0 0; } }
+.btn.icon { transition: background-color var(--dur-quick), transform var(--dur-base) var(--spring-snap), color var(--dur-quick); }
+.btn.icon:hover svg { transform: rotate(-6deg) scale(1.06); }
+.btn.icon svg { transition: transform var(--dur-slow) var(--spring-snap); }
+
+/* chips: one height */
+.chip { height: 32px; font-size: 13.5px; }
+
+/* ---------- creator profile: the banner melts into the page in both themes ---------- */
+.profile-banner { border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
+.profile-banner::after { background: linear-gradient(180deg, transparent 10%, color-mix(in srgb, var(--bg) 45%, transparent) 55%, var(--bg) 98%); }
+.profile-head .avatar { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 65%, transparent), 0 22px 48px -16px rgba(0, 0, 0, .8); }
+.profile-info h1 { font-size: clamp(30px, 4vw, 52px); letter-spacing: -.04em; }
+
+/* ---------- theme switch: the new theme spreads from the button (main.js starts a view transition) ---------- */
+::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+::view-transition-old(root) { z-index: 1; }
+::view-transition-new(root) { z-index: 2; }
+
+/* ---------- motion preferences ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .appbar { animation: none; background-color: var(--glass-strong); }
+  .nav-ind, .card, .btn.primary, .creator-card, .coll-card, .browse-tile, .topic-card { transition: none; }
+  .creator-card:hover, .coll-card:hover, .browse-tile:hover, .topic-card:hover { transform: none; }
+}
+/* software rendering (see fx.js gpuTier): no live blur behind the chrome */
+:root[data-gpu='software'] .appbar, :root[data-gpu='software'] .bottomnav, :root[data-gpu='software'] .filterbar { backdrop-filter: none; -webkit-backdrop-filter: none; animation: none; background: var(--bg-elev); }
+/* Decorative layers (the hero glow drifts and scales past 100% width) must never widen the page on a phone.
+   clip, not hidden: no scroll container is created, so the sticky app bar keeps working. */
+#app { overflow-x: clip; }
