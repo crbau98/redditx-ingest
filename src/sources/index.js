@@ -16,6 +16,7 @@ const adapters = [
   require('./telegram'),
   require('./youtube'),
   require('./rss'),
+  require('./coomer'),
   webAdapter,
   linkInBioAdapter,
 ];
@@ -33,7 +34,7 @@ const resolvers = [
  * 404) on many instances, and from discovery (Admin → Discovery), which searches for real communities itself.
  * Every untrusted (tag / search) seed carries unmistakable male wording: items must read male-focused to publish.
  */
-const SEED_VERSION = 8;
+const SEED_VERSION = 9;
 const seeds = (platform, kind, targets, extra) => targets.map((target) => ({ platform, kind, target, ...extra }));
 const SEEDS = [
   ...seeds('reddit', 'community', ['gaybrosgonewild', 'vlinesabsanddick', 'gaynsfw', 'twinks', 'massivecocks', 'gaymuscle',
@@ -55,6 +56,10 @@ const SEEDS = [
   ...seeds('peertube', 'search', ['gay', 'gay muscle', 'gay amateur', 'gay jock', 'gay hunk'], { trusted: false, intervalMin: 240 }),
   ...seeds('peertube', 'tag', ['gay'], { trusted: false, intervalMin: 240 }),
   ...seeds('bluesky', 'search', ['gaymuscle', 'gayjock', 'gayotter', 'gaynsfw', 'malenude'], { trusted: false, intervalMin: 180 }),
+  // Coomer — the public mirror index of paid gay creator pages. Keyword feeds are untrusted (every item
+  // must read male-focused, lib/scope). Creator `user` feeds are added by discovery when a traced paid page
+  // exists there, which is what pulls a popular creator's whole page in automatically.
+  ...seeds('coomer', 'search', ['gay muscle', 'gay jock', 'gay twink', 'gay daddy', 'gay otter', 'gay hunk', 'gay couple', 'gay athlete', 'gay porn star', 'gay muscle for hire'], { trusted: false, intervalMin: 360 }),
   // Telegram — public channels via web preview (t.me/s/<channel>, no login or key required)
   ...seeds('telegram', 'user', ['gaymusclemen', 'malephysique', 'gayjocksdaily', 'gayhunksdaily', 'mensfitnesshub', 'gayotters'], { trusted: true, intervalMin: 240 }),
 ];

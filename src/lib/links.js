@@ -232,6 +232,13 @@ function parseProfile(input, hint = {}) {
     if (matches(h, lb)) return { platform: 'linkinbio', kind: 'page', target: url.href, ingestable: true, label: `${h}${url.pathname}`.replace(/\/$/, ''), url: url.href };
   }
 
+  // Coomer mirror page: onlyfans/fansly/<handle> (and post permalinks) become ingestible creator feeds.
+  if (matches(h, 'coomer.st') || matches(h, 'coomer.party') || matches(h, 'kemono.cr') || matches(h, 'kemono.su')) {
+    const m = url.pathname.match(/^\/(onlyfans|fansly|patreon|subscribestar|gd|justforfans)\/user\/([A-Za-z0-9_-]+)/i);
+    if (m) return { platform: 'coomer', kind: 'user', target: `${m[1].toLowerCase()}/${m[2]}`, ingestable: true, label: `${m[2]} (${m[1].toLowerCase()} on Coomer)`, url: `https://coomer.st/${m[1].toLowerCase()}/user/${m[2]}` };
+    return null; // index/search pages are not a creator link
+  }
+
   // OnlyFans: one canonical link per person (campaign / post links collapse to the profile); site pages are not links.
   if (matches(h, 'onlyfans.com')) {
     const handle = ofHandle(url.href);

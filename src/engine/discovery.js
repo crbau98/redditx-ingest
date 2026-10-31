@@ -648,6 +648,51 @@ async function probeOnlyFans(lead, found, { budget, search = true } = {}) {
   return { searched: false };
 }
 /**
+ * Coomer discovery: the public mirror index of paid gay creator pages. Query the mirror for male-focused
+ * terms, tally the creators who actually have content there, and give each one his own `coomer` feed so
+ * his whole page is pulled automatically. Every creator passes the safety / male-scope gates first, and
+ * the pipeline re-checks each item before it is published.
+ */
+const COOMER_QUERIES = ['gay muscle', 'gay jock', 'gay twink', 'gay daddy', 'gay otter', 'gay hunk', 'gay couple', 'gay athlete', 'muscle for hire', 'gay porn'];
+
+async function coomerDiscovery({ queries = 4, perQuery = 2, limit = 6, aborted = () => false } = {}) {
+  const out = { searched: 0, creators: 0, feeds: 0, rejected: 0 };
+  const t = require('../services/targets');
+  const registry = require('../sources');
+  const seen = new Set();
+  let made = 0;
+  for (const q of COOMER_QUERIES.slice(0, queries)) {
+    if (aborted() || made >= limit) break;
+    let json;
+    try {
+      json = await registry.get('coomer').fetch({ platform: 'coomer', kind: 'search', target: q }, { limit: 60 });
+    } catch (e) { events.log('WARN', `Discovery: coomer "${q}" — ${e.message}`); continue; }
+    out.searched++;
+    const tally = new Map();
+    for (const it of json.items || []) {
+      const h = String(it.author || '').toLowerCase();
+      if (!h || seen.has(h)) continue;
+      const e = tally.get(h) || { posts: 0, svc: it.service || 'onlyfans' };
+      e.posts++; tally.set(h, e);
+    }
+    const ranked = [...tally.entries()].filter(([, e]) => e.posts >= 2).sort((a, b) => b[1].posts - a[1].posts).slice(0, perQuery);
+    for (const [handle, e] of ranked) {
+      if (aborted() || made >= limit) break;
+      seen.add(handle);
+      // Male-scope + safety gate on the handle itself (a creator page is one creator, so a hard
+      // female name or a safety hit rejects it before it becomes a feed).
+      const verdict = gate(handle, handle.replace(/[._-]+/g, ' '));
+      const gender = femaleCheck(handle, handle.replace(/[._-]+/g, ' '));
+      if (verdict.level === 'block' || gender.level === 'hard') { out.rejected++; continue; }
+      const r = t.addSpec({ platform: 'coomer', kind: 'user', target: `${e.svc}/${handle}`, label: `${handle} (${e.svc} on Coomer)`, ingestable: true }, { origin: 'discovered', trusted: false });
+      if (r.status === 'created') { out.feeds++; out.creators++; made++; }
+      else if (r.status === 'exists') { seen.add(handle); }
+    }
+  }
+  return out;
+}
+
+/**
  * Work the paid leads: (1) pages creators promote that we do not follow yet become discovery
  * candidates for that person's public accounts; (2) followed creators who have a paid page but few
  * known accounts get the same search, and what it finds is linked to them (their content from elsewhere).
@@ -1178,15 +1223,19 @@ function follow(candidate, { actor = 'discovery' } = {}) {
       }
     }
   }
-  // Auto-register leak-site mirror pages for this creator so their content is pulled from across the web.
+  // Auto-register the creator's public mirror page (Coomer index of his paid page) so his whole
+  // library is pulled from across the web, plus the gayforfans listing for him.
   if (r.creator) {
-    const handle = String(c.target || '').replace(/^@/, '').toLowerCase();
-    const leakUrls = [
-      `https://coomer.st/onlyfans/user/${handle}`,
-      `https://gayforfans.com/${handle}`,
-    ];
     const t = require('../services/targets');
-    for (const u of leakUrls) {
+    const ofPageNow = (c.signals.ofconfirmed || [])[0];
+    const svcHandle = ofPageNow ? splitLead(ofPageNow) : null;
+    const handle = (svcHandle && svcHandle.handle) || String(c.target || '').replace(/^@/, '').toLowerCase();
+    const mirrorUrls = [];
+    if (handle) {
+      mirrorUrls.push(`https://coomer.st/${(svcHandle && svcHandle.service === 'Fansly') ? 'fansly' : 'onlyfans'}/user/${handle}`);
+      mirrorUrls.push(`https://gayforfans.com/${handle}`);
+    }
+    for (const u of mirrorUrls) {
       try { t.addSpec(u, { creatorId: r.creator.id, origin: 'discovered', trusted: false }); } catch { /* ignore */ }
     }
   }
@@ -1258,6 +1307,7 @@ async function run({ trigger = 'schedule' } = {}) {
     }
     report.seeds = await seedCreators({ aborted });
     if (s.discoveryOnlyFans) report.onlyfans = await onlyfansDiscovery({ budget: s.braveDailyBudget, aborted });
+    if (s.discoveryOnlyFans) report.coomer = await coomerDiscovery({ aborted });
     if (s.discoveryCommunities) report.communities = await communityDiscovery({ aborted });
     if (s.discoveryCommunities) report.hangouts = creatorHangouts();
     if (s.discoveryExpand) {
@@ -1332,4 +1382,4 @@ function start() {
 }
 function stop() { stopFlag = true; clearInterval(timer); timer = null; }
 
-module.exports = { seedCreators, seedStatus, onlyfansDiscovery, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskyLookalikes, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };
+module.exports = { seedCreators, seedStatus, onlyfansDiscovery, coomerDiscovery, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskyLookalikes, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };

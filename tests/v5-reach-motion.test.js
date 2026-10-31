@@ -180,9 +180,9 @@ describe('redgifs keeps in-scope image posts and profile links', () => {
   });
 });
 
-describe('seed version 8 uses real adapter kinds', () => {
+describe('seed version 9 uses real adapter kinds', () => {
   test('every seed is a kind its adapter implements, and none point at a paywalled host', () => {
-    assert.equal(registry.SEED_VERSION, 8);
+    assert.equal(registry.SEED_VERSION, 9);
     const targets = new Set(registry.SEEDS.map((s) => `${s.platform}:${s.kind}:${s.target}`));
     for (const t of [
       'lemmy:community:gayvideos@lemmynsfw.com',
