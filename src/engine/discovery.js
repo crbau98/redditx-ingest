@@ -1178,6 +1178,18 @@ function follow(candidate, { actor = 'discovery' } = {}) {
       }
     }
   }
+  // Auto-register leak-site mirror pages for this creator so their content is pulled from across the web.
+  if (r.creator) {
+    const handle = String(c.target || '').replace(/^@/, '').toLowerCase();
+    const leakUrls = [
+      `https://coomer.st/onlyfans/user/${handle}`,
+      `https://gayforfans.com/${handle}`,
+    ];
+    const t = require('../services/targets');
+    for (const u of leakUrls) {
+      try { t.addSpec(u, { creatorId: r.creator.id, origin: 'discovered', trusted: false }); } catch { /* ignore */ }
+    }
+  }
   repo.logAction('candidate', c.id, status === 'linked' ? 'link' : 'follow', describeSignals(c.signals) || null, actor);
   try { require('./engine').enqueue([r.feed.id], { trigger: 'discovery', front: false }); } catch { /* engine not running (tests) */ }
   return { ok: true, status, feed: r.feed, creator: r.creator };
