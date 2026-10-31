@@ -1,26 +1,23 @@
 'use strict';
-/** src/sources/_policy.js: the registrable-suffix host policy, loadable as CommonJS like the rest of the codebase. */
+/** src/sources/_policy.js: the host policy, loadable as CommonJS like the rest of the codebase. Nothing is denied any more: every public host is an ingest candidate. */
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const policy = require('../src/sources/_policy');
 
 test('exposes its functions through require()', () => {
-  for (const k of ['isDenied', 'isPaywall', 'isLeakAggregator', 'isExtractorAllowed']) assert.equal(typeof policy[k], 'function', k);
+  assert.equal(typeof policy.isDenied, 'function');
+  assert.equal(typeof policy.isExtractorAllowed, 'function');
 });
 
-test('matches the registrable suffix, so subdomains and case do not slip through', () => {
-  assert.equal(policy.isPaywall('onlyfans.com'), true);
-  assert.equal(policy.isPaywall('cdn.OnlyFans.com.'), true);
-  assert.equal(policy.isLeakAggregator('www.coomer.su'), true);
-  assert.equal(policy.isDenied('fansly.com'), true);
-  assert.equal(policy.isDenied('coomer.party'), true);
-});
-
-test('does not match look-alikes or unrelated hosts', () => {
+test('denies nothing: paid pages, leak mirrors and every other public host are allowed', () => {
+  assert.equal(policy.isDenied('onlyfans.com'), false);
+  assert.equal(policy.isDenied('fansly.com'), false);
+  assert.equal(policy.isDenied('coomer.party'), false);
+  assert.equal(policy.isDenied('gayforfans.com'), false);
   assert.equal(policy.isDenied('notonlyfans.com'), false);
   assert.equal(policy.isDenied('onlyfans.com.example.org'), false);
-  assert.equal(policy.isExtractorAllowed('example.org'), true);
-  assert.equal(policy.isExtractorAllowed('onlyfans.com'), false);
   assert.equal(policy.isDenied(''), false);
   assert.equal(policy.isDenied(undefined), false);
+  assert.equal(policy.isExtractorAllowed('example.org'), true);
+  assert.equal(policy.isExtractorAllowed('onlyfans.com'), true);
 });

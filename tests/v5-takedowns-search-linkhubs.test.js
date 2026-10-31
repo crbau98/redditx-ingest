@@ -651,22 +651,24 @@ describe('2. Link-in-Bio & Rich Public Web Scraping', () => {
 // 3. Brave Images/Videos, DDG Fallback & Creator Mention Search / Attribution
 // ============================================================================
 describe('3. Brave Images/Videos, DDG Fallback & Creator Mention Search', () => {
-  test('brave.web, brave.images, and brave.videos filter out leak hosts and paywalled URLs', async () => {
+  test('brave.web, brave.images, and brave.videos keep paid / mirror results and filter only junk', async () => {
     const webRes = await brave.web('atlas_fit', { count: 10 });
     assert.ok(webRes.some((r) => r.url === 'https://x.com/atlas_fit'));
-    assert.ok(!webRes.some((r) => /coomer\.su/i.test(r.url)), 'Leak host filtered from brave.web');
-    assert.ok(!webRes.some((r) => /onlyfans\.com/i.test(r.url)), 'Paywalled host filtered from brave.web');
+    assert.ok(webRes.some((r) => /coomer\.su/i.test(r.url)), 'Mirror hosts come back now');
+    assert.ok(webRes.some((r) => /onlyfans\.com/i.test(r.url)), 'Paid pages come back now');
 
     const imgRes = await brave.images('atlas_fit', { count: 10 });
-    assert.equal(imgRes.length, 1);
+    assert.equal(imgRes.length, 3);
     assert.equal(imgRes[0].mediaUrl, 'https://pbs.twimg.com/media/AtlasImg1.jpg');
     assert.equal(imgRes[0].mediaType, 'image');
+    assert.ok(imgRes.some((r) => /fapello/.test(r.mediaUrl)), 'Mirror-hosted images come back now');
 
     const vidRes = await brave.videos('atlas_fit', { count: 10 });
-    assert.equal(vidRes.length, 1);
+    assert.equal(vidRes.length, 2);
     assert.equal(vidRes[0].pageUrl, 'https://www.redgifs.com/watch/atlasworkout1');
     assert.equal(vidRes[0].mediaType, 'video');
     assert.equal(vidRes[0].duration, 24);
+    assert.ok(vidRes.some((r) => /thothub/i.test(r.pageUrl || '')), 'Mirror-hosted videos come back now');
   });
 
   test('brave.web automatically falls back to DuckDuckGo HTML when BRAVE_SEARCH_KEY is not configured', async () => {
@@ -675,8 +677,8 @@ describe('3. Brave Images/Videos, DDG Fallback & Creator Mention Search', () => 
     try {
       const ddgRes = await brave.web('ddg_athlete', { count: 10 });
       assert.ok(ddgRes.some((r) => r.url === 'https://x.com/ddg_athlete'), JSON.stringify(ddgRes));
-      assert.ok(!ddgRes.some((r) => /bunkr\.si/i.test(r.url)), 'Leak host filtered from DDG fallback');
-      assert.ok(!ddgRes.some((r) => /fansly\.com/i.test(r.url)), 'Paywalled host filtered from DDG fallback');
+      assert.ok(ddgRes.some((r) => /bunkr\.si/i.test(r.url)), 'Mirror hosts come back in the DDG fallback now');
+      assert.ok(ddgRes.some((r) => /fansly\.com/i.test(r.url)), 'Paid pages come back in the DDG fallback now');
     } finally {
       process.env.BRAVE_SEARCH_KEY = prevKey;
     }
@@ -767,8 +769,8 @@ describe('3. Brave Images/Videos, DDG Fallback & Creator Mention Search', () => 
         'Includes Brave Video / RedGIFs hit',
       );
       assert.ok(
-        !res.mediaHits.some((m) => /fapello|thothub|coomer|onlyfans\.com/i.test(m.mediaUrl || '')),
-        'Never includes leak or paywalled URLs in mediaHits',
+        res.mediaHits.some((m) => /fapello|thothub|coomer|onlyfans/i.test(m.mediaUrl || '')),
+        'Surfaces paid / mirror media URLs now that the prohibition is gone',
       );
     } finally {
       for (const [plat, fn] of savedFetch.entries()) {

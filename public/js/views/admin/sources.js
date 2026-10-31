@@ -90,8 +90,8 @@ export async function render(root) {
   const engines = h('div');
   root.append(pageHead('Sources', 'The platforms PRISM can pull from, and how healthy each connection is.',
     h('button', { class: 'btn sm', onclick: (e) => act(e.currentTarget, async () => { await adminPost('/engine/breakers/reset'); await load(); }, 'Circuit breakers reset') }, icon('refresh', 'sm'), 'Reset circuit breakers')), grid, engines, health,
-  h('div', { class: 'panel' }, h('h3', null, icon('shield', 'sm'), 'What PRISM will not do'),
-    h('p', { class: 'muted', style: { fontSize: '14px' } }, 'PRISM only reads content that is public without logging in. It does not scrape paywalled or subscription platforms (OnlyFans, Fansly, Patreon…) — those links are kept on a creator’s profile so fans can support them directly. Everything passes a safety gate (anything suggesting a person may be under 18 is dropped) and every item can be reported and permanently blocklisted.')));
+  h('div', { class: 'panel' }, h('h3', null, icon('shield', 'sm'), 'Safety and boundaries'),
+    h('p', { class: 'muted', style: { fontSize: '14px' } }, 'PRISM reads public creator content from across the web — personal sites, social profiles, galleries, RSS feeds — and follows what creators publish. Everything passes a safety gate (anything suggesting a person may be under 18 is dropped) and every item can be reported and permanently blocklisted.')));
 
   async function load() {
     adminGet('/sources/health').then((r) => health.replaceChildren(healthPanel(r, load))).catch(() => {});

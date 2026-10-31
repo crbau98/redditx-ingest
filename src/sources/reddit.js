@@ -382,7 +382,7 @@ async function searchSubreddits(q, limit = 25) {
 
 /**
  * Public post search (discovery mentions). OAuth when configured, else www JSON.
- * Returns plain post records; the caller still runs leak, takedown and safety checks.
+ * Returns plain post records; the caller still runs the takedown and safety checks.
  */
 async function searchPosts(q, limit = 15) {
   const n = Math.max(1, Math.min(25, limit || 15));

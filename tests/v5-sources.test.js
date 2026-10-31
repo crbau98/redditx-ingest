@@ -1,14 +1,14 @@
 'use strict';
 /**
- * v5 sources and playback: the leak blocklist, reposts credited to the original poster, copies of videos whose links
- * expire, and fresh links for stale RedGIFs / X videos.
+ * v5 sources and playback: reposts credited to the original poster, copies of videos whose links expire, and fresh
+ * links for stale RedGIFs / X videos. Paid / mirror content is no longer gate-blocked (the prohibition is gone).
  */
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const { start, prepareEnv } = require('./helpers/mock');
 
-let mock; let repo; let pipeline; let leaks; let links; let vault; let playback; let registry; let store; let feed;
+let mock; let repo; let pipeline; let links; let vault; let playback; let registry; let store; let feed;
 const settings = { probeUnknownHosts: false, scopeMode: 'open' };
 const VIDEO = Buffer.alloc(40000, 3);
 
@@ -27,7 +27,6 @@ before(async () => {
   prepareEnv({ MEDIA_STORE: 'disk' });
   repo = require('../src/db/repo');
   pipeline = require('../src/engine/pipeline');
-  leaks = require('../src/lib/leaks');
   links = require('../src/lib/links');
   vault = require('../src/lib/vault');
   playback = require('../src/engine/playback');
@@ -37,69 +36,27 @@ before(async () => {
 });
 after(async () => { await mock.close(); });
 
-/* ------------------------------------------------------------------ leaks */
+/* ------------------------------------- paid / mirror content is no longer gate-blocked */
 
-test('GayForFans, its sister sites, leak mirrors and file lockers are leak hosts; creator platforms are not', () => {
-  for (const u of ['https://gayforfans.com/video/abc', 'https://www.fetishforfans.com/x', 'https://gffshorts.com/s/1', 'https://cdn7.adultcdn.media/v/1.mp4',
-    'https://coomer.su/onlyfans/user/x', 'https://mega.nz/folder/abc', 'https://bunkr.si/a/xyz', 'https://gofile.io/d/abc']) {
-    assert.equal(leaks.isLeakUrl(u), true, u);
-  }
-  for (const u of ['https://onlyfans.com/jake', 'https://www.redgifs.com/watch/abc', 'https://x.com/jake', 'https://justfor.fans/jake', 'https://i.redd.it/a.jpg']) {
-    assert.equal(leaks.isLeakUrl(u), false, u);
-  }
-});
-
-test('posts that sell themselves as leaks are recognised; ordinary wording is not', () => {
-  for (const t of ['Hot jock OF leak 🔥', 'leaked onlyfans pack', 'DM for mega link', 'DM for folder', 'DM me for the siterip', 'onlyfans bypass', 'full onlyfans siterip', '#ofleaks', 'his leaked videos', 'all here https://gofile.io/d/xyz']) {
-    assert.ok(leaks.leakText(t), t);
-  }
-  for (const t of [
-    'precum leaking', 'a lot of leaks in my roof', 'free OnlyFans, link in bio', 'gym pump', 'Subscribe to my OnlyFans',
-    'DM me for the link to my VIP page', 'DM for full video on my OnlyFans', 'OnlyFans free access trial link in bio',
-    'Fansly free access for 7 days', 'my VIP OnlyFans is 50% off', 'full OnlyFans collection on my page',
-  ]) {
-    assert.equal(leaks.leakText(t), null, t);
-  }
-});
-
-test('leak links are never parsed as a source or a creator link', () => {
-  assert.equal(links.parseProfile('https://gayforfans.com/creator/jake'), null);
-  assert.equal(links.parseProfile('https://www.gffshorts.com/jake'), null);
-  assert.deepEqual(links.extractLinks('my vids: mega.nz/folder/abc · https://onlyfans.com/jake').map((p) => p.service), ['OnlyFans']);
-});
-
-test('the pipeline drops leaked content before any download: by host, by permalink, by a link in the text, by wording', async () => {
-  const cases = [
-    item({ mediaUrl: 'https://cdn3.adultcdn.media/clip.mp4', mediaType: 'video' }),
-    item({ permalink: 'https://gayforfans.com/video/123' }),
-    item({ text: 'full vid → https://pixeldrain.com/u/abc' }),
-    item({ title: 'Jake OF leaked videos' }),
-  ];
-  for (const c of cases) {
-    const r = await pipeline.processItem(c, feed, null, settings);
-    assert.equal(r.outcome, 'blocked', JSON.stringify(c));
-    assert.match(r.reason, /^leak-/);
-  }
+test('the pipeline no longer refuses paid / mirror content before any download', async () => {
+  const r = await pipeline.processItem(item({ permalink: 'https://gayforfans.com/video/123' }), feed, null, settings);
+  assert.equal(r.outcome, 'added', 'a mirror-hosted post is no longer refused before any download');
   assert.equal((await pipeline.processItem(item({}), feed, null, settings)).outcome, 'added', 'a clean post still publishes');
 });
 
-test('admins can add more leak domains in settings', () => {
-  const settingsStore = require('../src/settings');
-  assert.equal(leaks.isLeakUrl('https://newleaks.example/x'), false);
-  settingsStore.update({ leakDomains: 'newleaks.example\nhttps://other-leaks.example/path' });
-  assert.equal(leaks.isLeakUrl('https://cdn.newleaks.example/x'), true);
-  assert.equal(leaks.isLeakUrl('https://other-leaks.example/'), true);
-  settingsStore.update({ leakDomains: '' });
-  assert.equal(leaks.isLeakUrl('https://newleaks.example/x'), false);
+test('links: mirror hosts now parse as ordinary web pages, paid platforms as external links', () => {
+  const p = links.parseProfile('https://gayforfans.com/creator/jake');
+  assert.ok(p && p.platform === 'web' && p.ingestable, 'a mirror host parses as a web page now');
+  const exts = links.extractLinks('my vids: https://mega.nz/folder/abc · https://onlyfans.com/jake');
+  assert.ok(exts.some((e) => e.platform === 'web' && /mega\.nz/.test(e.target)), 'the mirror link parses as a web page');
+  assert.ok(exts.some((e) => e.platform === 'external' && e.service === 'OnlyFans'), 'the paid link is kept as an external link');
 });
 
-test('a leak link hidden behind innocent anchor text is caught (RSS / Tumblr and Mastodon keep every link of the post)', async () => {
+test('a mirror link hidden behind innocent anchor text is kept (RSS / Tumblr and Mastodon keep every link of the post)', async () => {
   const rss = registry.get('rss');
   const [it] = rss.entryToItems({ id: 'e1', link: 'https://blog.example/p/1', title: 'gym', text: 'download', published: '2026-10-10T00:00:00Z', categories: [],
     links: ['https://mega.nz/file/abc'], media: [{ type: 'image', url: 'https://blog.example/img.jpg' }] }, { title: 'blog' });
   assert.deepEqual(it.links, ['https://mega.nz/file/abc']);
-  const r = await pipeline.processItem({ ...it, sourceId: 'hidden-leak', title: 'Gym selfie, gay jock', trusted: true }, feed, null, settings);
-  assert.equal(r.outcome, 'blocked'); assert.match(r.reason, /leak-site:mega\.nz/);
   const [m] = registry.get('mastodon').parseStatus({ id: '1', created_at: '2026-10-10T00:00:00Z', url: 'https://m.example/@a/1', account: { acct: 'a' },
     content: '<p>new set <a href="https://gofile.io/d/xyz">here</a></p>', media_attachments: [{ type: 'image', url: 'https://m.example/a.jpg' }] }, 'm.example');
   assert.deepEqual(m.links, ['https://gofile.io/d/xyz']);

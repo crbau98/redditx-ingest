@@ -12,13 +12,11 @@
  *
  * Web Unlocker (opt-in, paid, see unlock()): a public page that refused PRISM's own request is fetched through Bright Data's
  * unblocking network instead. It is off by default (setting brightdataUnlocker) and only ever called for a page that
- * REFUSED us - never for a paywalled or leak host, a takedown, a private address or a robots.txt disallow.
+ * REFUSED us - never for a takedown, a private address or a robots.txt disallow.
  */
 const config = require('../config');
 const http = require('../sources/http').forPlatform('brightdata', 400);
 const repo = require('../db/repo');
-const leaks = require('./leaks');
-const { isPaywalledHost } = require('./brave');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const today = () => new Date().toISOString().slice(0, 10);
@@ -35,14 +33,13 @@ function record() {
   repo.settings.set('brightdata.usage', JSON.stringify({ day: u.day, count: u.count + 1, total: u.total + 1 }));
 }
 
-/** Rows -> {url, title, description, relevance}, best first. Leak sites and paywalled hosts never come out of here. */
+/** Rows -> {url, title, description, relevance}, best first. */
 function parseResults(rows, { minRelevance = 0 } = {}) {
   const out = [];
   const seen = new Set();
   for (const r of Array.isArray(rows) ? rows : []) {
     const url = String((r && (r.link || r.url)) || '').trim();
     if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
-    if (leaks.isLeakUrl(url) || isPaywalledHost(url)) continue;
     const relevance = Number(r.relevance_score);
     if (Number.isFinite(relevance) && relevance < minRelevance) continue;
     seen.add(url);
@@ -114,7 +111,7 @@ const redact = (msg) => String(msg || '').replace(/wss?:\/\/[^@\s]+@/gi, 'wss://
 /**
  * Fetch one public page through the Web Unlocker. Every precondition that keeps PRISM's content policy intact is checked HERE,
  * inside the only function that sends a URL to Bright Data, so no caller can forget it: the URL must be a public http(s) page
- * (an internal address is never handed to a third party) and not a leak site, a paywalled host or a takedown.
+ * (an internal address is never handed to a third party) and not a takedown.
  * @returns {Promise<{html: string, status: number}>}
  */
 async function unlock(url, { budget = 100, country } = {}) {

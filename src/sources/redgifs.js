@@ -65,7 +65,7 @@ function itemFromGif(gif, query) {
   };
 }
 
-/** Profile block from a RedGIFs user object, including outbound links (paid pages stay link records, never fetches). */
+/** Profile block from a RedGIFs user object, including outbound links (paid pages stay link records, kept on the profile). */
 function profileFromUser(u) {
   if (!u || !u.username) return null;
   const bits = [];

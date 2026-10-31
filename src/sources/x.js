@@ -69,7 +69,7 @@ function bestMp4(variants) {
  */
 /**
  * Where a post's links really point. The text only shows t.co redirects; the destinations are in entities.urls
- * (API v2 and legacy tweets) or in fxtwitter's raw_text facets. The leak gate (lib/leaks) checks every one.
+ * (API v2 and legacy tweets) or in fxtwitter's raw_text facets. Every one is checked downstream like any other link.
  */
 function expandedLinks(t) {
   const urls = [

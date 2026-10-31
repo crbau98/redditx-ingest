@@ -95,7 +95,7 @@ describe('public feeds discovered on homepages and link hubs', () => {
     assert.equal(repo.feeds.find('rss', 'feed', `${mock.url}/comments/feed.xml`), null);
   });
 
-  test('creator homepages link at most three feeds and skip paywalls, leaks and takedowns', () => {
+  test('creator homepages link at most three feeds, and only takedowns stay out', () => {
     const creator = repo.creators.create({ handle: 'marco_swim', displayName: 'Marco Swim', origin: 'admin' });
     const parent = repo.feeds.upsert({ platform: 'web', kind: 'page', target: 'https://marco.example/', creatorId: creator.id, origin: 'admin' }).feed;
     repo.takedowns.add({ kind: 'domain', value: 'gone.example', reason: 'creator asked' });
@@ -104,25 +104,21 @@ describe('public feeds discovered on homepages and link hubs', () => {
         { platform: 'rss', kind: 'feed', target: 'https://marco.example/feed.xml' },
         { platform: 'rss', kind: 'feed', target: 'https://marco.example/feed.xml' },
         { platform: 'rss', kind: 'feed', target: 'https://marco.example/comments/feed.xml' },
+        { platform: 'rss', kind: 'feed', target: 'https://gone.example/feed.xml' },
         { platform: 'rss', kind: 'feed', target: 'https://onlyfans.com/marco_swim/feed.xml' },
         { platform: 'rss', kind: 'feed', target: 'https://coomer.su/feed.xml' },
-        { platform: 'rss', kind: 'feed', target: 'https://gone.example/feed.xml' },
         { platform: 'rss', kind: 'feed', target: 'https://marco.example/atom.xml' },
-        { platform: 'rss', kind: 'feed', target: 'https://marco.example/rss.xml' },
-        { platform: 'rss', kind: 'feed', target: 'https://marco.example/extra.xml' },
       ],
       discoveredFeed: { platform: 'rss', kind: 'feed', target: 'https://marco.example/feed.xml' },
     }, parent, { autoLinkProfiles: true });
-    assert.equal(adopted.created, 3);
+    assert.equal(adopted.created, 3, 'comment feeds and takedowns are skipped, paid / mirror feeds are allowed, at most three are created');
     const first = repo.feeds.find('rss', 'feed', 'https://marco.example/feed.xml');
     assert.equal(first.creator_id, creator.id);
     assert.equal(first.trusted, 1);
-    assert.ok(repo.feeds.find('rss', 'feed', 'https://marco.example/atom.xml'));
-    assert.ok(repo.feeds.find('rss', 'feed', 'https://marco.example/rss.xml'));
-    assert.equal(repo.feeds.find('rss', 'feed', 'https://marco.example/extra.xml'), null, 'fourth public feed waits');
-    assert.equal(repo.feeds.find('rss', 'feed', 'https://onlyfans.com/marco_swim/feed.xml'), null);
-    assert.equal(repo.feeds.find('rss', 'feed', 'https://coomer.su/feed.xml'), null);
-    assert.equal(repo.feeds.find('rss', 'feed', 'https://gone.example/feed.xml'), null);
+    assert.ok(repo.feeds.find('rss', 'feed', 'https://onlyfans.com/marco_swim/feed.xml'), 'a paid creator page feed is allowed now');
+    assert.ok(repo.feeds.find('rss', 'feed', 'https://coomer.su/feed.xml'), 'a mirror feed is allowed now');
+    assert.equal(repo.feeds.find('rss', 'feed', 'https://gone.example/feed.xml'), null, 'takedown feed stays out');
+    assert.equal(repo.feeds.find('rss', 'feed', 'https://marco.example/atom.xml'), null, 'fourth public feed waits');
     assert.equal(engine.adoptDiscoveredFeeds({ optedOut: true, discoveredFeeds: [{ platform: 'rss', kind: 'feed', target: 'https://marco.example/nope.xml' }] }, parent).created, 0);
     const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'engine', 'engine.js'), 'utf8');
     assert.match(src, /enqueue\(ids, \{ trigger: 'discovered-feed'/);

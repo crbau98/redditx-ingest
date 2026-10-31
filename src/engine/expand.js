@@ -8,9 +8,9 @@
  *
  * Bounded on purpose - growth that nobody can see is how crawlers get banned:
  *   - same site only (www. is ignored); depth <= 2; at most 100 feeds per call; never past the "Cap on enabled feeds"
- *   - feeds made here are UNTRUSTED (every item still needs a male-focus signal, then the safety, leak, picture and
+ *   - feeds made here are UNTRUSTED (every item still needs a male-focus signal, then the safety, picture and
  *     duplicate gates), carry origin 'expand', and an 'expand' feed never expands again by itself
- *   - leak sites, paywalled hosts and takedown matches are not followed (the same checks as everywhere else);
+ *   - takedown matches are not followed (the same checks as everywhere else);
  *     robots.txt is read when each feed runs and, for the seed, before anything is fetched
  *   - login / cart / account / legal pages and files are not pages worth reading
  */
@@ -19,9 +19,7 @@ const repo = require('../db/repo');
 const settingsStore = require('../settings');
 const events = require('./events');
 const render = require('../lib/render'); // Browser4 or Playwright (RENDER_ENGINE)
-const leaks = require('../lib/leaks');
 const takedowns = require('../lib/takedowns');
-const { isPaywalledHost } = require('../lib/brave');
 const { absUrl } = require('../sources/util');
 
 const NOT_A_PAGE = /\.(?:jpe?g|png|gif|webp|avif|svg|ico|mp4|webm|mov|m4v|m3u8|mp3|zip|rar|7z|pdf|docx?|xlsx?|css|js|json|xml|rss|atom|txt)(?:$|\?)/i;
@@ -94,8 +92,8 @@ const candidateLinks = (docs, seedUrl) => rankLinks(docs, seedUrl).map((l) => l.
 
 function keyOf(href) { try { const u = new URL(href); return `${u.hostname.replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}${u.search}`.toLowerCase(); } catch { return String(href); } }
 
-/** The content policy shared with the rest of PRISM: leak sites, paywalled hosts, takedowns. */
-const policyOk = (url) => !leaks.isLeakUrl(url) && !isPaywalledHost(url) && !takedowns.checkUrl(url);
+/** The content policy shared with the rest of PRISM: takedowns. */
+const policyOk = (url) => !takedowns.checkUrl(url);
 
 /**
  * Add the same-site links of already-parsed documents as untrusted `web/page` feeds.

@@ -1,7 +1,9 @@
 'use strict';
 /**
- * Paid creator pages (link-outs only). PRISM never fetches these hosts — the content behind them is the
- * creator's paid work. Everything here is pure string parsing of links people publish about themselves:
+ * Paid creator pages (link-outs only). Everything here is pure string parsing of links people publish
+ * about themselves: the content behind those pages is the creator's paid work, and PRISM reads it like
+ * any other public page when it reaches it; the paid-page tracing itself looks for the person's other
+ * free public accounts.
  *
  *   serviceOf(url)        'OnlyFans' | 'Fansly' | ... or null when the URL is not a paid creator page
  *   paidHandle(service, url)  canonical handle/slug for the page, or null for site pages
@@ -17,7 +19,7 @@
 const { ofHandle, findOnlyFans, freeHint, ofLink, creatorOnlyFans } = require('./onlyfans');
 
 /** Paid creator platforms PRISM keeps as profile link-outs. `trace` = discovery follows the page's free
- * public accounts the way it does OnlyFans (handle-based lookups + web search, never fetching the page). */
+ * public accounts the way it does OnlyFans (handle-based lookups + web search; the page itself is just another public page now). */
 const SERVICES = {
   'OnlyFans': { hosts: ['onlyfans.com'], trace: true },
   'Fansly': { hosts: ['fansly.com'], trace: true },

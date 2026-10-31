@@ -8,9 +8,9 @@
  * Chromium is started with loopback NOT exempt from the proxy) - is checked before anything is sent:
  *
  *   - literal private / loopback / link-local addresses and local names are refused;
- *   - names are resolved HERE and the connection is made to the validated address itself, so a name that resolves to a
+ *     names are resolved HERE and the connection is made to the validated address itself, so a name that resolves to a
  *     private address is refused and the browser cannot be handed a different answer afterwards (no rebinding window);
- *   - leak sites, paywalled hosts and takedown hosts are refused.
+ *   - takedown hosts are refused.
  *
  * It listens on loopback only and demands a per-process random credential, so nothing else on the host can use it.
  * HTTPS goes through CONNECT and stays end-to-end encrypted: the proxy sees host names, never content.
@@ -21,9 +21,7 @@ const dns = require('dns');
 const nodeNet = require('net');
 const config = require('../config');
 const net = require('./net');
-const leaks = require('./leaks');
 const takedowns = require('./takedowns');
-const { isPaywalledHost } = require('./brave');
 
 let server = null;
 let starting = null;
@@ -41,8 +39,6 @@ const testAllow = (host) => (config.playwright.testAllowHosts || []).includes(St
 /** Content policy on a host (and, for plain HTTP, the full URL). @returns {string|null} why it is refused */
 function policy(host, href) {
   const url = href || `https://${host}/`;
-  if (leaks.isLeakUrl(url)) return 'leak site';
-  if (isPaywalledHost(url)) return 'paywalled host';
   if (takedowns.checkUrl(url)) return 'takedown';
   return null;
 }

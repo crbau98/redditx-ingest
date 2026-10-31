@@ -66,7 +66,7 @@ const SCHEMA = {
     // empty under test: a lookup reaches every platform, which tests must not do by accident
     default: config.isTest ? '' : ['Christian Hogue', 'Jakipz', 'Michael Yerger', 'Chase Stobbe', 'HotAlex'].join('\n'),
   },
-  discoveryOnlyFans: { type: 'bool', default: true, label: 'Trace OnlyFans creators: find the free public accounts (RedGIFs, Bluesky, X, Telegram, link pages) behind OnlyFans pages that creators promote. onlyfans.com itself is never read', group: 'discovery' },
+  discoveryOnlyFans: { type: 'bool', default: true, label: 'Trace OnlyFans creators: find the free public accounts (RedGIFs, Bluesky, X, Telegram, link pages) behind OnlyFans pages that creators promote. Paid pages named in a creator’s own posts or bios are read like any other public page', group: 'discovery' },
   discoveryExpand: { type: 'bool', default: true, label: 'Find lookalike creators (Bluesky) and search Bluesky and RedGIFs for new people', group: 'discovery' },
   discoveryAutoCommunities: { type: 'bool', default: true, label: 'Auto-follow strong communities and feeds (their posts are still checked one by one)', group: 'discovery' },
   // --- sources and playback (v5) ---
@@ -81,13 +81,12 @@ const SCHEMA = {
   browser4Pages: { type: 'int', default: 3, min: 1, max: 10, label: 'Browser rendering: pages followed through "next page" links in one run (same site only, robots.txt honoured)', group: 'sources' },
   browser4AutoExpand: { type: 'bool', default: false, label: 'Browser rendering: follow a page’s same-site links as new web feeds (untrusted: every item still passes the safety, male-only and picture gates). Feeds made this way never expand further', group: 'sources' },
   browser4ExpandPerRun: { type: 'int', default: 5, min: 0, max: 50, label: 'Browser rendering: new feeds one run may add through auto-expand (also bounded by "Cap on enabled feeds")', group: 'sources' },
-  brightdataUnlocker: { type: 'enum', values: ['off', 'fallback'], default: 'fallback', label: 'Bright Data Unlocker (ON by default, but inert until BRIGHTDATA_API_TOKEN + BRIGHTDATA_UNLOCKER_ZONE, or BRIGHTDATA_BROWSER_WSS, are set; choose off to disable): when a site REFUSES PRISM (HTTP 403 / 429 / 503 on the plain read, or a bot-challenge page in the browser), fetch the public page through Bright Data\'s unblocking network (Web Unlocker; the Browser API too when BRIGHTDATA_BROWSER_WSS is set). Costs credits per request. Never used for paywalled or leak hosts, takedowns, robots.txt disallows or login walls.', group: 'sources' },
+  brightdataUnlocker: { type: 'enum', values: ['off', 'fallback'], default: 'fallback', label: 'Bright Data Unlocker (ON by default, but inert until BRIGHTDATA_API_TOKEN + BRIGHTDATA_UNLOCKER_ZONE, or BRIGHTDATA_BROWSER_WSS, are set; choose off to disable): when a site REFUSES PRISM (HTTP 403 / 429 / 503 on the plain read, or a bot-challenge page in the browser), fetch the public page through Bright Data\'s unblocking network (Web Unlocker; the Browser API too when BRIGHTDATA_BROWSER_WSS is set). Costs credits per request. Never used for takedowns, robots.txt disallows or login walls.', group: 'sources' },
   brightdataUnlockBudget: { type: 'int', default: 100, min: 0, max: 100000, label: 'Bright Data Unlocker: most unlocked requests per day (each one costs credit; 0 = none)', group: 'sources' },
   // --- Claude (Anthropic API; needs ANTHROPIC_API_KEY on the host, inert without it) ---
   aiSearch: { type: 'bool', default: true, label: 'Claude reads searches the built-in rules cannot fully place (slang, descriptions, other languages, typos) and maps them onto the library\'s tags and filters. Only the typed words and the tag list are sent', group: 'search' },
   aiDiscovery: { type: 'bool', default: true, label: 'Claude plans new discovery searches once a day and triages discovered accounts from their public name and bio: boosts adult male creators, rejects possible minors, holds the rest for review', group: 'discovery' },
   aiDailyBudget: { type: 'int', default: 300, min: 0, max: 100000, label: 'Claude: most API requests per day across search, discovery and web search (0 = none)', group: 'discovery' },
-  leakDomains: { type: 'text', default: '', label: 'Extra leak domains to block (one per line). GayForFans, its sister sites, OnlyFans leak mirrors and file lockers are always blocked', group: 'sources' },
   discoveryKeywords: {
     type: 'text', group: 'discovery', label: 'Community keywords (one per line; two are searched per run, in rotation)',
     default: ['gay', 'gaybros', 'gay muscle', 'fit gay', 'twinks', 'gay swimmers', 'jocks', 'bulge', 'gay amateur', 'hairy men', 'male nude', 'gay nsfw',

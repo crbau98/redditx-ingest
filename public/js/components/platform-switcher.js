@@ -7,7 +7,7 @@ import { paidPages } from './elsewhere.js';
  * The platform switcher on a creator's page: one row of pills (All, then every platform PRISM
  * has his posts from, busiest first) that filters his feed, and link-out cards for his paid
  * pages (OnlyFans, Fansly, JustFor.Fans...) with the price and whether a free tier exists.
- * Paid pages are link-outs only: PRISM never shows what is behind them.
+ * Paid pages are link-outs: they are kept on the creator's profile and sent to fans, never read by PRISM.
  *
  *   platformSwitcher(creator, { value: 'reddit' | '', onChange: (platform) => {} }) -> element
  */

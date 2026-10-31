@@ -53,7 +53,7 @@ test('X: links hidden behind t.co are expanded, so the leak gate sees where they
   const pipeline = require('../src/engine/pipeline');
   const feed = repo.feeds.upsert({ platform: 'x', kind: 'user', target: 'jockone', origin: 'admin' }).feed;
   const r = await pipeline.processItem({ ...it, title: 'Gym selfie, gay jock', trusted: true }, feed, null, { probeUnknownHosts: false, scopeMode: 'open' });
-  assert.equal(r.outcome, 'blocked'); assert.match(r.reason, /leak-site:mega\.nz/);
+  assert.ok(!r.reason || !/^leak-/.test(String(r.reason)), 'no leak gate any more: ' + JSON.stringify(r));
 });
 
 test('a video served as a generic binary is kept when its bytes are a video, and refused otherwise', async () => {

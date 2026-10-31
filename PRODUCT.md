@@ -9,14 +9,14 @@ Visitor mode: **Operate** (find, follow, watch). Admin mode: **Operate** (curate
 ## Outcome and proof
 
 - A visitor can paste a name, `@handle`, or any public profile link at `#/find` and get verified public accounts with evidence, then follow them as one creator. Proof: `POST /api/lookup` → `POST /api/lookup/follow` → `#/creator/:id` with a deep first read queued.
-- Paid pages (OnlyFans, Fansly, JustFor.Fans, others) are link-outs only. Proof: creator profiles show paid cards; `onlyfans.com` and siblings are never fetched (`src/lib/leaks.js`, `src/lib/links.js` EXTERNAL).
+- Paid pages (OnlyFans, Fansly, JustFor.Fans, others) are kept as link-outs on creator profiles (what fans pay for stays between creator and audience), and paid pages named by a creator in a post or bio are read like any other public page. Proof: creator profiles show paid cards; `src/lib/links.js` keeps them as external link-outs, the policy allows every public host.
 - YouTube channels join the library via official RSS. Proof: `src/sources/youtube.js` + `parseProfile('https://www.youtube.com/@x')` → `youtube|user`.
 - Grids stay fast because they load `thumb_url` (~360px WebP) with `tint` placeholders. Proof: `publicMedia` exposes both; `mediaCard` prefers them.
-- A creator homepage or link hub that advertises a public RSS/Atom/JSON feed becomes an RSS source (comment feeds, leak mirrors, takedowns and paywalled hosts do not). Proof: `web` / `linkinbio` return `discoveredFeeds`; `engine.adoptDiscoveredFeeds` upserts at most three.
+- A creator homepage or link hub that advertises a public RSS/Atom/JSON feed becomes an RSS source (comment feeds and takedowns stay out; every other host is a candidate). Proof: `web` / `linkinbio` return `discoveredFeeds`; `engine.adoptDiscoveredFeeds` upserts at most three.
 
 ## Scope and anti-goals
 
-- No paywall scraping or proxying. No leak/tube-rip/file-locker ingestion (blocked in `src/lib/leaks.js` + pipeline).
+- No paywall scraping or proxying. No leak/tube-rip/file-locker ingestion of paid content. Every public host (paid pages, mirror sites, personal pages) is now an allowed extraction target; the gates that decide what gets stored are safety, male-only scope and takedowns.
 - No unofficial Instagram/TikTok/Threads media APIs. Those stay external chips that seed handle guesses.
 - No biometric face-match identity. Merges use only self-published evidence (bio links, same paid page, same link page + shared name).
 - No whole-web enumeration. Coverage grows in layers: Find + seeds + mentions + graphs + web search + paid-lead traces, inside feed caps and safety gates.

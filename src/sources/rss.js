@@ -181,7 +181,7 @@ function entryToItems(entry, feed, ctx = {}) {
       height: m.height || null,
       altText: m.alt || null,
       tags: entry.categories,
-      links: entry.links || [], // every link in the post: the leak gate checks them (lib/leaks)
+      links: entry.links || [], // every link in the post: checked like any other link
       probe: true, // unknown hosts: verify before trusting
     });
   });

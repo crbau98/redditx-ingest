@@ -21,7 +21,7 @@ export async function creators(root, { query }) {
   search.addEventListener('input', debounce(() => set({ q: search.value.trim() }), 350));
   const sortSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Sort creators', onchange: (e) => set({ sort: e.target.value }) }, SORTS.map(([v, l]) => h('option', { value: v, selected: f.sort === v }, l)));
   const platSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Filter by free source', onchange: (e) => set({ platform: e.target.value }) }, h('option', { value: '' }, 'All sources'));
-  const paidSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Filter by paid page (link-outs, never fetched)', title: 'Creators with a paid page (link-outs, never fetched)', onchange: (e) => set({ paid: e.target.value }) },
+  const paidSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Filter by paid page (link-outs)', title: 'Creators with a paid page (link-outs)', onchange: (e) => set({ paid: e.target.value }) },
     PAID_OPTS.map(([v, l]) => h('option', { value: v, selected: (f.paid || '') === v }, l)));
   const field = (label, el) => h('label', { class: 'filter-field' }, h('span', { class: 'filter-label' }, label), el);
   const filtersActive = Boolean(f.q || f.sort !== 'media' || f.platform || f.paid);

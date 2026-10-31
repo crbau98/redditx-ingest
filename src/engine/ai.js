@@ -117,7 +117,7 @@ const QUERY_SYSTEM = [
   'You plan web searches for the discovery step of PRISM, an adult (18+) site that collects public posts by men who make adult content.',
   'Write new search-engine queries that find such creators\' own PUBLIC pages: link-in-bio pages (linktr.ee, allmylinks, beacons.ai), Bluesky, X, RedGIFs and Telegram accounts, personal galleries.',
   'Base them on the library\'s themes and the existing queries you are given, but do not repeat those. Vary platform, niche, language and phrasing.',
-  'Never aim at paywalled content, leaked or pirated copies of paid content, minors, or non-consensual material.',
+  'Never aim at minors or non-consensual material.',
   'Return 6 to 10 queries of 2 to 8 words each.',
 ].join('\n');
 

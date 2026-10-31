@@ -11,11 +11,11 @@
  *   - fight access controls. A bot-challenge page (Cloudflare, CAPTCHA ...) ends the render; nothing is solved or evaded.
  *   - visit anything the rest of PRISM refuses to. A real browser does not go through lib/net.js's connect-time DNS
  *     guard, so: (1) the start URL and every "next page" URL are checked before navigation (private/internal addresses
- *     including what the name resolves to, leak sites, paywalled hosts, takedowns); (2) requests to literal private,
+ *     including what the name resolves to, takedowns); (2) requests to literal private,
  *     loopback and link-local addresses and local names are ABORTED INSIDE THE BROWSER (CDP Fetch interception), which
  *     covers redirect hops, sub-resources and XHR before anything is sent; (3) where the browser ended up is checked
  *     again afterwards. Not covered: a public-looking NAME that resolves to a private address inside a redirect or
- *     sub-request, and redirect hops to leak/paywall hosts (found only afterwards) - firewall the host for those.
+ *     sub-request - firewall the host for those.
  *   - run a shell. The CLI is started with execFile and an argument array; page URLs are only ever arguments.
  *
  * One browser session serves the whole process, so renders are strictly serialised.
@@ -28,9 +28,7 @@ const nodeNet = require('net');
 const config = require('../config');
 const net = require('./net');
 const limiter = require('./limiter');
-const leaks = require('./leaks');
 const takedowns = require('./takedowns');
-const { isPaywalledHost } = require('./brave');
 const { redact } = require('./brightdata');
 
 const MAX_HTML = 3_500_000;
@@ -46,7 +44,7 @@ const sameSite = (a, b) => !!hostOf(a) && hostOf(a) === hostOf(b);
 /* --------------------------------------------------------------- URL policy */
 /**
  * May PRISM send a browser to this URL? Throws a `skip` error when not.
- * Mirrors what lib/net.js enforces for plain downloads, plus the content policy (leaks, paywalls, takedowns).
+ * Mirrors what lib/net.js enforces for plain downloads, plus the content policy (takedowns).
  */
 async function assertAllowed(raw) {
   let u;
@@ -57,8 +55,6 @@ async function assertAllowed(raw) {
   if (net.isPrivateHost(host)) throw skip(`${host} is a private or internal host`);
   // Content policy first: it is offline, and a host we would refuse anyway should not even be looked up.
   const href = u.href;
-  if (leaks.isLeakUrl(href)) throw skip('leak site');
-  if (isPaywalledHost(href)) throw skip('paywalled host');
   if (takedowns.checkUrl(href)) throw skip('takedown');
   const viaTrustedProxyDns = config.outboundProxy && config.outboundProxyTrustDns;
   if (!config.allowPrivateHosts && !nodeNet.isIP(host) && !viaTrustedProxyDns) {

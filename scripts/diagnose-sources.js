@@ -33,7 +33,6 @@ const { checkItem } = require('../src/lib/safety');
 const { classify } = require('../src/lib/scope');
 const { hostOf, hostBlocked, hostTrusted, normalizeMediaUrl } = require('../src/lib/mediaurl');
 const { probeMedia } = require('../src/engine/probe');
-const leaks = require('../src/lib/leaks');
 const vault = require('../src/lib/vault');
 
 const LIMIT = parseInt(opt('limit'), 10) || 15;
@@ -82,7 +81,7 @@ async function withTimeout(promise, ms) {
 
 async function check(spec) {
   const adapter = registry.get(spec.platform);
-  const row = { platform: spec.platform, kind: spec.kind, target: spec.target, reachable: false, fetched: 0, usable: 0, would: { publish: 0, review: 0, excluded: 0, dropped: 0, blocked: 0, leak: 0, skipped: 0 }, reposts: 0, videos: 0, skipReasons: {}, probe: null, error: null, hint: null, note: null, ms: 0 };
+  const row = { platform: spec.platform, kind: spec.kind, target: spec.target, reachable: false, fetched: 0, usable: 0, would: { publish: 0, review: 0, excluded: 0, dropped: 0, blocked: 0, skipped: 0 }, reposts: 0, videos: 0, skipReasons: {}, probe: null, error: null, hint: null, note: null, ms: 0 };
   if (!adapter) { row.error = 'unknown platform'; return row; }
   if (!spec.target) { row.note = 'no sample target: pass --target platform:kind:target'; row.skipped = true; return row; }
   const conf = adapter.isConfigured(spec.kind);
@@ -104,7 +103,6 @@ async function check(spec) {
       row.usable++;
       const safety = checkItem(it);
       if (safety.level === 'block') { row.would.blocked++; continue; }
-      if (leaks.checkItem(it)) { row.would.leak++; continue; }
       if (it.repostOf) row.reposts++;
       // exactly what the pipeline does: the query is screened for female words but is never male evidence
       const sc = classify([it.title, it.text, it.altText, it.community, it.author, it.authorName, it.authorBio, it.tags, it.labels], { trusted: !!spec.trusted, screen: [it.query] });
@@ -160,7 +158,7 @@ async function check(spec) {
       if (r.hint) console.log(`        fix:   ${r.hint}`);
       if (r.note) console.log(`        note:  ${r.note}`);
       if (!r.skipped && !r.error) {
-        console.log(`        ${r.fetched} fetched · ${r.usable} with usable media · would publish ${r.would.publish}, review ${r.would.review}, excluded (not male-only) ${r.would.excluded}, dropped (no male wording) ${r.would.dropped}, blocked (safety) ${r.would.blocked}, blocked (leaks) ${r.would.leak}, skipped ${r.would.skipped}`);
+        console.log(`        ${r.fetched} fetched · ${r.usable} with usable media · would publish ${r.would.publish}, review ${r.would.review}, excluded (not male-only) ${r.would.excluded}, dropped (no male wording) ${r.would.dropped}, blocked (safety) ${r.would.blocked}, skipped ${r.would.skipped}`);
         if (r.reposts) console.log(`        reposts kept (credited to the original poster): ${r.reposts}`);
         if (r.videos) console.log(`        videos: ${r.videos} · playback: ${r.playback}`);
         const reasons = Object.entries(r.skipReasons).map(([k, v]) => `${k} ×${v}`).join(', ');

@@ -7,17 +7,13 @@
  * Platforms fall in three groups:
  *   ingestable  - we have an adapter and the content is public.
  *   linkinbio   - a hub page we crawl for *other* profile links.
- *   external    - paywalled / closed platforms. We keep the link so it can be
- *                 shown on the creator page (and send fans to the creator's
- *                 own pages) but never scrape them.
- *   (leak sites, tube-rips and file lockers parse to nothing at all: never
- *    followed, never shown as a creator's link. See lib/leaks.js.)
+ *   external    - paid / closed platforms. Kept on the creator's profile so fans can
+ *                 reach the creator's own pages, and followed like any public page when reached.
  */
 
 const config = require('../config');
 const { ofHandle } = require('./onlyfans');
 const paid = require('./paid');
-const { isLeakHost } = require('./leaks');
 
 const EXTERNAL = {
   'onlyfans.com': 'OnlyFans',
@@ -181,7 +177,6 @@ function parseProfile(input, hint = {}) {
   if (!/^https?:$/.test(url.protocol)) return null;
   const h = host(url.hostname);
   if (!h.includes('.')) return null;
-  if (isLeakHost(h)) return null;
   const parts = url.pathname.split('/').filter(Boolean);
 
   if (matches(h, 'reddit.com') || h === 'redd.it') {

@@ -19,9 +19,7 @@ const events = require('./events');
 const { processItem } = require('./pipeline');
 const physique = require('./physique');
 const { applyProfile, autoTrack } = require('./creators');
-const leaks = require('../lib/leaks');
 const takedowns = require('../lib/takedowns');
-const { isPaywalledHost } = require('../lib/brave');
 
 const MAX_DISCOVERED_FEEDS = 3;
 
@@ -32,7 +30,7 @@ function isCommentFeed(target) {
   } catch { return true; }
 }
 
-/** Public RSS/Atom/JSON feeds a page advertised. Paywalled hosts, leak mirrors, takedowns and comment feeds stay out. */
+/** Public RSS/Atom/JSON feeds a page advertised. Takedowns and comment feeds stay out. */
 function discoveredFeedSpecs(result) {
   const list = [];
   if (result && Array.isArray(result.discoveredFeeds)) list.push(...result.discoveredFeeds);
@@ -46,7 +44,7 @@ function discoveredFeedSpecs(result) {
     const key = target.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    if (isCommentFeed(target) || leaks.isLeakUrl(target) || isPaywalledHost(target) || takedowns.checkUrl(target)) continue;
+    if (isCommentFeed(target) || takedowns.checkUrl(target)) continue;
     out.push({ platform: 'rss', kind: 'feed', target });
   }
   return out.slice(0, MAX_DISCOVERED_FEEDS);

@@ -476,7 +476,7 @@ const REFUSED_STATUS = new Set([403, 429, 503]);
  * read through Bright Data instead: the Web Unlocker (HTML) and, when BRIGHTDATA_BROWSER_WSS is set and the page needs
  * JavaScript, the remote Browser API. Opt-in (setting brightdataUnlocker) and paid, so:
  *   - it runs only AFTER robots.txt allowed the page and only for those refusals (never 401 login walls, 404/410 gone, 451 legal);
- *   - lib/brightdata.unlock() and the remote render refuse leak sites, paywalled hosts, takedowns and private addresses before
+ *   - lib/brightdata.unlock() and the remote render refuse takedowns and private addresses before
  *     anything leaves PRISM, and extractPage still applies noindex / nopin / takedown opt-outs to what comes back;
  *   - a daily budget caps the spend and a host where unlocking keeps finding nothing is backed off (engine/hoststrategy.js).
  * Returns null when not applicable, else {page, via, notes, info} / {skipped} / {error}.

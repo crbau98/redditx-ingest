@@ -962,7 +962,7 @@ main.tinted .tag { border-color: color-mix(in srgb, var(--accent) 30%, var(--lin
 .card-badges { right: 52px; flex-wrap: wrap; }
 .card.compact .card-badges { right: 50px; }
 
-/* ---- OnlyFans & paid platforms (v4.14+): link-outs to the creator's own page; PRISM never shows paywalled content ---- */
+/* ---- OnlyFans & paid platforms (v4.14+): link-outs to the creator's own page; paid content is followed like any public page */
 :root {
   --of: #00aff0;
   --of-2: #0091ea;

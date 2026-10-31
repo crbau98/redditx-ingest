@@ -5,7 +5,7 @@ import { table, pager, platBadge, pageHead, act } from './ui.js';
 
 function addCreatorDialog(onDone) {
   const name = h('input', { class: 'input', placeholder: 'Display name (optional)', autofocus: true });
-  const links = h('textarea', { class: 'textarea', rows: 7, 'aria-label': 'Public profile links', placeholder: 'Paste any of their public profile links — one per line:\nhttps://x.com/name\nhttps://bsky.app/profile/name.bsky.social\nu/name\nhttps://www.redgifs.com/users/name\nhttps://linktr.ee/name   ← hubs are crawled for more accounts\nhttps://onlyfans.com/name   ← shown on their profile, never scraped' });
+  const links = h('textarea', { class: 'textarea', rows: 7, 'aria-label': 'Public profile links', placeholder: 'Paste any of their public profile links — one per line:\nhttps://x.com/name\nhttps://bsky.app/profile/name.bsky.social\nu/name\nhttps://www.redgifs.com/users/name\nhttps://linktr.ee/name   ← hubs are crawled for more accounts\nhttps://onlyfans.com/name   ← kept on the profile as a paid page' });
   const result = h('div');
   const m = openModal({
     title: 'Add a creator', sub: 'One person, many accounts. PRISM follows every public account you give it and keeps their media together on one profile.', wide: true,
@@ -16,7 +16,7 @@ function addCreatorDialog(onDone) {
       onDone();
       result.replaceChildren(h('div', { class: 'panel', style: { marginTop: '12px' } },
         h('b', null, `${r.creator.display_name || r.creator.handle}`), ` — following ${r.feeds.length} account${r.feeds.length === 1 ? '' : 's'}`,
-        r.links.length ? h('p', { class: 'muted', style: { fontSize: '13px', marginTop: '6px' } }, `${r.links.length} external link${r.links.length === 1 ? '' : 's'} saved to their profile (not scraped).`) : null,
+        r.links.length ? h('p', { class: 'muted', style: { fontSize: '13px', marginTop: '6px' } }, `${r.links.length} external link${r.links.length === 1 ? '' : 's'} saved to their profile.`) : null,
         r.conflicts.length ? h('p', { style: { color: 'var(--warn)', fontSize: '13px', marginTop: '6px' } }, `Skipped (belongs to another creator): ${r.conflicts.map((c) => `${c.input} — ${c.reason}`).join('; ')}. Use Merge if it is the same person.`) : null,
         r.skipped.length ? h('p', { style: { color: 'var(--warn)', fontSize: '13px', marginTop: '6px' } }, `Not recognised: ${r.skipped.map((s) => s.input).join(', ')}`) : null));
       toast('Creator saved — syncing now', 'ok');
@@ -62,7 +62,7 @@ function findCreatorDialog(onDone, { query = '', creatorId = null } = {}) {
     out.replaceChildren(
       h('div', { class: 'row', style: { justifyContent: 'space-between', marginBottom: '8px' } }, h('span', { class: 'muted', style: { fontSize: '13px' } }, `${r.candidates.length} account${r.candidates.length === 1 ? '' : 's'} found in ${(r.ms / 1000).toFixed(1)} s${r.webSearch ? ` · web search: ${r.webSearch}` : ' · web search not configured (BRAVE_API_KEY or SEARXNG_URL)'}${hiddenN ? ` · ${hiddenN} hidden (not male-focused or failed the safety gate)` : ''}`), count),
       r.candidates.length ? h('div', { class: 'stack', style: { gap: '8px' } }, rows) : h('p', { class: 'muted' }, 'No public accounts found. Try another spelling, a handle, or paste one of their profile links.'),
-      r.externalLinks.length ? h('div', { style: { marginTop: '10px' } }, h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Paywalled / external links (saved to the profile, never scraped): '), ...r.externalLinks.map((l) => h('a', { class: 'badge', href: l.url, target: '_blank', rel: 'noopener noreferrer', style: { marginRight: '6px' } }, l.service || l.label))) : null,
+      r.externalLinks.length ? h('div', { style: { marginTop: '10px' } }, h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Paid / external links (saved to the profile): '), ...r.externalLinks.map((l) => h('a', { class: 'badge', href: l.url, target: '_blank', rel: 'noopener noreferrer', style: { marginRight: '6px' } }, l.service || l.label))) : null,
       r.candidates.length ? h('div', { class: 'row', style: { justifyContent: 'flex-end', marginTop: '12px' } }, followBtn) : null);
     update();
   }

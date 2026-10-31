@@ -448,7 +448,7 @@ function v7(db) {
 
 /**
  * v8 (PRISM 4.14): OnlyFans leads. Every OnlyFans handle PRISM sees named in a bio, a post or a web
- * search result, whether or not we follow that person yet. onlyfans.com itself is never read; a lead is
+ * search result, whether or not we follow that person yet. A lead is
  * worked by finding the same person's free public accounts elsewhere (RedGIFs, Bluesky, X, Reddit...).
  *   status   pending (not looked for yet) | searching (looked, nothing yet) | found (accounts queued in
  *            discovery) | claimed (a followed creator links to this page) | rejected (safety / scope)
@@ -554,8 +554,8 @@ function v10(db) {
  * v11 (PRISM v5 iteration): paid leads go beyond OnlyFans. The leads table gains a `service`
  * ('OnlyFans', 'Fansly', 'JustFor.Fans') so a Fansly or JFF page named in posts, bios and web
  * search results is traced to the same man's free public accounts exactly like an OnlyFans page.
- * The paid hosts themselves are still never read. Rebuilt with a composite key because one handle
- * can exist on several services at once.
+ * The paid hosts are worked like any other public page; the trace looks for the person's free public
+ * accounts. Rebuilt with a composite key because one handle can exist on several services at once.
  */
 function v11(db) {
   const cols = db.prepare('PRAGMA table_info(onlyfans_leads)').all().map((c) => c.name);

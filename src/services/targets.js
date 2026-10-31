@@ -2,7 +2,7 @@
 /**
  * Admin-facing operations for adding things to follow: pasted links and
  * handles become feeds and creators, with the invariants the engine relies on
- * (every `user` feed has a creator; external/paywalled links are display-only).
+ * (every `user` feed has a creator; paid / closed platforms are display-only).
  */
 const repo = require('../db/repo');
 const paid = require('../lib/paid');

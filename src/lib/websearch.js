@@ -55,7 +55,7 @@ const PROVIDERS = {
     configured: () => brave.configured(),
     search: (q, o) => brave.search(q, o),
   },
-  // Bright Data Discover: results ranked by relevance to an intent ("public creator pages, not paywalled or leaked"), one credit each.
+  // Bright Data Discover: results ranked by relevance to an intent ("public creator pages and accounts"), one credit each.
   brightdata: {
     configured: () => brightdata.configured(),
     search: (q, o) => brightdata.search(q, o),

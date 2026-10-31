@@ -4,31 +4,16 @@
  * fallback (`ddgWeb` / `ddgUrls`) when `BRAVE_SEARCH_KEY` / `BRAVE_API_KEY` is
  * not configured so web, image, and video search work out-of-the-box.
  *
- * Hard boundary: never returns piracy/leak hosts (`lib/leaks`) or scrapes
- * paywalled creator platforms (`onlyfans.com`, `fansly.com`, `justfor.fans`,
- * `patreon.com`, `loyalfans.com`, `manyvids.com`).
+ * Everything the engines return is accepted now: public creator pages, galleries,
+ * paid subscription pages and mirror sites alike are surfaced for ingestion,
+ * and the admin's safety, takedown and male-only scope gates decide what publishes.
  */
 const cheerio = require('cheerio');
 const config = require('../config');
 const http = require('../sources/http').forPlatform('brave', 1100); // free plan: 1 request / second
 const ddgHttp = require('../sources/http').forPlatform('ddg', 900);
 const repo = require('../db/repo');
-const { isLeakUrl, isLeakHost } = require('./leaks');
 const { hostOf, looksLikeDirectMedia, looksLikeVideo } = require('./mediaurl');
-
-const PAYWALLED_HOSTS = new Set([
-  'onlyfans.com', 'fansly.com', 'justfor.fans', 'patreon.com',
-  'loyalfans.com', 'manyvids.com', 'fanvue.com', 'fancentro.com', 'clips4sale.com',
-]);
-
-function isPaywalledHost(urlOrHost) {
-  const h = hostOf(urlOrHost) || String(urlOrHost || '').toLowerCase().replace(/^www\./, '');
-  if (!h) return false;
-  for (const p of PAYWALLED_HOSTS) {
-    if (h === p || h.endsWith(`.${p}`)) return true;
-  }
-  return false;
-}
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -109,7 +94,6 @@ function ddgUrls(html) {
   const push = (rawUrl, title, description) => {
     const url = unwrapDdgHref(rawUrl);
     if (!url || seen.has(url)) return;
-    if (isLeakUrl(url) || isLeakHost(hostOf(url)) || isPaywalledHost(url)) return;
     seen.add(url);
     out.push({
       url,
@@ -206,7 +190,7 @@ async function search(q, { count = 20, budget = 40 } = {}) {
   const json = await braveRequest('/res/v1/web/search', qs, { budget });
   return ((json.web && json.web.results) || [])
     .map((r) => ({ url: r.url, title: strip(r.title), description: strip(r.description) }))
-    .filter((r) => r.url && !isLeakUrl(r.url));
+    .filter((r) => !!r.url);
 }
 
 /**
@@ -218,7 +202,7 @@ async function web(q, { count = 20, budget = 40 } = {}) {
   }
   try {
     const res = await search(q, { count, budget });
-    return res.filter((r) => !isPaywalledHost(r.url));
+    return res;
   } catch (e) {
     if (e && (e.skip || e.budget)) {
       return ddgWeb(q, { count });
@@ -229,13 +213,12 @@ async function web(q, { count = 20, budget = 40 } = {}) {
 
 /**
  * Brave Image Search (`https://api.search.brave.com/res/v1/images/search`) with automatic DDG fallback.
- * Filters out leak hosts and paywalled media URLs.
  */
 async function images(q, { count = 20, budget = 40 } = {}) {
   if (!configured()) {
     const hits = await ddgWeb(q, { count });
     return hits
-      .filter((r) => r.url && !isLeakUrl(r.url) && !isPaywalledHost(r.url))
+      .filter((r) => r.url)
       .map((r) => ({
         url: r.url,
         pageUrl: r.url,
@@ -259,7 +242,7 @@ async function images(q, { count = 20, budget = 40 } = {}) {
     if (e && (e.skip || e.budget)) {
       const hits = await ddgWeb(q, { count });
       return hits
-        .filter((r) => r.url && !isLeakUrl(r.url) && !isPaywalledHost(r.url))
+        .filter((r) => r.url)
         .map((r) => ({
           url: r.url,
           pageUrl: r.url,
@@ -298,21 +281,15 @@ async function images(q, { count = 20, budget = 40 } = {}) {
         mediaType: 'image',
       };
     })
-    .filter((r) => {
-      if (!r.url) return false;
-      if (isLeakUrl(r.url) || isLeakUrl(r.imageUrl) || isLeakUrl(r.thumbnailUrl)) return false;
-      if (isPaywalledHost(r.url) || isPaywalledHost(r.imageUrl)) return false;
-      return true;
-    });
+    .filter((r) => !!r.url);
 }
 
 /**
  * Brave Video Search (`https://api.search.brave.com/res/v1/videos/search`) with automatic DDG fallback.
- * Filters out leak hosts and paywalled media URLs.
  */
 async function videos(q, { count = 20, budget = 40 } = {}) {
   const mapDdgVideos = (hits) => hits
-    .filter((r) => r.url && !isLeakUrl(r.url) && !isPaywalledHost(r.url))
+    .filter((r) => !!r.url)
     .map((r) => ({
       url: r.url,
       pageUrl: r.url,
@@ -366,12 +343,7 @@ async function videos(q, { count = 20, budget = 40 } = {}) {
         mediaType: 'video',
       };
     })
-    .filter((r) => {
-      if (!r.url) return false;
-      if (isLeakUrl(r.url) || isLeakUrl(r.mediaUrl) || isLeakUrl(r.thumbnailUrl)) return false;
-      if (isPaywalledHost(r.url) || isPaywalledHost(r.mediaUrl)) return false;
-      return true;
-    });
+    .filter((r) => !!r.url);
 }
 
 module.exports = {
@@ -383,6 +355,4 @@ module.exports = {
   ddgUrls,
   usage,
   configured,
-  isPaywalledHost,
-  PAYWALLED_HOSTS,
 };

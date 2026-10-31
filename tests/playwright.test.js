@@ -86,7 +86,8 @@ describe('the guard proxy: nothing private is reached, by any route', { timeout:
         <img src="${ip}/img.png"><img src="http://sneaky.example:${internal.port}/img.png">
         <script>fetch('${ip}/xhr').catch(()=>{}); new Worker(URL.createObjectURL(new Blob(["fetch('${ip}/xhr?worker').catch(()=>{})"])));
         try { new WebSocket('ws://127.0.0.1:${internal.port}/ws'); } catch (e) {}</script></body></html>` }),
-      '/to-leak': () => ({ status: 302, headers: { location: 'https://coomer.su/onlyfans/user/x' } }),
+      '/to-public': () => ({ status: 302, headers: { location: `http://localhost:${pub.port}/final` } }),
+      '/final': () => ({ headers: { 'content-type': 'text/html' }, body: '<html><body>public final page</body></html>' }),
     });
   });
   after(async () => { config.allowPrivateHosts = true; delete config.playwright.testAllowHosts; await internal.close(); await pub.close(); });
@@ -124,10 +125,12 @@ describe('the guard proxy: nothing private is reached, by any route', { timeout:
     assert.ok(refused.includes('sneaky.example'), `the name was resolved and refused: ${refused.join(',')}`);
   });
 
-  test('a redirect hop to a leak site is refused (Browser4 only notices these afterwards)', async () => {
+  test('a redirect hop to a public host is followed, not refused', async () => {
     const since = Date.now();
-    await assert.rejects(render.renderPages(`http://localhost:${pub.port}/to-leak`, { scrolls: 0 }));
-    assert.ok(guard.refusedSince(since).some((b) => b.host === 'coomer.su' && b.reason === 'leak site'));
+    const r = await render.renderPages(`http://localhost:${pub.port}/to-public`, { scrolls: 0 });
+    assert.equal(r.pages.length, 1);
+    assert.equal(r.pages[0].url, `http://localhost:${pub.port}/final`);
+    assert.equal(guard.refusedSince(since).length, 0, JSON.stringify(guard.refusedSince(since)));
   });
 
   test('the proxy serves nobody without its per-process credential', async () => {

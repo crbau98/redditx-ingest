@@ -58,7 +58,7 @@ function parseStatus(status, host) {
   }
   const acct = acctOf(status.account, host);
   const text = htmlToText(status.content, 500);
-  // every link in the post (anchor text can hide where it points): the leak gate checks them (lib/leaks)
+  // every link in the post (anchor text can hide where it points): checked like any other link
   const links = [...new Set([...String(status.content || '').matchAll(/href="(https?:\/\/[^"]+)"/gi)].map((m) => m[1].replace(/&amp;/g, '&')))];
   const media = (status.media_attachments || []).filter((m) => ['image', 'video', 'gifv'].includes(m.type) && m.url);
   const nsfw = status.sensitive || status.spoiler_text ? 'explicit' : 'suggestive';

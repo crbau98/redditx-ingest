@@ -67,16 +67,15 @@ describe('guard proxy', () => {
     assert.equal(t.status, 502);
   });
 
-  test('with private hosts refused: private addresses, names resolving to them and leak hosts get a marked 403', async () => {
+  test('with private hosts refused: private addresses and names resolving to them get a marked 403', async () => {
     config.allowPrivateHosts = false;
     try {
-      for (const url of [`http://127.0.0.1:${upstream.port}/x`, `http://dual.test:${upstream.port}/x`, 'http://169.254.169.254/latest/meta-data/', 'http://coomer.su/x']) {
+      for (const url of [`http://127.0.0.1:${upstream.port}/x`, `http://dual.test:${upstream.port}/x`, 'http://169.254.169.254/latest/meta-data/']) {
         const r = await via(url);
         assert.equal(r.status, 403, url);
         assert.ok(r.headers['x-prism-refused'], url);
       }
       assert.equal((await tunnel(`127.0.0.1:${upstream.port}`)).status, 403);
-      assert.equal((await tunnel('coomer.su:443')).status, 403);
       assert.ok(upstream.hits.every((h) => !h.includes('meta-data')));
     } finally { config.allowPrivateHosts = true; }
   });

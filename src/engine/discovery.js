@@ -29,7 +29,6 @@ const tgBot = require('../lib/telegram-bot');
 const registry = require('../sources');
 const { parseProfile, extractLinks, profileUrl, linkHubHandle } = require('../lib/links');
 const { checkText } = require('../lib/safety');
-const leaks = require('../lib/leaks');
 const takedowns = require('../lib/takedowns');
 const { classify, femaleCheck } = require('../lib/scope');
 const physiqueText = require('../lib/physique').textCheck;
@@ -239,7 +238,7 @@ function sameName(a, b) {
 /**
  * Paid pages named in a post. A creator naming a page with their own handle is telling us it is
  * theirs; any other page is a shout-out or a promo channel featuring someone: a lead to work later.
- * OnlyFans, Fansly and JustFor.Fans are traced; the paid hosts themselves are never read.
+ * OnlyFans, Fansly and JustFor.Fans are traced; the paid pages are read like any other public page.
  */
 function notePaidHandles(text, creatorId) {
   const found = paid.findPaidHandles(text).filter((p) => paid.SERVICES[p.service] && paid.SERVICES[p.service].trace);
@@ -583,7 +582,7 @@ const namesOf = (text, handle) => findOnlyFans(text).includes(String(handle).toL
  * Look for the free, public accounts of the person behind a paid page: the same handle on RedGIFs and
  * Bluesky (free lookups), a web search for the exact page link (budgeted), and same-handle X / Telegram
  * leads that enrich() verifies. An account whose profile links that exact page is proven to be them.
- * The paid page itself is never fetched. Lead services: OnlyFans, Fansly, JustFor.Fans.
+ * The paid page itself is followed like any other public page; what is searched for is the same person's free public accounts. Lead services: OnlyFans, Fansly, JustFor.Fans.
  * @param {{handle: string, service?: string}} lead
  * @param {(spec, proven: boolean, meta) => any} found  called for every account found
  */
@@ -630,7 +629,7 @@ async function probeOnlyFans(lead, found, { budget, search = true } = {}) {
     }
     for (const r of results) {
       const snippet = `${r.title || ''} ${r.description || ''}`;
-      if (leaks.isLeakUrl(r.url) || leaks.isLeakText(snippet) || takedowns.checkUrl(r.url)) continue;
+      if (takedowns.checkUrl(r.url)) continue;
       const page = parseProfile(r.url);
       const named = linked(snippet); // the result page itself shows the exact paid-page link
       for (const spec of [page, ...extractLinks(snippet)]) {
@@ -652,7 +651,7 @@ async function probeOnlyFans(lead, found, { budget, search = true } = {}) {
  * Work the paid leads: (1) pages creators promote that we do not follow yet become discovery
  * candidates for that person's public accounts; (2) followed creators who have a paid page but few
  * known accounts get the same search, and what it finds is linked to them (their content from elsewhere).
- * OnlyFans, Fansly and JustFor.Fans; the paid hosts themselves are never read.
+ * OnlyFans, Fansly and JustFor.Fans; the paid pages are read like any other public page.
  */
 async function onlyfansDiscovery({ leads = 10, reach = 4, searches = 4, budget, aborted = () => false } = {}) {
   const out = { checked: 0, found: 0, linked: 0, searched: 0, rejected: 0 };
@@ -707,7 +706,7 @@ async function onlyfansDiscovery({ leads = 10, reach = 4, searches = 4, budget, 
 }
 
 /**
- * One web query per subject. The paid-page slug is a search term only — the paid host is never fetched.
+ * One web query per subject. The paid-page slug is a search term only — the paid host is just another public page in the results.
  * Display name is added when it is not just the handle, so one request covers handle, name and slug.
  */
 function mentionSearchQuery(subject) {
@@ -792,7 +791,7 @@ async function probeFediMentions(subject, creatorId = null, aborted = () => fals
  * For known creators and active OF/Fansly/JFF leads, searches for public posts, videos, and images
  * mentioning the creator's `@handle`, display name, or paid-page slug (`onlyfans.com/<handle>` and
  * the Fansly / JustFor.Fans equivalents). The slug is a search term only. Every candidate passes
- * `leaks.check`, `takedowns.check`, `safety`, and `scope.classify` (and never fetches paywalled hosts).
+ * `takedowns.check`, `safety`, and `scope.classify`.
  */
 async function discoverCreatorMentions({ creators = 3, leads = 3, budget, aborted = () => false } = {}) {
   const out = { checked: 0, found: 0, linked: 0, searched: 0 };
@@ -802,7 +801,6 @@ async function discoverCreatorMentions({ creators = 3, leads = 3, budget, aborte
   const ingestSearchHit = (hit, subject, creatorId = null) => {
     if (!hit || !hit.url) return 0;
     const text = `${hit.title || ''} ${hit.description || ''} ${hit.creator || ''} ${hit.publisher || ''}`;
-    if (leaks.isLeakUrl(hit.url) || leaks.isLeakText(text) || brave.isPaywalledHost(hit.url)) return 0;
     if (takedowns.checkUrl(hit.url) || takedowns.checkItem({ title: hit.title, text: hit.description, permalink: hit.url })) return 0;
     if (gate(hit.title, hit.description).level) return 0;
 
@@ -853,8 +851,6 @@ async function discoverCreatorMentions({ creators = 3, leads = 3, budget, aborte
         const posts = await reddit.searchPosts(`"${paidPage}" OR "${qHandle}"`, 15);
         for (const p of posts || []) {
           if (!p || !p.author) continue;
-          const postText = `${p.title || ''} ${p.selftext || ''} ${p.url || ''}`;
-          if (leaks.isLeakText(postText) || leaks.isLeakUrl(p.url)) continue;
           if (gate(p.title, p.selftext, p.author).level) continue;
           const spec = parseProfile(`u/${p.author}`);
           if (spec && usable(spec)) {

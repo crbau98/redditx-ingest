@@ -100,7 +100,7 @@ export async function find(root, { query }) {
           title: state.rateLimited ? 'Easy does it — too many lookups' : 'That lookup didn’t go through',
           text: state.rateLimited
             ? 'Find is rate-limited so one person can’t sweep the whole web. Wait a minute, then try again with his @handle or a direct profile link.'
-            : 'Check the spelling, or paste a direct profile link (Bluesky, YouTube, Reddit…). Paid pages stay link-outs — search his free, public accounts here.',
+            : 'Check the spelling, or paste a direct profile link (Bluesky, YouTube, Reddit…). Paid pages are kept as link-outs — search his free, public accounts here.',
           actions: [h('button', { class: 'btn primary', onclick: run }, icon('refresh', 'sm'), 'Try again')],
         }));
     } else if (state.result) {
@@ -125,7 +125,7 @@ export async function find(root, { query }) {
       const ext = state.result.externalLinks || [];
       if (ext.length) {
         out.append(h('section', { class: 'find-paid', 'aria-label': 'Paid pages' },
-          h('div', { class: 'muted sm' }, 'Paid pages open on the creator’s own site — PRISM never fetches inside them:'),
+          h('div', { class: 'muted sm' }, 'Paid pages open on the creator’s own site — what they cost is between him and his fans:'),
           h('div', { class: 'row wrap', style: { gap: '8px', marginTop: '8px' } }, ext.map((l) => {
             const [tone, tag] = paidKind(l);
             return h('a', { class: `linkchip ext${tone ? ` paid-pill ${tone}` : ''}`, href: l.url, target: '_blank', rel: 'noopener noreferrer nofollow' },
@@ -135,7 +135,7 @@ export async function find(root, { query }) {
       }
     } else {
       out.append(
-        h('p', { class: 'muted find-lede' }, 'Pull any creator’s public work in from across the open web — one identity, every free account. Paid pages stay link-outs.'),
+        h('p', { class: 'muted find-lede' }, 'Pull any creator’s public work in from across the open web — one identity, every public account. Paid pages are kept as link-outs.'),
         h('div', { class: 'find-examples' },
           h('span', { class: 'muted sm find-try' }, 'Try:'),
           h('div', { class: 'row wrap', style: { gap: '8px' } }, EXAMPLES.map((ex) => h('button', { class: 'chip', type: 'button', title: `Look up ${ex}`, onclick: () => { input.value = ex; run(); } }, ex)))),
@@ -144,7 +144,7 @@ export async function find(root, { query }) {
   }
 
   root.replaceChildren(
-    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Find a creator'), h('div', { class: 'sub' }, 'Name, performer name, @handle or profile link. Only verified public accounts are followed — paywalled pages stay link-outs.'))),
+    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Find a creator'), h('div', { class: 'sub' }, 'Name, performer name, @handle or profile link. Only verified public accounts are followed. Paid pages are kept as link-outs.'))),
     form,
     out,
   );

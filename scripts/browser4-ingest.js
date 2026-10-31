@@ -16,8 +16,8 @@
  *   --trusted          treat the starting pages as trusted (an admin vouches they are male-focused)
  *   --json             machine-readable report
  *
- * Everything goes through the same engine and the same gates as a scheduled run (robots.txt, opt-outs, takedowns, leak
- * and paywall hosts, the safety / male-only / picture filters, duplicates). Browser4 only changes HOW the page is read.
+ * Everything goes through the same engine and the same gates as a scheduled run (robots.txt, opt-outs, takedowns, the
+ * safety / male-only / picture filters, duplicates). Browser4 only changes HOW the page is read.
  * Needs: npm i -g browser4-cli && browser4-cli install, plus Chrome or Chromium on this machine.
  */
 const argv = process.argv.slice(2);

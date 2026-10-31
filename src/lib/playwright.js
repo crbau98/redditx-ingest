@@ -10,7 +10,7 @@
  *
  * Network policy is stronger than Browser4's, because the browser's traffic all goes through lib/guardproxy.js (a
  * DNS-validated proxy in this process): a redirect hop or sub-request to a private address, a public-looking name that
- * resolves to one, or a hop to a leak / paywalled / takedown host is refused before anything is sent. Service workers
+ * resolves to one, or a hop to a takedown host is refused before anything is sent. Service workers
  * are blocked, WebRTC may not use non-proxied UDP and QUIC is off, so nothing leaves the browser around the proxy.
  * A bot-challenge page ends the render; nothing is solved or evaded.
  *

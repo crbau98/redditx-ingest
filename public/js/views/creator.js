@@ -91,7 +91,7 @@ export async function creator(root, { params, query }) {
   // A glowing ring (like a "story") when they posted in the last two days.
   const fresh = c.last_media_at && Date.now() - new Date(c.last_media_at).getTime() < 2 * 86400000;
   const headAvatar = avatar(c, 112);
-  // His other paid pages (Fansly, JustFor.Fans…) as header buttons next to the OnlyFans one — link-outs, never fetched.
+  // His other paid pages (Fansly, JustFor.Fans…) as header buttons next to the OnlyFans one — link-outs, kept on the profile.
   const paidTone = (l) => (/fansly/i.test(l.service || l.url || '') ? ' paid-cta fansly' : /justfor\.?fans|^jff$/i.test(l.service || l.url || '') ? ' paid-cta jff' : ' paid-cta');
   const paidCtas = (c.paid || []).filter((l) => l && l.url).slice(0, 2).map((l) =>
     h('a', { class: `btn${paidTone(l)}${l.free ? ' free' : ''}`, href: l.url, target: '_blank', rel: 'noopener noreferrer nofollow', title: l.url }, `${l.service === 'JustFor.Fans' ? 'JFF' : l.service || 'Paid page'}${l.free ? ' · free' : ''}`, icon('external', 'sm')));

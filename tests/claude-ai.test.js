@@ -260,7 +260,7 @@ describe('AI discovery: planned queries and triage', () => {
 });
 
 describe('Claude as a web search provider', () => {
-  test('only URLs the search tool returned come back; leak and paywalled hosts are dropped', async () => {
+  test('only URLs the search tool returned come back (paid / mirror hosts included now)', async () => {
     state.answers.websearch = () => message([
       { type: 'server_tool_use', id: 'srvtoolu_1', name: 'web_search', input: { query: 'hairy bear creator' } },
       { type: 'web_search_tool_result', tool_use_id: 'srvtoolu_1', content: [
@@ -273,9 +273,9 @@ describe('Claude as a web search provider', () => {
     ]);
     const results = await websearch.search('hairy bear creator', { count: 10 });
     assert.equal(results.provider, 'claude');
-    assert.deepEqual(results.map((r) => r.url), ['https://bsky.app/profile/bearguy.bsky.social', 'https://linktr.ee/bearguy']);
+    assert.deepEqual(results.map((r) => r.url), ['https://bsky.app/profile/bearguy.bsky.social', 'https://coomer.su/onlyfans/user/bearguy', 'https://linktr.ee/bearguy', 'https://onlyfans.com/bearguy']);
     assert.equal(results[0].description, 'His Bluesky, posts photos');
-    assert.equal(results[1].title, 'Bear Guy | Linktree');
+    assert.equal(results[2].title, 'Bear Guy | Linktree');
     const body = state.requests[0];
     assert.deepEqual(body.tools, [{ type: 'web_search_20260209', name: 'web_search', max_uses: 3 }]);
   });

@@ -57,22 +57,24 @@ describe('Discover', () => {
     const body = state.discoverBodies[0];
     assert.equal(body.query, 'gay muscle creator linktree');
     assert.match(body.intent, /Public creator profiles/);
-    assert.match(body.intent, /Not paywalled/i);
     assert.equal(body.mode, 'standard'); assert.equal(body.num_results, 5);
     assert.ok(state.auth.every((a) => a === 'Bearer bd-secret-token'));
     assert.ok(state.polls >= 2, 'it waited for "processing" to turn into "done"');
-    assert.deepEqual(r.map((x) => x.url), ['https://linktr.ee/zed', 'https://creator.example/gallery', 'https://low.example/x']);
-    assert.equal(r[1].description, 'A public gallery', 'whitespace tidied');
+    // paid pages and mirror hosts come out now, ranked by relevance; duplicates and junk never do
+    assert.deepEqual(r.map((x) => x.url), ['https://coomer.su/onlyfans/user/zed', 'https://onlyfans.com/zed', 'https://linktr.ee/zed', 'https://creator.example/gallery', 'https://low.example/x']);
+    assert.equal(r[1].description, 'x');
+    assert.equal(r[3].description, 'A public gallery', 'whitespace tidied');
   });
-  test('leak sites, paywalled hosts, duplicates and non-URLs never come out', async () => {
+  test('paid / mirror hosts come out, duplicates and non-URLs never do', async () => {
     const urls = (await brightdata.search('q')).map((x) => x.url);
-    assert.ok(!urls.some((u) => /coomer|onlyfans|not a url/.test(u)));
+    assert.ok(urls.some((u) => /coomer|onlyfans/.test(u)), 'paid / mirror hosts are no longer filtered out');
+    assert.ok(!urls.some((u) => /not a url/.test(u)));
     assert.equal(urls.filter((u) => u === 'https://linktr.ee/zed').length, 1);
   });
   test('a minimum relevance drops weak results', async () => {
     config.brightdata.minRelevance = 0.5;
     const urls = (await brightdata.search('q')).map((x) => x.url);
-    assert.deepEqual(urls, ['https://linktr.ee/zed', 'https://creator.example/gallery']);
+    assert.deepEqual(urls, ['https://coomer.su/onlyfans/user/zed', 'https://onlyfans.com/zed', 'https://linktr.ee/zed', 'https://creator.example/gallery']);
   });
   test('a per-query intent replaces the default', async () => {
     await brightdata.search('q', { intent: 'official artist pages' });
@@ -102,7 +104,7 @@ describe('Discover', () => {
     websearch._clear();
     const r = await websearch.search('fresh query one', { count: 3 });
     assert.equal(r.provider, 'brightdata');
-    assert.equal(r[0].url, 'https://linktr.ee/zed');
+    assert.equal(r[0].url, 'https://coomer.su/onlyfans/user/zed');
     const st = websearch.status();
     assert.equal(st.brightdata.configured, true);
     assert.equal(st.providers.find((p) => p.name === 'brightdata').ok, 1);
@@ -118,9 +120,9 @@ describe('Web Unlocker', () => {
     assert.equal(brightdata.unlockUsage().count, 1);
   });
 
-  test('NOTHING is sent for a leak site, a paywalled host, a takedown or a non-http(s) / credentialed URL (private addresses: see browser4.policy.test.js)', async () => {
+  test('NOTHING is sent for a takedown, a private address or a non-http(s) / credentialed URL (private addresses: see browser4.policy.test.js)', async () => {
     repo.takedowns.add({ kind: 'domain', value: 'opted-out.example', reason: 'asked' });
-    for (const url of ['https://coomer.su/x', 'https://www.onlyfans.com/zed', 'https://fansly.com/zed', 'http://opted-out.example/page', 'file:///etc/passwd', 'https://user:pw@creator.example/']) {
+    for (const url of ['https://opted-out.example/page', 'file:///etc/passwd', 'https://user:pw@creator.example/']) {
       await assert.rejects(brightdata.unlock(url), (e) => e.skip === true, url);
     }
     assert.deepEqual(state.requests, [], 'not one of them reached Bright Data');

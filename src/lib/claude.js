@@ -17,8 +17,6 @@
 const crypto = require('crypto');
 const config = require('../config');
 const repo = require('../db/repo');
-const leaks = require('./leaks');
-const { isPaywalledHost } = require('./brave');
 
 let Anthropic = null;
 try { Anthropic = require('@anthropic-ai/sdk'); Anthropic = Anthropic.default || Anthropic; } catch { Anthropic = null; }
@@ -138,13 +136,13 @@ async function json(purpose, { system, input, schema, effort = 'low', maxTokens 
 const SEARCH_SYSTEM = [
   'You are the web-search step of a media discovery tool for an adult (18+) site about men.',
   'Run web searches for the query and report the most relevant results: public creator profiles, galleries, social accounts and link-in-bio pages.',
-  'Only report URLs that appeared in your web search results. Never report paywalled subscription pages, leaked or pirated copies of paid content, or anything involving minors.',
+  'Only report URLs that appeared in your web search results, and never anything involving minors.',
   'Answer with one result per line, exactly: URL | one-sentence description of what is on it. No other text.',
 ].join('\n');
 
 /**
  * Web search through Claude's server-side web search tool. Returns {url,title,description}[]: URLs come only from the
- * tool's own result blocks (a URL the model wrote but the tool never returned is dropped), leak and paywalled hosts out.
+ * tool's own result blocks (a URL the model wrote but the tool never returned is dropped).
  */
 async function webSearch(q, { count = 10, site } = {}) {
   const query = site ? `${q} site:${site}` : q;
@@ -178,7 +176,7 @@ async function webSearch(q, { count = 10, site } = {}) {
   }
   const out = [];
   for (const url of [...described.keys(), ...seen.keys()]) {
-    if (!seen.has(url) || out.some((r) => r.url === url) || leaks.isLeakUrl(url) || isPaywalledHost(url)) continue;
+    if (!seen.has(url) || out.some((r) => r.url === url)) continue;
     out.push({ url, title: String(seen.get(url) || '').trim(), description: String(described.get(url) || '').replace(/\s+/g, ' ').trim().slice(0, 500) });
     if (out.length >= count) break;
   }

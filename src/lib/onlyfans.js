@@ -1,7 +1,6 @@
 'use strict';
 /**
- * OnlyFans awareness. PRISM never reads onlyfans.com (paywalled: the content is the creator's paid
- * work). What it uses is what creators publish for free: the link to their page, whether they say
+ * OnlyFans awareness. What it uses is what creators publish for free: the link to their page, whether they say
  * the page is free or on sale, and the public promo accounts they post from everywhere else.
  *
  *   ofHandle(url)       canonical handle of an onlyfans.com profile link, or null

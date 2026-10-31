@@ -3,7 +3,7 @@
  * The per-item pipeline. Every raw item from every adapter goes through the
  * same ordered gates, so rules are enforced in exactly one place:
  *
- *   resolve -> safety -> leaks -> blocklist -> scope -> physique (text) -> media checks -> dedupe
+ *   resolve -> safety -> blocklist -> scope -> physique (text) -> media checks -> dedupe
  *           -> image (faces, physique, perceptual hash) -> keep (unstable video to the store) -> creator -> insert -> tags
  */
 const crypto = require('crypto');
@@ -17,7 +17,6 @@ const imagefilter = require('../lib/imagefilter');
 const physique = require('./physique');
 const dedupe = require('../services/dedupe');
 const events = require('./events');
-const leaks = require('../lib/leaks');
 const paid = require('../lib/paid');
 const takedowns = require('../lib/takedowns');
 const { extractLinks } = require('../lib/links');
@@ -275,12 +274,7 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   const safety = checkItem(item);
   if (safety.level === 'block') return { outcome: 'blocked', reason: `safety:${safety.rule}` };
 
-  // ---- 2b. leaked paid content (never bypassable) -----------------------------------
-  // Reposts of public posts are fine from anywhere; leak sites, file lockers and posts that sell themselves as leaks are not.
-  const leak = leaks.checkItem(item);
-  if (leak) return { outcome: 'blocked', reason: leak.rule };
-
-  // ---- 2c. creator takedowns & opt-outs (never bypassable) --------------------------
+  // ---- 2b. creator takedowns & opt-outs (never bypassable) --------------------------
   const tdHit = takedowns.checkItem(item, feed);
   if (tdHit) return { outcome: 'blocked', reason: 'takedown' };
 

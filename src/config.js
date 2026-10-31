@@ -89,7 +89,7 @@ module.exports = {
   searxngEngines: String(env.SEARXNG_ENGINES || '').trim(),
   ddgEnabled: /^(1|true|yes|on)$/i.test(String(env.DDG_SEARCH || '')),
   searchProviders: list(env.SEARCH_PROVIDERS, ['keenable', 'brave', 'brightdata', 'ddg', 'searxng', 'claude']),
-  // What Discover ranks results against: the intent steers it toward public creator pages and away from paid / pirated sites.
+  // What Discover ranks results against: the intent steers it toward public creator pages and personal galleries.
   // Claude (Anthropic API). Text only: PRISM never sends pictures or videos to it.
   anthropic: {
     model: String(env.ANTHROPIC_MODEL || 'claude-opus-5-5').trim(),
@@ -98,7 +98,7 @@ module.exports = {
     fallbacks: !/^(0|false|no|off)$/i.test(String(env.ANTHROPIC_FALLBACKS || '1')),
   },
   brightdata: {
-    intent: String(env.BRIGHTDATA_DISCOVER_INTENT || 'Public creator profiles, portfolios, galleries and link-in-bio pages, and the creator\'s own public social accounts. Not paywalled subscription sites and not leaked or pirated copies of paid content.').trim(),
+    intent: String(env.BRIGHTDATA_DISCOVER_INTENT || 'Public creator profiles, portfolios, galleries and link-in-bio pages, and the creator\'s own public social accounts. Public paid-subscription pages are read like any other public page.').trim(),
     minRelevance: parseFloat(env.BRIGHTDATA_MIN_RELEVANCE) || 0,   // drop results scored below this (0 = keep all, ranked)
     pollMs: int(env.BRIGHTDATA_POLL_MS, 2000),
     timeoutMs: int(env.BRIGHTDATA_TIMEOUT_MS, 60000),

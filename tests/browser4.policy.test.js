@@ -48,11 +48,9 @@ describe('assertAllowed', () => {
     await refuses('http://0177.0.0.1/', /private|internal/);
   });
 
-  test('refuses leak sites, paywalled hosts and takedowns, even on a public address', async () => {
-    await refuses('https://coomer.su/onlyfans/user/x', /leak/);
-    await refuses('https://gayforfans.com/video/1', /leak/);
-    await refuses('https://onlyfans.com/someone', /paywalled/);
-    await refuses('https://www.fansly.com/someone', /paywalled/);
+  test('allows paid / mirror hosts and still refuses private addresses and takedowns', async () => {
+    // paid pages and leak / mirror hosts are ingest candidates now: a public address is allowed through
+    assert.equal(await browser4.assertAllowed('http://93.184.216.34/paid'), 'http://93.184.216.34/paid');
     repo.takedowns.add({ kind: 'domain', value: 'opted-out.example', reason: 'creator asked' });
     await refuses('http://opted-out.example/gallery', /takedown/);
   });
@@ -81,10 +79,12 @@ describe('renderPages', () => {
     await assert.rejects(browser4.renderPages(url, { scrolls: 0 }), (e) => e.skip === true && /private/.test(e.message));
   });
 
-  test('a redirect to a leak site is refused too', async () => {
+  test('a redirect to a public host is followed (paid / mirror destinations are allowed)', async () => {
     const url = 'http://93.184.216.34/out';
-    setRoutes({ [url]: { html: '<html></html>', final: 'https://coomer.su/x' } });
-    await assert.rejects(browser4.renderPages(url, { scrolls: 0 }), (e) => e.skip === true && /leak/.test(e.message));
+    setRoutes({ [url]: { html: '<html></html>', final: 'http://93.184.216.34/final' } });
+    const r = await browser4.renderPages(url, { scrolls: 0 });
+    assert.equal(r.pages.length, 1);
+    assert.equal(r.pages[0].url, 'http://93.184.216.34/final');
   });
 
   test('a bot-challenge page ends the render - nothing is retried or worked around', async () => {
@@ -163,15 +163,13 @@ describe('admin expand endpoint refuses what the policy refuses', () => {
   after(async () => { await new Promise((r) => srv.close(r)); });
   const post = async (body) => { const r = await fetch(`${base}/api/admin/browser4/expand`, { method: 'POST', headers: { 'x-admin-key': 'test-key', 'content-type': 'application/json' }, body: JSON.stringify(body) }); return { status: r.status, json: await r.json() }; };
 
-  test('bad input, private targets and leak sites are rejected before anything starts', async () => {
+  test('bad input and private targets are rejected before anything starts', async () => {
     setRoutes({}); // start from an empty call log
     assert.equal((await post({})).status, 400);
     assert.equal((await post({ url: 'file:///etc/passwd' })).status, 400);
     const priv = await post({ url: 'http://169.254.169.254/latest/meta-data/' });
     assert.equal(priv.status, 400); assert.match(priv.json.error, /private/);
-    const leak = await post({ url: 'https://coomer.su/x/y' });
-    assert.equal(leak.status, 400); assert.match(leak.json.error, /leak/);
-    assert.deepEqual(calls(), [], 'no browser was started for any of them');
+    assert.deepEqual(calls(), [], 'no browser was started for the rejected ones');
   });
 
   test('409 when Browser4 is not enabled on this server', async () => {

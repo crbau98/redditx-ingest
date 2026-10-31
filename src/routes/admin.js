@@ -351,7 +351,7 @@ router.post('/discovery/candidates', (req, res) => {
 
 /* ---------------------------------------------------------- Paid-page leads */
 // Paid pages named in posts, bios and search results (OnlyFans, Fansly, JustFor.Fans); PRISM traces each
-// to the person's free public accounts. The paid hosts themselves are never read.
+// to the person's free public accounts. The paid pages are read like any other public page.
 const paidLib = require('../lib/paid');
 router.get('/discovery/onlyfans', (req, res) => {
   const status = ['pending', 'searching', 'found', 'claimed', 'rejected', 'all'].includes(req.query.status) ? req.query.status : 'all';

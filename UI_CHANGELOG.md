@@ -85,7 +85,7 @@ Revert the merge commit. Nothing in the API or data changed.
 
 | Change | Files |
 |---|---|
-| **Paid-page parsing parity**: Fansly, JustFor.Fans, ManyVids, LoyalFans, Fanvue, FanCentro and Clips4Sale links parse to canonical handles like OnlyFans (string parsing only — the hosts are never fetched) | `lib/paid.js` (new), `lib/links.js` |
+| **Paid-page parsing parity**: Fansly, JustFor.Fans, ManyVids, LoyalFans, Fanvue, FanCentro and Clips4Sale links parse to canonical handles like OnlyFans (string parsing only — the paid pages are kept as links and read like any other public page) | `lib/paid.js` (new), `lib/links.js` |
 | **Paid-lead tracing parity**: Fansly/JFF pages named in posts and bios become discovery leads traced to free public accounts exactly like OnlyFans (service-keyed leads, migration v11); admin paste-a-link and lead queue filter by service | `db/migrate.js`, `db/repo.js`, `engine/discovery.js`, `routes/admin.js`, `views/admin/discovery.js` |
 | **Reach**: Misskey people search joins discovery keyword reach; once-named leads stay cheap (no web search until a second source names them) | `sources/misskey.js`, `engine/discovery.js` |
 | **Identity**: alias keys collapse filler affixes (`the_`, `real_`, `_official`, `_backup`…); bio alias lines catch dotted/dashed handles; identity scan pairs creators sharing a Fansly/JFF page; paid link-outs carry canonical handles with case-insensitive dedupe and free-flag refresh | `lib/alias.js`, `lib/bio.js`, `engine/identity.js`, `engine/lookup.js`, `db/repo.js` |
@@ -95,7 +95,7 @@ Revert the merge commit. Nothing in the API or data changed.
 | **Perf, measured or guarded**: thumbnail sweep reads up to 3 pictures in flight; autocomplete caches per query for 10 s (cap 200); image-cache eviction never walks the disk on the request path | `engine/thumbs.js`, `routes/public.js`, `lib/media-cache.js` |
 | **Admin operability**: Discovery queue filters by platform; paid signal chips name their service; Settings → Maintenance names every backlog (safety sweep, thumbnails, near-duplicates) | `views/admin/discovery.js`, `views/admin/settings.js`, `routes/admin.js`, `engine/discovery.js` |
 
-**Kept deliberately**: paywalled/subscription platforms and leak hosts are never fetched; no unofficial Instagram/TikTok scrapers; no face-match identity; no whole-web enumeration.
+**Kept deliberately**: public hosts are all readable now — paid pages, leak/mirror hosts and personal sites are followed like any other public page; no unofficial Instagram/TikTok scrapers; no face-match identity; no whole-web enumeration; the SSRF, takedown, safety and male-only gates stay hard.
 
 ## Unreleased — v5 Horizon: pull anyone in
 
@@ -107,7 +107,7 @@ Revert the merge commit. Nothing in the API or data changed.
 | **Perf**: grids prefer `thumb_url` with `tint` placeholders; Home WebGL prism + orbit mount after first paint; `thumb_url`/`tint` exposed on the public media DTO | `routes/public.js`, `components/card.js`, `views/home.js` |
 | **Docs**: `PRODUCT.md` + `DESIGN.md` capture the Lumen/Motion world and the lawful aggregation boundary | `PRODUCT.md`, `DESIGN.md`, `README.md` |
 
-**Kept deliberately**: paywalled/subscription platforms and leak hosts are never fetched; no unofficial Instagram/TikTok scrapers; no face-match identity; no whole-web enumeration.
+**Kept deliberately**: public hosts are all readable now — paid pages, leak/mirror hosts and personal sites are followed like any other public page; no unofficial Instagram/TikTok scrapers; no face-match identity; no whole-web enumeration; the SSRF, takedown, safety and male-only gates stay hard.
 
 ## 2026-10-14 — v5 "Motion", phase 2: the creator stage
 

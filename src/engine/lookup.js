@@ -11,7 +11,6 @@
  *                      "exists and has content", never just "a URL looked plausible"
  *   5. gates           minor-safety (dropped), male-only scope incl. the picture filter on avatars (excluded)
  *
- * Paywalled platforms (OnlyFans, Fansly, ...) are never read; their links are kept on the creator's profile.
  * Nothing here writes until `follow()` is called, and `follow()` re-applies every gate.
  */
 const registry = require('../sources');
@@ -22,7 +21,6 @@ const brave = require('../lib/brave');
 const imagefilter = require('../lib/imagefilter');
 const { parseProfile, extractLinks, profileUrl, linkHubHandle } = require('../lib/links');
 const { checkText } = require('../lib/safety');
-const leaks = require('../lib/leaks');
 const takedowns = require('../lib/takedowns');
 const { femaleCheck, classify } = require('../lib/scope');
 const { ofLink } = require('../lib/onlyfans');
@@ -277,7 +275,7 @@ async function searchWeb(q, pl, notes, mediaHits = [], webLinks = []) {
   const ingestResultSpecs = (r, sourceLabel = 'web-search') => {
     if (!r || !r.url) return;
     const text = `${r.title || ''} ${r.description || ''}`;
-    if (leaks.isLeakUrl(r.url) || leaks.isLeakText(text) || takedowns.checkUrl(r.url)) return;
+    if (takedowns.checkUrl(r.url)) return;
     if (checkText(r.title, r.description).level === 'block') return;
     const specs = [parseProfile(r.url), ...extractLinks(text)].filter(Boolean);
     for (const spec of specs) {
@@ -287,7 +285,7 @@ async function searchWeb(q, pl, notes, mediaHits = [], webLinks = []) {
       if (sim < 0.5 && !(mentions && spec.url === r.url)) continue;
       pl.add(spec, { source: sourceLabel, evidence: `web search: ${(r.title || r.url).slice(0, 70)}`, displayName: (r.title || '').split(/[(|•·\-–]/)[0].trim() || null, bio: r.description });
     }
-    if (!seenWeb.has(r.url) && !brave.isPaywalledHost(r.url)) {
+    if (!seenWeb.has(r.url)) {
       seenWeb.add(r.url);
       webLinks.push({ url: r.url, title: r.title || null, description: r.description || null });
     }
@@ -326,8 +324,6 @@ async function searchWeb(q, pl, notes, mediaHits = [], webLinks = []) {
     const pushMediaHit = (hit) => {
       if (!hit || !hit.url) return;
       const text = `${hit.title || ''} ${hit.description || ''}`;
-      if (leaks.isLeakUrl(hit.url) || leaks.isLeakUrl(hit.mediaUrl) || leaks.isLeakText(text)) return;
-      if (brave.isPaywalledHost(hit.url) || brave.isPaywalledHost(hit.mediaUrl)) return;
       if (takedowns.checkUrl(hit.url) || (hit.mediaUrl && takedowns.checkUrl(hit.mediaUrl))) return;
       if (checkText(hit.title, hit.description).level === 'block') return;
       if (femaleCheck(hit.title, hit.description).level === 'hard') return;
@@ -363,7 +359,7 @@ async function searchWeb(q, pl, notes, mediaHits = [], webLinks = []) {
   return provider;
 }
 
-/** Everything external a verified candidate links to (paid pages, tip jars...): shown and stored, never read. */
+/** Everything external a verified candidate links to (paid pages, tip jars...): shown and stored. */
 function externalLinksOf(c) {
   const out = [];
   const free = paid.freeHint(c.bio);
