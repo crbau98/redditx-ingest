@@ -55,3 +55,21 @@ test('cooldowns are per endpoint: one walled DDG door leaves the others open', (
   ws._clear();
   assert.equal(ws.PROVIDERS.ddg.configured(), true, 'cleared again');
 });
+
+test('the last open keyless door never cools down (no-search is worse than a slow search)', () => {
+  const ws = require('../src/lib/websearch');
+  ws._clear();
+  // With other doors open, a wall on this one may cool it down.
+  assert.equal(ws._anotherDoorOpen('ddg'), true, 'other doors are open');
+  // Cool every OTHER door: this one is now the last, so the rule must flip.
+  ws._setCooldown(60000, 'bing');
+  ws._setCooldown(60000, 'lite');
+  assert.equal(ws._anotherDoorOpen('ddg'), false, 'no other door remains — this one must stay live');
+  assert.equal(ws.PROVIDERS['ddg-lite'].configured(), false, 'lite cooled by the test');
+  assert.equal(ws.PROVIDERS.bing.configured(), false, 'bing cooled by the test');
+  // The live door must remain configured: cooling it would leave search with NOTHING configured
+  // once Brave's daily budget is spent (the exact failure this rule fixes).
+  assert.equal(ws.PROVIDERS.ddg.configured(), true, 'last door stays configured');
+  assert.equal(ws.configured(), true, 'search as a whole is still possible');
+  ws._clear();
+});

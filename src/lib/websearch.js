@@ -45,6 +45,17 @@ let bingCooldownUntil = 0;
 let bingFails = 0;
 const wall = (msg) => /CAPTCHA|anomaly|429|too many|timed?\s?out|ECONNRESET|EHOSTUNREACH|ENETUNREACH|getaddrinfo|HTTP 5\d\d/i.test(String(msg || ''));
 
+/** The three keyless doors, so a wall on one can ask whether another is still open. */
+function keylessDoors() { return { bing: PROVIDERS.bing, ddg: PROVIDERS.ddg, 'ddg-lite': PROVIDERS['ddg-lite'] }; }
+/**
+ * Is any keyless door besides `self` still answering? If not, this one must NOT cool down: burning a
+ * 6 s timeout per query beats having no search at all (which is what a fully-cooled tier plus an
+ * exhausted metered budget produces — discovery then reports "0 searches").
+ */
+function anotherDoorOpen(self) {
+  return Object.entries(keylessDoors()).some(([name, p]) => name !== self && p && p.configured());
+}
+
 function parseDdg(html) {
   const $ = cheerio.load(html);
   if ($('form#challenge-form, .anomaly-modal__modal').length) throw new Error('DuckDuckGo asked for a CAPTCHA');
@@ -122,7 +133,7 @@ const PROVIDERS = {
       if (!coherent(results, q)) {
         bingFails++;
         // One incoherent answer can be fluke; two in a row means the mitigation is on for this IP.
-        if (bingFails >= 2) bingCooldownUntil = Date.now() + COOLDOWN_MS;
+        if (bingFails >= 2 && anotherDoorOpen('bing')) bingCooldownUntil = Date.now() + COOLDOWN_MS;
         throw Object.assign(new Error(`Bing returned results unrelated to the query (bot mitigation)${bingFails >= 2 ? `; cooling down ${COOLDOWN_MS / 60000} min` : ''}`), { skip: true });
       }
       bingFails = 0;
@@ -157,8 +168,9 @@ const PROVIDERS = {
         return parseDdg(html).slice(0, count);
       } catch (e) {
         if (wall(e.message)) {
-          ddgCooldownUntil = Date.now() + COOLDOWN_MS;
-          throw Object.assign(new Error(`DuckDuckGo is walled off from this network — cooling down ${COOLDOWN_MS / 60000} min (${String(e.message).slice(0, 100)})`), { skip: true });
+          const cool = anotherDoorOpen('ddg');
+          if (cool) ddgCooldownUntil = Date.now() + COOLDOWN_MS;
+          throw Object.assign(new Error(`DuckDuckGo /html/ is walled off from this network${cool ? ` — cooling down ${COOLDOWN_MS / 60000} min` : ' (last keyless door: staying live, failing fast)'} (${String(e.message).slice(0, 80)})`), { skip: true });
         }
         throw e;
       }
@@ -185,8 +197,9 @@ const PROVIDERS = {
         return out.slice(0, count);
       } catch (e) {
         if (wall(e.message)) {
-          ddgLiteCooldownUntil = Date.now() + COOLDOWN_MS;
-          throw Object.assign(new Error(`DuckDuckGo Lite is walled off from this network — cooling down ${COOLDOWN_MS / 60000} min`), { skip: true });
+          const cool = anotherDoorOpen('ddg-lite');
+          if (cool) ddgLiteCooldownUntil = Date.now() + COOLDOWN_MS;
+          throw Object.assign(new Error(`DuckDuckGo Lite is walled off from this network${cool ? ` — cooling down ${COOLDOWN_MS / 60000} min` : ' (last keyless door: staying live, failing fast)'}`), { skip: true });
         }
         throw e;
       }
@@ -326,4 +339,4 @@ async function search(q, { count = 20, budget = 40, fresh = false, site } = {}) 
 
 function _clear() { cache.clear(); ddgCooldownUntil = 0; ddgLiteCooldownUntil = 0; bingCooldownUntil = 0; bingFails = 0; for (const h of Object.values(health)) Object.assign(h, { ok: 0, empty: 0, failed: 0, lastAt: null, lastError: null, lastResults: null, engines: [] }); }
 
-module.exports = { search, configured, status, PROVIDERS, parseDdg, coherent, _clear, _cooldown: () => ({ until: ddgCooldownUntil, lite: ddgLiteCooldownUntil, bing: bingCooldownUntil, active: Date.now() < ddgCooldownUntil || Date.now() < ddgLiteCooldownUntil || Date.now() < bingCooldownUntil }), _setCooldown: (ms) => { ddgCooldownUntil = ms ? Date.now() + ms : 0; } };
+module.exports = { search, configured, status, PROVIDERS, parseDdg, coherent, _clear, _anotherDoorOpen: anotherDoorOpen, _cooldown: () => ({ until: ddgCooldownUntil, lite: ddgLiteCooldownUntil, bing: bingCooldownUntil, active: Date.now() < ddgCooldownUntil || Date.now() < ddgLiteCooldownUntil || Date.now() < bingCooldownUntil }), _setCooldown: (ms, which = 'ddg') => { const until = ms ? Date.now() + ms : 0; if (which === 'lite') ddgLiteCooldownUntil = until; else if (which === 'bing') bingCooldownUntil = until; else ddgCooldownUntil = until; } };
