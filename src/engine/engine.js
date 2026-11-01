@@ -90,6 +90,10 @@ const state = {
 };
 
 const RUN_TIMEOUT_MS = 150_000;
+/** A single item never gets more than this (one network probe + hashing), and the item phase as a whole
+ *  is capped so a feed with hundreds of items cannot hold its platform slot for the whole cycle. */
+const ITEM_TIMEOUT_MS = 45_000;
+const ITEM_PHASE_MS = 600_000;
 const parseJson = (s) => { try { return s ? JSON.parse(s) : {}; } catch { return {}; } };
 const withTimeout = (p, ms, label) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error(`${label} timed out after ${ms / 1000}s`), { status: 0 })), ms).unref())]);
 
@@ -233,14 +237,24 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     // and idempotent (a duplicate hash simply loses the insert), so overlapping them is safe and much faster.
     const waysIn = { originals: new Set(), reposters: new Map(), hangouts: new Set(), forwards: new Set() };
     let next = 0;
+    // One stuck item must not wedge the whole run. Processing an item can touch the network (probe an
+    // unknown host, resolve a RedGIFs link, download a picture for the image filter) and the fetch
+    // timeout below only covers `adapter.fetch`: a hung probe used to leave the feed "running" for
+    // hours, holding its platform slot so every other feed on that platform waited behind it.
+    const itemDeadline = Date.now() + ITEM_PHASE_MS;
     const worker = async () => {
       for (;;) {
-        if (ctx.aborted()) return;
+        if (ctx.aborted() || Date.now() > itemDeadline) return;
         const raw = items[next++];
         if (!raw) return;
         let r;
         // the body filter's settings are re-read per item and after the model pass (a run can take minutes): see physique.live
-        try { r = await processItem(raw, feed, adapter, { ...cfg, liveBody: true }); } catch (e) { r = { outcome: 'skipped', reason: `error: ${e.message}` }; }
+        try {
+          r = await withTimeout(processItem(raw, feed, adapter, { ...cfg, liveBody: true }), ITEM_TIMEOUT_MS, 'item');
+        } catch (e) {
+          // A timeout is per item: this one is skipped and the run carries on with the rest.
+          r = { outcome: 'skipped', reason: e && e.status === 0 ? `timed out after ${ITEM_TIMEOUT_MS / 1000}s` : `error: ${e.message}` };
+        }
         if (r.creatorId) touched.add(r.creatorId);
         if (r.outcome === 'added' || r.outcome === 'review' || r.outcome === 'dupe') noteWaysIn(raw, r, feed, waysIn);
         switch (r.outcome) {
