@@ -81,8 +81,8 @@ function itemsFromPost(post, feed) {
   return out;
 }
 
-async function api(path) {
-  const res = await http.json(`${BASE}${path}`, { headers: HEADERS, retries: 2, maxBytes: 8_000_000 });
+async function api(path, { retries = 2, timeout = 12000 } = {}) {
+  const res = await http.json(`${BASE}${path}`, { headers: HEADERS, retries, timeout, maxBytes: 8_000_000 });
   if (res && res.error) throw new Error(`coomer: ${res.error}`);
   return res || { posts: [] };
 }
@@ -116,18 +116,26 @@ module.exports = {
       ? `service=${encodeURIComponent(svc0)}&q=${encodeURIComponent(handle0)}` // `user=` is ignored by the API; handle query + filter below
       : `q=${encodeURIComponent(feed.target)}`;
     const mine = feed.kind === 'user' ? handle0 : null;
-    // A creator's own page reads deep (his whole backlog over the first runs); keyword feeds stay shallow.
-    const pageCap = maxPages(feed);
-    const itemCap = feed.kind === 'user' ? Math.max(Number(ctx.limit) || 0, 400) : Number(ctx.limit) || 100;
+    // A small explicit limit means "does this creator page exist?" — the lookup probe reads one page
+    // (2.5 s) and stops. Scheduled runs pass 100–400 and get the deep backfill: paging 40 pages for a
+    // probe burned the whole 18 s probe timeout on every guessed handle.
+    const asked = Number(ctx.limit) || 0;
+    const probe = asked > 0 && asked < 50;
+    const pageCap = probe ? 1 : maxPages(feed);
+    const itemCap = probe ? asked : feed.kind === 'user' ? Math.max(asked, 400) : asked || 100;
+    // A probe must fail fast: one attempt, short timeout, no rate-limit waits — "not verified" is a
+    // perfectly good answer for a guessed handle, and 15 s backoffs burned the whole probe budget.
+    const apiOpts = probe ? { retries: 0, timeout: 8000 } : { retries: 2, timeout: 12000 };
 
     for (let page = 0; page < pageCap; page++) {
       let json = null;
-      for (let attempt = 0; attempt < 3 && !json; attempt++) {
+      const maxAttempts = probe ? 1 : 3;
+      for (let attempt = 0; attempt < maxAttempts && !json; attempt++) {
         try {
-          json = await api(`/api/v1/posts?${opt}&sort=new&o=${page * PAGE}`);
+          json = await api(`/api/v1/posts?${opt}&sort=new&o=${page * PAGE}`, apiOpts);
         } catch (e) {
           const rate = e && (e.status === 429 || /429|rate/i.test(String(e.message)));
-          if (rate && attempt < 2) { // coomer rate-limits hard: wait it out instead of ending the run
+          if (rate && !probe && attempt < 2) { // coomer rate-limits hard: wait it out instead of ending the run
             notes.push(`coomer: rate limited at page ${page + 1}, waiting`);
             await new Promise((r) => setTimeout(r, 15000 * (attempt + 1)));
             continue;

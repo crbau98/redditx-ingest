@@ -18,6 +18,7 @@ const { clip, toIso } = require('./util');
 const { robotsAllows } = require('./web');
 
 const PAGE_VIDEOS = 14;   // video pages read per run (each is one full page fetch)
+const PROBE_VIDEOS = 2;   // a lookup probe asks "does this performer page exist?" — read only two
 const SEEN_KEEP = 400;    // remembered video slugs in the feed cursor
 
 function durationOf(iso) {
@@ -87,7 +88,11 @@ module.exports = {
     }
     const page = performerPage(String(html));
     const seen = new Set((ctx.cursor && ctx.cursor.seen) || []);
-    const fresh = page.videos.filter((v) => !seen.has(v.slug)).slice(0, PAGE_VIDEOS);
+    // A small explicit limit is the lookup probe ("does this performer exist?"): two video pages
+    // answer it, where reading fourteen cost ~8 s of the 18 s probe budget.
+    const asked = Number(ctx.limit) || 0;
+    const cap = asked > 0 && asked < 50 ? Math.min(PROBE_VIDEOS, asked) : PAGE_VIDEOS;
+    const fresh = page.videos.filter((v) => !seen.has(v.slug)).slice(0, cap);
     if (!fresh.length && page.videos.length) notes.push('gayforfans: no new videos since the last run');
 
     for (const v of fresh) {

@@ -40,7 +40,10 @@ export async function find(root, { query }) {
   async function run() {
     const q = input.value.trim();
     if (!q || state.loading || state.following) return;
-    navigate('/find', q ? { q } : {}, { replace: true });
+    // Put the query in the URL for sharing and Back — but WITHOUT dispatching hashchange: routeKey
+    // includes ?q=, so a dispatched event remounts this view and `if (initial) run()` below would
+    // fire a second /api/lookup for the same query (each one counts against the rate limit).
+    history.replaceState(null, '', href('/find', { q }));
     state = { loading: true, result: null, error: null, rateLimited: false, following: false, followed: false };
     paint();
     try {
@@ -130,7 +133,7 @@ export async function find(root, { query }) {
       out.append(
         h('div', { class: 'find-loading', 'aria-label': 'Searching verified accounts' },
           h('div', { class: 'spinner', 'aria-hidden': 'true' }),
-          h('p', { class: 'muted' }, 'Checking the real platforms — this usually takes a few seconds…')),
+          h('p', { class: 'muted' }, 'Checking every public platform and the web — usually about half a minute…')),
         h('div', { class: 'creator-grid', 'aria-hidden': 'true' }, [0, 1, 2].map(() => h('div', { class: 'card find-cand' }, h('div', { class: 'skeleton', style: { height: '86px' } }), h('div', { class: 'skeleton', style: { height: '14px', marginTop: '10px' } })))),
       );
     } else if (state.following) {

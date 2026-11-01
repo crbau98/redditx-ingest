@@ -29,6 +29,9 @@ const strip = (s) => String(s || '').replace(/<[^>]+>/g, '').trim();
 
 const cheerio = require('cheerio');
 const ddgHttp = require('../sources/http').forPlatform('ddg', 1500);
+// Bing has its own limiter key: sharing DDG's meant a DuckDuckGo 429 penalty (30 s+) delayed Bing
+// too, and Bing's own spacing to be whatever DDG's was. Different hosts, different keys.
+const bingHttp = require('../sources/http').forPlatform('bing', 900);
 
 const searxngUrl = () => String(config.searxngUrl || '').replace(/\/+$/, '');
 
@@ -125,7 +128,7 @@ const PROVIDERS = {
   bing: {
     configured: () => config.bingEnabled !== false && Date.now() >= bingCooldownUntil,
     async search(q, { count = 20 } = {}) {
-      const html = await ddgHttp.text(`https://www.bing.com/search?q=${encodeURIComponent(q)}&count=${Math.min(Math.max(count, 10), 30)}&setlang=en&safeSearch=Off`, {
+      const html = await bingHttp.text(`https://www.bing.com/search?q=${encodeURIComponent(q)}&count=${Math.min(Math.max(count, 10), 30)}&setlang=en&safeSearch=Off`, {
         timeout: 15000,
         headers: { 'accept-language': 'en-US,en;q=0.9', accept: 'text/html,application/xhtml+xml' },
       });

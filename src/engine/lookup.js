@@ -28,7 +28,7 @@ const paid = require('../lib/paid');
 const events = require('./events');
 
 const PROBE_TIMEOUT_MS = 18000;
-const DEADLINE_MS = 55000;
+const DEADLINE_MS = 45000;
 const CONCURRENCY = 6;
 const MAX_VARIANTS = 3;
 const MAX_VERIFY = 14;
@@ -155,14 +155,18 @@ class Pool {
 
 /* ---------------------------------------------------------------------- probes */
 /** Read a candidate through its real adapter: profile + a few posts. Marks it verified when something is there. */
-async function verify(c) {
+async function verify(c, deadline) {
+  // Never outlive the lookup: a verify started after the budget is spent is skipped rather than
+  // left in flight (the caller waits on it, which is what pushed a 45 s lookup to 70 s).
+  if (deadline && Date.now() >= deadline) { c.note = 'not checked (time budget used)'; return false; }
+  const budget = deadline ? Math.max(3000, Math.min(PROBE_TIMEOUT_MS, deadline - Date.now())) : PROBE_TIMEOUT_MS;
   const adapter = registry.get(c.platform);
   if (!adapter || !adapter.kinds.includes(c.kind)) return false;
   const conf = adapter.isConfigured(c.kind);
   if (conf && conf.ok === false) { c.note = conf.note || 'not configured'; return false; }
   try {
     const feed = { id: 'lookup', platform: c.platform, kind: c.kind, target: c.target, trusted: 1, label: c.label };
-    const res = await withTimeout(adapter.fetch(feed, { cursor: {}, limit: 8, force: true, needProfile: true, aborted: () => false }), PROBE_TIMEOUT_MS, `${c.platform} read`);
+    const res = await withTimeout(adapter.fetch(feed, { cursor: {}, limit: 8, force: true, needProfile: true, aborted: () => false }), budget, `${c.platform} read`);
     const items = res.items || [];
     const p = res.profile || {};
     c.sampleCount = items.length;
@@ -258,7 +262,8 @@ async function searchPeople(q, pl, notes, deadline) {
   await pool(tasks, 3, deadline);
 }
 
-async function searchWeb(q, pl, notes, mediaHits = [], webLinks = []) {
+async function searchWeb(q, pl, notes, mediaHits = [], webLinks = [], deadline = Date.now() + DEADLINE_MS) {
+  const lap = (label, from) => { if (process.env.LOOKUP_DEBUG) console.error(`[lookup] ${label} ${Date.now() - from}ms`); };
   const term = (q.name || q.raw).replace(/"/g, '');
   const canWebSearch = websearch.configured();
   const canDdg = !config.isTest || !!process.env.DDG_BASE_URL || brave.configured();
@@ -294,7 +299,11 @@ async function searchWeb(q, pl, notes, mediaHits = [], webLinks = []) {
     }
   };
 
-  for (const { query, site } of jobs) {
+  // The queries are independent: run them together (bounded, so a provider is not hammered) instead
+  // of one after another — a lookup is interactive and used to sit on 5 sequential round trips.
+  let stop = false;
+  const jobTasks = jobs.map(({ query, site }) => async () => {
+    if (stop) return;
     try {
       let results;
       if (canWebSearch) {
@@ -313,16 +322,19 @@ async function searchWeb(q, pl, notes, mediaHits = [], webLinks = []) {
           provider = provider || 'ddg';
           for (const r of fallbackHits) ingestResultSpecs(r, 'web-search');
           notes.push({ platform: 'web', step: 'web search (ddg)', ok: true });
-          continue;
+          return;
         } catch { /* fall through */ }
       }
       notes.push({ platform: 'web', step: 'web search', ok: false, note: e.message });
-      if (e.skip || e.budget) break;
+      // No key / budget spent: the remaining queries would fail the same way — stop starting them.
+      if (e.skip || e.budget) stop = true;
     }
-  }
+  });
+  const _w = Date.now();
+  const jobsDone = pool(jobTasks, Math.min(3, jobTasks.length), deadline).then((r) => { lap("web searches", _w); return r; });
 
-  // Enrich lookup with public web image & video appearances (Brave Images/Videos + DDG fallback)
-  if (canDdg) {
+  const mediaEnrich = (async () => {
+    if (!canDdg) return;
     const mediaQuery = q.handles[0] ? `"${q.handles[0]}"` : `"${term}"`;
     const pushMediaHit = (hit) => {
       if (!hit || !hit.url) return;
@@ -349,15 +361,28 @@ async function searchWeb(q, pl, notes, mediaHits = [], webLinks = []) {
       });
     };
 
+    // Bounded by the lookup deadline: these providers retry internally (up to 30s each when a
+    // keyless fallback is doing the work), and nothing after this point may make the caller wait
+    // past the deadline — an unbounded media fetch turned an interactive lookup into a 3-minute wait.
     try {
-      const [imgs, vids] = await Promise.all([
-        brave.images(mediaQuery, { count: 10, budget: 200 }).catch(() => []),
-        brave.videos(mediaQuery, { count: 10, budget: 200 }).catch(() => []),
+      const media = await Promise.race([
+        Promise.all([
+          brave.images(mediaQuery, { count: 10, budget: 200 }).catch(() => []),
+          brave.videos(mediaQuery, { count: 10, budget: 200 }).catch(() => []),
+        ]),
+        new Promise((resolve) => setTimeout(() => resolve([[], []]), Math.max(1, Math.min(8000, deadline - Date.now())))),
       ]);
-      for (const h of imgs || []) pushMediaHit(h);
-      for (const h of vids || []) pushMediaHit(h);
+      for (const h of media[0] || []) pushMediaHit(h);
+      for (const h of media[1] || []) pushMediaHit(h);
     } catch { /* best effort */ }
-  }
+  })();
+
+  await jobsDone;
+  // Awaited (not fire-and-forget): the hits land in mediaHits/pl before the response is built, and
+  // its own deadline race keeps this from ever blocking past the lookup deadline.
+  const _m = Date.now();
+  await mediaEnrich;
+  lap("media enrich", _m);
 
   return provider;
 }
@@ -396,6 +421,8 @@ async function lookup(input, { imageCheck = true } = {}) {
   if (takedowns.checkHandle(q.raw) || takedowns.checkUrl(q.raw)) return { error: 'This creator has requested a takedown / opt-out' };
 
   const pl = new Pool();
+  // LOOKUP_DEBUG=1 prints per-phase timing — the only way to see where a slow lookup spends time.
+  const lap = (label, from) => { if (process.env.LOOKUP_DEBUG) console.error(`[lookup] ${label} ${Date.now() - from}ms`); };
   const notes = [];
   const mediaHits = [];
   const webLinks = [];
@@ -404,20 +431,28 @@ async function lookup(input, { imageCheck = true } = {}) {
   const direct = directSpecs(q).map((spec) => async () => {
     const c = pl.add(spec, { source: 'direct', evidence: `handle “${String(spec.target).split('@')[0]}” on ${(registry.get(spec.platform) || {}).label || spec.platform}`, handleExact: true });
     if (!c) return false;
-    const ok = await verify(c);
+    const ok = await verify(c, deadline);
     if (!ok) pl.map.delete(keyOf(c)); // a guessed handle that does not exist is not a candidate
     return ok;
   });
   const searches = [
     () => searchPeople(q, pl, notes, deadline),
-    () => searchWeb(q, pl, notes, mediaHits, webLinks).then((p) => { q.provider = p; }),
+    () => searchWeb(q, pl, notes, mediaHits, webLinks, deadline).then((p) => { q.provider = p; }),
   ];
-  await pool([...searches, ...direct], CONCURRENCY, deadline);
+  // 10, not 6: these are independent GETs to different hosts (same-host spacing is the per-platform
+  // limiter), and the 29 handle probes were queueing at 6 — phase 1 dominated the whole lookup.
+  let _t = Date.now();
+  // 10, not 6: these are independent GETs to different hosts (same-host spacing is the per-platform
+  // limiter), and 29 handle probes queued at 6 dominated the whole lookup.
+  await pool([...searches, ...direct], Math.min(10, [...searches, ...direct].length), deadline);
+  lap("probes + searches", _t);
 
   // 3: bios and link-in-bio pages reveal the rest of the person's accounts
   let verified = pl.list().filter((c) => c.verified);
   const pages = pl.list().filter((c) => c.platform === 'linkinbio').slice(0, 4);
-  await pool(pages.map((c) => () => verify(c)), 4, deadline);
+  _t = Date.now();
+  await pool(pages.map((c) => () => verify(c, deadline)), 4, deadline);
+  lap("link hubs", _t);
   const expandFrom = pl.list().filter((c) => c.verified || c.platform === 'linkinbio');
   for (const c of expandFrom) {
     const fromLinks = [...(c.links || []), ...extractLinks(c.bio || '')];
@@ -428,15 +463,21 @@ async function lookup(input, { imageCheck = true } = {}) {
     }
   }
   const toVerify = pl.list().filter((c) => !c.verified && !c.note && c.platform !== 'linkinbio').slice(0, MAX_VERIFY);
-  await pool(toVerify.map((c) => () => verify(c)), CONCURRENCY, deadline);
+  _t = Date.now();
+  await pool(toVerify.map((c) => () => verify(c, deadline)), CONCURRENCY, deadline);
+  lap(`verify wave 1 (${toVerify.length})`, _t);
   // one more hop: link-in-bio pages found in bios
   const pages2 = pl.list().filter((c) => c.platform === 'linkinbio' && !c.verified && !c.note).slice(0, 3);
-  await pool(pages2.map((c) => () => verify(c)), 3, deadline);
+  _t = Date.now();
+  await pool(pages2.map((c) => () => verify(c, deadline)), 3, deadline);
+  lap("link hubs (2nd hop)", _t);
   for (const c of pl.list().filter((x) => x.platform === 'linkinbio' && x.verified)) {
     for (const l of c.links || []) if (!l.external && l.platform !== 'linkinbio') pl.add(l, { source: 'bio-link', evidence: `listed on link-in-bio ${c.label}` });
   }
-  const toVerify2 = pl.list().filter((c) => !c.verified && !c.note && c.platform !== 'linkinbio').slice(0, MAX_VERIFY);
-  await pool(toVerify2.map((c) => () => verify(c)), CONCURRENCY, deadline);
+  const toVerify2 = pl.list().filter((c) => !c.verified && !c.note && c.platform !== 'linkinbio').slice(0, 6); // expansion wave: the first waves already found the person
+  _t = Date.now();
+  await pool(toVerify2.map((c) => () => verify(c, deadline)), CONCURRENCY, deadline);
+  lap(`verify wave 2 (${toVerify2.length})`, _t);
 
   // 4: score, gate, annotate
   const hidden = { safety: 0, notMale: 0, unverified: 0 };
