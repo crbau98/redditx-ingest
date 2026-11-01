@@ -136,6 +136,24 @@ describe('discovery wiring', () => {
     for (const q of queries) assert.match(q, /gay|male|performers/i, `male-focused query: ${q}`);
   });
 
+  test('the directory cursor wraps back to page 1 instead of drifting past the end', () => {
+    // The wrap used to be applied to a local copy after the state was written, so it never
+    // persisted: the cursor walked off the end of the directory and discovery found nobody.
+    let page = 0;
+    for (let i = 0; i < 74; i++) {
+      page = discovery.gffNextPage(page);
+      assert.ok(page >= 1 && page <= 74, `state ${page} stays on a real page while advancing`);
+    }
+    assert.equal(page, 74, 'advances to the last directory page');
+    assert.equal(discovery.gffNextPage(page), 0, 'the last page wraps back to page 1');
+    assert.equal(discovery.gffNextPage(0), 1, 'and advances normally otherwise');
+    assert.equal(discovery.gffNextPage(NaN), 1, 'a corrupt state value starts from the top');
+    // After the wrap the cursor must circle again, not run away.
+    page = 0;
+    for (let i = 0; i < 200; i++) page = discovery.gffNextPage(page);
+    assert.ok(page >= 0 && page <= 74, `state after 200 steps (${page}) still maps to a real page`);
+  });
+
   test('lookup probes the mirror for any handle', () => {
     const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'engine', 'lookup.js'), 'utf8');
     assert.match(src, /platform: 'coomer', kind: 'user', target: `onlyfans\/\$\{handle\}`/);

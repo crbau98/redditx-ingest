@@ -1379,12 +1379,20 @@ async function gffDiscovery({ pages = 2, perPage = 12, aborted = () => false } =
       if (r.status === 'created') { added++; out.followed++; }
     }
     out.seen += links.length;
-    page = page + 1;
+    page = gffNextPage(page);
     repo.discoveryState.set('gff.page', String(page));
-    if (page >= 74) page = -1; // wrap: -1 + 1 = 0 (page 1) next run
     if (links.length < 10) break;
   }
   return out;
+}
+
+/** The directory has 75 pages: state 0 → ?page=1 … state 74 → ?page=75, then start over.
+ * (The wrap used to be applied to a local copy AFTER the state was written, so the reset never
+ * persisted — the cursor drifted past the last page forever and discovery stopped finding anyone.) */
+const GFF_LAST_STATE = 74;
+function gffNextPage(current) {
+  const next = (Number.isFinite(current) ? current : 0) + 1;
+  return next > GFF_LAST_STATE ? 0 : next;
 }
 
 /** Auto-follow the strongest pending candidates, within the feed cap. */
@@ -1520,4 +1528,4 @@ function start() {
 }
 function stop() { stopFlag = true; clearInterval(timer); timer = null; }
 
-module.exports = { seedCreators, seedStatus, onlyfansDiscovery, coomerDiscovery, gffDiscovery, directoryHarvest, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskyLookalikes, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };
+module.exports = { seedCreators, seedStatus, onlyfansDiscovery, coomerDiscovery, gffDiscovery, gffNextPage, directoryHarvest, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskyLookalikes, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };
