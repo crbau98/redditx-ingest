@@ -69,6 +69,27 @@
   failure path), and the E2E test no longer races the async flip.
 - **Bing gets its own rate-limiter key**: a DuckDuckGo 429 penalty no longer delays Bing.
 
+### One search budget, spent where it matters
+- **Lookup no longer overrides your budget.** It passed a hard-coded `budget: 200`, which spent the
+  shared Brave counter to 201 while Settings said 40 — locking Brave out of discovery for the rest of
+  the day (measured: "Brave daily budget reached" on all 10 discovery searches). Every caller now reads
+  `braveDailyBudget`.
+- **`preferKeyless`** — directory harvest and image match run the free tier (Bing + DuckDuckGo + Lite)
+  *first* and never call the paid provider, so Brave's budget is reserved for identity matching, topic
+  search and paid-page tracing.
+- **Budget 0 or no Brave key no longer disables discovery**: the topic/identity gate used to skip
+  entirely; it now means "free search only" and searches *more* per run (5 identity / 3 topics instead
+  of 3 / 1).
+- **Junk leads fixed at the source**: `plausibleHandle()` gates both match paths — a URL path or file
+  name that merely starts with `onlyfans-` (`vicesnob.com/onlyfans-creator-debanking-2026/`,
+  `.../onlyfans-debanking-featured.jpg`) can no longer become a lead. 41 stored junk leads rejected,
+  41 real handles kept.
+- **One failed query no longer kills the directory harvest**: the counter resets on success; two
+  failures in a row stop it and say why. A run that previously reported "0 searches" now reports
+  "2 searches · 5 pages · 37 leads".
+- **DDG endpoints honour `DDG_BASE_URL` / `DDG_HTML_URL` / `DDG_LITE_URL`** — `ddg-lite` ignored the
+  override and reached the live site from unit tests; tests are hermetic again.
+
 ### Verified
 - 941 unit/integration tests pass (new: coherence, prose filters, harvest wiring, gff link parsing).
 - 10/10 E2E tests in real Chromium (age gate, smart search, viewer, creators, takedown form, admin key, phone layout, theme).

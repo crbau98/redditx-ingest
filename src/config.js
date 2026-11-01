@@ -200,6 +200,8 @@ module.exports = {
     anthropic: String(env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/+$/, ''),
     // Tumblr's global tag feeds (blog feeds live on <blog>.tumblr.com or the blog's own domain).
     tumblr: String(env.TUMBLR_BASE_URL || 'https://www.tumblr.com').replace(/\/+$/, ''),
+    // The public mirror index (posts API + creator index).
+    coomer: String(env.COOMER_BASE_URL || 'https://coomer.st').replace(/\/+$/, ''),
   },
 
   // Reserved host name under which stored media is addressed inside PRISM (.invalid never resolves).

@@ -87,7 +87,10 @@ function parseDdg(html) {
 /** Bing's HTML endpoint (keyless). Result links come back as `/ck/a?...&u=a1<base64url>`. */
 function parseBing(html) {
   const $ = cheerio.load(html);
-  if ($('#captchaform, #cf_challenge, .b_no').length && !$('.b_algo').length) throw new Error('Bing asked for a CAPTCHA');
+  // A challenge page is a wall (the caller cools down); Bing's own "no results" block is an honest
+  // empty answer (the caller falls through to the next tier) — they must not be confused, or one
+  // empty query costs a 10-minute cooldown.
+  if ($('#captchaform, #cf_challenge').length) throw new Error('Bing asked for a CAPTCHA');
   const out = [];
   $('.b_algo').each((_, el) => {
     const a = $(el).find('h2 a').first();
@@ -139,19 +142,30 @@ const PROVIDERS = {
   bing: {
     configured: () => config.bingEnabled !== false && Date.now() >= bingCooldownUntil,
     async search(q, { count = 20 } = {}) {
-      const html = await bingHttp.text(`https://www.bing.com/search?q=${encodeURIComponent(q)}&count=${Math.min(Math.max(count, 10), 30)}&setlang=en&safeSearch=Off`, {
-        timeout: 15000,
-        headers: { 'accept-language': 'en-US,en;q=0.9', accept: 'text/html,application/xhtml+xml' },
-      });
-      const results = parseBing(html).slice(0, count);
-      if (!coherent(results, q)) {
-        bingFails++;
-        // One incoherent answer can be fluke; two in a row means the mitigation is on for this IP.
-        if (bingFails >= 2 && anotherDoorOpen('bing')) bingCooldownUntil = Date.now() + COOLDOWN_MS;
-        throw Object.assign(new Error(`Bing returned results unrelated to the query (bot mitigation)${bingFails >= 2 ? `; cooling down ${COOLDOWN_MS / 60000} min` : ''}`), { skip: true });
-      }
-      bingFails = 0;
-      return results;
+      const url = (extra = '') => `https://www.bing.com/search?q=${encodeURIComponent(q)}&count=${Math.min(Math.max(count, 10), 30)}&setlang=en&safeSearch=Off${extra}`;
+      const headers = { 'accept-language': 'en-US,en;q=0.9', accept: 'text/html,application/xhtml+xml' };
+      const fetchResults = async (extra) => parseBing(await bingHttp.text(url(extra), { timeout: 15000, headers })).slice(0, count);
+      const cooled = (e) => { // a wall (CAPTCHA page, 429, timeout) is not a fluke: cool down, don't retry
+        bingCooldownUntil = Date.now() + COOLDOWN_MS;
+        throw Object.assign(new Error(`Bing is walled off from this network — cooling down ${COOLDOWN_MS / 60000} min (${String(e.message).slice(0, 80)})`), { skip: true });
+      };
+
+      let results;
+      try { results = await fetchResults(''); } catch (e) { if (wall(e.message)) cooled(e); throw e; }
+      if (!results.length) return []; // an honest empty answer: let the next tier speak
+      if (coherent(results, q)) { bingFails = 0; return results; }
+
+      // Degraded, not challenged: Bing intermittently answers with unrelated results for this IP.
+      // One retry with a different request shape — never on a CAPTCHA (that cooled above already).
+      try {
+        const retry = await fetchResults('&form=QBRE&first=1');
+        if (!retry.length || coherent(retry, q)) { bingFails = 0; return retry; }
+      } catch (e) { if (wall(e.message)) cooled(e); }
+
+      bingFails++;
+      // One incoherent answer can be fluke; two in a row means the mitigation is on for this IP.
+      if (bingFails >= 2 && anotherDoorOpen('bing')) bingCooldownUntil = Date.now() + COOLDOWN_MS;
+      throw Object.assign(new Error(`Bing returned results unrelated to the query after a retry (bot mitigation)${bingFails >= 2 ? `; cooling down ${COOLDOWN_MS / 60000} min` : ''}`), { skip: true });
     },
   },
   brave: {
@@ -364,4 +378,4 @@ async function search(q, { count = 20, budget = 40, fresh = false, site, preferK
 
 function _clear() { cache.clear(); ddgCooldownUntil = 0; ddgLiteCooldownUntil = 0; bingCooldownUntil = 0; bingFails = 0; for (const h of Object.values(health)) Object.assign(h, { ok: 0, empty: 0, failed: 0, lastAt: null, lastError: null, lastResults: null, engines: [] }); }
 
-module.exports = { search, configured, status, PROVIDERS, parseDdg, coherent, _clear, _anotherDoorOpen: anotherDoorOpen, _cooldown: () => ({ until: ddgCooldownUntil, lite: ddgLiteCooldownUntil, bing: bingCooldownUntil, active: Date.now() < ddgCooldownUntil || Date.now() < ddgLiteCooldownUntil || Date.now() < bingCooldownUntil }), _setCooldown: (ms, which = 'ddg') => { const until = ms ? Date.now() + ms : 0; if (which === 'lite') ddgLiteCooldownUntil = until; else if (which === 'bing') bingCooldownUntil = until; else ddgCooldownUntil = until; } };
+module.exports = { search, configured, status, PROVIDERS, parseDdg, parseBing, coherent, _clear, _anotherDoorOpen: anotherDoorOpen, _cooldown: () => ({ until: ddgCooldownUntil, lite: ddgLiteCooldownUntil, bing: bingCooldownUntil, active: Date.now() < ddgCooldownUntil || Date.now() < ddgLiteCooldownUntil || Date.now() < bingCooldownUntil }), _setCooldown: (ms, which = 'ddg') => { const until = ms ? Date.now() + ms : 0; if (which === 'lite') ddgLiteCooldownUntil = until; else if (which === 'bing') bingCooldownUntil = until; else ddgCooldownUntil = until; } };

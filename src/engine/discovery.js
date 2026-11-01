@@ -693,6 +693,59 @@ async function coomerDiscovery({ queries = 4, perQuery = 2, limit = 6, aborted =
 }
 
 /**
+ * Coomer's creator index (lib/coomer-index): the mirror publishes every account it has indexed —
+ * 220k+ OnlyFans / Fansly / JustFor.Fans creators — in one public response. Matching the paid
+ * handles this app already knows about against that index means a creator's whole mirrored page is
+ * followed from a lookup, not from a guess: no per-handle probe, no rate limit burned on handles
+ * that were never mirrored at all.
+ *
+ * Two sources of handles, in order of how much we already know about the man:
+ *   paid leads   — OnlyFans/Fansly handles harvested from listicles, bios and directory pages
+ *   paid pages   — creators already followed here whose stored links name a paid page
+ * Every one passes the same safety + male-scope + body gates as any other discovered account
+ * before it becomes a feed; the index only says "this account exists on the mirror".
+ */
+async function coomerIndexDiscovery({ leads = 40, reach = 40, limit = 25, aborted = () => false } = {}) {
+  const out = { indexed: false, checked: 0, matched: 0, feeds: 0, rejected: 0, leads: 0, creators: 0 };
+  const t = require('../services/targets');
+  const index = require('../lib/coomer-index');
+  const info = await index.ensure();
+  if (!info || !info.count) { events.log('WARN', 'Discovery: coomer creator index unavailable'); return out; }
+  out.indexed = true;
+
+  const queue = []; // {handle, name, service, where}
+  for (const lead of repo.onlyfans.workable(leads)) {
+    if (aborted()) break;
+    queue.push({ handle: lead.handle, name: lead.display_name || null, service: lead.service || 'OnlyFans', where: 'lead' });
+  }
+  for (const c of repo.onlyfans.reachTargets(reach, 30, 6, 'OnlyFans', 'coomer.reach.')) {
+    if (aborted()) break;
+    const of = creatorOnlyFans(c);
+    if (!of) continue;
+    repo.discoveryState.set(`coomer.reach.${c.id}`, new Date().toISOString());
+    queue.push({ handle: of.handle, name: c.display_name || c.handle, service: 'OnlyFans', where: 'creator' });
+  }
+
+  for (const q of queue) {
+    if (aborted() || out.feeds >= limit) break;
+    out.checked++;
+    const hit = index.best({ handle: q.handle, name: q.name });
+    if (!hit) continue;
+    out.matched++;
+    if (q.where === 'lead') out.leads++; else out.creators++;
+    // A creator page is one creator: a hard female name or a safety hit rejects it before it is a feed.
+    const verdict = gate(q.handle, hit.name || hit.id, q.name);
+    const gender = femaleCheck(q.handle, hit.name || hit.id, q.name);
+    if (verdict.level === 'block' || gender.level === 'hard') { out.rejected++; continue; }
+    if (settingsStore.get().physiqueFilter && heavyRule(q.handle, hit.name || hit.id, q.name)) { out.rejected++; continue; }
+    if (takedowns.checkHandle(hit.id, 'coomer')) { out.rejected++; continue; }
+    const r = t.addSpec({ platform: 'coomer', kind: 'user', target: `${hit.service}/${hit.id}`, label: `${hit.id} (${hit.service} on Coomer)`, ingestable: true }, { origin: 'discovered', trusted: false });
+    if (r.status === 'created') { out.feeds++; events.log('OK', `Discovery: coomer index — ${hit.service}/${hit.id} (${q.where})`); }
+  }
+  return out;
+}
+
+/**
  * Listicle & directory harvest: the open web already published lists of gay male creators —
  * "top gay onlyfans" roundups, link-hub directories, forum threads, performer indexes. Search finds
  * the pages (keyless Bing + DuckDuckGo merge, see lib/websearch), each page is read once (robots.txt
@@ -1351,9 +1404,11 @@ function reject(id, { reason = 'rejected by admin', actor = 'admin', block = fal
  * yet, gate them (safety + male-scope), and register each performer page as a feed — his page then
  * pulls his whole video library through the gff adapter.
  */
-async function gffDiscovery({ pages = 2, perPage = 12, aborted = () => false } = {}) {
-  const out = { scanned: 0, followed: 0, rejected: 0, seen: 0 };
+async function gffDiscovery({ pages = 2, perPage = 12, coomerLimit = 12, aborted = () => false } = {}) {
+  const out = { scanned: 0, followed: 0, rejected: 0, seen: 0, coomer: 0 };
   const t = require('../services/targets');
+  const index = require('../lib/coomer-index');
+  let indexReady = false; // the creator index is one big request: only fetch it when a page actually lists performers
   const http = require('../sources/http').forPlatform('gff', 1000);
   let page = parseInt(repo.discoveryState.get('gff.page', '0'), 10) || 0;
   for (let p = 0; p < Math.max(1, pages); p++) {
@@ -1376,16 +1431,30 @@ async function gffDiscovery({ pages = 2, perPage = 12, aborted = () => false } =
     });
     out.scanned += links.length;
     let added = 0;
+    // GayForFans is a gay-male OnlyFans directory: each performer here is a gay male creator by the
+    // site's own definition. His page gives us his name and (usually) his paid handle, which is
+    // enough to match him in coomer's creator index — so his mirrored content is followed too,
+    // without guessing a handle or spending a search on him.
+    if (links.length && coomerLimit > 0 && !indexReady) { indexReady = true; await index.ensure(); }
     for (const l of links) {
-      if (added >= perPage || aborted()) break;
+      if (aborted()) break;
       const name = l.label || l.slug.replace(/-[a-z0-9]{4,6}$/i, '').replace(/[-_]+/g, ' ');
       // Same gates as every other discovery: safety first, then male-only scope, then the body filter.
       const verdict = gate(name, l.slug);
       const gender = femaleCheck(name, l.slug);
       if (verdict.level === 'block' || gender.level === 'hard') { out.rejected++; continue; }
       if (settingsStore.get().physiqueFilter && heavyRule(name, l.slug)) { out.rejected++; continue; }
-      const r = t.addSpec({ platform: 'gff', kind: 'user', target: l.url, label: name, ingestable: true }, { origin: 'discovered', trusted: true });
-      if (r.status === 'created') { added++; out.followed++; }
+      if (added < perPage) {
+        const r = t.addSpec({ platform: 'gff', kind: 'user', target: l.url, label: name, ingestable: true }, { origin: 'discovered', trusted: true });
+        if (r.status === 'created') { added++; out.followed++; }
+      }
+      if (out.coomer >= coomerLimit) continue;
+      const hit = coomerMatchForPerformer(l, name, index);
+      if (!hit) continue;
+      if (verdict.level === 'block' || gender.level === 'hard') { out.rejected++; continue; }
+      if (settingsStore.get().physiqueFilter && heavyRule(hit.id, hit.name, name)) continue;
+      const r = t.addSpec({ platform: 'coomer', kind: 'user', target: `${hit.service}/${hit.id}`, label: `${hit.id} (${hit.service} on Coomer)`, ingestable: true }, { origin: 'discovered', trusted: false });
+      if (r.status === 'created') { out.coomer++; events.log('OK', `Discovery: gayforfans performer ${name} → coomer ${hit.service}/${hit.id}`); }
     }
     out.seen += links.length;
     page = gffNextPage(page);
@@ -1402,6 +1471,24 @@ const GFF_LAST_STATE = 74;
 function gffNextPage(current) {
   const next = (Number.isFinite(current) ? current : 0) + 1;
   return next > GFF_LAST_STATE ? 0 : next;
+}
+
+/**
+ * Which coomer account (if any) is this gayforfans performer? The page names him as
+ * "First Last (paidhandle)" or just "First Last", and the slug carries the same words. A handle
+ * match wins; a name match only counts when the indexed account's own handle is built from that
+ * name, so a namesake never becomes his feed.
+ */
+function coomerMatchForPerformer(link, name, index) {
+  const paren = String(name || '').match(/\(([^)]+)\)\s*$/);
+  const hit = index.best({ handle: paren ? paren[1].trim() : null, name });
+  if (hit) return hit;
+  for (const p of String(link.slug || '').split('-')) {
+    if (p.length < 4) continue;
+    const h = index.lookup(p);
+    if (h) return { ...h, how: 'handle' };
+  }
+  return null;
 }
 
 /** Auto-follow the strongest pending candidates, within the feed cap. */
@@ -1464,7 +1551,8 @@ async function run({ trigger = 'schedule' } = {}) {
     report.seeds = await seedCreators({ aborted });
     if (s.discoveryOnlyFans) report.onlyfans = await onlyfansDiscovery({ budget: s.braveDailyBudget, aborted });
     if (s.discoveryOnlyFans && !config.isTest) report.coomer = await coomerDiscovery({ aborted });
-    if (!config.isTest) report.gff = await gffDiscovery({ aborted });
+    if (!config.isTest) report.gff = await gffDiscovery({ aborted, pages: s.gffDirectoryPages });
+    if (s.discoveryOnlyFans && s.coomerIndexFollows > 0 && !config.isTest) report.coomerIndex = await coomerIndexDiscovery({ limit: s.coomerIndexFollows, aborted });
     if (s.imageMatch && !config.isTest) report.imageMatch = await require('./imagematch').run({ aborted, budget: s.braveDailyBudget });
     if (s.discoveryCommunities) report.communities = await communityDiscovery({ aborted });
     if (s.discoveryCommunities) report.hangouts = creatorHangouts();
@@ -1479,7 +1567,7 @@ async function run({ trigger = 'schedule' } = {}) {
     report.aiTriage = await require('./ai').triage();
     report.promote = s.autoDiscover || trigger === 'manual' ? promote(s) : { followed: 0, linked: 0 };
     report.pruned = repo.candidates.prune();
-    events.log('INFO', `Discovery ${trigger === 'manual' ? '(manual) ' : ''}finished: ${report.mentions.found} mention leads, ${report.graph ? report.graph.found : 0} graph leads, ${report.topics ? report.topics.found : 0} search leads, ${report.communities ? report.communities.found : 0} community/feed leads, ${report.hangouts ? report.hangouts.found : 0} hangouts, ${report.lookalikes ? report.lookalikes.found : 0} lookalikes, ${report.people ? report.people.found : 0} people-search leads, ${report.identity ? report.identity.linked : 0} identity matches, ${report.seeds ? report.seeds.followed : 0} named creators found, ${report.onlyfans ? report.onlyfans.found : 0} OnlyFans creators traced (${report.onlyfans ? report.onlyfans.linked : 0} accounts linked), ${report.identities.links} same-creator links (${report.identities.merged} merged), ${report.harvest ? report.harvest.read : 0} directory pages harvested (${report.harvest ? report.harvest.leads : 0} paid leads, ${report.harvest ? report.harvest.candidates : 0} profile links), ${report.gff ? report.gff.followed : 0} performer-directory follows, ${report.imageMatch ? report.imageMatch.pages : 0} image-matched pages; followed ${report.promote.followed}, linked ${report.promote.linked}`);
+    events.log('INFO', `Discovery ${trigger === 'manual' ? '(manual) ' : ''}finished: ${report.mentions.found} mention leads, ${report.graph ? report.graph.found : 0} graph leads, ${report.topics ? report.topics.found : 0} search leads, ${report.communities ? report.communities.found : 0} community/feed leads, ${report.hangouts ? report.hangouts.found : 0} hangouts, ${report.lookalikes ? report.lookalikes.found : 0} lookalikes, ${report.people ? report.people.found : 0} people-search leads, ${report.identity ? report.identity.linked : 0} identity matches, ${report.seeds ? report.seeds.followed : 0} named creators found, ${report.onlyfans ? report.onlyfans.found : 0} OnlyFans creators traced (${report.onlyfans ? report.onlyfans.linked : 0} accounts linked), ${report.identities.links} same-creator links (${report.identities.merged} merged), ${report.harvest ? report.harvest.read : 0} directory pages harvested (${report.harvest ? report.harvest.leads : 0} paid leads, ${report.harvest ? report.harvest.candidates : 0} profile links), ${report.gff ? report.gff.followed : 0} performer-directory follows, ${report.coomerIndex ? report.coomerIndex.feeds : 0} creators followed from coomer's creator index (${report.coomerIndex && report.coomerIndex.indexed ? report.coomerIndex.matched : 0} matched of ${report.coomerIndex ? report.coomerIndex.checked : 0} paid handles), ${report.imageMatch ? report.imageMatch.pages : 0} image-matched pages; followed ${report.promote.followed}, linked ${report.promote.linked}`);
   } catch (e) {
     report.error = e.message;
     events.log('ERR', `Discovery failed: ${e.message}`);
@@ -1541,4 +1629,4 @@ function start() {
 }
 function stop() { stopFlag = true; clearInterval(timer); timer = null; }
 
-module.exports = { seedCreators, seedStatus, onlyfansDiscovery, coomerDiscovery, gffDiscovery, gffNextPage, directoryHarvest, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskyLookalikes, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };
+module.exports = { seedCreators, seedStatus, onlyfansDiscovery, coomerDiscovery, coomerIndexDiscovery, gffDiscovery, gffNextPage, directoryHarvest, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskyLookalikes, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };

@@ -1,7 +1,8 @@
 import { proxied, loadScript } from '../dom.js';
 import { reportBroken } from '../api.js';
 
-export const isM3u8 = (u) => /\.m3u8(\?|$)/i.test(u || '');
+// A playlist link: a .m3u8, or GayForFans' /play/<id>/manifest (an HLS manifest with no extension).
+export const isM3u8 = (u) => /\.m3u8(\?|$)|\/play\/[^/]+\/manifest(\?|$)/i.test(u || '');
 
 /**
  * Point a <video> at an item's best source. HLS (with audio) goes through the
@@ -24,9 +25,19 @@ export function attachVideo(v, it) {
   const useHls = hls && (it.has_audio || !mp4);
   // Every source failed: let the server verify the item at its origin.
   const dead = () => { if (!handle.dead) reportBroken(it.id); };
+  const challenged = () => {
+    if (handle.dead) return;
+    handle.dead = true;
+    v.dataset.sourceState = 'challenged';
+    v.title = 'The source is showing a bot check, so this video cannot be streamed right now. Open it on the source site.';
+  };
   const fallback = () => {
     if (handle.dead) return;
-    if (!mp4) { dead(); return; }
+    if (!mp4) {
+      // No plain file to fall back to: ask the proxy why the stream failed before blaming the item.
+      fetch(`/api/hls?url=${encodeURIComponent(hls)}`).then((r) => (r.status === 503 ? challenged() : dead()), () => dead());
+      return;
+    }
     v.addEventListener('error', dead, { once: true });
     v.src = proxied(mp4); if (handle.autoplay) v.play().catch(() => {});
   };
@@ -45,7 +56,15 @@ export function attachVideo(v, it) {
     // Start at a level that suits the player size and buffer a little ahead when only warming.
     const inst = new Hls({ enableWorker: true, capLevelToPlayerSize: true, backBufferLength: 15, maxBufferLength: handle.autoplay ? 30 : 6, maxMaxBufferLength: handle.autoplay ? 60 : 8 });
     handle.hls = inst;
-    inst.on(Hls.Events.ERROR, (_, data) => { if (data.fatal) { try { inst.destroy(); } catch { /* ignore */ } handle.hls = null; fallback(); } });
+    inst.on(Hls.Events.ERROR, (_, data) => {
+      if (!data.fatal) return;
+      try { inst.destroy(); } catch { /* ignore */ }
+      handle.hls = null;
+      // 503 from /api/hls with source_challenged: the source is showing a bot check. The video is fine,
+      // so do not report it broken; show the state instead.
+      if (data.response && data.response.code === 503) { challenged(); return; }
+      fallback();
+    });
     inst.loadSource(src);
     inst.attachMedia(v);
   })();

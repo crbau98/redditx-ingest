@@ -3,7 +3,10 @@
  * Coomer adapter (the public onlyfans/fansly/patreon mirror index at coomer.st).
  *
  *   user    target "onlyfans/<handle>" (or bare handle, default service onlyfans)
- *           everything one creator has on coomer.
+ *           everything one creator has on coomer, newest first, read through the mirror's own
+ *           per-creator endpoint. The cursor remembers both the newest post seen and how deep into
+ *           the list the backfill has walked, so a creator with thousands of posts is fetched
+ *           across runs instead of only his first pageful.
  *   search  target "free text"        keyword feed, ordered by newest (untrusted:
  *                                     every item must read male-focused to publish, see lib/scope).
  *
@@ -12,10 +15,11 @@
  * /data/ endpoint, which 302s to the file CDN (nX.coomer.st) — the same link a logged-in browser tab
  * follows — so the item's permalink (the coomer post page) is stored too.
  */
+const config = require('../config');
 const http = require('./http').forPlatform('coomer', 2500);
 const { toIso, clip } = require('./util');
 
-const BASE = 'https://coomer.st';
+const BASE = config.baseUrls.coomer;
 const SERVICES = new Set(['onlyfans', 'fansly', 'patreon', 'subscribestar', 'gd', 'justforfans']);
 const PAGE = 50;
 /** Pages read per run: creator pages go deep (a whole backlog), keyword feeds stay shallow. */
@@ -84,8 +88,11 @@ function itemsFromPost(post, feed) {
 async function api(path, { retries = 2, timeout = 12000 } = {}) {
   const res = await http.json(`${BASE}${path}`, { headers: HEADERS, retries, timeout, maxBytes: 8_000_000 });
   if (res && res.error) throw new Error(`coomer: ${res.error}`);
-  return res || { posts: [] };
+  return Array.isArray(res) ? res : (res && Array.isArray(res.posts) ? res.posts : []);
 }
+
+/** Coomer answers "the offset is past the end of this creator's list" with a 400, not an empty page. */
+const pastEnd = (e) => /bigger than total count/i.test(String(e && e.message || ''));
 
 module.exports = {
   platform: 'coomer',
@@ -99,22 +106,31 @@ module.exports = {
   parse(input) {
     const m = String(input || '').match(/coomer\.st\/(onlyfans|fansly|patreon|subscribestar|gd|justforfans)\/user\/([A-Za-z0-9_-]+)/i);
     if (!m) return null;
-    return { platform: 'coomer', kind: 'user', target: `${m[1].toLowerCase()}/${m[2]}`, ingestable: true, label: `${m[2]} (${m[1].toLowerCase()} on Coomer)`, url: `https://coomer.st/${m[1]}/user/${m[2]}` };
+    return { platform: 'coomer', kind: 'user', target: `${m[1].toLowerCase()}/${m[2]}`, ingestable: true, label: `${m[2]} (${m[1].toLowerCase()} on Coomer)`, url: `${BASE}/${m[1].toLowerCase()}/user/${m[2]}` };
   },
 
   async fetch(feed, ctx = {}) {
     const notes = [];
     const items = [];
     const seen = new Set();
-    // The cursor is the *previous* run's newest post: posts at or below it are already stored. New
-    // content found this run only moves the returned cursor forward (it must never gate this run's
-    // own pages, which are all older than the newest post on page 1).
+    // The cursor is three things: `newestAt` (the newest post seen, so a run knows whether anything
+    // new arrived), `oldestId` (the oldest post stored — coomer's ids fall as posts get older, so
+    // this marks the stored set exactly, with no date ties) and `walk` (how many posts, counted from
+    // the newest, are stored without a gap: the backfill resumes right after them). The walk is what
+    // makes a deep backfill finish: without it every run started again at page 1 and a creator with
+    // thousands of posts only ever contributed his first 400.
     const prevNewest = (ctx.cursor || {}).newestAt || null;
+    const prevOldestId = Number((ctx.cursor || {}).oldestId) || 0;
+    let walk = Number((ctx.cursor || {}).walk) || 0;
     let runNewest = prevNewest;
+    let runOldestId = prevOldestId;
     const { service: svc0, handle: handle0 } = splitTarget(feed.target);
-    const opt = feed.kind === 'user'
-      ? `service=${encodeURIComponent(svc0)}&q=${encodeURIComponent(handle0)}` // `user=` is ignored by the API; handle query + filter below
-      : `q=${encodeURIComponent(feed.target)}`;
+    // A creator feed reads the mirror's own per-creator endpoint: every post on it is his, so no
+    // page is spent on other people's posts that merely name him (which is all the search endpoint
+    // returns — the old behaviour, and the reason a creator's page took 40 requests to fill).
+    const pagePath = (o) => (feed.kind === 'user'
+      ? `/api/v1/${svc0}/user/${handle0}/posts?o=${o}`
+      : `/api/v1/posts?q=${encodeURIComponent(feed.target)}&sort=new&o=${o}`);
     const mine = feed.kind === 'user' ? handle0 : null;
     // A small explicit limit means "does this creator page exist?" — the lookup probe reads one page
     // (2.5 s) and stops. Scheduled runs pass 100–400 and get the deep backfill: paging 40 pages for a
@@ -126,33 +142,76 @@ module.exports = {
     // A probe must fail fast: one attempt, short timeout, no rate-limit waits — "not verified" is a
     // perfectly good answer for a guessed handle, and 15 s backoffs burned the whole probe budget.
     const apiOpts = probe ? { retries: 0, timeout: 8000 } : { retries: 2, timeout: 12000 };
+    // The engine gives a feed run 150 s and the pipeline needs its share: stop paging in time rather
+    // than being killed mid-request (a killed run stores no cursor, so the work is simply lost).
+    const deadline = Date.now() + (probe ? 20000 : 95000);
+    // The mirror only accepts offsets that are multiples of PAGE ("Offset is not a multiple of 50").
+    const pageStart = (n) => Math.floor(n / PAGE) * PAGE;
+    let offset = 0;        // query offset of the page being read (always a multiple of PAGE)
+    let phase = 'front';   // 'front': only what is newer than the cursor · 'backfill': the stored backlog
+    // Absolute positions, counted from the newest post: everything below `skipBelow` is already
+    // stored; `consumed` is how far this run has read, which becomes the next walk.
+    let skipBelow = 0;
+    let consumed = 0;
+
+    // A saved walk means the last run stopped inside the backlog. Look at the newest page first:
+    // if anything was published since, every position behind it moved, so this run must start at the
+    // front and re-find the boundary (one cheap request; the alternative is missing new posts).
+    if (walk > 0 && prevNewest && !ctx.force && !probe) {
+      try {
+        const head = await api(pagePath(0), apiOpts);
+        const hasNew = head.some((p) => p.published && p.published > prevNewest);
+        if (!hasNew) { skipBelow = walk; consumed = walk; offset = pageStart(walk); phase = 'backfill'; }
+      } catch { /* stay at the front: a full pass is always correct, only slower */ }
+    }
 
     for (let page = 0; page < pageCap; page++) {
+      if (Date.now() > deadline) { notes.push('coomer: stopped at the run time budget'); break; }
       let json = null;
       const maxAttempts = probe ? 1 : 3;
       for (let attempt = 0; attempt < maxAttempts && !json; attempt++) {
         try {
-          json = await api(`/api/v1/posts?${opt}&sort=new&o=${page * PAGE}`, apiOpts);
+          json = await api(pagePath(offset), apiOpts);
         } catch (e) {
+          // "Offset N is bigger than total count M" is the mirror's way of saying the list is over.
+          if (pastEnd(e)) { json = []; break; }
           const rate = e && (e.status === 429 || /429|rate/i.test(String(e.message)));
-          if (rate && !probe && attempt < 2) { // coomer rate-limits hard: wait it out instead of ending the run
-            notes.push(`coomer: rate limited at page ${page + 1}, waiting`);
-            await new Promise((r) => setTimeout(r, 15000 * (attempt + 1)));
+          if (rate && !probe && attempt < 2 && Date.now() < deadline) { // coomer rate-limits hard: wait it out instead of ending the run
+            notes.push(`coomer: rate limited, waiting`);
+            await new Promise((r) => setTimeout(r, 12000 * (attempt + 1)));
             continue;
           }
-          notes.push(page === 0 ? `coomer: ${e.message}` : `coomer: stopped at page ${page + 1} (${e.message})`);
+          notes.push(offset === 0 ? `coomer: ${e.message}` : `coomer: stopped after ${offset} posts (${e.message})`);
         }
       }
       if (!json) break;
-      const posts = Array.isArray(json.posts) ? json.posts : [];
-      if (!posts.length) break;
+      const posts = Array.isArray(json) ? json : [];
+      if (!posts.length) break; // the mirror ran dry
       let fresh = 0;
-      for (const p of posts) {
+      let boundary = -1; // absolute position where the stored region begins (front phase only)
+      for (let i = 0; i < posts.length; i++) {
+        const p = posts[i];
+        const abs = offset + i;
         if (!p || !p.id) continue;
-        // A creator feed only keeps his own posts (the query returns anyone who names the handle too).
+        // A creator feed only keeps his own posts (the search endpoint returns anyone who names him too).
         if (mine && String(p.user || '').toLowerCase() !== mine) continue;
-        if (p.published && prevNewest && p.published <= prevNewest && !ctx.force) continue;
+        if (phase === 'front' && prevNewest && p.published && p.published <= prevNewest) {
+          // The stored region starts here. A creator feed crosses into his backfill and keeps
+          // reading (everything after this point is content we do not have yet); a keyword feed
+          // has nothing older worth re-reading, so it stops.
+          if (!mine) continue;
+          boundary = abs;
+          break;
+        }
+        consumed = Math.max(consumed, abs + 1);
+        // Already stored: everything above the stored walk is content this feed already ingested.
+        // Positions are exact, so no overlap page is re-read (the mirror rejects odd offsets anyway).
+        if (phase === 'backfill' && abs < skipBelow) continue;
         if (p.published && (!runNewest || p.published > runNewest)) runNewest = p.published;
+        // The mirror's ids fall as posts get older: at or above the oldest stored id is stored too
+        // (covers a feed whose walk was saved before positions were exact).
+        const id = Number(p.id);
+        if (phase === 'backfill' && prevOldestId && id && id >= prevOldestId) continue;
         if (seen.has(p.id)) continue;
         seen.add(p.id);
         fresh++;
@@ -160,16 +219,34 @@ module.exports = {
         // gates re-check every item (tombstones and creator takedowns are recorded there, not fetched
         // per post — a request per post would blow the site's rate limit immediately).
         items.push(...itemsFromPost(p, feed));
+        if (id && (!runOldestId || id < runOldestId)) runOldestId = id;
         if (items.length >= itemCap) break;
       }
+      if (boundary >= 0) {
+        // New posts were found at the front and the stored region begins at `boundary`, so the
+        // stored walk sits right behind it. Resume the backfill there: everything up to that point
+        // is already stored, and the walk moves on from the boundary.
+        skipBelow = boundary + walk;
+        consumed = Math.max(consumed, skipBelow);
+        offset = pageStart(skipBelow);
+        phase = 'backfill';
+        continue;
+      }
+      offset += posts.length;
       if (items.length >= itemCap) break;
-      if (posts.length < PAGE) break;
-      // A creator feed's query only names him in some posts: keep paging until the mirror runs dry.
-      if (!fresh && !mine) break; // fully behind the cursor: no newer content
+      if (posts.length < PAGE) break; // last page: the list ran out
+      // A keyword feed's query only names the term in some posts: keep paging until the mirror runs dry.
+      if (!fresh && !mine && phase === 'front') break; // fully behind the cursor: no newer content
     }
+    // The walk is kept even at the end of the list: a run with nothing new then costs two requests
+    // (is anything new? · resume at the end → empty) instead of re-reading the whole backlog.
+    const cursor = {};
+    if (runNewest) cursor.newestAt = runNewest;
+    if (runOldestId) cursor.oldestId = runOldestId;
+    if (consumed > 0) cursor.walk = consumed;
     return {
       items,
-      cursor: runNewest ? { newestAt: runNewest } : undefined,
+      cursor: Object.keys(cursor).length ? cursor : undefined,
       profile: feed.kind === 'user' ? { displayName: splitTarget(feed.target).handle, bio: null, avatarUrl: null, links: [] } : null,
       notes,
       via: 'coomer-api',

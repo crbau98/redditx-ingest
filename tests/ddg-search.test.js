@@ -57,13 +57,22 @@ test('cooldowns are per endpoint: one walled DDG door leaves the others open', (
   assert.equal(ws.PROVIDERS.ddg.configured(), true, 'cleared again');
 });
 
+test('Bing: a challenge page is a wall, an empty result set is not', () => {
+  const ws = require('../src/lib/websearch');
+  const captcha = '<form id="captchaform"></form><div class="b_no">No results</div>';
+  assert.throws(() => ws.parseBing(captcha), /CAPTCHA/, 'a challenge must surface as a wall (cooldown path)');
+  const honestEmpty = '<div class="b_no">There are no results for your query</div>';
+  assert.deepEqual(ws.parseBing(honestEmpty), [], 'Bing\'s own no-results block is an honest empty, not a wall');
+});
+
 test('preferKeyless puts the free tier ahead of the paid one (one shared daily budget)', async () => {
   const ws = require('../src/lib/websearch');
   ws._clear();
   const order = [];
-  const { brave, ddg } = ws.PROVIDERS;
-  const oBrave = brave.search; const oDdg = ddg.search;
+  const { brave, ddg, bing } = ws.PROVIDERS;
+  const oBrave = brave.search; const oDdg = ddg.search; const oBing = bing.search;
   brave.search = async () => { order.push('brave'); return [{ url: 'https://example.com/brave', title: 'Brave answer', description: '' }]; };
+  bing.search = async () => { order.push('bing'); return [{ url: 'https://example.com/bing', title: 'Bing answer', description: '' }]; };
   ddg.search = async () => { order.push('ddg'); return [{ url: 'https://example.com/ddg', title: 'DDG answer', description: '' }]; };
   try {
     const paid = await ws.search('tier order paid first', {});
@@ -71,10 +80,11 @@ test('preferKeyless puts the free tier ahead of the paid one (one shared daily b
     assert.equal(paid.provider, 'brave');
     order.length = 0;
     const free = await ws.search('tier order free first', { preferKeyless: true });
-    assert.deepEqual(order, ['ddg'], 'preferKeyless never touches the paid provider');
-    assert.equal(free.provider, 'ddg');
+    assert.ok(!order.includes('brave'), 'preferKeyless never touches the paid provider');
+    assert.ok(free.provider.includes('ddg'), `the free tier answers: ${free.provider}`);
+    assert.equal(free.provider, 'bing+ddg', 'the keyless tier merges every door that answered');
   } finally {
-    brave.search = oBrave; ddg.search = oDdg; ws._clear();
+    brave.search = oBrave; bing.search = oBing; ddg.search = oDdg; ws._clear();
   }
 });
 
