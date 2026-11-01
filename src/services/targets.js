@@ -12,6 +12,26 @@ const { femaleCheck } = require('../lib/scope');
 const physiqueText = require('../lib/physique').textCheck;
 const { profileUrl } = require('../lib/links');
 
+/** Clean a raw platform target ("onlyfans/renogold", "https://gayforfans.com/performer/reno-gold-c2gav", "Paul Wagner (paulwagner)") into a human handle and display name. */
+function cleanCreatorNames(spec) {
+  const rawLabel = spec.label ? String(spec.label).replace(/^[@u/]+/, '').trim() : '';
+  const rawTarget = String(spec.target || '').trim();
+  if (spec.platform === 'gff' || /^https?:\/\/gayforfans\.com\/performer\//i.test(rawTarget)) {
+    const slug = (rawTarget.match(/\/performer\/([a-z0-9-]+)/i) || [])[1] || rawTarget;
+    const baseSlug = slug.replace(/-[a-z0-9]{4,6}$/i, '');
+    const paren = rawLabel.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+    const displayName = paren ? paren[1].trim() : (rawLabel && !/^https?:/i.test(rawLabel) && rawLabel !== slug ? rawLabel : baseSlug.split(/[-_]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(' '));
+    const handle = paren ? paren[2].trim().replace(/^@/, '') : baseSlug.replace(/-/g, '');
+    return { handle: handle || slug, displayName: displayName || handle || slug };
+  }
+  if (spec.platform === 'coomer') {
+    const bare = rawTarget.replace(/^(?:onlyfans|fansly|patreon|subscribestar|gd|justforfans)\//i, '');
+    const cleanLabel = rawLabel.replace(/\s*\((?:onlyfans|fansly|patreon|subscribestar|gd|justforfans)\s+on\s+coomer\)\s*$/i, '').trim();
+    return { handle: bare || rawTarget, displayName: cleanLabel || bare || rawTarget };
+  }
+  return { handle: rawTarget, displayName: rawLabel || rawTarget };
+}
+
 const defaultInterval = (spec) => {
   const a = registry.get(spec.platform);
   return (a && a.intervalMin && a.intervalMin[spec.kind]) || 180;
@@ -45,7 +65,8 @@ function addSpec(spec, { creatorId = null, origin = 'admin', trusted, hint, body
     if (owner) creator = owner;
     if (!creator) {
       if (checkText(spec.target, spec.label).level === 'block') return { status: 'invalid', reason: 'Rejected by the safety gate' };
-      creator = repo.creators.create({ handle: spec.target, displayName: spec.label ? spec.label.replace(/^[@u/]+/, '') : spec.target, origin });
+      const { handle, displayName } = cleanCreatorNames(spec);
+      creator = repo.creators.create({ handle, displayName, origin });
     }
   }
   const res = repo.feeds.upsert({
@@ -71,12 +92,18 @@ function addCreator({ name, inputs, bio }) {
   const ingestable = specs.filter((s) => !s.external);
   if (!ingestable.length && !specs.length && !name) return { error: 'Provide at least one profile link or a name' };
 
-  // If any account already belongs to a creator, extend that creator instead of duplicating.
+  // If any account already belongs to a creator (or a creator with the same name/handle exists), extend that creator instead of duplicating.
   let creator = null;
   for (const s of ingestable) {
     if (s.kind !== 'user' && !(s.kind === 'channel' && s.platform === 'youtube')) continue;
     const owner = repo.creators.byAccount(s.platform, s.target);
     if (owner) { creator = owner; break; }
+  }
+  if (!creator && name) {
+    const cleanName = String(name).trim();
+    const core = cleanName.toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const match = repo.db.prepare("SELECT * FROM creators WHERE status != 'blocked' AND (LOWER(handle) = LOWER(?) OR LOWER(display_name) = LOWER(?) OR LOWER(handle) = ?) ORDER BY media_count DESC LIMIT 1").get(cleanName, cleanName, core);
+    if (match) creator = repo.creators.get(match.id);
   }
   if (creator && creator.status === 'blocked') return { error: `${creator.display_name || creator.handle} is blocked. Restore them first if you want to follow them again.` };
   if (!creator) {

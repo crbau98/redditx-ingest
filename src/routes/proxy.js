@@ -31,6 +31,8 @@ const KNOWN_SUFFIXES = [
   // GayForFans streams from its own CDN (manifest on gayforfans.com, segments on
   // cdn.gff.network / cache-<city>-fbs-<n>.gff.network, all one infrastructure).
   'gff.network',
+  // Coomer serves thumbnails, icons and banners from img.coomer.st and files from nX.coomer.st.
+  'coomer.st',
 ];
 const HLS_TYPES = /^(application\/(vnd\.apple\.mpegurl|x-mpegurl|octet-stream)|audio\/mpegurl|video\/mp2t)/i;
 
@@ -50,7 +52,17 @@ function parseTarget(req) {
   const host = u.hostname.toLowerCase();
   const known = host === config.storeHost || KNOWN_SUFFIXES.some((d) => host === d || host.endsWith(`.${d}`)) || repo.hosts.has(host);
   if (!known) return { error: [403, 'Host not allowed'] };
-  return { url: u.toString(), host, origin: u.origin };
+  return { url: u.toString(), host, origin: u.origin, pathname: u.pathname };
+}
+
+/**
+ * Coomer's /data/<path> 302s to its file nodes (n1..n4.coomer.st). When a file node times out for an image,
+ * img.coomer.st/thumbnail/data/<path> serves the 800px JPEG from Coomer's reachable image CDN.
+ */
+function coomerThumbFallback(t) {
+  if (!t || !t.pathname || !/^\/data\/.+\.(?:jpe?g|png|webp|gif)$/i.test(t.pathname)) return null;
+  if (!(t.host === 'coomer.st' || t.host.endsWith('.coomer.st'))) return null;
+  return `${config.baseUrls.coomerImg}/thumbnail${t.pathname}`;
 }
 
 function sendError(res, [status, message]) {
@@ -88,10 +100,20 @@ router.get('/proxy', async (req, res) => {
   }
 
   let upstream;
+  const isCoomerData = (t.host === 'coomer.st' || t.host.endsWith('.coomer.st')) && /^\/data\//i.test(t.pathname || '');
   try {
-    upstream = await net.open(t.url, { headers: proxyHeaders(t.url, hasRange ? { range: req.headers.range } : {}), timeout: 15000, maxRedirects: 4 });
+    upstream = await net.open(t.url, { headers: proxyHeaders(t.url, hasRange ? { range: req.headers.range } : {}), timeout: isCoomerData ? 6000 : 15000, maxRedirects: 4 });
   } catch (e) {
-    return sendError(res, e.code === 'EBLOCKED' ? [403, 'Blocked host'] : [502, 'Upstream unreachable']);
+    const thumbFallback = e.code !== 'EBLOCKED' ? coomerThumbFallback(t) : null;
+    if (thumbFallback) {
+      try {
+        upstream = await net.open(thumbFallback, { headers: proxyHeaders(thumbFallback), timeout: 10000, maxRedirects: 3 });
+      } catch (e2) {
+        return sendError(res, e2.code === 'EBLOCKED' ? [403, 'Blocked host'] : [502, 'Upstream unreachable']);
+      }
+    } else {
+      return sendError(res, e.code === 'EBLOCKED' ? [403, 'Blocked host'] : [502, 'Upstream unreachable']);
+    }
   }
   const { res: up, req: upReq } = upstream;
   req.on('close', () => { if (!up.complete) upReq.destroy(); });

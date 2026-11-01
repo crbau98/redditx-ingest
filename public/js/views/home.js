@@ -223,6 +223,34 @@ export async function home(root) {
     parts.push(h('section', { class: 'section' }, sectionHead('heart', 'From creators you follow', 'Latest from the people you follow on this device', { href: href('/following'), label: 'See all' }), rail(fromFollowed, { open: open(fromFollowed) })));
   }
   parts.push(...await becauseP);
+  const latestHead = h('div', { class: 'section-head' },
+    h('div', null, h('h2', null, icon('layers'), 'Latest uploads'), h('div', { class: 'sub' }, 'Filter by creator or browse everything across sources')),
+    h('a', { class: 'link-more', href: href('/explore') }, 'Explore everything', icon('chev-r', 'sm')));
+  let activeCreatorId = '';
+  const setFeedCreator = (cid) => {
+    if (activeCreatorId === cid) return;
+    activeCreatorId = cid;
+    for (const b of creatorFilterBar.querySelectorAll('.chip')) {
+      const on = (b.dataset.cid || '') === cid;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', String(on));
+    }
+    const next = createFeed({ query: cid ? { creator: cid, sort: 'recent' } : { sort: 'recent' }, pageSize: 36 });
+    feed.el.replaceWith(next.el);
+    feed.destroy();
+    feed = next;
+  };
+  const pillCreators = [...(data.topCreators || []).slice(0, 12)];
+  const creatorFilterBar = pillCreators.length ? h('div', { class: 'row', style: { gap: '8px', overflowX: 'auto', padding: '0 0 14px', scrollbarWidth: 'none' }, role: 'group', 'aria-label': 'Filter feed by creator' },
+    h('button', { type: 'button', class: 'chip on', dataset: { cid: '' }, 'aria-pressed': 'true', onclick: () => setFeedCreator('') }, 'All creators'),
+    ...pillCreators.map((c) => h('button', { type: 'button', class: 'chip', dataset: { cid: c.id }, 'aria-pressed': 'false', onclick: () => setFeedCreator(c.id), title: `${c.display_name || c.handle} (${c.media_count} posts)` },
+      c.display_name || c.handle, h('span', { class: 'n' }, fmt.num(c.media_count)))),
+    h('a', { class: 'chip', href: href('/find') }, icon('plus', 'sm'), 'Find a creator')) : null;
+
+  if (data.topCreators.length) {
+    parts.push(h('section', { class: 'section' }, sectionHead('users', 'Suggested creators', 'Popular creators with videos and photos in the library — tap to open or follow', { href: href('/creators'), label: 'All creators' }),
+      h('div', { class: 'rail' }, data.topCreators.map((c) => creatorCard(c, { mini: false })))));
+  }
   if (data.trending.length) {
     parts.push(h('section', { class: 'section' }, sectionHead('flame', 'Trending now', 'What people are watching and saving', { href: href('/explore', { sort: 'trending' }), label: 'See all' }), rail(data.trending, { open: open(data.trending) })));
   }
@@ -234,10 +262,6 @@ export async function home(root) {
   }
   if (data.freshVideos.length) {
     parts.push(h('section', { class: 'section' }, sectionHead('video', 'Fresh videos', 'Newest clips from across all sources', { href: href('/explore', { type: 'video', sort: 'recent' }), label: 'More videos' }), rail(data.freshVideos, { open: open(data.freshVideos) })));
-  }
-  if (data.topCreators.length) {
-    parts.push(h('section', { class: 'section' }, sectionHead('users', 'Top creators', 'Most-loved creators right now', { href: href('/creators'), label: 'All creators' }),
-      h('div', { class: 'rail' }, data.topCreators.map((c) => creatorCard(c, { mini: true })))));
   }
   if (data.communities.length || data.platforms.length) {
     parts.push(h('section', { class: 'section' }, sectionHead('compass', 'Browse by source'),
@@ -251,7 +275,7 @@ export async function home(root) {
   }
 
   feed = createFeed({ query: { sort: 'recent' }, pageSize: 36 });
-  parts.push(h('section', { class: 'section' }, sectionHead('layers', 'Latest uploads', null, { href: href('/explore'), label: 'Explore everything' }), feed.el));
+  parts.push(h('section', { class: 'section' }, latestHead, creatorFilterBar, feed.el));
 
   root.replaceChildren(...parts);
   return () => { teardownHero(); if (feed) feed.destroy(); };

@@ -20,6 +20,7 @@ const http = require('./http').forPlatform('coomer', 2500);
 const { toIso, clip } = require('./util');
 
 const BASE = config.baseUrls.coomer;
+const IMG_BASE = config.baseUrls.coomerImg || 'https://img.coomer.st';
 const SERVICES = new Set(['onlyfans', 'fansly', 'patreon', 'subscribestar', 'gd', 'justforfans']);
 const PAGE = 50;
 /** Pages read per run: creator pages go deep (a whole backlog), keyword feeds stay shallow. */
@@ -46,6 +47,24 @@ function fileUrl(pathOrUrl) {
   return `${BASE}/data${p.startsWith('/') ? p : `/${p}`}`;
 }
 
+/** Coomer's image CDN (img.coomer.st) serves 800px JPEGs for image paths, plus creator icons and banners. */
+function thumbUrl(pathOrUrl) {
+  const p = String(pathOrUrl || '');
+  if (!p) return null;
+  if (/^https?:\/\//i.test(p)) return p;
+  return `${IMG_BASE}/thumbnail/data${p.startsWith('/') ? p : `/${p}`}`;
+}
+
+function bannerUrl(service, handle) {
+  if (!service || !handle) return null;
+  return `${IMG_BASE}/banners/${encodeURIComponent(service)}/${encodeURIComponent(handle)}`;
+}
+
+function iconUrl(service, handle) {
+  if (!service || !handle) return null;
+  return `${IMG_BASE}/icons/${encodeURIComponent(service)}/${encodeURIComponent(handle)}`;
+}
+
 function mediaTypeOf(name) {
   return /\.(mp4|webm|mov|m4v|avi)$/i.test(String(name || '')) ? 'video' : 'image';
 }
@@ -60,10 +79,14 @@ function itemsFromPost(post, feed) {
   const author = String(post.user || '');
   const text = `${post.title || ''} ${(post.content || post.substring || '').replace(/<[^>]*>/g, ' ')}`.trim();
   const permalink = post.id ? `${BASE}/${svc}/user/${author}/${post.id}` : `${BASE}/${svc}/user/${author}`;
+  // If a post has both an image and a video, use the image's thumbnail as the video's poster; otherwise fall back to the creator's banner.
+  const firstImg = files.find((f) => f && f.path && mediaTypeOf(f.name || f.path) === 'image');
+  const videoPoster = firstImg ? thumbUrl(firstImg.path) : (author ? bannerUrl(svc, author) : null);
   files.forEach((f, i) => {
     const url = fileUrl(f.path);
     if (!url) return;
     const type = mediaTypeOf(f.name || f.path);
+    const preview = type === 'image' ? thumbUrl(f.path) : videoPoster;
     out.push({
       sourceId: `coomer-${svc}-${post.id || author}-${i}`.slice(0, 220),
       position: i,
@@ -76,7 +99,8 @@ function itemsFromPost(post, feed) {
       permalink,
       mediaType: type,
       mediaUrl: url,
-      previewUrl: type === 'image' ? url : null,
+      previewUrl: preview,
+      thumbnailUrl: preview,
       tags: [],
       nsfw: 'explicit',
       trusted: true, // API-provided media URL on coomer's own host; scope trust is decided per feed
@@ -254,7 +278,13 @@ module.exports = {
     return {
       items,
       cursor: Object.keys(cursor).length ? cursor : undefined,
-      profile: feed.kind === 'user' ? { displayName: splitTarget(feed.target).handle, bio: null, avatarUrl: null, links: [] } : null,
+      profile: feed.kind === 'user' ? {
+        displayName: splitTarget(feed.target).handle,
+        bio: null,
+        avatarUrl: iconUrl(svc0, handle0),
+        bannerUrl: bannerUrl(svc0, handle0),
+        links: [],
+      } : null,
       notes,
       via: 'coomer-api',
     };

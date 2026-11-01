@@ -133,9 +133,14 @@ export async function explore(root, { query }) {
   const addTag = (name) => set({ tag: '', tags: [...new Set([...required, name])].slice(0, 6).join(',') });
   const tagRail = focusTags.length ? relatedRail(focusTags, { onPick: addTag, title: 'Narrow with', mode: required.length ? 'all' : 'any' }) : h('div', { class: 'row', style: { gap: '8px', overflowX: 'auto', padding: '14px 0 2px', scrollbarWidth: 'none' } });
 
+  const creatorRail = h('div', { class: 'row', style: { gap: '8px', overflowX: 'auto', padding: '10px 0 2px', scrollbarWidth: 'none' }, role: 'group', 'aria-label': 'Filter by creator' });
+
   const emptyHost = h('div', { class: 'stack', style: { justifyItems: 'center' } },
     f.following && !followIds.length ? emptyState({ icon: 'heart', title: 'You’re not following anyone yet', text: 'Follow a creator and their newest posts collect here.', actions: [h('a', { class: 'btn primary', href: href('/creators') }, 'Browse creators')] })
-      : emptyState({ icon: 'search', title: f.q || f.tags || f.tag || f.anytags || f.platform || f.since ? 'Nothing matches these filters.' : 'Nothing has been ingested yet.', text: f.q || f.tags ? 'Try fewer words, or remove a filter.' : 'Sources, topics and tags appear here after the first ingest.', actions: [f.q || f.tags || f.tag || f.anytags || f.platform || f.since ? h('a', { class: 'btn', href: href('/explore') }, 'Clear filters') : h('a', { class: 'btn', href: href('/browse') }, 'Browse sources')] }));
+      : emptyState({ icon: 'search', title: f.q || f.tags || f.tag || f.anytags || f.platform || f.since ? 'Nothing matches these filters.' : 'Nothing has been ingested yet.', text: f.q || f.tags ? 'Try fewer words, or remove a filter — or look up this creator across the web.' : 'Sources, topics and tags appear here after the first ingest.', actions: [
+        f.q ? h('a', { class: 'btn primary', href: href('/find', { q: f.q }) }, icon('search', 'sm'), `Find “${f.q}” across the web`) : null,
+        f.q || f.tags || f.tag || f.anytags || f.platform || f.since ? h('a', { class: 'btn', href: href('/explore') }, 'Clear filters') : h('a', { class: 'btn', href: href('/browse') }, 'Browse sources'),
+      ].filter(Boolean) }));
 
   async function onEmpty() {
     if (f.norelax || forYou) return;
@@ -162,7 +167,7 @@ export async function explore(root, { query }) {
   });
   let feed = makeFeed();
 
-  root.replaceChildren(h('div', { class: 'page-head explore-head' }, h('div', null, titleEl, count), h('div', { class: 'row wrap' }, reelsBtn, saveBtn)), banner, relaxedNote, bar, tagRail, h('div', { style: { height: '14px' } }), feed.el);
+  root.replaceChildren(h('div', { class: 'page-head explore-head' }, h('div', null, titleEl, count), h('div', { class: 'row wrap' }, reelsBtn, saveBtn)), banner, relaxedNote, bar, creatorRail, tagRail, h('div', { style: { height: '14px' } }), feed.el);
   const offSearches = bus.on('searches', paintSave);
   // Toggling "Hide seen" (here or from the palette) rebuilds the feed in place.
   const offSeen = bus.on('hideSeen', (on) => {
@@ -172,6 +177,15 @@ export async function explore(root, { query }) {
 
   // Fill the dynamic option lists without blocking the feed.
   get('/api/platforms').then((list) => { for (const p of list) platSel.appendChild(h('option', { value: p.platform, selected: f.platform === p.platform }, `${platformLabel(p.platform)} (${fmt.num(p.count)})`)); }).catch(() => {});
+  get('/api/creators', { sort: 'media', platform: f.platform || undefined, limit: 16 }).then((res) => {
+    const list = (res && res.items) || [];
+    if (!list.length) { creatorRail.remove(); return; }
+    creatorRail.replaceChildren(
+      h('button', { type: 'button', class: `chip${!f.creator ? ' on' : ''}`, 'aria-pressed': String(!f.creator), onclick: () => set({ creator: '' }) }, 'All creators'),
+      ...list.map((c) => h('button', { type: 'button', class: `chip${f.creator === c.id ? ' on' : ''}`, 'aria-pressed': String(f.creator === c.id), onclick: () => set({ creator: f.creator === c.id ? '' : c.id }), title: `${c.display_name || c.handle} (${c.media_count} posts)` },
+        c.display_name || c.handle, h('span', { class: 'n' }, fmt.num(c.media_count)))),
+    );
+  }).catch(() => { creatorRail.remove(); });
   if (!focusTags.length) {
     get('/api/tags', { limit: 30 }).then((tags) => {
       tagRail.replaceChildren(...tags.map((t) => h('button', { class: 'chip', onclick: () => set({ tag: t.name }) }, `#${t.name}`, h('span', { class: 'n' }, fmt.num(t.count)))));

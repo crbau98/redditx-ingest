@@ -28,11 +28,11 @@ const paid = require('../lib/paid');
 const events = require('./events');
 const settingsStore = require('../settings');
 
-const PROBE_TIMEOUT_MS = 18000;
-const DEADLINE_MS = 45000;
-const CONCURRENCY = 6;
-const MAX_VARIANTS = 3;
-const MAX_VERIFY = 14;
+const PROBE_TIMEOUT_MS = 10000;
+const DEADLINE_MS = 35000;
+const CONCURRENCY = 8;
+const MAX_VARIANTS = 2;
+const MAX_VERIFY = 12;
 
 /* -------------------------------------------------------------------- helpers */
 const compact = (s) => String(s || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^\p{L}\p{N}]+/gu, '');
@@ -179,7 +179,8 @@ async function verify(c, deadline) {
     if (p.bio && !c.bio) c.bio = String(p.bio).slice(0, 500);
     if (p.avatarUrl && !c.avatarUrl) c.avatarUrl = p.avatarUrl;
     c.links = (p.links || []).filter((l) => l && (l.target || l.url));
-    c.verified = !!(items.length || p.displayName || p.bio);
+    // Coomer always synthesises a displayName from the handle; only count a Coomer page as verified when it actually has posts.
+    c.verified = c.platform === 'coomer' ? items.length > 0 : !!(items.length || p.displayName || p.bio);
     // Handles that differ only by case/platform suffix: keep what the platform itself reports.
     if (p.handle && c.platform === 'bluesky') c.target = p.handle;
     return c.verified;
@@ -195,6 +196,13 @@ function instancesFor(platform) { return (platform === 'mastodon' ? config.masto
 function directSpecs(q) {
   const specs = [];
   if (q.spec) specs.push(q.spec);
+  let coomerIdx = null;
+  if (!config.isTest) {
+    try {
+      const idx = require('../lib/coomer-index');
+      if (idx.summary()) coomerIdx = idx;
+    } catch { /* ignore */ }
+  }
   for (const h of q.handles) {
     const handle = h.replace(/^@/, '');
     if (/^[A-Za-z0-9_]{3,40}$/.test(handle)) {
@@ -202,9 +210,14 @@ function directSpecs(q) {
       specs.push({ platform: 'redgifs', kind: 'user', target: handle, label: handle, ingestable: true });
       specs.push({ platform: 'x', kind: 'user', target: handle, label: `@${handle}`, ingestable: true });
       specs.push({ platform: 'telegram', kind: 'user', target: handle, label: handle, ingestable: true });
-      // The public mirror (Coomer) answers for any handle: the same paid-page content, publicly indexed.
-      specs.push({ platform: 'coomer', kind: 'user', target: `onlyfans/${handle}`, label: `${handle} (OnlyFans on Coomer)`, ingestable: true });
-      specs.push({ platform: 'coomer', kind: 'user', target: `fansly/${handle}`, label: `${handle} (Fansly on Coomer)`, ingestable: true });
+      // The public mirror (Coomer): when the index is loaded, only probe the service that actually exists.
+      if (coomerIdx) {
+        const hit = coomerIdx.lookup(handle);
+        if (hit) specs.push({ platform: 'coomer', kind: 'user', target: `${hit.service}/${hit.id}`, label: `${hit.id} (${hit.service} on Coomer)`, ingestable: true });
+      } else {
+        specs.push({ platform: 'coomer', kind: 'user', target: `onlyfans/${handle}`, label: `${handle} (OnlyFans on Coomer)`, ingestable: true });
+        specs.push({ platform: 'coomer', kind: 'user', target: `fansly/${handle}`, label: `${handle} (Fansly on Coomer)`, ingestable: true });
+      }
       for (const inst of instancesFor('mastodon')) specs.push({ platform: 'mastodon', kind: 'user', target: `${handle}@${inst}`, label: `@${handle}@${inst}`, ingestable: true });
       for (const inst of instancesFor('misskey')) specs.push({ platform: 'misskey', kind: 'user', target: `${handle}@${inst}`, label: `@${handle}@${inst}`, ingestable: true });
     }
@@ -273,7 +286,7 @@ async function searchWeb(q, pl, notes, mediaHits = [], webLinks = [], deadline =
     return null;
   }
 
-  const queries = [`"${term}" (onlyfans OR fansly OR "justfor.fans" OR twitter OR bluesky OR reddit OR redgifs OR telegram OR linktree OR tumblr)`, `"${term}" gay creator links`];
+  const queries = [`"${term}" (onlyfans OR fansly OR "justfor.fans" OR twitter OR bluesky OR reddit OR redgifs OR telegram OR linktree OR tumblr OR gayforfans)`, `"${term}" gay creator links`];
   if (q.handles[0] && compact(q.handles[0]) !== compact(term)) queries.unshift(`"${q.handles[0]}" (onlyfans OR fansly OR "justfor.fans" OR twitter OR bluesky OR reddit OR redgifs OR linktree)`);
   const jobs = queries.slice(0, 3).map((query) => ({ query }));
   for (const site of ['linktr.ee', 'bsky.app', 'x.com']) jobs.push({ query: `"${term}"`, site });
@@ -289,10 +302,13 @@ async function searchWeb(q, pl, notes, mediaHits = [], webLinks = [], deadline =
     const specs = [parseProfile(r.url), ...extractLinks(text)].filter(Boolean);
     for (const spec of specs) {
       const handle = spec.platform === 'linkinbio' ? (linkHubHandle(spec.target) || (() => { try { return new URL(spec.target).pathname.split('/').filter(Boolean)[0] || ''; } catch { return ''; } })()) : String(spec.target).split('@')[0];
-      const sim = Math.max(nameSimilarity(term, handle), nameSimilarity(term, (r.title || '').split(/[(|•·\-–]/)[0]));
+      const titleLead = (r.title || '').split(/[(|•·\-–]/)[0].trim();
+      const sim = Math.max(nameSimilarity(term, handle), nameSimilarity(term, titleLead));
       const mentions = compact(text).includes(compact(term)) || words(term).every((w) => compact(text).includes(w));
       if (sim < 0.5 && !(mentions && spec.url === r.url)) continue;
-      pl.add(spec, { source: sourceLabel, evidence: `web search: ${(r.title || r.url).slice(0, 70)}`, displayName: (r.title || '').split(/[(|•·\-–]/)[0].trim() || null, bio: r.description });
+      // For GayForFans performer results, preserve the "(handle)" in the title ("Alejandro Pino (hotalex6)").
+      const gffParen = spec.platform === 'gff' ? ((r.title || '').match(/^[^|•·]+?\([A-Za-z0-9_.-]+\)/) || [])[0] : null;
+      pl.add(spec, { source: sourceLabel, evidence: `web search: ${(r.title || r.url).slice(0, 70)}`, displayName: (gffParen ? gffParen.trim() : titleLead) || null, bio: r.description });
     }
     if (!seenWeb.has(r.url)) {
       seenWeb.add(r.url);
@@ -427,6 +443,7 @@ async function lookup(input, { imageCheck = true } = {}) {
   if (takedowns.checkHandle(q.raw) || takedowns.checkUrl(q.raw)) return { error: 'This creator has requested a takedown / opt-out' };
 
   const pl = new Pool();
+  if (!config.isTest) { try { await require('../lib/coomer-index').ensure(); } catch { /* ignore */ } }
   // LOOKUP_DEBUG=1 prints per-phase timing — the only way to see where a slow lookup spends time.
   const lap = (label, from) => { if (process.env.LOOKUP_DEBUG) console.error(`[lookup] ${label} ${Date.now() - from}ms`); };
   const notes = [];
@@ -450,7 +467,7 @@ async function lookup(input, { imageCheck = true } = {}) {
   let _t = Date.now();
   // 10, not 6: these are independent GETs to different hosts (same-host spacing is the per-platform
   // limiter), and 29 handle probes queued at 6 dominated the whole lookup.
-  await pool([...searches, ...direct], Math.min(10, [...searches, ...direct].length), deadline);
+  await pool([...searches, ...direct], Math.min(12, [...searches, ...direct].length), deadline);
   lap("probes + searches", _t);
 
   // 3: bios and link-in-bio pages reveal the rest of the person's accounts
@@ -468,7 +485,31 @@ async function lookup(input, { imageCheck = true } = {}) {
       pl.add(l, { source: 'bio-link', evidence: `linked from ${(registry.get(c.platform) || {}).label || c.platform} profile ${c.label}` });
     }
   }
-  const toVerify = pl.list().filter((c) => !c.verified && !c.note && c.platform !== 'linkinbio').slice(0, MAX_VERIFY);
+  const addCoomerFromRevealedHandles = () => {
+    if (config.isTest) return;
+    try {
+      const index = require('../lib/coomer-index');
+      if (!index.summary()) return;
+      for (const c of pl.list()) {
+        const extraHandles = [];
+        const paren = String(c.displayName || c.label || '').match(/\(([^)]+)\)\s*$/);
+        if (paren && paren[1]) extraHandles.push(paren[1].trim().replace(/^@/, ''));
+        if (c.platform === 'gff') {
+          const slug = (String(c.target).match(/\/performer\/([a-z0-9-]+)/i) || [])[1] || '';
+          for (const part of slug.split('-')) if (part.length >= 5) extraHandles.push(part);
+        }
+        for (const ext of externalLinksOf(c)) if (ext.handle) extraHandles.push(ext.handle);
+        for (const eh of extraHandles) {
+          const hit = index.lookup(eh);
+          if (hit) {
+            pl.add({ platform: 'coomer', kind: 'user', target: `${hit.service}/${hit.id}`, label: `${hit.id} (${hit.service} on Coomer)`, ingestable: true }, { source: 'bio-link', evidence: `handle “${hit.id}” on ${c.label || c.platform}`, displayName: c.displayName || hit.id });
+          }
+        }
+      }
+    } catch { /* index optional */ }
+  };
+  addCoomerFromRevealedHandles();
+  const toVerify = pl.list().filter((c) => !c.verified && !c.note && c.platform !== 'linkinbio').sort((a, b) => (b.platform === 'coomer' || b.platform === 'gff') - (a.platform === 'coomer' || a.platform === 'gff')).slice(0, MAX_VERIFY);
   _t = Date.now();
   await pool(toVerify.map((c) => () => verify(c, deadline)), CONCURRENCY, deadline);
   lap(`verify wave 1 (${toVerify.length})`, _t);
@@ -480,7 +521,8 @@ async function lookup(input, { imageCheck = true } = {}) {
   for (const c of pl.list().filter((x) => x.platform === 'linkinbio' && x.verified)) {
     for (const l of c.links || []) if (!l.external && l.platform !== 'linkinbio') pl.add(l, { source: 'bio-link', evidence: `listed on link-in-bio ${c.label}` });
   }
-  const toVerify2 = pl.list().filter((c) => !c.verified && !c.note && c.platform !== 'linkinbio').slice(0, 6); // expansion wave: the first waves already found the person
+  addCoomerFromRevealedHandles();
+  const toVerify2 = pl.list().filter((c) => !c.verified && !c.note && c.platform !== 'linkinbio').sort((a, b) => (b.platform === 'coomer' || b.platform === 'gff') - (a.platform === 'coomer' || a.platform === 'gff')).slice(0, 6); // expansion wave: the first waves already found the person
   _t = Date.now();
   await pool(toVerify2.map((c) => () => verify(c, deadline)), CONCURRENCY, deadline);
   lap(`verify wave 2 (${toVerify2.length})`, _t);

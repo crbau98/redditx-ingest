@@ -730,7 +730,7 @@ async function coomerDiscovery({ queries = 0, perQuery = 0, limit = 0, aborted =
       if (check.verdict === 'female') out.rejected++; else out.deferred++;
       continue;
     }
-    const r = t.addSpec({ platform: 'coomer', kind: 'user', target: `${entry.service}/${handle}`, label: `${handle} (${entry.service} on Coomer)`, ingestable: true }, { origin: 'discovered', trusted: false });
+    const r = t.addSpec({ platform: 'coomer', kind: 'user', target: `${entry.service}/${handle}`, label: `${handle} (${entry.service} on Coomer)`, ingestable: true }, { origin: 'discovered', trusted: true });
     if (r.status === 'created') { out.feeds++; out.creators++; events.log('OK', `Discovery: coomer scout — ${entry.service}/${handle} (${d.reason})`); }
   }
   return out;
@@ -757,17 +757,17 @@ async function coomerIndexDiscovery({ leads = 40, reach = 40, limit = 25, aborte
   if (!info || !info.count) { events.log('WARN', 'Discovery: coomer creator index unavailable'); return out; }
   out.indexed = true;
 
-  const queue = []; // {handle, name, service, where}
+  const queue = []; // {handle, name, service, where, creatorId}
   for (const lead of repo.onlyfans.workable(leads)) {
     if (aborted()) break;
-    queue.push({ handle: lead.handle, name: lead.display_name || null, service: lead.service || 'OnlyFans', where: 'lead' });
+    queue.push({ handle: lead.handle, name: lead.display_name || null, service: lead.service || 'OnlyFans', where: 'lead', creatorId: lead.creator_id || null });
   }
   for (const c of repo.onlyfans.reachTargets(reach, 30, 6, 'OnlyFans', 'coomer.reach.')) {
     if (aborted()) break;
     const of = creatorOnlyFans(c);
     if (!of) continue;
     repo.discoveryState.set(`coomer.reach.${c.id}`, new Date().toISOString());
-    queue.push({ handle: of.handle, name: c.display_name || c.handle, service: 'OnlyFans', where: 'creator' });
+    queue.push({ handle: of.handle, name: c.display_name || c.handle, service: 'OnlyFans', where: 'creator', creatorId: c.id });
   }
 
   for (const q of queue) {
@@ -783,7 +783,7 @@ async function coomerIndexDiscovery({ leads = 40, reach = 40, limit = 25, aborte
     if (verdict.level === 'block' || gender.level === 'hard') { out.rejected++; continue; }
     if (settingsStore.get().physiqueFilter && heavyRule(q.handle, hit.name || hit.id, q.name)) { out.rejected++; continue; }
     if (takedowns.checkHandle(hit.id, 'coomer')) { out.rejected++; continue; }
-    const r = t.addSpec({ platform: 'coomer', kind: 'user', target: `${hit.service}/${hit.id}`, label: `${hit.id} (${hit.service} on Coomer)`, ingestable: true }, { origin: 'discovered', trusted: false });
+    const r = t.addSpec({ platform: 'coomer', kind: 'user', target: `${hit.service}/${hit.id}`, label: `${hit.id} (${hit.service} on Coomer)`, ingestable: true }, { creatorId: q.creatorId || null, origin: 'discovered', trusted: true });
     if (r.status === 'created') { out.feeds++; events.log('OK', `Discovery: coomer index — ${hit.service}/${hit.id} (${q.where})`); }
   }
   return out;
@@ -829,7 +829,7 @@ async function coomerNameDiscovery({ limit = 8, scan = 60, aborted = () => false
     if (takedowns.checkHandle(hit.id, 'coomer')) { out.rejected++; continue; }
     const r = t.addSpec(
       { platform: 'coomer', kind: 'user', target: `${hit.service}/${hit.id}`, label: `${hit.id} (${hit.service} on Coomer)`, ingestable: true },
-      { creatorId: c.id, origin: 'discovered', trusted: false },
+      { creatorId: c.id, origin: 'discovered', trusted: true },
     );
     if (r.status === 'created') { out.feeds++; events.log('OK', `Discovery: coomer by name — ${name} → ${hit.service}/${hit.id}`); }
   }
@@ -1473,7 +1473,7 @@ function follow(candidate, { actor = 'discovery' } = {}) {
     try {
       const index = require('../lib/coomer-index');
       const hit = handle ? index.best({ handle, name: c.display_name }) : null;
-      if (hit) t.addSpec(`https://coomer.st/${hit.service}/user/${hit.id}`, { creatorId: r.creator.id, origin: 'discovered', trusted: false });
+      if (hit) t.addSpec(`https://coomer.st/${hit.service}/user/${hit.id}`, { creatorId: r.creator.id, origin: 'discovered', trusted: true });
     } catch { /* the index is optional: discovery still runs without it */ }
   }
   repo.logAction('candidate', c.id, status === 'linked' ? 'link' : 'follow', describeSignals(c.signals) || null, actor);
@@ -1535,8 +1535,10 @@ async function gffDiscovery({ pages = 2, perPage = 12, coomerLimit = 12, aborted
       const gender = femaleCheck(name, l.slug);
       if (verdict.level === 'block' || gender.level === 'hard') { out.rejected++; continue; }
       if (settingsStore.get().physiqueFilter && heavyRule(name, l.slug)) { out.rejected++; continue; }
+      let gffCreatorId = null;
       if (added < perPage) {
         const r = t.addSpec({ platform: 'gff', kind: 'user', target: l.url, label: name, ingestable: true }, { origin: 'discovered', trusted: true });
+        if (r.creator) gffCreatorId = r.creator.id;
         if (r.status === 'created') { added++; out.followed++; }
       }
       if (out.coomer >= coomerLimit) continue;
@@ -1544,7 +1546,7 @@ async function gffDiscovery({ pages = 2, perPage = 12, coomerLimit = 12, aborted
       if (!hit) continue;
       if (verdict.level === 'block' || gender.level === 'hard') { out.rejected++; continue; }
       if (settingsStore.get().physiqueFilter && heavyRule(hit.id, hit.name, name)) continue;
-      const r = t.addSpec({ platform: 'coomer', kind: 'user', target: `${hit.service}/${hit.id}`, label: `${hit.id} (${hit.service} on Coomer)`, ingestable: true }, { origin: 'discovered', trusted: false });
+      const r = t.addSpec({ platform: 'coomer', kind: 'user', target: `${hit.service}/${hit.id}`, label: `${hit.id} (${hit.service} on Coomer)`, ingestable: true }, { creatorId: gffCreatorId, origin: 'discovered', trusted: true });
       if (r.status === 'created') { out.coomer++; events.log('OK', `Discovery: gayforfans performer ${name} → coomer ${hit.service}/${hit.id}`); }
     }
     out.seen += links.length;

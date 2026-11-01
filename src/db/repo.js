@@ -137,7 +137,18 @@ const creatorQ = {
 
 const creators = {
   get(id) { return serializeCreator(creatorQ.get.get(id)); },
-  byAccount(platform, handle) { return serializeCreator(creatorQ.byAccount.get(platform, handle)); },
+  byAccount(platform, handle) {
+    const h = String(handle || '');
+    const hit = creatorQ.byAccount.get(platform, h);
+    if (hit) return serializeCreator(hit);
+    if (platform === 'coomer' && !h.includes('/')) {
+      for (const svc of ['onlyfans', 'fansly']) {
+        const alt = creatorQ.byAccount.get('coomer', `${svc}/${h}`);
+        if (alt) return serializeCreator(alt);
+      }
+    }
+    return null;
+  },
 
   create({ handle, displayName, bio, avatarUrl, bannerUrl, scope = 'in', origin = 'ingest' }) {
     const id = uuid();
@@ -172,7 +183,8 @@ const creators = {
     const c = creatorQ.get.get(id);
     if (!c) return;
     const patch = {};
-    if (displayName && (!c.display_name || c.display_name === c.handle)) patch.displayName = displayName;
+    const validName = displayName && !/^(?:untitled|sin t[íi]tulo|unbenannt|sans titre)$/i.test(String(displayName).trim());
+    if (validName && (!c.display_name || c.display_name === c.handle)) patch.displayName = displayName;
     if (bio && !c.bio) patch.bio = bio;
     if (avatarUrl && !c.avatar_url) patch.avatarUrl = avatarUrl;
     if (bannerUrl && !c.banner_url) patch.bannerUrl = bannerUrl;
@@ -222,7 +234,7 @@ const creators = {
       params.push(platform);
     }
     const order = {
-      media: 'c.media_count DESC, c.total_score DESC',
+      media: "(c.origin = 'admin') DESC, c.media_count DESC, c.total_score DESC",
       score: 'c.total_score DESC',
       recent: 'c.last_media_at DESC',
       new: 'c.created_at DESC',
@@ -537,10 +549,16 @@ function suggest(query, limit = 6) {
   const q = String(query || '').trim().slice(0, 40);
   if (q.length < 1) return { creators: [], tags: [], communities: [] };
   const pre = likeEscape(q); const any = `%${pre}`;
+  const norm = normAlias(q);
+  const aliasCond = norm.length >= 2 ? ' OR EXISTS (SELECT 1 FROM creator_aliases a WHERE a.creator_id = creators.id AND a.norm LIKE ?)' : '';
+  const cArgs = norm.length >= 2
+    ? [pre, pre, any, any, `${norm}%`, pre, pre, limit]
+    : [pre, pre, any, any, pre, pre, limit];
   return {
     creators: db.prepare(`SELECT id, handle, display_name, avatar_url, media_count FROM creators
-      WHERE status = 'active' AND scope != 'excluded' AND media_count > 0 AND (handle LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\' OR handle LIKE ? ESCAPE '\\')
-      ORDER BY (handle LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\') DESC, media_count DESC LIMIT ?`).all(pre, pre, any, pre, pre, limit),
+      WHERE status = 'active' AND scope != 'excluded' AND (media_count > 0 OR origin != 'ingest')
+        AND (handle LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\' OR handle LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\'${aliasCond})
+      ORDER BY (handle LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\') DESC, media_count DESC LIMIT ?`).all(...cArgs),
     tags: (() => { const p = q.toLowerCase().replace(/^#/, ''); const out = []; for (const t of library().tagList) { if (t.name.startsWith(p)) { out.push(t); if (out.length >= limit) break; } } return out; })(),
     communities: db.prepare(`SELECT community AS name, platform, COUNT(*) AS count FROM media
       WHERE publish_state = 'published' AND scope != 'excluded' AND community LIKE ? ESCAPE '\\' GROUP BY community, platform ORDER BY count DESC LIMIT ?`).all(pre, limit),
@@ -1272,11 +1290,17 @@ function adminOverview() {
 
 function discover() {
   const pageOf = (f) => media.list({ ...f, noCount: true }).items;
+  // Suggested creators: admin/lookup-curated creators first, then OnlyFans/paid-page creators with media, then by media count.
+  const featured = db.prepare(`${SELECT_CREATOR_CARD}
+    WHERE c.status = 'active' AND c.scope != 'excluded' AND c.media_count >= 2
+    ORDER BY (c.origin = 'admin') DESC,
+             (c.links GLOB '*onlyfans.com/[A-Za-z0-9]*' OR c.links GLOB '*fansly.com/[A-Za-z0-9]*') DESC,
+             c.media_count DESC, c.total_score DESC LIMIT 16`).all().map(serializeCreator);
   return {
     stats: publicStats(),
     trending: pageOf({ sort: 'trending', limit: 20 }),
     freshVideos: pageOf({ type: 'video', sort: 'recent', limit: 14 }),
-    topCreators: creators.list({ sort: 'score', limit: 14, minMedia: 2 }).items,
+    topCreators: featured.length ? featured : creators.list({ sort: 'media', limit: 16, minMedia: 2 }).items,
     newCreators: creators.list({ sort: 'new', limit: 12, minMedia: 2 }).items,
     rising: creators.rising(12),
     tags: media.tags(36, 2),

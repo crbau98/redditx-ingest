@@ -27,6 +27,7 @@ const TRUSTED_HOSTS = [
   'redd.it', 'redditmedia.com', 'redditstatic.com', 'imgur.com', 'redgifs.com',
   'gfycat.com', 'twimg.com', 'bsky.app', 'bsky.social', 'bsky.network',
   'telesco.pe', 'telegram-cdn.org', 'cdn-telegram.org', 'telegram.org',
+  'coomer.st', 'gff.network',
 ];
 
 const MEDIA_EXT = /\.(jpe?g|png|gif|webp|avif|mp4|webm|mov|m4v|m3u8)(\?|#|$)/i;

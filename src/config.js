@@ -5,6 +5,9 @@
  * override values by setting env vars before the first require).
  */
 const path = require('path');
+if (process.env.NODE_ENV !== 'test') {
+  try { require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') }); } catch { /* optional */ }
+}
 
 const env = process.env;
 const bool = (v, d) => (v === undefined || v === '' ? d : /^(1|true|yes|on)$/i.test(String(v)));
@@ -200,8 +203,9 @@ module.exports = {
     anthropic: String(env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/+$/, ''),
     // Tumblr's global tag feeds (blog feeds live on <blog>.tumblr.com or the blog's own domain).
     tumblr: String(env.TUMBLR_BASE_URL || 'https://www.tumblr.com').replace(/\/+$/, ''),
-    // The public mirror index (posts API + creator index).
+    // The public mirror index (posts API + creator index + thumbnail CDN).
     coomer: String(env.COOMER_BASE_URL || 'https://coomer.st').replace(/\/+$/, ''),
+    coomerImg: String(env.COOMER_IMG_URL || (env.COOMER_BASE_URL ? env.COOMER_BASE_URL : 'https://img.coomer.st')).replace(/\/+$/, ''),
   },
 
   // Reserved host name under which stored media is addressed inside PRISM (.invalid never resolves).

@@ -64,7 +64,11 @@ const SCHEMA = {
   creatorSeeds: {
     type: 'text', group: 'discovery', label: 'Creators to find by name (one per line: a name, @handle or profile link). Each is looked up across every platform PRISM reads and his verified public accounts are followed; re-checked monthly',
     // empty under test: a lookup reaches every platform, which tests must not do by accident
-    default: config.isTest ? '' : ['Christian Hogue', 'Jakipz', 'Michael Yerger', 'Chase Stobbe', 'HotAlex'].join('\n'),
+    default: config.isTest ? '' : [
+      'Reno Gold', 'Christian Hogue', 'Alejandro Pino', 'Jakipz', 'Michael Yerger', 'Chase Stobbe', 'HotAlex',
+      'Zeb Atlas', 'Diego Sans', 'Malik Delgaty', 'Austin Wolf', 'Cade Maddox', 'Rhyheim Shabazz',
+      'Leoiami', 'Teddy Bear', 'William Seed', 'Paddy O\'Brian', 'Diego Barros', 'Dante Colle', 'Joey Mills',
+    ].join('\n'),
   },
   discoveryOnlyFans: { type: 'bool', default: true, label: 'Trace OnlyFans creators: find the free public accounts (RedGIFs, Bluesky, X, Telegram, link pages) behind OnlyFans pages that creators promote. Paid pages named in a creator’s own posts or bios are read like any other public page', group: 'discovery' },
   // --- ingest depth + cross-web content matching (v4.17) ---

@@ -72,8 +72,12 @@ function noteImageStrike(item, feed) {
   if (strikes < IMAGE_STRIKES_TO_BLOCK) return;
   const reason = `image filter: ${strikes} pictures with women`;
   const creator = (ownedByFeed(item, feed) ? repo.creators.get(feed.creator_id) : null) || repo.creators.byAccount(feed.platform, handle);
-  if (creator && creator.status === 'active') { repo.creators.block(creator.id, reason, 'system'); events.log('WARN', `Creator ${creator.handle} blocked: ${reason}`); }
-  else repo.blocklist.add('creator', key, reason);
+  if (creator && creator.status === 'active') {
+    // A creator explicitly added by admin/lookup or with >15 published posts is not auto-blocked by 3 face-model false positives.
+    if (creator.origin === 'admin' || creator.media_count >= 15) return;
+    repo.creators.block(creator.id, reason, 'system');
+    events.log('WARN', `Creator ${creator.handle} blocked: ${reason}`);
+  } else repo.blocklist.add('creator', key, reason);
 }
 
 /** Block the creator behind an item whose own profile text is female / feminine, and remember the account. */
@@ -224,8 +228,9 @@ function resolveCreator(item, feed, adapter) {
   }
   const a = adapter || registry.get(platform);
   if (a && a.kinds.includes('user')) {
+    const userTarget = platform === 'coomer' ? `${item.service || 'onlyfans'}/${handle}` : handle;
     repo.feeds.upsert({
-      platform, kind: 'user', target: handle, creatorId: c.id, enabled: 0, trusted: 1, origin: 'ingest',
+      platform, kind: 'user', target: userTarget, creatorId: c.id, enabled: 0, trusted: 1, origin: 'ingest',
       intervalMin: (a.intervalMin && a.intervalMin.user) || 240, runNow: false,
     });
   }

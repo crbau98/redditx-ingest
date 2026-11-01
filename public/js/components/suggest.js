@@ -74,6 +74,13 @@ export function attachSuggest(input, { id = 'suggest-box', extraRows = null } = 
     // Caller-supplied rows (e.g. Discover's "look up across the open web") always sit last, under the local matches.
     const typedQ = input.value.trim();
     if (extraRows && typedQ) parts.push(...extraRows(typedQ, row));
+    else if (typedQ.length >= 2 && !d.creators.length) {
+      parts.push(row([
+        icon('search', 'sm'),
+        h('span', { class: 'grow' }, `Find & pull in “${typedQ.length > 36 ? `${typedQ.slice(0, 36)}…` : typedQ}” from across the web`),
+        h('kbd', { class: 'u-enter' }, '↵'),
+      ], () => navigate('/find', { q: typedQ })));
+    }
     // Local matches (creators/tags/communities) and caller rows are real rows: they open the box on their own.
     const hasRows = hasRowsEarly || parts.some((p) => p && p.classList && p.classList.contains('suggest-row'));
     if (input.value.trim().length >= 3) parts.push(preview);

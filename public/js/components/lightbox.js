@@ -278,6 +278,14 @@ function paintStage(it) {
     const v = h('video', { controls: true, playsinline: true, loop: true, autoplay: true, preload: 'auto', poster: it.preview_url ? proxied(it.preview_url) : null, 'aria-label': it.title || 'Video' });
     v.muted = prefs.muted;
     v.addEventListener('volumechange', () => { prefs.muted = v.muted; });
+    v.addEventListener('error', () => {
+      if (!v.isConnected || S.stage.querySelector('.lb-video-fallback')) return;
+      if (it.source_url) {
+        S.stage.appendChild(h('div', { class: 'lb-video-fallback', style: { position: 'absolute', bottom: '68px', left: '50%', transform: 'translateX(-50%)', zIndex: '5', background: 'rgba(11,11,14,0.88)', padding: '10px 16px', borderRadius: '999px', display: 'flex', alignItems: 'center', gap: '10px', border: '1px solid rgba(255,255,255,0.14)', backdropFilter: 'blur(10px)' } },
+          h('span', { class: 'muted', style: { fontSize: '13px' } }, v.dataset.sourceState === 'challenged' ? 'Source requires a browser check:' : 'Stream node unreachable right now:'),
+          h('a', { class: 'btn sm primary', href: it.source_url, target: '_blank', rel: 'noopener noreferrer nofollow' }, icon('external', 'sm'), 'Watch on source')));
+      }
+    });
     S.stage.replaceChildren(...keep, v);
     S.video = attachVideo(v, it);
     playFlip(v);
@@ -287,7 +295,7 @@ function paintStage(it) {
     const img = h('img', { alt: it.title || '', draggable: 'false', src: proxied(preview || it.media_url) });
     S.stage.replaceChildren(...keep, img);
     playFlip(img);
-    if (preview) {
+    if (preview && preview !== it.media_url) {
       const full = new Image();
       full.onload = () => { if (img.isConnected) img.src = full.src; };
       full.src = proxied(it.media_url);
@@ -301,7 +309,11 @@ function paintStage(it) {
       return true;
     } });
     img.addEventListener('dblclick', () => { if (img.classList.contains('zoomed')) return; toggleFav(it, true); });
-    img.addEventListener('error', () => { reportBroken(it.id); S.stage.replaceChildren(...keep, h('div', { class: 'lb-loading' }, 'This image is no longer available at its source.')); });
+    img.addEventListener('error', () => {
+      if (it.media_url && img.src !== proxied(it.media_url)) { img.src = proxied(it.media_url); return; }
+      reportBroken(it.id);
+      S.stage.replaceChildren(...keep, h('div', { class: 'lb-loading' }, 'This image is no longer available at its source.'));
+    });
   }
 }
 

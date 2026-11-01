@@ -4,7 +4,7 @@ import { navigate, href } from '../router.js';
 import { platformLabel, platformColor } from '../store.js';
 import { attachSuggest } from '../components/suggest.js';
 
-const EXAMPLES = ['Christian Hogue', '@jakipz', 'https://bsky.app/profile/jakipz.bsky.social', 'https://www.youtube.com/@GymGuy', 'UC_x5XG1OV2P6uZZ5FSM9Ttw'];
+const EXAMPLES = ['Reno Gold', 'Christian Hogue', 'Alejandro Pino', '@jakipz', 'Diego Sans', 'Malik Delgaty', 'Austin Wolf'];
 
 const paidKind = (l) => {
   const s = `${l.service || ''} ${l.label || ''} ${l.url || ''}`.toLowerCase();

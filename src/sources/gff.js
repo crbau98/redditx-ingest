@@ -62,8 +62,8 @@ function videoObject(html) {
 function performerPage(html) {
   const $ = cheerio.load(html);
   const name = ($('h1').first().text() || '').trim() || null;
-  const avatar = $('meta[property="og:image"]').attr('content')
-    || $('img[alt]').filter((i, el) => !/GayForFans|placeholder/i.test($(el).attr('alt') || '')).first().attr('src')
+const avatar = $('img[alt]').filter((i, el) => !/GayForFans|placeholder|logo/i.test(($(el).attr('alt') || '') + ' ' + ($(el).attr('src') || ''))).first().attr('src')
+    || $('meta[property="og:image"]').filter((i, el) => !/logo/i.test($(el).attr('content') || '')).attr('content')
     || null;
   const videos = [];
   const seen = new Set();
