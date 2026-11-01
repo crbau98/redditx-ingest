@@ -1,6 +1,9 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+// ddgEnabled reads DDG_BASE_URL under test (tests must not reach the live web): set it before
+// config loads so the DuckDuckGo providers are 'configured' and their cooldown clocks are observable.
+process.env.DDG_BASE_URL = process.env.DDG_BASE_URL || 'http://127.0.0.1:1';
 const { parseDdg } = require('../src/lib/websearch');
 
 test('ddg parser unwraps redirect links and keeps title and snippet', () => {
@@ -37,4 +40,18 @@ test('coherence: decoy results that ignore the query are rejected', () => {
 test('coherence: short queries and empty results behave sensibly', () => {
   assert.equal(coherent([], 'anything'), false, 'no results is never coherent');
   assert.equal(coherent([{ url: 'https://a.com', title: 'x', description: '' }], 'gay'), true, 'all-stopword query is not held against the provider');
+});
+
+test('cooldowns are per endpoint: one walled DDG door leaves the others open', () => {
+  const ws = require('../src/lib/websearch');
+  ws._clear();
+  assert.equal(ws.PROVIDERS.ddg.configured(), true, 'html endpoint starts available');
+  assert.equal(ws.PROVIDERS['ddg-lite'].configured(), true, 'lite endpoint starts available');
+  ws._setCooldown(60000); // cools only the /html/ endpoint, as its CAPTCHA/timeout would
+  assert.equal(ws.PROVIDERS.ddg.configured(), false, 'html endpoint cooled down');
+  assert.equal(ws.PROVIDERS['ddg-lite'].configured(), true, 'lite endpoint unaffected by the html cooldown');
+  const cd = ws._cooldown();
+  assert.ok(cd.until && !cd.lite, 'the html cooldown is reported on its own clock');
+  ws._clear();
+  assert.equal(ws.PROVIDERS.ddg.configured(), true, 'cleared again');
 });

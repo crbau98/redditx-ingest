@@ -36,7 +36,11 @@ const searxngUrl = () => String(config.searxngUrl || '').replace(/\/+$/, '');
  * provider cools down for COOLDOWN_MS so every query is not stalled by a 6 s timeout; it is retried
  * automatically once the cooldown passes, and health shows the reason in the admin console. */
 const COOLDOWN_MS = 10 * 60 * 1000;
+/** Cooldowns are per ENDPOINT: a wall on html.duckduckgo.com says nothing about lite.duckduckgo.com
+ * (they are answered differently), and one walled keyless door must not silence the others —
+ * with the metered budget spent, a shared cooldown meant no search at all until the next day. */
 let ddgCooldownUntil = 0;
+let ddgLiteCooldownUntil = 0;
 let bingCooldownUntil = 0;
 let bingFails = 0;
 const wall = (msg) => /CAPTCHA|anomaly|429|too many|timed?\s?out|ECONNRESET|EHOSTUNREACH|ENETUNREACH|getaddrinfo|HTTP 5\d\d/i.test(String(msg || ''));
@@ -162,7 +166,7 @@ const PROVIDERS = {
   },
   // DuckDuckGo Lite: same index, simpler HTML — a second door when the /html/ endpoint is walled off.
   'ddg-lite': {
-    configured: () => config.ddgEnabled && Date.now() >= ddgCooldownUntil,
+    configured: () => config.ddgEnabled && Date.now() >= ddgLiteCooldownUntil,
     async search(q, { count = 20 } = {}) {
       try {
         const html = await ddgHttp.text(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(q)}&kl=us-en`, {
@@ -180,7 +184,10 @@ const PROVIDERS = {
         if (!out.length) throw new Error('DuckDuckGo lite returned no results');
         return out.slice(0, count);
       } catch (e) {
-        if (wall(e.message)) ddgCooldownUntil = Date.now() + COOLDOWN_MS;
+        if (wall(e.message)) {
+          ddgLiteCooldownUntil = Date.now() + COOLDOWN_MS;
+          throw Object.assign(new Error(`DuckDuckGo Lite is walled off from this network — cooling down ${COOLDOWN_MS / 60000} min`), { skip: true });
+        }
         throw e;
       }
     },
@@ -232,6 +239,7 @@ function status() {
     providers: order().map((p) => ({ name: p, configured: PROVIDERS[p].configured(), ...health[p] })),
     working: order().some((p) => PROVIDERS[p].configured() && health[p].ok > 0 && !health[p].lastError),
     ddgCooldown: Date.now() < ddgCooldownUntil ? new Date(ddgCooldownUntil).toISOString() : null,
+    ddgLiteCooldown: Date.now() < ddgLiteCooldownUntil ? new Date(ddgLiteCooldownUntil).toISOString() : null,
     bingCooldown: Date.now() < bingCooldownUntil ? new Date(bingCooldownUntil).toISOString() : null,
     brave: { configured: brave.configured(), usage: brave.usage() },
     keenable: { configured: keenable.configured(), usage: keenable.usage() },
@@ -316,6 +324,6 @@ async function search(q, { count = 20, budget = 40, fresh = false, site } = {}) 
   throw lastErr || Object.assign(new Error('web search: no results'), { status: 502 }); // never cache "nothing out there"
 }
 
-function _clear() { cache.clear(); ddgCooldownUntil = 0; bingCooldownUntil = 0; bingFails = 0; for (const h of Object.values(health)) Object.assign(h, { ok: 0, empty: 0, failed: 0, lastAt: null, lastError: null, lastResults: null, engines: [] }); }
+function _clear() { cache.clear(); ddgCooldownUntil = 0; ddgLiteCooldownUntil = 0; bingCooldownUntil = 0; bingFails = 0; for (const h of Object.values(health)) Object.assign(h, { ok: 0, empty: 0, failed: 0, lastAt: null, lastError: null, lastResults: null, engines: [] }); }
 
-module.exports = { search, configured, status, PROVIDERS, parseDdg, coherent, _clear, _cooldown: () => ({ until: ddgCooldownUntil, active: Date.now() < ddgCooldownUntil }), _setCooldown: (ms) => { ddgCooldownUntil = ms ? Date.now() + ms : 0; } };
+module.exports = { search, configured, status, PROVIDERS, parseDdg, coherent, _clear, _cooldown: () => ({ until: ddgCooldownUntil, lite: ddgLiteCooldownUntil, bing: bingCooldownUntil, active: Date.now() < ddgCooldownUntil || Date.now() < ddgLiteCooldownUntil || Date.now() < bingCooldownUntil }), _setCooldown: (ms) => { ddgCooldownUntil = ms ? Date.now() + ms : 0; } };

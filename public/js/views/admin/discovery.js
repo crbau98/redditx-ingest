@@ -96,7 +96,8 @@ export async function render(root) {
     const bad = tried.find((p) => p.lastError);
     const engines = used.flatMap((p) => p.engines || []);
     const cooldownBits = [];
-    if (w.ddgCooldown) cooldownBits.push(`DuckDuckGo walled until ${new Date(w.ddgCooldown).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`);
+    if (w.ddgCooldown) cooldownBits.push(`DuckDuckGo /html/ walled until ${new Date(w.ddgCooldown).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`);
+    if (w.ddgLiteCooldown) cooldownBits.push(`DuckDuckGo Lite walled until ${new Date(w.ddgLiteCooldown).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`);
     if (w.bingCooldown) cooldownBits.push(`Bing decoys until ${new Date(w.bingCooldown).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`);
     const cooldown = cooldownBits.length ? ` · ${cooldownBits.join(' · ')}` : '';
     const detail = (bad ? `${bad.name}: ${bad.lastError}`
