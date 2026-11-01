@@ -1438,6 +1438,22 @@ const onlyfans = {
         AND (SELECT COUNT(*) FROM feeds x WHERE x.creator_id = c.id AND x.kind IN ('user','page')) <= ?
       ORDER BY ds.updated_at IS NOT NULL, ds.updated_at ASC, c.media_count DESC LIMIT ?`).all(key, `*${host}/[A-Za-z0-9]*`, since, maxAccounts, limit);
   },
+  /**
+   * Creators already followed here that have no mirrored page yet, most media first: the input for
+   * matching a creator *by his name* against coomer's public creator index. A paid link is not
+   * required — a popular creator whose OnlyFans handle differs from the name he uses everywhere
+   * else is exactly who the handle-based pass cannot find.
+   */
+  nameTargets(limit = 60, staleDays = 45, keyPrefix = 'coomer.name.') {
+    const since = new Date(Date.now() - staleDays * 86400000).toISOString();
+    return db.prepare(`SELECT c.id, c.handle, c.display_name, c.media_count
+      FROM creators c LEFT JOIN discovery_state ds ON ds.key = ? || c.id
+      WHERE c.status = 'active' AND c.scope != 'excluded'
+        AND c.display_name IS NOT NULL AND length(trim(c.display_name)) >= 4
+        AND (ds.updated_at IS NULL OR ds.updated_at < ?)
+        AND NOT EXISTS (SELECT 1 FROM feeds f WHERE f.creator_id = c.id AND f.platform = 'coomer')
+      ORDER BY ds.updated_at IS NOT NULL, ds.updated_at ASC, c.media_count DESC LIMIT ?`).all(keyPrefix, since, limit);
+  },
   counts() {
     const out = { pending: 0, searching: 0, found: 0, claimed: 0, rejected: 0, byService: {} };
     for (const r of db.prepare('SELECT service, status, COUNT(*) AS n FROM onlyfans_leads GROUP BY service, status').all()) {

@@ -70,6 +70,9 @@ const SCHEMA = {
   // --- ingest depth + cross-web content matching (v4.17) ---
   coomerPages: { type: 'int', default: 40, min: 1, max: 200, label: 'Coomer: most pages read per run (50 posts each; creator pages go this deep, keyword feeds a quarter of it)', group: 'sources' },
   coomerIndexFollows: { type: 'int', default: 25, min: 0, max: 200, label: "Coomer creator index: creators followed per discovery run by matching this app's paid handles against the mirror's public creator list", group: 'discovery' },
+  coomerNameFollows: { type: 'int', default: 12, min: 0, max: 200, label: 'Coomer creator index: creators followed per discovery run by matching the name they use here against the mirror\'s creator list (no paid handle needed)', group: 'discovery' },
+  coomerScoutQueries: { type: 'int', default: 8, min: 1, max: 20, label: 'Coomer discovery: male-creator searches per run, rotated through a 48-niche bank so every niche is covered within a few runs', group: 'discovery' },
+  coomerScoutVerify: { type: 'bool', default: true, label: "Coomer discovery: read a candidate's own mirrored page before following him — drops pages that read female, follows pages that read male even when the handle says nothing", group: 'discovery' },
   gffDirectoryPages: { type: 'int', default: 8, min: 1, max: 20, label: 'GayForFans: directory pages walked per discovery run (75 pages total; higher = the whole directory is covered sooner)', group: 'discovery' },
   imageMatch: { type: 'bool', default: true, label: 'AI image match: after a creator is found, search the web for pictures of his and keep the pages where his content shows up', group: 'discovery' },
   imageMatchPerRun: { type: 'int', default: 4, min: 0, max: 30, label: 'AI image match: creators matched per discovery run', group: 'discovery' },

@@ -648,46 +648,82 @@ async function probeOnlyFans(lead, found, { budget, search = true } = {}) {
   return { searched: false };
 }
 /**
- * Coomer discovery: the public mirror index of paid gay creator pages. Query the mirror for male-focused
- * terms, tally the creators who actually have content there, and give each one his own `coomer` feed so
- * his whole page is pulled automatically. Every creator passes the safety / male-scope gates first, and
- * the pipeline re-checks each item before it is published.
+ * Coomer discovery: the public mirror index of paid gay creator pages.
+ *
+ * lib/coomer-scout explains the two halves. In short: a rotating bank of specific male-creator
+ * niches (eight per run, so the whole bank is covered in about six runs — the old pass re-asked the
+ * same four generic phrases forever), creators ranked by how many *independent* queries surfaced
+ * them, and then each candidate's own mirrored page read once and classified. A page whose captions
+ * read female is dropped; a page whose captions read male is followed even when the handle is opaque
+ * ("xxl_92"); a page with nothing readable is followed only when several queries already agree.
+ * Every creator still passes the safety / male-scope / body / takedown gates, and the pipeline
+ * re-checks each item before it is published.
  */
-const COOMER_QUERIES = ['gay muscle', 'gay jock', 'gay twink', 'gay daddy', 'gay otter', 'gay hunk', 'gay couple', 'gay athlete', 'muscle for hire', 'gay porn'];
-
-async function coomerDiscovery({ queries = 4, perQuery = 2, limit = 6, aborted = () => false } = {}) {
-  const out = { searched: 0, creators: 0, feeds: 0, rejected: 0 };
+async function coomerDiscovery({ queries = 0, perQuery = 0, limit = 0, aborted = () => false } = {}) {
+  const out = { searched: 0, creators: 0, feeds: 0, rejected: 0, deferred: 0, verified: 0, ranked: 0 };
   const t = require('../services/targets');
   const registry = require('../sources');
-  const seen = new Set();
-  let made = 0;
-  for (const q of COOMER_QUERIES.slice(0, queries)) {
-    if (aborted() || made >= limit) break;
-    let json;
+  const scout = require('../lib/coomer-scout');
+  const s = settingsStore.get();
+  const wanted = Math.max(1, Number(queries) || Number(s.coomerScoutQueries) || 8);
+  const cap = Math.max(0, Number(limit) || 0) || 6;
+  const rotate = parseInt(repo.discoveryState.get('coomer.query.rotate', '0'), 10) || 0;
+  const picks = scout.pickQueries(rotate, wanted);
+  const tally = new Map();
+
+  for (const q of picks) {
+    if (aborted()) break;
     try {
-      json = await registry.get('coomer').fetch({ platform: 'coomer', kind: 'search', target: q }, { limit: 60 });
-    } catch (e) { events.log('WARN', `Discovery: coomer "${q}" — ${e.message}`); continue; }
-    out.searched++;
-    const tally = new Map();
-    for (const it of json.items || []) {
-      const h = String(it.author || '').toLowerCase();
-      if (!h || seen.has(h)) continue;
-      const e = tally.get(h) || { posts: 0, svc: it.service || 'onlyfans' };
-      e.posts++; tally.set(h, e);
+      const res = await registry.get('coomer').fetch({ platform: 'coomer', kind: 'search', target: q }, { limit: 120 });
+      out.searched++;
+      scout.merge(tally, scout.tally(res.items || [], q));
+    } catch (e) { events.log('WARN', `Discovery: coomer "${q}" — ${e.message}`); }
+  }
+  // The cursor advances even when a query failed: the next run continues the bank instead of
+  // re-spending its whole budget on the same phrase that just timed out.
+  repo.discoveryState.set('coomer.query.rotate', String(scout.nextRotate(rotate, picks.length)));
+
+  // Evidence from previous runs counts too: a creator surfaced by "gay jock" today and "gay
+  // massage" last week is corroborated, and the rotation means that is the normal way he is found.
+  let stored = {};
+  try { stored = JSON.parse(repo.discoveryState.get('coomer.evidence', '{}') || '{}'); } catch { stored = {}; }
+  const surfacedNow = new Set(tally.keys()); // only re-verify men this run actually surfaced
+  scout.restore(tally, stored);
+  repo.discoveryState.set('coomer.evidence', JSON.stringify(scout.snapshot(tally, stored)));
+
+  const ranked = [...tally.values()].filter((e) => surfacedNow.has(e.handle) && scout.candidate(e)).sort((a, b) => scout.score(b) - scout.score(a));
+  out.ranked = ranked.length;
+  const verify = s.coomerScoutVerify !== false;
+
+  for (const entry of ranked) {
+    if (aborted() || out.feeds >= cap) break;
+    const handle = entry.handle;
+    // A creator page is one creator: a hard-female or unsafe name rejects it before any fetching.
+    const verdict = gate(handle, handle.replace(/[._-]+/g, ' '));
+    const named = scout.nameGate(handle, null);
+    if (verdict.level === 'block' || !named.ok) { out.rejected++; continue; }
+    if (s.physiqueFilter && heavyRule(handle)) { out.rejected++; continue; }
+    if (takedowns.checkHandle(handle, 'coomer')) { out.rejected++; continue; }
+
+    let check = { verdict: 'unverified', maleRatio: 0, femaleRatio: 0, total: 0, reason: 'content not read' };
+    if (verify) {
+      try {
+        // A small limit makes the adapter read exactly one page: the evidence, not the backfill.
+        const page = await registry.get('coomer').fetch({ platform: 'coomer', kind: 'user', target: `${entry.service}/${handle}` }, { limit: 15 });
+        check = scout.verify(page.items || []);
+        if (check.verdict === 'verified') out.verified++;
+      } catch (e) {
+        events.log('WARN', `Discovery: coomer verify ${handle} — ${e.message}`);
+        out.deferred++; continue; // cannot judge this run: try again next time rather than follow blind
+      }
     }
-    const ranked = [...tally.entries()].filter(([, e]) => e.posts >= 2).sort((a, b) => b[1].posts - a[1].posts).slice(0, perQuery);
-    for (const [handle, e] of ranked) {
-      if (aborted() || made >= limit) break;
-      seen.add(handle);
-      // Male-scope + safety gate on the handle itself (a creator page is one creator, so a hard
-      // female name or a safety hit rejects it before it becomes a feed).
-      const verdict = gate(handle, handle.replace(/[._-]+/g, ' '));
-      const gender = femaleCheck(handle, handle.replace(/[._-]+/g, ' '));
-      if (verdict.level === 'block' || gender.level === 'hard') { out.rejected++; continue; }
-      const r = t.addSpec({ platform: 'coomer', kind: 'user', target: `${e.svc}/${handle}`, label: `${handle} (${e.svc} on Coomer)`, ingestable: true }, { origin: 'discovered', trusted: false });
-      if (r.status === 'created') { out.feeds++; out.creators++; made++; }
-      else if (r.status === 'exists') { seen.add(handle); }
+    const d = scout.decide(entry, check);
+    if (!d.follow) {
+      if (check.verdict === 'female') out.rejected++; else out.deferred++;
+      continue;
     }
+    const r = t.addSpec({ platform: 'coomer', kind: 'user', target: `${entry.service}/${handle}`, label: `${handle} (${entry.service} on Coomer)`, ingestable: true }, { origin: 'discovered', trusted: false });
+    if (r.status === 'created') { out.feeds++; out.creators++; events.log('OK', `Discovery: coomer scout — ${entry.service}/${handle} (${d.reason})`); }
   }
   return out;
 }
@@ -741,6 +777,48 @@ async function coomerIndexDiscovery({ leads = 40, reach = 40, limit = 25, aborte
     if (takedowns.checkHandle(hit.id, 'coomer')) { out.rejected++; continue; }
     const r = t.addSpec({ platform: 'coomer', kind: 'user', target: `${hit.service}/${hit.id}`, label: `${hit.id} (${hit.service} on Coomer)`, ingestable: true }, { origin: 'discovered', trusted: false });
     if (r.status === 'created') { out.feeds++; events.log('OK', `Discovery: coomer index — ${hit.service}/${hit.id} (${q.where})`); }
+  }
+  return out;
+}
+
+/**
+ * Coomer by name: the index pass above starts from a *paid handle* this app harvested. Most popular
+ * creators never publish their OnlyFans handle anywhere the harvest can see, but their display name
+ * is everywhere ("Jordan Brandt", "Owen Hawk"). The mirror's creator index publishes names too, so a
+ * followed creator can be matched by the name he actually uses, and his mirrored page followed.
+ *
+ * The index only says "an account with this name is mirrored". The match is deliberately strict
+ * (lib/coomer-index `best`: the indexed handle must be built from the name, never a namesake), and
+ * every candidate still passes safety + male-scope + body + takedown before it becomes a feed.
+ */
+async function coomerNameDiscovery({ limit = 8, scan = 60, aborted = () => false } = {}) {
+  const out = { indexed: false, checked: 0, matched: 0, feeds: 0, rejected: 0 };
+  const t = require('../services/targets');
+  const index = require('../lib/coomer-index');
+  const info = await index.ensure();
+  if (!info || !info.count) return out;
+  out.indexed = true;
+  const s = settingsStore.get();
+  for (const c of repo.onlyfans.nameTargets(Math.max(scan, limit * 4))) {
+    if (aborted() || out.feeds >= limit) break;
+    const name = String(c.display_name || '').trim();
+    if (!name) continue;
+    // Cheap local check first: never spend a state write on a name the index cannot match.
+    const hit = index.best({ name });
+    out.checked++;
+    repo.discoveryState.set(`coomer.name.${c.id}`, new Date().toISOString());
+    if (!hit || hit.how !== 'name') continue;
+    out.matched++;
+    const verdict = gate(c.handle, name, hit.id);
+    const gender = femaleCheck(c.handle, name, hit.id);
+    if (verdict.level === 'block' || gender.level === 'hard') { out.rejected++; continue; }
+    if (s.physiqueFilter && heavyRule(c.handle, name, hit.id)) { out.rejected++; continue; }
+    if (takedowns.checkHandle(hit.id, 'coomer')) { out.rejected++; continue; }
+    const r = t.addSpec(
+      { platform: 'coomer', kind: 'user', target: `${hit.service}/${hit.id}`, label: `${hit.id} (${hit.service} on Coomer)`, ingestable: true },
+      { creatorId: c.id, origin: 'discovered', trusted: false },
+    );
+    if (r.status === 'created') { out.feeds++; events.log('OK', `Discovery: coomer by name — ${name} → ${hit.service}/${hit.id}`); }
   }
   return out;
 }
@@ -1369,21 +1447,21 @@ function follow(candidate, { actor = 'discovery' } = {}) {
       }
     }
   }
-  // Auto-register the creator's public mirror page (Coomer index of his paid page) so his whole
-  // library is pulled from across the web, plus the gayforfans listing for him.
+  // Auto-register the creator's public mirror page, but only the page that actually exists: the
+  // creator index says which accounts the mirror has. Guessing `coomer/<service>/user/<handle>` from
+  // a Reddit or Bluesky handle was registering hundreds of pages the mirror does not have (and
+  // paying coomer's rate limit to find out). When the index is not loaded yet, the pass is skipped —
+  // coomerNameDiscovery matches him by name later, which is the reliable path anyway.
   if (r.creator) {
     const t = require('../services/targets');
     const ofPageNow = (c.signals.ofconfirmed || [])[0];
     const svcHandle = ofPageNow ? splitLead(ofPageNow) : null;
     const handle = (svcHandle && svcHandle.handle) || String(c.target || '').replace(/^@/, '').toLowerCase();
-    const mirrorUrls = [];
-    if (handle) {
-      mirrorUrls.push(`https://coomer.st/${(svcHandle && svcHandle.service === 'Fansly') ? 'fansly' : 'onlyfans'}/user/${handle}`);
-      mirrorUrls.push(`https://gayforfans.com/${handle}`);
-    }
-    for (const u of mirrorUrls) {
-      try { t.addSpec(u, { creatorId: r.creator.id, origin: 'discovered', trusted: false }); } catch { /* ignore */ }
-    }
+    try {
+      const index = require('../lib/coomer-index');
+      const hit = handle ? index.best({ handle, name: c.display_name }) : null;
+      if (hit) t.addSpec(`https://coomer.st/${hit.service}/user/${hit.id}`, { creatorId: r.creator.id, origin: 'discovered', trusted: false });
+    } catch { /* the index is optional: discovery still runs without it */ }
   }
   repo.logAction('candidate', c.id, status === 'linked' ? 'link' : 'follow', describeSignals(c.signals) || null, actor);
   try { require('./engine').enqueue([r.feed.id], { trigger: 'discovery', front: false }); } catch { /* engine not running (tests) */ }
@@ -1553,6 +1631,7 @@ async function run({ trigger = 'schedule' } = {}) {
     if (s.discoveryOnlyFans && !config.isTest) report.coomer = await coomerDiscovery({ aborted });
     if (!config.isTest) report.gff = await gffDiscovery({ aborted, pages: s.gffDirectoryPages });
     if (s.discoveryOnlyFans && s.coomerIndexFollows > 0 && !config.isTest) report.coomerIndex = await coomerIndexDiscovery({ limit: s.coomerIndexFollows, aborted });
+    if (s.discoveryOnlyFans && s.coomerNameFollows > 0 && !config.isTest) report.coomerNames = await coomerNameDiscovery({ limit: s.coomerNameFollows, aborted });
     if (s.imageMatch && !config.isTest) report.imageMatch = await require('./imagematch').run({ aborted, budget: s.braveDailyBudget });
     if (s.discoveryCommunities) report.communities = await communityDiscovery({ aborted });
     if (s.discoveryCommunities) report.hangouts = creatorHangouts();
@@ -1567,7 +1646,7 @@ async function run({ trigger = 'schedule' } = {}) {
     report.aiTriage = await require('./ai').triage();
     report.promote = s.autoDiscover || trigger === 'manual' ? promote(s) : { followed: 0, linked: 0 };
     report.pruned = repo.candidates.prune();
-    events.log('INFO', `Discovery ${trigger === 'manual' ? '(manual) ' : ''}finished: ${report.mentions.found} mention leads, ${report.graph ? report.graph.found : 0} graph leads, ${report.topics ? report.topics.found : 0} search leads, ${report.communities ? report.communities.found : 0} community/feed leads, ${report.hangouts ? report.hangouts.found : 0} hangouts, ${report.lookalikes ? report.lookalikes.found : 0} lookalikes, ${report.people ? report.people.found : 0} people-search leads, ${report.identity ? report.identity.linked : 0} identity matches, ${report.seeds ? report.seeds.followed : 0} named creators found, ${report.onlyfans ? report.onlyfans.found : 0} OnlyFans creators traced (${report.onlyfans ? report.onlyfans.linked : 0} accounts linked), ${report.identities.links} same-creator links (${report.identities.merged} merged), ${report.harvest ? report.harvest.read : 0} directory pages harvested (${report.harvest ? report.harvest.leads : 0} paid leads, ${report.harvest ? report.harvest.candidates : 0} profile links), ${report.gff ? report.gff.followed : 0} performer-directory follows, ${report.coomerIndex ? report.coomerIndex.feeds : 0} creators followed from coomer's creator index (${report.coomerIndex && report.coomerIndex.indexed ? report.coomerIndex.matched : 0} matched of ${report.coomerIndex ? report.coomerIndex.checked : 0} paid handles), ${report.imageMatch ? report.imageMatch.pages : 0} image-matched pages; followed ${report.promote.followed}, linked ${report.promote.linked}`);
+    events.log('INFO', `Discovery ${trigger === 'manual' ? '(manual) ' : ''}finished: ${report.mentions.found} mention leads, ${report.graph ? report.graph.found : 0} graph leads, ${report.topics ? report.topics.found : 0} search leads, ${report.communities ? report.communities.found : 0} community/feed leads, ${report.hangouts ? report.hangouts.found : 0} hangouts, ${report.lookalikes ? report.lookalikes.found : 0} lookalikes, ${report.people ? report.people.found : 0} people-search leads, ${report.identity ? report.identity.linked : 0} identity matches, ${report.seeds ? report.seeds.followed : 0} named creators found, ${report.onlyfans ? report.onlyfans.found : 0} OnlyFans creators traced (${report.onlyfans ? report.onlyfans.linked : 0} accounts linked), ${report.identities.links} same-creator links (${report.identities.merged} merged), ${report.harvest ? report.harvest.read : 0} directory pages harvested (${report.harvest ? report.harvest.leads : 0} paid leads, ${report.harvest ? report.harvest.candidates : 0} profile links), ${report.gff ? report.gff.followed : 0} performer-directory follows, ${report.coomerIndex ? report.coomerIndex.feeds : 0} creators followed from coomer's creator index (${report.coomerIndex && report.coomerIndex.indexed ? report.coomerIndex.matched : 0} matched of ${report.coomerIndex ? report.coomerIndex.checked : 0} paid handles), ${report.coomerNames ? report.coomerNames.feeds : 0} creators matched on coomer by name, ${report.coomer ? report.coomer.verified : 0} coomer pages verified male (${report.coomer ? report.coomer.deferred : 0} deferred), ${report.imageMatch ? report.imageMatch.pages : 0} image-matched pages; followed ${report.promote.followed}, linked ${report.promote.linked}`);
   } catch (e) {
     report.error = e.message;
     events.log('ERR', `Discovery failed: ${e.message}`);
@@ -1629,4 +1708,4 @@ function start() {
 }
 function stop() { stopFlag = true; clearInterval(timer); timer = null; }
 
-module.exports = { seedCreators, seedStatus, onlyfansDiscovery, coomerDiscovery, coomerIndexDiscovery, gffDiscovery, gffNextPage, directoryHarvest, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskyLookalikes, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };
+module.exports = { seedCreators, seedStatus, onlyfansDiscovery, coomerDiscovery, coomerIndexDiscovery, coomerNameDiscovery, gffDiscovery, gffNextPage, directoryHarvest, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskyLookalikes, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };
