@@ -136,6 +136,48 @@ describe('discovery wiring', () => {
     for (const q of queries) assert.match(q, /gay|male|performers/i, `male-focused query: ${q}`);
   });
 
+  test('one failed query no longer kills the whole directory harvest', async () => {
+    const ws = require('../src/lib/websearch');
+    const { configured: oCfg, search: oSearch } = ws;
+    ws.configured = () => true;
+    let calls = 0;
+    // First query walled (skip), second answers with nothing: the pass must try both, count the
+    // failure, and only give up after two failures in a row — a spent budget used to abort it at
+    // query one and discovery reported "0 searches" for the whole run.
+    ws.search = async () => {
+      calls++;
+      if (calls === 1) throw Object.assign(new Error('walled off'), { skip: true });
+      return [];
+    };
+    try {
+      const r = await discovery.directoryHarvest({ queries: 3, pages: 1 });
+      assert.equal(calls, 3, 'the success reset the failure counter, so the third query ran too');
+      assert.equal(r.failed, 1, 'the failure is counted for the admin badge');
+      assert.equal(r.searched, 2, 'the two succeeding queries are counted as searched');
+      assert.equal(r.read, 0, 'no pages to read: nothing left the machine');
+    } finally {
+      ws.configured = oCfg;
+      ws.search = oSearch;
+    }
+  });
+
+  test('two failed queries in a row stop the harvest instead of burning every query', async () => {
+    const ws = require('../src/lib/websearch');
+    const { configured: oCfg, search: oSearch } = ws;
+    ws.configured = () => true;
+    let calls = 0;
+    ws.search = async () => { calls++; throw Object.assign(new Error('walled off'), { skip: true }); };
+    try {
+      const r = await discovery.directoryHarvest({ queries: 6, pages: 1 });
+      assert.equal(calls, 2, 'stops after two consecutive failures (search really is down)');
+      assert.equal(r.failed, 2, 'both attempts counted');
+      assert.equal(r.searched, 0, 'and honestly reports nothing was searched');
+    } finally {
+      ws.configured = oCfg;
+      ws.search = oSearch;
+    }
+  });
+
   test('the directory cursor wraps back to page 1 instead of drifting past the end', () => {
     // The wrap used to be applied to a local copy after the state was written, so it never
     // persisted: the cursor walked off the end of the directory and discovery found nobody.

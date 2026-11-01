@@ -23,6 +23,31 @@ test('iter1: paid.js parses Fansly/JFF handles and finds every paid page a text 
   assert.equal(paid.paidLink('Fansly', 'jakefit2', { free: true }).free, true);
 });
 
+test('a URL path or file name that merely starts with "onlyfans-" is not a username', () => {
+  const paid = require('../src/lib/paid');
+  // One harvested listicle produced 37 junk leads: the prose separator matches the middle of
+  // somebody else's path ('vicesnob.com/onlyfans-creator-debanking-2026/') and of file names.
+  const junk = [
+    'https://www.vicesnob.com/onlyfans-creator-debanking-2026/',
+    'https://www.vicesnob.com/wp-content/uploads/2026/09/onlyfans-debanking-featured.jpg',
+    'https://www.vicesnob.com/onlyfans-taxes-creator-owes-irs-1-1-million/',
+    'https://vicesnob.com/onlyfans-ceo-keily-blair-will-speak-at-fortunes-mo/',
+    'share this: onlyfans-alternatives-for-creators',
+  ];
+  for (const t of junk) assert.deepEqual(paid.findPaidHandles(t), [], t);
+  // ...while every real prose and URL form still resolves.
+  const good = [
+    'My OnlyFans: @jakefit',
+    'my onlyfans is musclejock88',
+    'Fansly - hotty_dude',
+    'https://onlyfans.com/joeymillsxxx',
+    'follow onlyfans.com/william_seedvip today',
+  ];
+  for (const t of good) assert.equal(paid.findPaidHandles(t).length, 1, t);
+  // a subdomain of the real host still counts (the guard is a word boundary, not "any dot")
+  assert.equal(paid.findPaidHandles('see m.onlyfans.com/jakefit now').length, 1, 'subdomain host');
+});
+
 test('iter1: extractLinks catches bare paid URLs for every paid host', () => {
   const { extractLinks } = require('../src/lib/links');
   for (const [bare, service] of [['manyvids.com/Profile/1/x', 'ManyVids'], ['loyalfans.com/jake', 'LoyalFans'], ['fanvue.com/jake', 'Fanvue']]) {

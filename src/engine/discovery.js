@@ -715,7 +715,7 @@ const HARVEST_QUERIES = [
 ];
 
 async function directoryHarvest({ queries = 3, pages = 5, budget, aborted = () => false } = {}) {
-  const out = { searched: 0, read: 0, leads: 0, candidates: 0, rejected: 0 };
+  const out = { searched: 0, read: 0, leads: 0, candidates: 0, rejected: 0, failed: 0 };
   if (!websearch.configured()) return out;
   const http = require('../sources/http').forPlatform('harvest', 1100);
   const cheerio = require('cheerio');
@@ -723,6 +723,7 @@ async function directoryHarvest({ queries = 3, pages = 5, budget, aborted = () =
   const seenPages = new Set(JSON.parse(repo.discoveryState.get('harvest.pages', '[]') || '[]'));
   let rotate = parseInt(repo.discoveryState.get('harvest.rotate', '0'), 10) || 0;
   const spent = new Set();
+  let fails = 0;
   const urls = []; // {url, q} — the query stays with the page so the signal names its source
 
   for (let i = 0; i < queries && !aborted(); i++) {
@@ -732,9 +733,17 @@ async function directoryHarvest({ queries = 3, pages = 5, budget, aborted = () =
     try {
       const hits = await websearch.search(q, { count: 12, budget });
       out.searched++;
+      fails = 0;
       for (const h of hits) if (h.url && !seenPages.has(h.url) && !takedowns.checkUrl(h.url)) urls.push({ url: h.url, q });
     } catch (e) {
-      if (e && (e.skip || e.budget)) break;
+      out.failed++;
+      // One failed query must not kill the whole pass: a wall or a spent metered budget can clear
+      // between queries (the keyless providers cool down and retry themselves). Two in a row means
+      // search really is unavailable — stop instead of burning a query per page read.
+      if (++fails >= 2) {
+        events.log('WARN', `Discovery: harvest stopped — search unavailable (${String(e.message).slice(0, 110)})`);
+        break;
+      }
       events.log('WARN', `Discovery: harvest "${q}" — ${e.message}`);
     }
   }

@@ -21,7 +21,7 @@ const SCOPE = { in: ['good', 'male-focused'], uncertain: ['', 'unclear'], exclud
 function describeRun(key, r) {
   if (!r) return '';
   const rej = r.rejected ? ` · ${r.rejected} rejected` : '';
-  if (key === 'harvest') return `${r.searched} searches · ${r.read} directory/list pages read · ${r.leads} paid-page leads found · ${r.candidates} profile links${rej}`;
+  if (key === 'harvest') return `${r.searched} searches${r.failed ? ` · ${r.failed} failed` : ''} · ${r.read} directory/list pages read · ${r.leads} paid-page leads found · ${r.candidates} profile links${rej}`;
   if (key === 'coomer') return `${r.searched} keyword queries on the mirror · ${r.creators} creators indexed · ${r.feeds} feeds registered${rej}`;
   if (key === 'gff') return `${r.scanned} ranked performers scanned · ${r.followed} followed${rej}`;
   if (key === 'imageMatch') return `${r.creators} creators image-matched · ${r.pictures} of his pictures found elsewhere · ${r.pages} page${r.pages === 1 ? '' : 's'} registered${r.error ? ` · ${r.error}` : ''}`;

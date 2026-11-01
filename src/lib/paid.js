@@ -57,7 +57,7 @@ const NOT_HANDLES = new Set(['link', 'links', 'in', 'is', 'bio', 'below', 'above
  * separator followed by one of these is typography, not a username. Applied to prose matches only. */
 const NOT_PROSE = new Set(['top', 'best', 'hottest', 'models', 'model', 'ranked', 'ranking', 'official', 'all', 'every', 'biggest',
   'famous', 'popular', 'list', 'lists', 'accounts', 'profiles', 'creators', 'stars', 'star', 'gay', 'male', 'men', 'man',
-  'guide', 'update', 'updated', 'daily', '2025', '2026', 'edition', 'full', 'free', 'hot', 'new',
+  'guide', 'update', 'updated', 'daily', '2025', '2026', 'edition', 'full', 'free', 'hot', 'new', 'sh', 'girls', 'backed', 'subscribers', 'complete', 'privately', 'for', 'from', 'to', 'guide',
   // generic nouns the separator regex picks up out of headlines and captions ("OnlyFans is porn")
   'porn', 'blowjob', 'squirt', 'threesome', 'sex', 'nude', 'nudes', 'nsfw', 'adult', 'content', 'videos', 'video',
   'pics', 'photos', 'leaked', 'leak', 'reddit', 'twitter', 'instagram', 'telegram', 'tiktok', 'youtube', 'discord']);
@@ -108,6 +108,45 @@ const PROSE_RES = {
   'JustFor.Fans': /\b(?:justfor\.?fans|jff)\s*(?:[:=\-–—→>]|\bis\b)\s*@?([A-Za-z0-9][A-Za-z0-9_.-]{1,40})/gi,
 };
 
+/**
+ * Is a prose match a username, or somebody else's URL path?
+ * The separator regex sees `vicesnob.com/onlyfans-creator-debanking-2026/` as "OnlyFans" + "-" +
+ * "creator-debanking-2026", and `.../onlyfans-debanking-featured.jpg` as a handle ending in a
+ * file name — 37 junk leads in one harvest. Three rules, all path-shaped evidence:
+ *   1. the "handle" is followed by / ? or # → it is a path segment, not a name
+ *   2. it ends in a file extension       → it is a file, not a name
+ *   3. it ends in -YYYY (a slug year)    → it is a WordPress slug, not a name
+ * Only prose matches are held to this: a real paid-page URL goes through its own parser, which
+ * extracts exactly one handle and never sees these shapes.
+ */
+/** Shape evidence that a match is somebody's path or file, not a username. Applied to BOTH the URL
+ * and the prose match path — a real paid-page URL extracts exactly one handle and never looks like this. */
+function looksLikePath(h) {
+  if (/\.(jpe?g|png|gif|webp|avif|svg|mp4|webm|html?|php)$/i.test(h)) return true; // a file name
+  if (/-\d{4}$/.test(h)) return true;                                                // a slug ending in a year
+  // Multi-segment slugs ("alternatives-for-creators", "models-to-follow"): a real username rarely
+  // carries two or more hyphens; a path segment routinely does.
+  if ((h.match(/-/g) || []).length >= 2) return true;
+  return false;
+}
+
+/** Every dot/dash/underscore segment is a headline word: "complete-guide" is a category, not a person. */
+function allSegmentsHeadline(h) {
+  const segs = String(h).split(/[._-]/).filter(Boolean);
+  return segs.length > 1 && segs.every((w) => NOT_PROSE.has(w.toLowerCase()));
+}
+
+/** The gate both match paths share: not a headline word, not a path, not a category slug. */
+function plausibleHandle(h) {
+  return !!h && !NOT_PROSE.has(String(h).toLowerCase()) && !looksLikePath(h) && !allSegmentsHeadline(h);
+}
+
+function isPathNotName(source, endIndex, h) {
+  const next = source[endIndex];
+  if (next === '/' || next === '?' || next === '#') return true;
+  return looksLikePath(h);
+}
+
 /** Every distinct {service, handle} a text names, in order. OnlyFans, Fansly and JustFor.Fans. */
 function findPaidHandles(text) {
   const s = String(text || '');
@@ -116,14 +155,20 @@ function findPaidHandles(text) {
   const add = (service, h) => { if (h && !seen.has(`${service}:${h}`)) { seen.add(`${service}:${h}`); out.push({ service, handle: h }); } };
   for (const [service, re] of Object.entries(LINK_RES)) {
     re.lastIndex = 0;
-    for (const m of s.match(re) || []) add(service, PARSERS[service](m.replace(/[.,;:!?]+$/, '')));
+    for (const m of s.match(re) || []) {
+      const h = PARSERS[service](m.replace(/[.,;:!?]+$/, ''));
+      // A URL whose path is a headline word (onlyfans.com/top, .../complete-guide) is a page,
+      // not a person: the same gate applies to both match paths.
+      if (plausibleHandle(h)) add(service, h);
+    }
   }
   for (const [service, re] of Object.entries(PROSE_RES)) {
     re.lastIndex = 0;
     for (const m of s.matchAll(re)) {
       const h = normal(m[1]);
-      // A separator + headline word ("OnlyFans — Top Models") is typography, not a username.
-      if (h && !NOT_PROSE.has(h)) add(service, h);
+      // A separator + headline word ("OnlyFans — Top Models") is typography, not a username,
+      // and a separator inside somebody else's URL path is not a username either.
+      if (plausibleHandle(h) && !isPathNotName(s, m.index + m[0].length, h)) add(service, h);
     }
   }
   // keep the OnlyFans order identical to findOnlyFans for callers that migrate gradually
@@ -165,5 +210,5 @@ function creatorPaid(c) {
   return (Array.isArray(links) ? links : []).filter((l) => l && l.url && serviceOf(l.url) && l.service !== 'OnlyFans' && !/onlyfans\.com/i.test(l.url || ''));
 }
 
-module.exports = { SERVICES, serviceOf, fanslyHandle, jffHandle, paidHandle, findPaidHandles, paidLink, creatorPaid, pageUrl, pageLinked, PAID_HOSTS,
+module.exports = { isPathNotName, plausibleHandle, SERVICES, serviceOf, fanslyHandle, jffHandle, paidHandle, findPaidHandles, paidLink, creatorPaid, pageUrl, pageLinked, PAID_HOSTS,
   ofHandle, findOnlyFans, freeHint, ofLink, creatorOnlyFans };
