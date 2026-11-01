@@ -813,8 +813,11 @@ async function coomerNameDiscovery({ limit = 8, scan = 60, aborted = () => false
     if (!name) continue;
     // Cheap local check first: never spend a state write on a name the index cannot match.
     // The handle counts too — a creator followed from Reddit or Bluesky often uses the same handle
-    // on his paid page, and the mirror indexes handles as well as names.
-    const hit = index.best({ handle: c.handle, name });
+    // on his paid page, and the mirror indexes handles as well as names. Fediverse handles carry an
+    // instance ("toiida@library.love", "x.bsky.social"), so the bare name is tried as well.
+    const core = coreHandle(c.handle);
+    const hit = index.best({ handle: c.handle, name })
+      || (core && core !== String(c.handle).toLowerCase() ? index.best({ handle: core }) : null);
     out.checked++;
     repo.discoveryState.set(`coomer.name.${c.id}`, new Date().toISOString());
     if (!hit) continue;
