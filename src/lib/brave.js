@@ -267,8 +267,10 @@ async function bingImages(query, { count = 30 } = {}) {
 /**
  * Brave Image Search (`https://api.search.brave.com/res/v1/images/search`) with automatic DDG/Bing fallback.
  */
-async function images(q, { count = 20, budget = 40 } = {}) {
-  if (!configured()) {
+async function images(q, { count = 20, budget = 40, preferKeyless = false } = {}) {
+  // preferKeyless: a secondary pass (image match) starts on the free feeds and only reaches for the
+  // metered Brave API if they return nothing — the daily counter is shared with lookup and discovery.
+  if (preferKeyless || !configured()) {
     // Image search needs actual picture URLs: DDG's HTML results rarely carry them, Bing's image feed does.
     if (config.bingEnabled) {
       try {
@@ -278,7 +280,8 @@ async function images(q, { count = 20, budget = 40 } = {}) {
     }
     try {
       const hits = await ddgWeb(q, { count });
-      if (hits.length) {        return hits
+      if (hits.length) {
+        return hits
           .filter((r) => r.url)
           .map((r) => ({
             url: r.url,
@@ -294,8 +297,10 @@ async function images(q, { count = 20, budget = 40 } = {}) {
             type: 'image',
           }));
       }
-    } catch { /* fall through to Bing */ }
-    return config.bingEnabled ? bingImages(q, { count }) : [];
+    } catch { /* fall through */ }
+    // Free feeds had nothing and there is no Brave key: nothing more to try.
+    if (!configured()) return [];
+    // preferKeyless with a key configured: fall through to the metered Brave API below.
   }
 
   let json;
@@ -303,6 +308,8 @@ async function images(q, { count = 20, budget = 40 } = {}) {
     const qs = `q=${encodeURIComponent(q)}&count=${Math.min(50, count)}&safesearch=off&spellcheck=0`;
     json = await braveRequest('/res/v1/images/search', qs, { budget });
   } catch (e) {
+    // A preferKeyless caller already tried the free feeds above: don't repeat them, just report.
+    if (preferKeyless) throw e;
     if (e && (e.skip || e.budget)) {
       try {
         const hits = await ddgWeb(q, { count });

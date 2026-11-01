@@ -26,6 +26,7 @@ const { femaleCheck, classify } = require('../lib/scope');
 const { ofLink } = require('../lib/onlyfans');
 const paid = require('../lib/paid');
 const events = require('./events');
+const settingsStore = require('../settings');
 
 const PROBE_TIMEOUT_MS = 18000;
 const DEADLINE_MS = 45000;
@@ -307,10 +308,10 @@ async function searchWeb(q, pl, notes, mediaHits = [], webLinks = [], deadline =
     try {
       let results;
       if (canWebSearch) {
-        results = await websearch.search(query, { count: 20, budget: 200, site });
+        results = await websearch.search(query, { count: 20, budget: searchBudget(), site });
         provider = results.provider || provider;
       } else {
-        results = await brave.web(site ? `${query} site:${site}` : query, { count: 20, budget: 200 });
+        results = await brave.web(site ? `${query} site:${site}` : query, { count: 20, budget: searchBudget() });
         provider = provider || (brave.configured() ? 'brave' : 'ddg');
       }
       for (const r of results) ingestResultSpecs(r, 'web-search');
@@ -367,8 +368,8 @@ async function searchWeb(q, pl, notes, mediaHits = [], webLinks = [], deadline =
     try {
       const media = await Promise.race([
         Promise.all([
-          brave.images(mediaQuery, { count: 10, budget: 200 }).catch(() => []),
-          brave.videos(mediaQuery, { count: 10, budget: 200 }).catch(() => []),
+          brave.images(mediaQuery, { count: 10, budget: searchBudget() }).catch(() => []),
+          brave.videos(mediaQuery, { count: 10, budget: searchBudget() }).catch(() => []),
         ]),
         new Promise((resolve) => setTimeout(() => resolve([[], []]), Math.max(1, Math.min(8000, deadline - Date.now())))),
       ]);
@@ -406,6 +407,11 @@ function externalLinksOf(c) {
 }
 
 /* ---------------------------------------------------------------------- lookup */
+/** Every caller shares ONE daily Brave counter (lib/brave counts per day, globally). Lookup used to
+ * pass a hard-coded budget of 200, which spent that counter to 201 and locked Brave (budget 40) out
+ * of discovery for the rest of the day — while the admin's setting said 40. One knob, one truth:
+ * when the budget is spent the keyless tier answers anyway, so nothing becomes unavailable. */
+const searchBudget = () => settingsStore.get().braveDailyBudget;
 /**
  * @param {string} input name, performer name, handle or profile link
  * @param {{imageCheck?: boolean}} opts

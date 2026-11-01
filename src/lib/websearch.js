@@ -33,6 +33,17 @@ const ddgHttp = require('../sources/http').forPlatform('ddg', 1500);
 // too, and Bing's own spacing to be whatever DDG's was. Different hosts, different keys.
 const bingHttp = require('../sources/http').forPlatform('bing', 900);
 
+/** DuckDuckGo's two HTML endpoints, overridable so tests can point them at a local (or dead) server
+ * instead of the live site: DDG_HTML_URL/DDG_LITE_URL set the exact base, DDG_BASE_URL sets both. */
+const ddgHtmlUrl = (q) => {
+  const b = String(process.env.DDG_HTML_URL || process.env.DDG_BASE_URL || 'https://html.duckduckgo.com').replace(/\/+$/, '');
+  return `${b.endsWith('/html') ? b : `${b}/html`}/?q=${encodeURIComponent(q)}`;
+};
+const ddgLiteUrl = (q) => {
+  const b = String(process.env.DDG_LITE_URL || process.env.DDG_BASE_URL || 'https://lite.duckduckgo.com').replace(/\/+$/, '');
+  return `${b.endsWith('/lite') ? b : `${b}/lite`}/?q=${encodeURIComponent(q)}&kl=us-en`;
+};
+
 const searxngUrl = () => String(config.searxngUrl || '').replace(/\/+$/, '');
 
 /** DuckDuckGo walls some networks off (anomaly CAPTCHA, 429, plain timeouts). After a wall hit the
@@ -165,7 +176,7 @@ const PROVIDERS = {
     configured: () => config.ddgEnabled && Date.now() >= ddgCooldownUntil,
     async search(q, { count = 20 } = {}) {
       try {
-        const html = await ddgHttp.text(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`, {
+        const html = await ddgHttp.text(ddgHtmlUrl(q), {
           timeout: 6000, retries: 0, headers: { accept: 'text/html,application/xhtml+xml', 'accept-language': 'en-US,en;q=0.9' },
         });
         return parseDdg(html).slice(0, count);
@@ -184,7 +195,7 @@ const PROVIDERS = {
     configured: () => config.ddgEnabled && Date.now() >= ddgLiteCooldownUntil,
     async search(q, { count = 20 } = {}) {
       try {
-        const html = await ddgHttp.text(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(q)}&kl=us-en`, {
+        const html = await ddgHttp.text(ddgLiteUrl(q), {
           timeout: 6000, retries: 0, headers: { accept: 'text/html', 'accept-language': 'en-US,en;q=0.9' },
         });
         const $ = cheerio.load(String(html));
@@ -266,7 +277,7 @@ function status() {
 
 /**
  * @param {string} q
- * @param {{count?: number, budget?: number, fresh?: boolean, site?: string}} opts `budget` = metered calls per day (Brave, Keenable); `site` restricts results to one domain
+ * @param {{count?: number, budget?: number, fresh?: boolean, site?: string, preferKeyless?: boolean}} opts `budget` = metered calls per day (Brave, Keenable); `site` restricts results to one domain
  * @returns {Promise<Array<{url,title,description}> & {provider?: string}>}
  *
  * Metered providers keep first-hit semantics (spend one call, stop). The keyless tier — Bing and
@@ -288,7 +299,7 @@ const dedupe = (list) => {
   });
 };
 
-async function search(q, { count = 20, budget = 40, fresh = false, site } = {}) {
+async function search(q, { count = 20, budget = 40, fresh = false, site, preferKeyless = false } = {}) {
   const key = `${count}|${site || ''}|${q}`;
   const hit = cache.get(key);
   if (!fresh && hit && hit.results.length && Date.now() - hit.at < CACHE_MS) return hit.results;
@@ -317,25 +328,36 @@ async function search(q, { count = 20, budget = 40, fresh = false, site } = {}) 
     return null;
   };
 
-  // Tier 1: metered providers (one paid call each at most, budget errors stop the tier).
   const metered = configured.filter((p) => METERED.includes(p));
-  const paid = await sequential(metered);
-  if (paid) return paid;
-
-  // Tier 2: keyless Bing + DuckDuckGo endpoints in parallel, merged and deduped.
   const free = configured.filter((p) => KEYLESS.includes(p));
-  if (free.length) {
+  // Tier 3: everything else (SearXNG and any custom provider) — free but slower / less universal.
+  const rest = configured.filter((p) => !METERED.includes(p) && !KEYLESS.includes(p));
+
+  /** Tier 1: metered providers, one paid call each at most — first answer wins. */
+  const paidTier = () => sequential(metered);
+
+  /** Tier 2: keyless Bing + DuckDuckGo endpoints in parallel, merged and deduped. */
+  const keylessTier = async () => {
+    if (!free.length) return null;
     const settled = await Promise.allSettled(free.map((name) => query(name).then((r) => { note(name, r); return r; }, (e) => { note(name, null, e); throw e; })));
     const merged = dedupe(settled.flatMap((s) => (s.status === 'fulfilled' ? s.value : [])));
     if (merged.length) return remember(free.filter((n, i) => settled[i].status === 'fulfilled' && settled[i].value.length).join('+') || 'keyless', merged);
     const firstFail = settled.find((s) => s.status === 'rejected');
     lastErr = lastErr || (firstFail && firstFail.reason) || lastErr;
-  }
+    return null;
+  };
 
-  // Tier 3: everything else (SearXNG and any custom provider) — free but slower / less universal.
-  const rest = configured.filter((p) => !METERED.includes(p) && !KEYLESS.includes(p));
-  const tail = await sequential(rest);
-  if (tail) return tail;
+  /** Tier 3: SearXNG and anything custom — free, last because it is the least universal. */
+  const tailTier = () => sequential(rest);
+
+  // The daily Brave counter is shared by lookup, discovery and image match. Secondary passes
+  // (directory harvest, image match) pass preferKeyless so they ride the free tier and leave the
+  // paid budget for identity matching and topic search — one budget, spent where it matters.
+  const tiers = preferKeyless ? [keylessTier, paidTier, tailTier] : [paidTier, keylessTier, tailTier];
+  for (const tier of tiers) {
+    const results = await tier();
+    if (results) return results;
+  }
 
   throw lastErr || Object.assign(new Error('web search: no results'), { status: 502 }); // never cache "nothing out there"
 }

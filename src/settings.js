@@ -43,7 +43,7 @@ const SCHEMA = {
   discoveryAutoFollowScore: { type: 'int', default: 8, min: 3, max: 60, label: 'Auto-follow a candidate at this score', group: 'discovery' },
   discoveryMaxFollowsPerRun: { type: 'int', default: 10, min: 0, max: 100, label: 'Max creators auto-followed per run', group: 'discovery' },
   discoveryGraph: { type: 'bool', default: true, label: 'Read who followed Bluesky creators follow', group: 'discovery' },
-  braveDailyBudget: { type: 'int', default: 40, min: 0, max: 2000, label: 'Metered web searches per day (Brave + Keenable + Bright Data budget; 0 = free SearXNG only)', group: 'discovery' },
+  braveDailyBudget: { type: 'int', default: 40, min: 0, max: 2000, label: 'Metered web searches per day (Brave + Keenable + Bright Data budget; 0 = free search only — SearXNG, Bing, DuckDuckGo, and discovery then searches MORE per run)', group: 'discovery' },
   discoveryQueries: {
     type: 'text', group: 'discovery', label: 'Web-search topics (one per line; rotated, one per run)',
     default: ['gay male model bluesky', 'male fitness model onlyfans x.com', 'gay creator linktree 18+', 'muscle model telegram channel', 'gay twink creator redgifs', 'muscle daddy creator onlyfans bluesky', 'gay amateur couple onlyfans twitter', 'male model throne wishlist',

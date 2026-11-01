@@ -731,7 +731,7 @@ async function directoryHarvest({ queries = 3, pages = 5, budget, aborted = () =
     if (spent.has(q)) continue;
     spent.add(q);
     try {
-      const hits = await websearch.search(q, { count: 12, budget });
+      const hits = await websearch.search(q, { count: 12, budget, preferKeyless: true });
       out.searched++;
       fails = 0;
       for (const h of hits) if (h.url && !seenPages.has(h.url) && !takedowns.checkUrl(h.url)) urls.push({ url: h.url, q });
@@ -1450,9 +1450,13 @@ async function run({ trigger = 'schedule' } = {}) {
   try {
     report.mentions = mineMentions();
     if (s.discoveryGraph) report.graph = await blueskyGraph({ aborted });
-    if (websearch.configured() && (s.braveDailyBudget > 0 || websearch.PROVIDERS.searxng.configured())) {
-      // SearXNG costs nothing per query: search more per run when it is there (metered providers keep the daily budget either way).
-      const free = websearch.PROVIDERS.searxng.configured();
+    // Free tiers cost nothing per query: SearXNG and the keyless Bing/DuckDuckGo pair. When a paid
+    // budget is in play, spend it deliberately (fewer, richer queries); when it is not — budget set
+    // to 0, or no Brave key at all — search is still free, so search MORE rather than not at all.
+    // (The old gate skipped topic/identity search entirely when braveDailyBudget was 0 and no
+    // SearXNG was configured, even though keyless search was right there.)
+    const free = websearch.PROVIDERS.searxng.configured() || s.braveDailyBudget === 0 || !brave.configured();
+    if (websearch.configured() && (free || s.braveDailyBudget > 0)) {
       report.aiQueries = await require('./ai').planQueries();
       report.identity = await braveIdentity({ creators: free ? 5 : 3, budget: s.braveDailyBudget, aborted });
       report.topics = await braveTopics({ queries: free ? 3 : 1, budget: s.braveDailyBudget, aborted });

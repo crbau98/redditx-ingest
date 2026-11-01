@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 // ddgEnabled reads DDG_BASE_URL under test (tests must not reach the live web): set it before
 // config loads so the DuckDuckGo providers are 'configured' and their cooldown clocks are observable.
 process.env.DDG_BASE_URL = process.env.DDG_BASE_URL || 'http://127.0.0.1:1';
+process.env.BRAVE_API_KEY = process.env.BRAVE_API_KEY || 'test-key'; // no network: the tier test stubs both searches
 const { parseDdg } = require('../src/lib/websearch');
 
 test('ddg parser unwraps redirect links and keeps title and snippet', () => {
@@ -54,6 +55,27 @@ test('cooldowns are per endpoint: one walled DDG door leaves the others open', (
   assert.ok(cd.until && !cd.lite, 'the html cooldown is reported on its own clock');
   ws._clear();
   assert.equal(ws.PROVIDERS.ddg.configured(), true, 'cleared again');
+});
+
+test('preferKeyless puts the free tier ahead of the paid one (one shared daily budget)', async () => {
+  const ws = require('../src/lib/websearch');
+  ws._clear();
+  const order = [];
+  const { brave, ddg } = ws.PROVIDERS;
+  const oBrave = brave.search; const oDdg = ddg.search;
+  brave.search = async () => { order.push('brave'); return [{ url: 'https://example.com/brave', title: 'Brave answer', description: '' }]; };
+  ddg.search = async () => { order.push('ddg'); return [{ url: 'https://example.com/ddg', title: 'DDG answer', description: '' }]; };
+  try {
+    const paid = await ws.search('tier order paid first', {});
+    assert.equal(order[0], 'brave', 'by default the paid tier runs first');
+    assert.equal(paid.provider, 'brave');
+    order.length = 0;
+    const free = await ws.search('tier order free first', { preferKeyless: true });
+    assert.deepEqual(order, ['ddg'], 'preferKeyless never touches the paid provider');
+    assert.equal(free.provider, 'ddg');
+  } finally {
+    brave.search = oBrave; ddg.search = oDdg; ws._clear();
+  }
 });
 
 test('the last open keyless door never cools down (no-search is worse than a slow search)', () => {

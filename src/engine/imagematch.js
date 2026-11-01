@@ -111,7 +111,11 @@ async function matchCreator(creator, { budget = 40, aborted = () => false, servi
   for (const q of [...new Set(queries)].slice(0, 3)) {
     if (aborted() || out.pages >= PAGES_PER_CREATOR) break;
     let hits = [];
-    try { hits = await brave.images(q, { count: HITS_PER_QUERY, budget }); } catch (e) {
+    try {
+      // Image match is a secondary pass: free feeds first, so the shared daily Brave budget is
+      // left for identity matching and topic search.
+      hits = await brave.images(q, { count: HITS_PER_QUERY, budget, preferKeyless: true });
+    } catch (e) {
       if (e && (e.skip || e.budget)) break;
       events.log('WARN', `Image match: "${q}" — ${e.message}`);
       continue;
