@@ -57,6 +57,15 @@
   --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--focus);
 
   /* ---- motion ---- */
+  /* ---- adult & creator accents ---- */
+  --of-blue: #00aff0;
+  --of-glow: rgba(0, 175, 240, 0.35);
+  --of-ink: #ffffff;
+  --gold: #f59e0b;
+  --glass: rgba(14, 14, 18, 0.82);
+  --glass-strong: rgba(18, 18, 24, 0.94);
+  --glass-blur: blur(20px) saturate(180%);
+
   --dur-quick: 120ms;
   --dur-base: 200ms;
   --dur-slow: 320ms;

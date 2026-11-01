@@ -1,4 +1,4 @@
-import { h, icon, fmt, emptyState } from '../dom.js';
+import { h, icon, fmt, emptyState, avatar } from '../dom.js';
 import { get } from '../api.js';
 import { href } from '../router.js';
 import { platformLabel, platformColor, follows, searches, tastes, history as viewHistory, prefs, visits } from '../store.js';
@@ -160,14 +160,23 @@ export async function home(root) {
   const orbitHolder = h('div', { class: 'hero-visual' });
   const copy = h('div', { class: 'hero-copy' },
     h('div', { class: 'hero-kicker' }, h('span', { class: 'live-dot' }), `${fmt.num(s.total)} photos & videos · ${fmt.num(s.creators)} creators · updated continuously`),
-    h('h1', null, 'Discover male creators ', h('em', null, 'across the web')),
-    h('p', { class: 'lead' }, 'One feed for photos and videos from creators on Reddit, RedGIFs, Bluesky, Mastodon, X, YouTube and more — fresh, searchable, and organised around the people who make it.'),
+    h('h1', null, 'The Master Index for ', h('em', null, 'Gay OnlyFans & Male Creators')),
+    h('p', { class: 'lead' }, 'Stream, explore, and follow thousands of gay male creators across OnlyFans, GayForFans, JustTheGays, Bluesky, Reddit, and X — verified, high-res, and organized.'),
     h('div', { class: 'hero-search' }, icon('search', 'lg'), input, h('button', { class: 'btn primary', onclick: go }, 'Search')),
     h('div', { class: 'hero-actions' },
       h('a', { class: 'btn glass', href: href('/find') }, icon('search', 'sm'), 'Find a creator'),
       h('a', { class: 'btn glass', href: href('/reels') }, icon('film', 'sm'), 'Watch Reels'),
       h('button', { class: 'btn glass', onclick: surpriseMe }, icon('shuffle', 'sm'), 'Surprise me'),
       h('a', { class: 'btn ghost hide-mobile', href: href('/browse') }, icon('layers', 'sm'), 'Browse everything')),
+    h('div', { class: 'hero-quick-jump', role: 'group', 'aria-label': 'Featured feeds and creators' },
+      h('span', { class: 'hero-quick-label' }, 'Featured'),
+      h('a', { class: 'chip hero-pill of-pill', href: href('/explore', { paid: 'onlyfans' }) }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), 'OnlyFans'),
+      h('a', { class: 'chip hero-pill fresh-pill', href: href('/explore', { fresh: '7' }) }, '✨ Fresh 2026'),
+      h('a', { class: 'chip hero-pill video-pill', href: href('/explore', { type: 'video' }) }, icon('video', 'sm'), 'HD Videos'),
+      ...(data.topCreators || []).slice(0, 5).map((c) =>
+        h('a', { class: 'chip hero-pill creator-pill', href: href(`/creator/${c.id}`), title: `${c.display_name || c.handle} (${c.media_count} posts)` },
+          avatar(c, 18),
+          h('span', null, c.display_name || c.handle)))),
     h('div', { class: 'hero-stats' }, stat(s.total, 'items'), stat(s.creators, 'creators'), stat(s.videos, 'videos'), stat(data.platforms.length, 'sources', (v) => String(v))));
   const hero = h('section', { class: 'hero' },
     copy,
@@ -214,6 +223,10 @@ export async function home(root) {
   const since = await sinceP;
   if (since) parts.push(since);
   if (picker) parts.push(picker);
+  if (data.topCreators && data.topCreators.length) {
+    parts.push(h('section', { class: 'section suggested-spotlight' }, sectionHead('users', 'Suggested creators', 'Top creators with videos and photos in the library — tap to open, or follow them here', { href: href('/creators'), label: 'All creators' }),
+      h('div', { class: 'rail' }, data.topCreators.map((c) => creatorCard(c, { spotlight: true })))));
+  }
   const forYou = await forYouSection(open);
   if (forYou) parts.push(forYou);
   const smart = smartFeeds();
@@ -247,10 +260,7 @@ export async function home(root) {
       c.display_name || c.handle, h('span', { class: 'n' }, fmt.num(c.media_count)))),
     h('a', { class: 'chip', href: href('/find') }, icon('plus', 'sm'), 'Find a creator')) : null;
 
-  if (data.topCreators.length) {
-    parts.push(h('section', { class: 'section' }, sectionHead('users', 'Suggested creators', 'Popular creators with videos and photos in the library — tap to open, or follow them here', { href: href('/creators'), label: 'All creators' }),
-      h('div', { class: 'rail' }, data.topCreators.map((c) => creatorCard(c, { spotlight: true })))));
-  }
+
   if (data.trending.length) {
     parts.push(h('section', { class: 'section' }, sectionHead('flame', 'Trending now', 'What people are watching and saving', { href: href('/explore', { sort: 'trending' }), label: 'See all' }), rail(data.trending, { open: open(data.trending) })));
   }

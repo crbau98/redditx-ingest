@@ -54,7 +54,7 @@ async function openById(id) {
 /* ------------------------------------------------------------------- build */
 function start(items, loadMore) {
   const root = document.getElementById('lightbox-root');
-  S = { items, index: -1, loadMore, info: window.matchMedia('(min-width: 900px)').matches, root, video: null, pushed: false, loading: false };
+  S = { items, index: -1, loadMore, info: window.matchMedia('(min-width: 900px)').matches, root, video: null, pushed: false, loading: false, theater: false };
   S.el = h('div', { class: 'lb', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Media viewer' });
   S.top = h('div', { class: 'lb-top' });
   S.stage = h('div', { class: 'lb-stage' });
@@ -64,7 +64,8 @@ function start(items, loadMore) {
   S.info$ = h('aside', { class: 'lb-info', 'aria-label': 'Details' });
   S.prev = h('button', { class: 'lb-nav prev', 'aria-label': 'Previous (←)', title: 'Previous (← / J)', onclick: () => nav(-1) }, icon('chev-l', 'lg'));
   S.next = h('button', { class: 'lb-nav next', 'aria-label': 'Next (→)', title: 'Next (→ / K)', onclick: () => nav(1) }, icon('chev-r', 'lg'));
-  S.stage.append(S.prev, S.next);
+  S.dock = h('div', { class: 'lb-dock', role: 'region', 'aria-label': 'Creator quick bar' });
+  S.stage.append(S.prev, S.next, S.dock);
   // Filmstrip: neighbours of the current item, for jumping around a long sequence (desktop).
   S.strip = h('div', { class: 'lb-strip', role: 'listbox', 'aria-label': 'More in this sequence' });
   S.el.append(S.amb[0], S.amb[1], S.top, S.stage, S.strip, S.info$);
@@ -168,6 +169,73 @@ function scheduleSlide() {
   }
 }
 
+
+function toggleTheater() {
+  if (!S) return;
+  S.theater = !S.theater;
+  S.el.classList.toggle('theater-mode', S.theater);
+  if (S.theater && S.info) setInfo(false);
+  paintTop();
+  toast(S.theater ? 'Cinema mode on' : 'Cinema mode off');
+}
+
+function paintDock(it) {
+  if (!S || !S.dock) return;
+  if (!it || !it.creator_id) { S.dock.style.display = 'none'; return; }
+  S.dock.style.display = '';
+  const cName = it.creator_name || it.creator_handle || it.author;
+  const cHandle = it.creator_handle || it.author;
+  const creatorLink = h('a', {
+    class: 'lb-dock-creator',
+    href: href(`/creator/${it.creator_id}`),
+    title: `View ${cName}'s full profile`,
+    onclick: (e) => { e.stopPropagation(); closeSilently(); }
+  },
+    avatar(it, 32),
+    h('div', { style: { minWidth: 0 } },
+      h('div', { class: 'lb-dock-name truncate' }, cName),
+      h('div', { class: 'lb-dock-handle truncate' }, `@${cHandle}`)));
+
+  const thumbsHolder = h('div', { class: 'lb-dock-thumbs', role: 'list' });
+  const followBtn = h('button', {
+    class: `btn sm${follows.has(it.creator_id) ? '' : ' primary'}`,
+    style: { padding: '4px 10px', height: '28px', fontSize: '12px' },
+    onclick: (e) => {
+      e.stopPropagation();
+      const on = follows.toggle({ id: it.creator_id, handle: it.creator_handle, display_name: it.creator_name });
+      followBtn.className = `btn sm${on ? '' : ' primary'}`;
+      followBtn.textContent = on ? 'Following' : 'Follow';
+      toast(on ? `Following ${cName}` : 'Unfollowed');
+    }
+  }, follows.has(it.creator_id) ? 'Following' : 'Follow');
+
+  S.dock.replaceChildren(creatorLink, followBtn, thumbsHolder);
+
+  const fillThumbs = (items) => {
+    if (!S || cur() !== it) return;
+    const list = (items || []).filter((x) => x && x.id !== it.id).slice(0, 7);
+    if (!list.length) return;
+    thumbsHolder.replaceChildren(...list.map((r) => {
+      const src = r.preview_url || r.thumbnail_url || (r.media_type === 'image' ? r.media_url : '');
+      return h('button', {
+        class: `lb-dock-thumb${r.id === it.id ? ' on' : ''}`,
+        title: r.title || `Post by ${cName}`,
+        style: src ? { backgroundImage: `url("${proxied(src)}")` } : {},
+        onclick: (e) => { e.stopPropagation(); jumpTo(r); }
+      }, r.media_type === 'video' ? icon('play', 'fill') : null);
+    }));
+  };
+
+  const hit = byCreator.get(it.creator_id);
+  if (hit && Date.now() - hit.at < 120000) fillThumbs(hit.items);
+  else {
+    get(`/api/creators/${it.creator_id}/media`, { sort: 'recent', limit: 12 }).then((r) => {
+      byCreator.set(it.creator_id, { at: Date.now(), items: r.items });
+      fillThumbs(r.items);
+    }).catch(() => {});
+  }
+}
+
 function toggleSlideshow() {
   if (!S) return;
   S.slide = !S.slide;
@@ -197,6 +265,7 @@ function paintTop() {
     h('button', { class: `btn icon fav${faved ? ' on' : ''}`, 'aria-label': faved ? 'Remove from saved' : 'Save', 'aria-pressed': String(faved), title: 'Save (F)', onclick: () => toggleFav(it) }, icon('heart'), h('span', { class: 'lb-lab', 'aria-hidden': 'true' }, 'Save')),
     h('button', { class: `btn icon${collections.containing(it.id).length ? ' on' : ''}`, 'aria-label': 'Add to collection', title: 'Add to collection (C)', onclick: () => openCollectionPicker(it) }, icon('bookmark'), h('span', { class: 'lb-lab', 'aria-hidden': 'true' }, 'Collect')),
     h('button', { class: 'btn icon', 'aria-label': 'Share link', title: 'Copy link', onclick: () => share(it) }, icon('share'), h('span', { class: 'lb-lab', 'aria-hidden': 'true' }, 'Share')),
+    h('button', { class: `btn icon hide-mobile${S.theater ? ' on' : ''}`, 'aria-label': S.theater ? 'Exit cinema mode' : 'Cinema mode', 'aria-pressed': String(!!S.theater), title: 'Cinema mode (T)', onclick: toggleTheater }, icon('film', 'sm'), h('span', { class: 'lb-lab', 'aria-hidden': 'true' }, 'Cinema')),
     dl,
     h('button', { class: `btn icon hide-mobile${S.slide ? ' on' : ''}`, 'aria-label': S.slide ? 'Stop slideshow' : 'Start slideshow', 'aria-pressed': String(!!S.slide), title: 'Slideshow (S)', onclick: toggleSlideshow }, icon(S.slide ? 'pause' : 'play', S.slide ? '' : 'fill')),
     h('button', { class: 'btn icon hide-mobile', 'aria-label': 'Keyboard shortcuts', title: 'Keyboard shortcuts (?)', onclick: showHelp }, icon('sliders')),
@@ -272,6 +341,7 @@ function paintStage(it) {
   teardownVideo();
   S.zoom = null;
   paintAmbient(it);
+  paintDock(it);
   S.stage.classList.remove('zoomed-wrap');
   const keep = [S.prev, S.next];
   if (it.media_type === 'video') {
@@ -435,6 +505,7 @@ function onKey(e) {
     case 'f': case 'F': if (it) toggleFav(it, true); break;
     case 'c': case 'C': if (it) openCollectionPicker(it); break;
     case 'i': case 'I': setInfo(!S.info); break;
+    case 't': case 'T': toggleTheater(); break;
     case 's': case 'S': toggleSlideshow(); break;
     case '?': showHelp(); break;
     case 'm': case 'M': { const v = S.stage.querySelector('video'); if (v) v.muted = !v.muted; break; }

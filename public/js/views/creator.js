@@ -1,4 +1,4 @@
-import { h, icon, fmt, proxied, avatar, toast, copyText, emptyState } from '../dom.js';
+import { h, icon, fmt, proxied, avatar, toast, copyText, emptyState, debounce } from '../dom.js';
 import { get } from '../api.js';
 import { navigate, href } from '../router.js';
 import { follows, platformColor, platformLabel, bus } from '../store.js';
@@ -63,7 +63,8 @@ export async function creator(root, { params, query }) {
   const type = query.get('type') || '';
   const sort = query.get('sort') || 'recent';
   const platform = /^[a-z]{1,20}$/.test(query.get('platform') || '') ? query.get('platform') : '';
-  const setQ = (patch) => navigate(`/creator/${c.id}`, { type, sort, platform, ...patch }, { replace: true });
+  const qFilter = query.get('q') || '';
+  const setQ = (patch) => navigate(`/creator/${c.id}`, { type, sort, platform, q: qFilter, ...patch }, { replace: true });
 
   // The stage: his best picture (previews come highest-scored first), full-bleed behind the header,
   // washed into the page with a colour taken from it. A banner is the fallback, then a plain wash.
@@ -103,7 +104,7 @@ export async function creator(root, { params, query }) {
       c.onlyfans ? h('a', { class: `btn of-cta${c.onlyfans.free ? ' free' : ''}`, href: c.onlyfans.url, target: '_blank', rel: 'noopener noreferrer nofollow', title: `onlyfans.com/${c.onlyfans.handle}` },
         h('span', { class: 'of-mark', 'aria-hidden': 'true' }), c.onlyfans.free ? 'Free OnlyFans' : 'OnlyFans', icon('external', 'sm')) : null,
       ...paidCtas,
-      c.media_count ? h('a', { class: 'btn', href: href('/reels', { creator: c.id, sort: 'recent', type: 'all' }), title: 'Watch everything full screen' }, icon('film', 'sm'), 'Reels') : null,
+      c.media_count ? h('a', { class: 'btn glass', href: href('/reels', { creator: c.id, sort: 'recent', type: 'all' }), title: 'Watch everything in full-screen vertical Reels' }, icon('film', 'sm'), 'Watch Reels') : null,
       h('button', { class: 'btn icon', 'aria-label': 'Copy profile link', title: 'Copy link', onclick: async () => toast((await copyText(location.href)) ? 'Link copied' : 'Could not copy') }, icon('share')),
       h('button', { class: 'btn icon', 'aria-label': 'Report', title: 'Report', onclick: () => openReport({ creatorId: c.id, title: 'Report this creator' }) }, icon('flag'))));
 
@@ -111,7 +112,9 @@ export async function creator(root, { params, query }) {
     h('button', { class: type === v ? 'on' : '', role: 'tab', 'aria-selected': String(type === v), onclick: () => setQ({ type: v }) }, `${l} `, h('span', { class: 'muted num' }, fmt.num(n)))));
   const sortSel = h('select', { class: 'select sm', style: { width: 'auto', marginLeft: 'auto', marginBottom: '8px' }, 'aria-label': 'Sort', onchange: (e) => setQ({ sort: e.target.value }) }, [['recent', 'Newest'], ['top', 'Top rated'], ['trending', 'Trending'], ['oldest', 'Oldest']].map(([v, l]) => h('option', { value: v, selected: sort === v }, l)));
 
-  const feed = createFeed({ endpoint: `/api/creators/${c.id}/media`, query: { type, sort, platform: platform || undefined }, empty: emptyState({ icon: 'image', title: 'Nothing here yet', text: 'No published posts match this tab.' }) });
+  const searchPost = h('input', { class: 'input sm', type: 'search', placeholder: `Search @${c.handle}'s posts…`, value: qFilter, style: { width: 'auto', minWidth: '160px', maxWidth: '240px', marginBottom: '8px' }, 'aria-label': `Search in @${c.handle}'s posts` });
+  searchPost.addEventListener('input', debounce(() => setQ({ q: searchPost.value.trim() }), 350));
+  const feed = createFeed({ endpoint: `/api/creators/${c.id}/media`, query: { type, sort, platform: platform || undefined, q: qFilter || undefined }, empty: emptyState({ icon: 'image', title: 'Nothing here yet', text: qFilter ? `No posts matching “${qFilter}”.` : 'No published posts match this tab.' }) });
 
   const stage = h('section', { class: `stage${art ? '' : ' bare'}` },
     art ? h('div', { class: 'stage-media', 'aria-hidden': 'true' }, h('img', { class: 'stage-img', src: proxied(art), alt: '', decoding: 'async', fetchpriority: 'high' })) : null,
@@ -130,7 +133,7 @@ export async function creator(root, { params, query }) {
     c.topTags && c.topTags.length ? h('div', { class: 'row wrap', style: { marginTop: '14px', gap: '6px' } }, c.topTags.slice(0, 10).map((t) => h('a', { class: 'tag', href: href('/explore', { tag: t.name }) }, `#${t.name}`))) : null,
     h('div', { style: { height: '22px' } }),
     platformSwitcher(c, { value: platform, onChange: (p) => setQ({ platform: p }) }), // pills per platform, plus his paid-page cards
-    h('div', { class: 'row', style: { alignItems: 'flex-end' } }, h('div', { class: 'grow' }, tabs), sortSel),
+    h('div', { class: 'row wrap', style: { alignItems: 'flex-end', gap: '8px' } }, h('div', { class: 'grow' }, tabs), searchPost, sortSel),
     feed.el);
   landAvatar(headAvatar, c.id); // the avatar tapped on the way here flies into place
   // Activity and "Similar creators" load after the page is usable; a failure just means they are missing.

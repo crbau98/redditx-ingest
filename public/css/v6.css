@@ -77,7 +77,7 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
 .nav a[aria-current='page'] { color: var(--text); }
 .nav a svg { transition: color var(--dur-base), transform var(--dur-slow) var(--spring-snap); }
 .nav a:hover svg { transform: translateY(-1px); }
-@media (max-width: 1240px) and (min-width: 900px) {
+@media (max-width: 1040px) and (min-width: 900px) {
   /* mid widths: icons only for the less used tabs, so the search keeps its room */
   .nav a { padding: 8px 11px; }
   .nav a:not([aria-current='page']) .nav-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
