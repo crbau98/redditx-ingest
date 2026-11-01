@@ -248,8 +248,8 @@ export async function home(root) {
     h('a', { class: 'chip', href: href('/find') }, icon('plus', 'sm'), 'Find a creator')) : null;
 
   if (data.topCreators.length) {
-    parts.push(h('section', { class: 'section' }, sectionHead('users', 'Suggested creators', 'Popular creators with videos and photos in the library — tap to open or follow', { href: href('/creators'), label: 'All creators' }),
-      h('div', { class: 'rail' }, data.topCreators.map((c) => creatorCard(c, { mini: false })))));
+    parts.push(h('section', { class: 'section' }, sectionHead('users', 'Suggested creators', 'Popular creators with videos and photos in the library — tap to open, or follow them here', { href: href('/creators'), label: 'All creators' }),
+      h('div', { class: 'rail' }, data.topCreators.map((c) => creatorCard(c, { spotlight: true })))));
   }
   if (data.trending.length) {
     parts.push(h('section', { class: 'section' }, sectionHead('flame', 'Trending now', 'What people are watching and saving', { href: href('/explore', { sort: 'trending' }), label: 'See all' }), rail(data.trending, { open: open(data.trending) })));

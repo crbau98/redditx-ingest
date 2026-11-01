@@ -66,6 +66,34 @@ function nameSimilarity(query, ...fields) {
   return best;
 }
 
+/**
+ * Is this candidate a namesake rather than the person whose name was typed?
+ *
+ * True when the query is a full name ("Christian Hogue") and the candidate's handle is that name
+ * with extra characters appended ("christianhogue912", "christian_hogue_official"): those are
+ * different accounts, and the extras are the tell. A handle that IS the name (or the name plus a
+ * platform suffix) is the person.
+ */
+function isNamesake(query, handle, displayName) {
+  const q = String(query || '').trim();
+  const qw = q.toLowerCase().split(/\s+/).filter((w) => w.length >= 2);
+  if (qw.length < 2) return false; // a single word cannot tell a namesake from the man
+  const h = String(handle || '').toLowerCase().replace(/\.bsky\.social$/, '');
+  // The handle must be built from the typed name (otherwise it is simply a different person).
+  const core = qw.join('');
+  if (!h.includes(core) && !qw.every((w) => h.includes(w))) return false;
+  // Strip the typed name from the handle: what is left is the extra (digits, filler words).
+  let rest = h;
+  for (const w of qw) rest = rest.replace(w, '');
+  rest = rest.replace(/[0-9]/g, '').replace(/[^a-z]+/g, '');
+  // Filler affixes a creator adds to his own handle (official, real, xxx, fit, vip, tv…).
+  const FILLER = /^(official|real|the|its|im|xxx|xx|vip|tv|fit|hd|hot|only|free|of|dot|co|com|me|my|1st)$/;
+  const leftovers = rest.split(/[^a-z]+/).filter((x) => x.length >= 2 && !FILLER.test(x));
+  // A handle with digits left over is a numbered namesake ("hogue912").
+  if (/\d/.test(h.replace(new RegExp(qw.join('|'), 'g'), ''))) return true;
+  return leftovers.length > 0;
+}
+
 /** Split what was typed into a display name and handle guesses. */
 function parseQuery(input) {
   const raw = String(input || '').trim().slice(0, 200);
@@ -273,7 +301,28 @@ async function searchPeople(q, pl, notes, deadline) {
       } catch (e) { notes.push({ platform: 'redgifs', step: 'creator search', ok: false, note: e.message }); }
     });
   }
-  await pool(tasks, 3, deadline);
+  // The gay-male performer directories (GayForFans / JustTheGays) answer a name with the performer's
+  // own page — no web-search quota, no guessing of handles. This is where the 2026 material lives:
+  // the mirror (coomer.st) stopped indexing new OnlyFans posts in late 2025, and these directories
+  // publish the same creators' current work (their HLS streams come straight off cdn.gff.network).
+  const gff = registry.get('gff');
+  if (gff && typeof gff.searchPerformers === 'function') {
+    tasks.push(async () => {
+      try {
+        const found = await withTimeout(gff.searchPerformers(term, { limit: 8 }), 12000, 'performer directory search');
+        let added = 0;
+        for (const p of found) {
+          if ((p.score || 0) < 0.8) continue; // a page that merely names him in its title is not his page
+          const c = pl.add({ platform: 'gff', kind: 'user', target: p.url, label: p.name || p.slug, ingestable: true }, {
+            source: 'people-search', evidence: `performer directory: ${p.name || p.slug} on ${p.host}`, displayName: p.name || p.slug,
+          });
+          if (c) added++;
+        }
+        notes.push({ platform: 'gff', step: 'performer search', ok: true, found: added });
+      } catch (e) { notes.push({ platform: 'gff', step: 'performer search', ok: false, note: e.message }); }
+    });
+  }
+  await pool(tasks, 4, deadline);
 }
 
 async function searchWeb(q, pl, notes, mediaHits = [], webLinks = [], deadline = Date.now() + DEADLINE_MS) {
@@ -572,6 +621,10 @@ async function lookup(input, { imageCheck = true } = {}) {
     let conf = 0.12 + 0.5 * sim + (c.handleExact ? 0.08 : 0) + (c.sources.has('bio-link') || paidMatch ? 0.22 : 0) + (c.sources.has('web-search') ? 0.08 : 0) + (c.sources.has('people-search') ? 0.06 : 0)
       + (independent > 1 ? 0.06 * (independent - 1) : 0) + (c.sampleCount ? 0.07 : 0) + (c.followers >= 100 ? 0.03 : 0);
     if (sim < 0.4 && !c.sources.has('bio-link') && !paidMatch) conf = Math.min(conf, 0.4);
+    // A namesake is a different man: "Christian Hogue" is not "christianhogue912". When the query is
+    // a full name and the handle carries extra digits or filler affixes, this candidate is somebody
+    // else who happens to share the name — it must never outrank the man who was typed.
+    if (isNamesake(q.raw, handle, c.displayName)) conf = Math.min(conf, 0.42);
     conf = Math.max(0.05, Math.min(0.99, conf));
     const existing = repo.feeds.find(c.platform, c.kind, c.target);
     const blocked = repo.blocklist.has('creator', `${c.platform}:${String(c.target).toLowerCase()}`);
@@ -696,4 +749,4 @@ async function findAndFollow(input, { minConfidence = 0.7 } = {}) {
   return { ...found, followed };
 }
 
-module.exports = { lookup, run: lookup, follow, findAndFollow, searchWeb, parseQuery, nameSimilarity, directSpecs, dice };
+module.exports = { lookup, run: lookup, follow, findAndFollow, searchWeb, parseQuery, nameSimilarity, directSpecs, dice, isNamesake };

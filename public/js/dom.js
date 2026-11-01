@@ -96,7 +96,7 @@ export const fmt = {
 
 /** Remote media always goes through the same-origin proxy. Local paths pass through. */
 export function proxied(url) {
-  if (!url) return '';
+  if (!url) return '';           // no URL: no request (an empty /api/proxy?url= is a 404)
   if (url.startsWith('/') || url.startsWith('data:') || url.startsWith('blob:')) return url;
   return `/api/proxy?url=${encodeURIComponent(url)}`;
 }
@@ -120,8 +120,11 @@ export function avatar(entity, size = 40) {
   const [a, b] = GRADS[hash % GRADS.length];
   const el = h('div', { class: 'avatar', style: { width: `${size}px`, height: `${size}px`, fontSize: `${Math.round(size * 0.42)}px`, background: `linear-gradient(135deg, ${a}, ${b})` } }, initial);
   if (url) {
-    const img = h('img', { src: proxied(url), alt: '', loading: 'lazy', decoding: 'async' });
+    // Eager, not lazy: an avatar inside a horizontal rail can sit off-screen for ever, and a lazy
+    // image that is never near the viewport never loads — the card kept showing its initials.
+    const img = h('img', { src: proxied(url), alt: '', loading: 'eager', decoding: 'async' });
     img.addEventListener('load', () => { el.textContent = ''; el.appendChild(img); }, { once: true });
+    img.addEventListener('error', () => { /* keep the initials */ }, { once: true });
   }
   return el;
 }

@@ -37,12 +37,32 @@ const bingHttp = require('../sources/http').forPlatform('bing', 900);
  * instead of the live site: DDG_HTML_URL/DDG_LITE_URL set the exact base, DDG_BASE_URL sets both. */
 const ddgHtmlUrl = (q) => {
   const b = String(process.env.DDG_HTML_URL || process.env.DDG_BASE_URL || 'https://html.duckduckgo.com').replace(/\/+$/, '');
-  return `${b.endsWith('/html') ? b : `${b}/html`}/?q=${encodeURIComponent(q)}`;
+  return `${b.endsWith('/html') ? b : `${b}/html`}/?q=${encodeURIComponent(q)}&kp=-2`;
 };
 const ddgLiteUrl = (q) => {
   const b = String(process.env.DDG_LITE_URL || process.env.DDG_BASE_URL || 'https://lite.duckduckgo.com').replace(/\/+$/, '');
-  return `${b.endsWith('/lite') ? b : `${b}/lite`}/?q=${encodeURIComponent(q)}&kl=us-en`;
+  return `${b.endsWith('/lite') ? b : `${b}/lite`}/?q=${encodeURIComponent(q)}&kl=us-en&kp=-2`;
 };
+/**
+ * DuckDuckGo's anti-bot layer answers a GET (or any request without a browser User-Agent) with an
+ * empty HTTP 202 challenge page, so the HTML and lite endpoints must be read with a form POST:
+ * a browser User-Agent, a matching Referer/Origin and `kp=-2` (SafeSearch off). The query stays
+ * in the URL as well, so a test mock that reads `url.searchParams.get('q')` still sees it.
+ */
+const DDG_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+const ddgPostHeaders = (origin) => ({
+  'user-agent': DDG_UA,
+  'content-type': 'application/x-www-form-urlencoded',
+  accept: 'text/html,application/xhtml+xml',
+  'accept-language': 'en-US,en;q=0.9',
+  referer: `${origin}/`,
+  origin,
+  cookie: 'kp=-2',
+});
+/** The form body DuckDuckGo expects: the query, SafeSearch off and the region. */
+const ddgPostBody = (q) => `q=${encodeURIComponent(q)}&kp=-2&kl=us-en&b=&df=`;
+/** The origin a DDG endpoint belongs to (its Referer/Origin must match). */
+const ddgOrigin = (url) => { try { return new URL(url).origin; } catch { return 'https://duckduckgo.com'; } };
 
 const searxngUrl = () => String(config.searxngUrl || '').replace(/\/+$/, '');
 
@@ -190,10 +210,13 @@ const PROVIDERS = {
     configured: () => config.ddgEnabled && Date.now() >= ddgCooldownUntil,
     async search(q, { count = 20 } = {}) {
       try {
-        const html = await ddgHttp.text(ddgHtmlUrl(q), {
-          timeout: 6000, retries: 0, headers: { accept: 'text/html,application/xhtml+xml', 'accept-language': 'en-US,en;q=0.9' },
+        const url = ddgHtmlUrl(q);
+        const html = await ddgHttp.text(url, {
+          method: 'POST', body: ddgPostBody(q), timeout: 8000, retries: 0, headers: ddgPostHeaders(ddgOrigin(url)),
         });
-        return parseDdg(html).slice(0, count);
+        const parsed = parseDdg(html);
+        if (!parsed.length) throw new Error('DuckDuckGo /html/ answered without results (bot challenge)');
+        return parsed.slice(0, count);
       } catch (e) {
         if (wall(e.message)) {
           const cool = anotherDoorOpen('ddg');
@@ -209,8 +232,9 @@ const PROVIDERS = {
     configured: () => config.ddgEnabled && Date.now() >= ddgLiteCooldownUntil,
     async search(q, { count = 20 } = {}) {
       try {
-        const html = await ddgHttp.text(ddgLiteUrl(q), {
-          timeout: 6000, retries: 0, headers: { accept: 'text/html', 'accept-language': 'en-US,en;q=0.9' },
+        const url = ddgLiteUrl(q);
+        const html = await ddgHttp.text(url, {
+          method: 'POST', body: ddgPostBody(q), timeout: 8000, retries: 0, headers: ddgPostHeaders(ddgOrigin(url)),
         });
         const $ = cheerio.load(String(html));
         if ($('form#challenge-form, .anomaly-modal__modal').length) throw new Error('DuckDuckGo lite asked for a CAPTCHA');
@@ -350,12 +374,34 @@ async function search(q, { count = 20, budget = 40, fresh = false, site, preferK
   /** Tier 1: metered providers, one paid call each at most — first answer wins. */
   const paidTier = () => sequential(metered);
 
-  /** Tier 2: keyless Bing + DuckDuckGo endpoints in parallel, merged and deduped. */
+  /** Tier 2: keyless Bing + DuckDuckGo endpoints in parallel, merged and deduped.
+   *  DuckDuckGo's answers come first: it is the door that answers creator names exactly, while
+   *  Bing intermittently answers with bot-mitigation decoys ("Christian" for "Christian Hogue").
+   *  A provider whose results are incoherent with the query is dropped rather than merged. */
   const keylessTier = async () => {
     if (!free.length) return null;
     const settled = await Promise.allSettled(free.map((name) => query(name).then((r) => { note(name, r); return r; }, (e) => { note(name, null, e); throw e; })));
-    const merged = dedupe(settled.flatMap((s) => (s.status === 'fulfilled' ? s.value : [])));
-    if (merged.length) return remember(free.filter((n, i) => settled[i].status === 'fulfilled' && settled[i].value.length).join('+') || 'keyless', merged);
+    // The provider list order is the configuration order; the answers are matched by name, not by
+    // position, so a door that failed does not shift the labels.
+    const answered = settled.map((s, i) => ({ name: free[i], results: s.status === 'fulfilled' ? s.value : [] }));
+    // DuckDuckGo first, then the rest: the exact-match door leads the merge.
+    answered.sort((a, b) => (b.name.startsWith('ddg') ? 1 : 0) - (a.name.startsWith('ddg') ? 1 : 0));
+    const kept = [];
+    const dropped = [];
+    for (const a of answered) {
+      if (!a.results.length) continue;
+      if (!coherent(a.results, q)) { dropped.push(a.name); continue; }
+      kept.push(a);
+    }
+    const merged = dedupe(kept.flatMap((a) => a.results));
+    if (merged.length) {
+      const label = kept.map((a) => a.name).join('+') || 'keyless';
+      return remember(label, merged);
+    }
+    // Nothing coherent: keep the raw answers rather than losing them (a provider may be right and
+    // the coherence check too strict for a very short query).
+    const raw = dedupe(answered.flatMap((a) => a.results));
+    if (raw.length) return remember(answered.filter((a) => a.results.length).map((a) => a.name).join('+') || 'keyless', raw);
     const firstFail = settled.find((s) => s.status === 'rejected');
     lastErr = lastErr || (firstFail && firstFail.reason) || lastErr;
     return null;

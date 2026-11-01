@@ -137,10 +137,22 @@ async function ddgWeb(query, { count = 20 } = {}) {
     ? `${rawBase}/?q=${encodeURIComponent(q)}&kp=-2`
     : `${rawBase}/html/?q=${encodeURIComponent(q)}&kp=-2`;
   try {
+    // DuckDuckGo answers a GET (or a request without a browser User-Agent) with an empty HTTP 202
+    // challenge page, so the endpoint is read with a form POST: browser User-Agent, matching
+    // Referer/Origin and `kp=-2` (SafeSearch off). The query stays in the URL too, so a test mock
+    // that reads `url.searchParams.get('q')` still sees it.
+    const origin = (() => { try { return new URL(url).origin; } catch { return 'https://html.duckduckgo.com'; } })();
     const html = await ddgHttp.text(url, {
+      method: 'POST',
+      body: `q=${encodeURIComponent(q)}&kp=-2&kl=us-en&b=&df=`,
       headers: {
+        'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        'content-type': 'application/x-www-form-urlencoded',
         accept: 'text/html,application/xhtml+xml',
         'accept-language': 'en-US,en;q=0.9',
+        referer: `${origin}/`,
+        origin,
+        cookie: 'kp=-2',
       },
       timeout: 8000,
       retries: 0,
@@ -172,6 +184,11 @@ async function braveRequest(path, params, { budget = 40 } = {}) {
   }
   if (res.status === 401 || res.status === 403) {
     throw Object.assign(new Error(`Brave rejected the API key (HTTP ${res.status}); check BRAVE_API_KEY and that the plan includes Web Search`), { skip: true, status: res.status });
+  }
+  if (res.status === 402) {
+    // The plan's quota is spent (HTTP 402 = payment required). Retrying cannot help until the plan
+    // is topped up, so this is a skip: the keyless tier answers instead of burning a call each time.
+    throw Object.assign(new Error('Brave plan limit reached (HTTP 402) — the keyless search tier answers instead'), { skip: true, status: res.status, budget: true });
   }
   if (res.status === 422) {
     throw Object.assign(new Error('Brave rejected the query (HTTP 422 — invalid parameters, not the API key)'), { status: res.status });

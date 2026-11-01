@@ -1501,6 +1501,7 @@ async function gffDiscovery({ pages = 2, perPage = 12, coomerLimit = 12, aborted
   const index = require('../lib/coomer-index');
   let indexReady = false; // the creator index is one big request: only fetch it when a page actually lists performers
   const http = require('../sources/http').forPlatform('gff', 1000);
+  const gff = registry.get('gff');
   let page = parseInt(repo.discoveryState.get('gff.page', '0'), 10) || 0;
   for (let p = 0; p < Math.max(1, pages); p++) {
     if (aborted()) break;
@@ -1520,6 +1521,20 @@ async function gffDiscovery({ pages = 2, perPage = 12, coomerLimit = 12, aborted
       const label = ($(el).text() || '').replace(/#\d+\s*/, '').replace(/\s+/g, ' ').trim();
       links.push({ url: /^https?:/i.test(href) ? href : `https://gayforfans.com${href}`, slug: m[1], label });
     });
+    // JustTheGays (justthegays.tv) is the 2026-era sister directory on the same infrastructure: the
+    // mirror (coomer.st) stopped indexing new OnlyFans posts in late 2025, and this is where the
+    // current material and the newly rising performers live. Its trending top-performer list is
+    // read once per run, so a creator nobody follows yet still gets found.
+    if (gff && typeof gff.trendingPerformers === 'function' && p === 0) {
+      try {
+        const fresh = await gff.trendingPerformers({ limit: 30 });
+        for (const f of fresh) {
+          if (seen.has(f.slug)) continue;
+          seen.add(f.slug);
+          links.push({ url: f.url, slug: f.slug, label: f.name });
+        }
+      } catch (e) { events.log('WARN', `Discovery: JustTheGays trending — ${e.message}`); }
+    }
     out.scanned += links.length;
     let added = 0;
     // GayForFans is a gay-male OnlyFans directory: each performer here is a gay male creator by the

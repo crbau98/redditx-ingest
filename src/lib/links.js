@@ -239,11 +239,15 @@ function parseProfile(input, hint = {}) {
     return null; // index/search pages are not a creator link
   }
 
-  // GayForFans performer page: an ingestible creator feed wherever a directory or listicle links it.
-  // Any other path on the host stays an ordinary web page (video pages, category pages, …).
-  if (matches(h, 'gayforfans.com')) {
+  // GayForFans / JustTheGays performer page: an ingestible creator feed wherever a directory or
+  // listicle links it. Any other path on the host stays an ordinary web page (video pages, …).
+  if (matches(h, 'gayforfans.com') || matches(h, 'justthegays.tv')) {
     const m = url.pathname.match(/^\/performer\/([a-z0-9-]{3,})/i);
-    if (m) return { platform: 'gff', kind: 'user', target: `https://gayforfans.com/performer/${m[1]}`, ingestable: true, label: m[1], url: `https://gayforfans.com/performer/${m[1]}` };
+    if (m) {
+      const host = matches(h, 'justthegays.tv') ? 'justthegays.tv' : 'gayforfans.com';
+      const target = `https://${host}/performer/${m[1]}`;
+      return { platform: 'gff', kind: 'user', target, ingestable: true, label: m[1], url: target };
+    }
   }
 
   // OnlyFans: one canonical link per person (campaign / post links collapse to the profile); site pages are not links.

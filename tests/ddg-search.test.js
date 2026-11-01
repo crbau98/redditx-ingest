@@ -71,9 +71,9 @@ test('preferKeyless puts the free tier ahead of the paid one (one shared daily b
   const order = [];
   const { brave, ddg, bing } = ws.PROVIDERS;
   const oBrave = brave.search; const oDdg = ddg.search; const oBing = bing.search;
-  brave.search = async () => { order.push('brave'); return [{ url: 'https://example.com/brave', title: 'Brave answer', description: '' }]; };
-  bing.search = async () => { order.push('bing'); return [{ url: 'https://example.com/bing', title: 'Bing answer', description: '' }]; };
-  ddg.search = async () => { order.push('ddg'); return [{ url: 'https://example.com/ddg', title: 'DDG answer', description: '' }]; };
+  brave.search = async () => { order.push('brave'); return [{ url: 'https://example.com/brave', title: 'tier order paid first answer', description: 'tier order paid first' }]; };
+  bing.search = async () => { order.push('bing'); return [{ url: 'https://example.com/bing', title: 'tier order free first answer', description: 'tier order free first' }]; };
+  ddg.search = async () => { order.push('ddg'); return [{ url: 'https://example.com/ddg', title: 'tier order free first answer', description: 'tier order free first' }]; };
   try {
     const paid = await ws.search('tier order paid first', {});
     assert.equal(order[0], 'brave', 'by default the paid tier runs first');
@@ -82,7 +82,9 @@ test('preferKeyless puts the free tier ahead of the paid one (one shared daily b
     const free = await ws.search('tier order free first', { preferKeyless: true });
     assert.ok(!order.includes('brave'), 'preferKeyless never touches the paid provider');
     assert.ok(free.provider.includes('ddg'), `the free tier answers: ${free.provider}`);
-    assert.equal(free.provider, 'bing+ddg', 'the keyless tier merges every door that answered');
+    // DuckDuckGo leads the merge: it is the door that answers creator names exactly, while Bing
+    // intermittently answers with bot-mitigation decoys.
+    assert.equal(free.provider, 'ddg+bing', 'the keyless tier merges every door that answered, DDG first');
   } finally {
     brave.search = oBrave; bing.search = oBing; ddg.search = oDdg; ws._clear();
   }

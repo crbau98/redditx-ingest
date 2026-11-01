@@ -214,9 +214,12 @@ const creators = {
 
   refreshStats(id) { if (id) creatorQ.stats.run({ id }); },
 
-  list({ page = 0, limit = 48, q: query, sort = 'media', platform, admin = false, minMedia, onlyfans: ofOnly = false, paidHost } = {}) {
+  list({ page = 0, limit = 48, q: query, sort = 'media', platform, admin = false, minMedia, onlyfans: ofOnly = false, paidHost, freshDays } = {}) {
     const where = []; const params = [];
     if (ofOnly) where.push("c.links GLOB '*onlyfans.com/[A-Za-z0-9]*'");
+    // "posted in the last N days": who is actually publishing right now.
+    const fresh = freshDays ? Math.min(Math.max(parseInt(freshDays, 10) || 0, 0), 3650) : 0;
+    if (fresh) { where.push('c.last_media_at >= ?'); params.push(new Date(Date.now() - fresh * 86400000).toISOString()); }
     if (paidHost) { where.push("c.links LIKE ? ESCAPE '\\'"); params.push(`%${String(paidHost).replace(/[\\%_]/g, (x) => `\\${x}`)}/%`); }
     if (!admin) { where.push("c.status = 'active'", "c.scope != 'excluded'"); }
     const min = minMedia !== undefined ? minMedia : (admin ? 0 : 1);

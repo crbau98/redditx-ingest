@@ -254,10 +254,17 @@ main { padding: 24px var(--pad) 80px; max-width: 1720px; margin: 0 auto; min-hei
 .creator-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
 .creator-card { display: block; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); overflow: hidden; transition: transform var(--dur-base) var(--ease), box-shadow var(--dur-base), border-color var(--dur-base); }
 .creator-card:hover { transform: translateY(-3px); box-shadow: var(--shadow); border-color: var(--line-strong); }
-.creator-thumbs { display: grid; grid-template-columns: 2fr 1fr; grid-template-rows: 1fr 1fr; gap: 2px; height: 150px; background: var(--surface-2); }
+.creator-thumbs { display: grid; grid-template-columns: 2fr 1fr; grid-template-rows: 1fr 1fr; gap: 2px; height: 150px; background: var(--surface-2); position: relative; }
 .creator-thumbs div { background: var(--surface-3) center/cover; }
 .creator-thumbs div:first-child { grid-row: span 2; }
 .creator-body { padding: 0 14px 14px; margin-top: -26px; position: relative; display: grid; gap: 10px; }
+.creator-head { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: 'avatar name' 'avatar follow'; align-items: center; column-gap: 12px; row-gap: 4px; }
+.creator-head > .avatar { grid-area: avatar; align-self: start; }
+/* The name sits over the preview strip (the body is pulled up over it): give the text its own
+   plate so it never reads against a photograph. */
+.creator-head > div { grid-area: name; min-width: 0; position: relative; isolation: isolate; }
+.creator-head > div::before { content: ''; position: absolute; inset: -8px -12px; z-index: -1; border-radius: var(--r-md); background: var(--surface); opacity: .92; }
+.creator-head > .btn.sm { grid-area: follow; justify-self: start; }
 .creator-body .avatar { width: 56px; height: 56px; font-size: 22px; border: 3px solid var(--surface); }
 .creator-name { font-family: var(--font-display); font-weight: 600; font-size: 16px; display: flex; align-items: center; gap: 6px; }
 .creator-name svg { color: var(--info); width: 16px; height: 16px; }
@@ -266,6 +273,27 @@ main { padding: 24px var(--pad) 80px; max-width: 1720px; margin: 0 auto; min-hei
 .creator-stats b { color: var(--text); font-weight: 600; }
 .creator-card.mini { width: 220px; }
 .creator-card.mini .creator-thumbs { height: 110px; }
+
+/* ---------- creator card: spotlight + freshness -----------------------------
+   The spotlight card is the large one on Home: bigger previews, a wider name, and
+   a freshness mark that says at a glance who is posting right now. */
+.creator-card.spotlight .creator-thumbs { height: 210px; }
+.creator-card.spotlight .creator-body { padding: 0 18px 18px; margin-top: -32px; gap: 12px; }
+.creator-card.spotlight .creator-body .avatar { width: 64px; height: 64px; font-size: 25px; border-width: 3px; }
+.creator-card.spotlight .creator-name { font-size: 18px; letter-spacing: var(--track-tight); }
+.creator-card.spotlight .creator-stats { gap: 18px; font-size: 13px; }
+/* The mark sits on the preview strip: a dot for "posting today", a clock for older work. */
+.fresh-mark { position: absolute; right: 10px; bottom: 10px; z-index: 3; display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: var(--r-pill); background: rgba(11, 11, 14, .74); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, .14); color: var(--text-2); font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+.fresh-mark i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+.fresh-mark.live { color: var(--text); border-color: color-mix(in srgb, var(--good) 46%, transparent); }
+.fresh-mark.live i { background: var(--good); animation: fresh-pulse 2.4s var(--ease-out) infinite; }
+/* The pulse animates transform and opacity only: a box-shadow animation repaints every frame. */
+@keyframes fresh-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.45); opacity: .55; }
+}
+@media (prefers-reduced-motion: reduce) { .fresh-mark.live i { animation: none; } }
+:root[data-theme='light'] .fresh-mark { background: rgba(255, 255, 255, .8); border-color: var(--line-strong); }
 
 /* ---------- filter bar --------------------------------------------------- */
 .filterbar { position: sticky; top: var(--appbar-h); z-index: 40; margin: 0 calc(var(--pad) * -1); padding: 12px var(--pad); background: color-mix(in srgb, var(--bg) 86%, transparent); backdrop-filter: blur(14px); border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }

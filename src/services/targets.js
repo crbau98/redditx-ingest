@@ -16,11 +16,14 @@ const { profileUrl } = require('../lib/links');
 function cleanCreatorNames(spec) {
   const rawLabel = spec.label ? String(spec.label).replace(/^[@u/]+/, '').trim() : '';
   const rawTarget = String(spec.target || '').trim();
-  if (spec.platform === 'gff' || /^https?:\/\/gayforfans\.com\/performer\//i.test(rawTarget)) {
-    const slug = (rawTarget.match(/\/performer\/([a-z0-9-]+)/i) || [])[1] || rawTarget;
+  if (spec.platform === 'gff' || /^https?:\/\/(?:gayforfans\.com|justthegays\.tv)\/performer\//i.test(rawTarget)) {
+    const slug = (rawTarget.match(/\/performer\/([a-z0-9-]+)/i) || [])[1] || '';
+    // The slug ends in a site id ("reno-gold-66", "alejandro-pino-hotalex6-x9b1v"): drop it.
     const baseSlug = slug.replace(/-[a-z0-9]{4,6}$/i, '');
     const paren = rawLabel.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
     const displayName = paren ? paren[1].trim() : (rawLabel && !/^https?:/i.test(rawLabel) && rawLabel !== slug ? rawLabel : baseSlug.split(/[-_]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(' '));
+    // The handle is the name plus his stage/paid handle ("alejandro-pino-hotalex6" → "alejandropinohotalex6"),
+    // so two pages of the same man share it.
     const handle = paren ? paren[2].trim().replace(/^@/, '') : baseSlug.replace(/-/g, '');
     return { handle: handle || slug, displayName: displayName || handle || slug };
   }
@@ -66,7 +69,12 @@ function addSpec(spec, { creatorId = null, origin = 'admin', trusted, hint, body
     if (!creator) {
       if (checkText(spec.target, spec.label).level === 'block') return { status: 'invalid', reason: 'Rejected by the safety gate' };
       const { handle, displayName } = cleanCreatorNames(spec);
-      creator = repo.creators.create({ handle, displayName, origin });
+      // The same man often has two pages on one platform ("reno-gold-c2gav" and "reno-gold-71").
+      // When his name already belongs to a creator, the new page belongs to him too — otherwise
+      // every page of one performer becomes a creator of his own.
+      const named = repo.db.prepare("SELECT id FROM creators WHERE status != 'blocked' AND LOWER(display_name) = LOWER(?) AND LENGTH(?) >= 5 ORDER BY media_count DESC LIMIT 1").get(displayName, displayName);
+      if (named) creator = repo.creators.get(named.id);
+      else creator = repo.creators.create({ handle, displayName, origin });
     }
   }
   const res = repo.feeds.upsert({
