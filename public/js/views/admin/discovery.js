@@ -6,9 +6,27 @@ import { table, pager, toggle, platBadge, pageHead, act, kpi } from './ui.js';
 const STATUSES = [['pending', 'Waiting'], ['followed', 'Followed'], ['linked', 'Linked to a creator'], ['rejected', 'Rejected'], ['all', 'All']];
 const SIGNAL_LABEL = { identity: 'same name', mention: 'mentioned', cofollow: 'followed by', search: 'search', similar: 'looks like', hangout: 'creators post here', ofconfirmed: 'runs a paid page', onlyfans: 'same handle as a paid page' };
 // What each strategy found on the last run (keys of the run report).
-const STRATEGIES = [['mentions', 'Mentions'], ['graph', 'Bluesky follows'], ['lookalikes', 'Lookalikes'], ['people', 'People search'], ['communities', 'Communities & feeds'], ['hangouts', 'Where creators post'], ['topics', 'Web topics'], ['identity', 'Same-name search'], ['onlyfans', 'Paid pages traced'], ['seeds', 'Named creators']];
-const foundOf = (r) => (r ? (r.found !== undefined ? r.found : r.linked || 0) : null);
+const STRATEGIES = [['mentions', 'Mentions'], ['graph', 'Bluesky follows'], ['lookalikes', 'Lookalikes'], ['people', 'People search'], ['communities', 'Communities & feeds'], ['hangouts', 'Where creators post'], ['topics', 'Web topics'], ['identity', 'Same-name search'], ['onlyfans', 'Paid pages traced'], ['seeds', 'Named creators'], ['harvest', 'Directory harvest'], ['coomer', 'Coomer creators'], ['gff', 'Performer dir'], ['imageMatch', 'Image match']];
+// Which number each strategy's badge shows: its own yield, else found/linked.
+const YIELD = { harvest: 'leads', coomer: 'feeds', gff: 'followed', imageMatch: 'pages' };
+const foundOf = (r, key) => {
+  if (!r) return null;
+  const y = YIELD[key];
+  if (y && r[y] !== undefined) return r[y];
+  return r.found !== undefined ? r.found : r.linked || 0;
+};
 const SCOPE = { in: ['good', 'male-focused'], uncertain: ['', 'unclear'], excluded: ['bad', 'off-topic'] };
+/** Hover text for a strategy badge: a sentence for the new passes (raw JSON means nothing here),
+ * the run report itself for everything else. */
+function describeRun(key, r) {
+  if (!r) return '';
+  const rej = r.rejected ? ` · ${r.rejected} rejected` : '';
+  if (key === 'harvest') return `${r.searched} searches · ${r.read} directory/list pages read · ${r.leads} paid-page leads found · ${r.candidates} profile links${rej}`;
+  if (key === 'coomer') return `${r.searched} keyword queries on the mirror · ${r.creators} creators indexed · ${r.feeds} feeds registered${rej}`;
+  if (key === 'gff') return `${r.scanned} ranked performers scanned · ${r.followed} followed${rej}`;
+  if (key === 'imageMatch') return `${r.creators} creators image-matched · ${r.pictures} of his pictures found elsewhere · ${r.pages} page${r.pages === 1 ? '' : 's'} registered${r.error ? ` · ${r.error}` : ''}`;
+  return JSON.stringify(r);
+}
 
 const KIND_LABEL = { community: 'community', feedgen: 'custom feed', list: 'list', page: 'link page' };
 const reach = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 100) / 10}k` : String(n));
@@ -40,7 +58,7 @@ export async function render(root) {
   let data; let seedsText = '';
 
   const runBtn = h('button', { class: 'btn primary', onclick: (e) => act(e.currentTarget, async () => { await adminPost('/discovery/run'); toast('Discovery started — watch the Live log', 'ok'); setTimeout(load, 2500); }) }, icon('sparkle', 'sm'), 'Run discovery now');
-  head.append(pageHead('Discovery', 'Finds creators, communities and custom feeds you are not following yet — from who your creators mention and follow, keyword searches on Reddit, Lemmy and Bluesky, and web searches — scores them, and follows the strong ones automatically.', runBtn));
+  head.append(pageHead('Discovery', 'Finds creators you are not following yet: who your creators mention and follow, keyword searches on Reddit, Lemmy and Bluesky, directory and list pages across the open web, the Coomer index and the GayForFans performer ranking, then image-matches their content — scores every lead and follows the strong ones automatically.', runBtn));
 
   const search = h('input', { class: 'input sm', type: 'search', 'aria-label': 'Search candidates', placeholder: 'Search candidates…', value: f.q, style: { maxWidth: '220px' } });
   search.addEventListener('input', debounce(() => set({ q: search.value.trim(), page: 0 }), 350));
@@ -69,7 +87,7 @@ export async function render(root) {
     const last = d.last;
     const rows = [];
     if (last) rows.push(h('div', { class: 'run-strategies' }, h('span', { class: 'muted' }, 'Last run found:'),
-      ...STRATEGIES.filter(([k]) => last[k]).map(([k, l]) => h('span', { class: `badge${foundOf(last[k]) ? ' good' : ''}`, title: JSON.stringify(last[k]) }, `${l} ${foundOf(last[k])}`))));
+      ...STRATEGIES.filter(([k]) => last[k]).map(([k, l]) => h('span', { class: `badge${foundOf(last[k], k) ? ' good' : ''}`, title: describeRun(k, last[k]) }, `${l} ${foundOf(last[k], k)}`))));
     if (d.yield && d.yield.length) rows.push(h('div', { class: 'run-strategies', title: 'For creators discovery followed: the signal that weighed most, and how many have posted since' },
       h('span', { class: 'muted' }, 'Followed creators now posting, by strongest signal:'),
       ...d.yield.map((y) => h('span', { class: `badge sig-${y.signal}` }, `${SIGNAL_LABEL[y.signal] || y.signal} ${y.posting}/${y.followed}`))));

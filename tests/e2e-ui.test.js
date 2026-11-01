@@ -202,6 +202,8 @@ describe('PRISM in a real browser', { timeout: 300000 }, () => {
     const theme = () => page.evaluate(() => document.documentElement.dataset.theme);
     const startTheme = await theme();
     await page.getByRole('button', { name: 'Toggle theme' }).click();
+    // The flip runs inside a view transition (async by design): wait for the state instead of racing it.
+    await page.waitForFunction((from) => document.documentElement.dataset.theme !== from, startTheme, { timeout: 4000 });
     assert.notEqual(await theme(), startTheme);
     noProblems(problems);
   });

@@ -44,6 +44,31 @@
 - New `css/tokens.css`: graphite palette (not blue-violet), one accent used for state and the primary action only, Space Grotesk for titles/names + Inter for UI, 4px spacing scale, radius/shadow/motion tokens, light theme with AA-contrast fixes (light accent `#e63f73` → `#c2185b`, 3.95:1 → 5.9:1), reduced-motion collapsing all durations, 44px touch targets on coarse pointers.
 - `:focus-visible` outline everywhere; hard-coded greys in the admin sidebar moved to tokens.
 
+### Discovery visibility and admin triage
+- **Admin → Discovery shows every strategy it now runs**: Directory harvest, Coomer creators, Performer
+  directory and AI image match joined the "Last run found" badges, each with a human-readable hover line
+  ("96 ranked performers scanned · 24 followed") instead of raw JSON. The page description lists what
+  discovery actually does.
+- **Review queue keyboard triage**: ← → move, Space select, A/H/R approve/hide/remove the selection —
+  for a queue in the hundreds, clicking each card was the slowest part. "Block forever" deliberately has
+  no shortcut: the one irreversible action stays a click. Shortcuts are listed in the `?` help and in
+  the page header, ignore anything typed in a field, and do nothing with an empty selection.
+
+### Fixes found by measuring rather than guessing
+- **Lookup 67 s → 34–46 s** (hard-bounded): verify() ignored the deadline so in-flight profile reads
+  finished 15–20 s after it; the expansion wave alone cost 21.7 s. The media search was
+  fire-and-forget (results discarded while it contended with verification); queries now run in parallel,
+  probes at concurrency 10, and every verify is clamped to the remaining budget.
+- **Lookup fired /api/lookup twice** per search (navigate dispatched hashchange, `?q=` remounted the
+  view): typing now fires 0, the lookup row exactly 1 — verified in Chromium.
+- **Coomer/GayForFans probes fail fast**: a probe read one page with no retries instead of paging
+  40 pages and backing off 15 s (which burned the entire 18 s probe budget on every guessed handle).
+- **GayForFans directory cursor never wrapped** — the reset was written after the state, so after one
+  pass through 75 pages discovery walked off the end (`?page=76, 77, …`) and silently found nobody.
+- **Theme toggle**: a refused view transition could leave the theme unchanged (apply() now runs in the
+  failure path), and the E2E test no longer races the async flip.
+- **Bing gets its own rate-limiter key**: a DuckDuckGo 429 penalty no longer delays Bing.
+
 ### Verified
 - 941 unit/integration tests pass (new: coherence, prose filters, harvest wiring, gff link parsing).
 - 10/10 E2E tests in real Chromium (age gate, smart search, viewer, creators, takedown form, admin key, phone layout, theme).

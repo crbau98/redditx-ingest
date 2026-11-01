@@ -74,7 +74,8 @@ const NAV = [['home', '/', 'Home', 'home'], ['following', '/following', 'Followi
 function showShortcuts() {
   const rows = [['Ctrl / ⌘ + K', 'Command palette — jump anywhere, run actions'], ['/', 'Search'], ['?', 'This help'], ['G then H / F / E / R / C / S / M', 'Go to Home, Following, Explore, Reels, Creators, Saved, Galaxy map'], ['X', 'Surprise me (open something random)'],
     ['In the viewer', ''], ['← / →  (J / K)', 'Previous / next'], ['F · C', 'Save · add to collection'], ['S · I · M', 'Slideshow · details · mute'],
-    ['In Reels', ''], ['↑ / ↓  (K / J)', 'Previous / next'], ['Space · M', 'Pause · sound'], ['F · C · Enter', 'Save · collect · open details'], ['Double-tap', 'Save']];
+    ['In Reels', ''], ['↑ / ↓  (K / J)', 'Previous / next'], ['Space · M', 'Pause · sound'], ['F · C · Enter', 'Save · collect · open details'], ['Double-tap', 'Save'],
+    ['In the review queue (Admin)', ''], ['← / →', 'Move between items'], ['Space', 'Select / deselect'], ['A · H · R', 'Approve · Hide · Remove the selection']];
   const m = openModal({ title: 'Keyboard shortcuts', wide: true, body: h('dl', { class: 'kv', style: { gridTemplateColumns: 'auto 1fr' } }, rows.map(([k, d]) => (d
     ? [h('dt', null, h('kbd', { class: 'kbd' }, k)), h('dd', { style: { textAlign: 'left' } }, d)]
     : [h('dt', { style: { gridColumn: '1 / -1', marginTop: '10px', fontWeight: 700, color: 'var(--text)' } }, k)]))), actions: [h('button', { class: 'btn primary', onclick: () => m.close() }, 'Got it')] });
@@ -128,9 +129,13 @@ function buildShell() {
     const r = themeBtn.getBoundingClientRect();
     const x = e.clientX || r.left + r.width / 2; const y = e.clientY || r.top + r.height / 2;
     const end = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
-    const vt = document.startViewTransition(apply);
-    vt.ready.then(() => document.documentElement.animate({ clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${end}px at ${x}px ${y}px)`] },
-      { duration: 560, easing: 'cubic-bezier(.22, .8, .2, 1)', pseudoElement: '::view-transition-new(root)' })).catch(() => {});
+    try {
+      const vt = document.startViewTransition(apply);
+      // A transition the browser refuses (aborted, unsupported animation, hidden document) must never
+      // leave the theme unchanged: apply() is idempotent, so re-running it in the failure path is safe.
+      vt.ready.then(() => document.documentElement.animate({ clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${end}px at ${x}px ${y}px)`] },
+        { duration: 560, easing: 'cubic-bezier(.22, .8, .2, 1)', pseudoElement: '::view-transition-new(root)' })).catch(() => apply());
+    } catch { apply(); }
   });
   paintTheme();
   bus.on('theme', paintTheme);

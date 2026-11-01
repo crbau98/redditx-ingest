@@ -26,7 +26,38 @@ export function selectableGrid(items, { onChange }) {
 
 export async function render(root) {
   const host = h('div', { class: 'stack' });
-  root.append(pageHead('Review queue', 'Items held back because their male focus is unclear or the safety gate flagged a keyword. Nothing here is public until you approve it.'), host);
+  root.append(pageHead('Review queue', 'Items held back because their male focus is unclear or the safety gate flagged a keyword. Nothing here is public until you approve it.  Shortcuts: ← → move · Space select · A approve · H hide · R remove.'), host);
+
+  // Keyboard triage: with 700+ items waiting, clicking each one is the slowest part of the job.
+  // "Block forever" deliberately has no shortcut — the one irreversible action stays a click.
+  let grid = null;
+  let shortcuts = null; // the bulk actions of the page currently showing (NOT named `act`: that shadows the import)
+  let lastKey = null; let lastAt = 0;
+  const onKey = (e) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.target && e.target.closest && e.target.closest('input, textarea, select, [contenteditable], button, a')) return;
+    const modal = document.getElementById('modal-root');
+    if (modal && modal.children.length) return;
+    const now = Date.now();
+    const prevG = (lastKey === 'g' || lastKey === 'G') && now - lastAt < 1200;
+    lastKey = e.key; lastAt = now;
+    if (prevG || !grid || !grid.el.isConnected) return;
+    const cards = [...grid.el.querySelectorAll('.mod-card')];
+    if (!cards.length) return;
+    if (e.key.startsWith('Arrow')) {
+      const i = cards.indexOf(document.activeElement);
+      const next = (e.key === 'ArrowRight' || e.key === 'ArrowDown') ? Math.min(cards.length - 1, i + 1) : Math.max(0, i < 0 ? 0 : i - 1);
+      e.preventDefault();
+      cards[next].focus();
+      cards[next].scrollIntoView({ block: 'nearest' });
+      return;
+    }
+    const k = e.key.toLowerCase();
+    if (!shortcuts || !shortcuts[k] || !grid.selected.size) return;
+    e.preventDefault();
+    shortcuts[k]();
+  };
+  document.addEventListener('keydown', onKey);
 
   async function load() {
     const r = await adminGet('/moderation/queue', { limit: 60 });
@@ -35,16 +66,19 @@ export async function render(root) {
     const count = h('b', null, '0 selected');
     const run = (action) => async (e) => {
       const ids = [...grid.selected];
-      await act(e.currentTarget, () => adminPost('/media/bulk', { ids, action, reason: 'review queue' }), `${ids.length} ${action === 'approve' ? 'approved' : action === 'block' ? 'blocked' : action === 'hide' ? 'hidden' : 'removed'}`);
+      await act(e && e.currentTarget, () => adminPost('/media/bulk', { ids, action, reason: 'review queue' }), `${ids.length} ${action === 'approve' ? 'approved' : action === 'block' ? 'blocked' : action === 'hide' ? 'hidden' : 'removed'}`);
       load();
     };
-    const grid = selectableGrid(r.items, { onChange: (sel) => { bar.hidden = !sel.size; count.textContent = `${sel.size} selected`; } });
+    grid = selectableGrid(r.items, { onChange: (sel) => { bar.hidden = !sel.size; count.textContent = `${sel.size} selected`; } });
     bar.append(count, h('span', { class: 'grow' }),
       h('button', { class: 'btn good', onclick: run('approve') }, icon('check', 'sm'), 'Approve'),
       h('button', { class: 'btn', onclick: run('hide') }, 'Hide'),
       h('button', { class: 'btn', onclick: run('reject') }, 'Remove'),
       h('button', { class: 'btn danger', onclick: run('block') }, 'Block forever'));
     host.replaceChildren(h('div', { class: 'row' }, h('span', { class: 'muted' }, `${fmt.int(r.total)} waiting`), h('span', { class: 'grow' }), h('button', { class: 'btn sm', onclick: () => grid.selectAll() }, 'Select all on page')), grid.el, bar);
+    // The keyboard layer runs the same actions as the buttons (act() takes any element, or none).
+    shortcuts = { a: run('approve'), h: run('hide'), r: run('reject') };
   }
   await load();
+  return () => document.removeEventListener('keydown', onKey);
 }
