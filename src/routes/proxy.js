@@ -30,6 +30,12 @@ const KNOWN_SUFFIXES = [
 ];
 const HLS_TYPES = /^(application\/(vnd\.apple\.mpegurl|x-mpegurl|octet-stream)|audio\/mpegurl|video\/mp2t)/i;
 
+/** Hosts whose hotlink protection demands a specific site as the Referer — sending the CDN's own
+ * origin (the generic behaviour) is exactly what gets refused with a 403. */
+const REFERER_BY_HOST = {
+  'cdn.gff.network': 'https://gayforfans.com/',
+};
+
 function parseTarget(req) {
   const raw = req.query.url;
   if (!raw || typeof raw !== 'string' || raw.length > 2048) return { error: [400, 'Missing or invalid url'] };
@@ -48,12 +54,18 @@ function sendError(res, [status, message]) {
   res.status(status).json({ error: message });
 }
 
-const proxyHeaders = (origin, extra = {}) => ({
-  referer: `${origin}/`,
-  accept: 'image/avif,image/webp,video/*,image/*;q=0.8,*/*;q=0.5',
-  'accept-encoding': 'identity',
-  ...extra,
-});
+const proxyHeaders = (target, extra = {}) => {
+  let origin;
+  try { origin = new URL(target).origin; } catch { origin = ''; }
+  let host = '';
+  try { host = new URL(target).hostname.toLowerCase(); } catch { /* none */ }
+  return {
+    referer: REFERER_BY_HOST[host] || `${origin}/`,
+    accept: 'image/avif,image/webp,video/*,image/*;q=0.8,*/*;q=0.5',
+    'accept-encoding': 'identity',
+    ...extra,
+  };
+};
 
 router.get('/proxy', async (req, res) => {
   const t = parseTarget(req);
@@ -73,7 +85,7 @@ router.get('/proxy', async (req, res) => {
 
   let upstream;
   try {
-    upstream = await net.open(t.url, { headers: proxyHeaders(t.origin, hasRange ? { range: req.headers.range } : {}), timeout: 15000, maxRedirects: 4 });
+    upstream = await net.open(t.url, { headers: proxyHeaders(t.url, hasRange ? { range: req.headers.range } : {}), timeout: 15000, maxRedirects: 4 });
   } catch (e) {
     return sendError(res, e.code === 'EBLOCKED' ? [403, 'Blocked host'] : [502, 'Upstream unreachable']);
   }

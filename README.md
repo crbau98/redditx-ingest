@@ -294,7 +294,7 @@ It uses the real adapters and the real safety + male-only gates but writes nothi
 `#/find` (also Admin → Creators → **Find a creator**, and *Find more accounts* inside a creator): type a **name, performer name, @handle or profile link**. The public route is age-gated and rate-limited (`POST /api/lookup`, `/lookup/follow`, `/lookup/auto`); admin keeps `POST /api/admin/lookup*`.
 
 1. the handle (and name-derived variants such as `jaxstone`, `jax_stone`) is probed on Reddit, RedGIFs, Bluesky, Mastodon, Misskey, X, Telegram, Tumblr, YouTube, PeerTube and Lemmy through the real adapters, so “found” means *exists and has posts*;
-2. Bluesky people search, RedGIFs creator search and a web search of the name (Keenable, Brave and/or a SearXNG instance, tried in that order with fallback and caching — `KEENABLE_API_KEY`, `BRAVE_API_KEY`, `SEARXNG_URL`; site-restricted searches on linktr.ee, bsky.app and x.com find the profile pages themselves) add accounts the handle guess missed;
+2. Bluesky people search, RedGIFs creator search and a web search of the name (metered providers first — Keenable, Brave, Bright Data, Claude — then keyless Bing + DuckDuckGo merged in parallel, then SearXNG; each layer fails over with caching — `KEENABLE_API_KEY`, `BRAVE_API_KEY` or `BRAVE_API_KEY_FILE`, `SEARXNG_URL`; DuckDuckGo and Bing need no key and cool themselves down when the network is walled off; site-restricted searches on linktr.ee, bsky.app and x.com find the profile pages themselves) add accounts the handle guess missed;
 3. bios and link-in-bio pages (Linktree, Beacons, AllMyLinks…) of what was found reveal the person's other accounts, which are verified the same way; paid links (OnlyFans, Fansly…) are kept on the profile and the free public accounts behind them are what gets followed;
 4. every candidate is scored (name similarity, exact handle, cross-links, independent sources, has content) and shown with its evidence; female / feminine candidates, minors and avatars showing a woman are hidden;
 5. **Follow selected** creates one creator with all chosen accounts and queues a deep first read (up to 300 posts per account); **Find & follow strong matches** does both steps at once. API: `POST /api/admin/lookup`, `/lookup/follow`, `/lookup/auto`.
@@ -338,7 +338,7 @@ See [`.env.example`](.env.example) for every variable. Runtime behaviour (concur
 
 1. Push to GitHub, create a Railway service from the repo (uses the `Dockerfile`).
 2. Add a persistent volume at `/data`.
-3. Set `ADMIN_KEY` (required) and optionally the source credentials — `X_BEARER_TOKEN`, `BRAVE_API_KEY` (discovery), `TELEGRAM_API_KEY` (a @BotFather bot token), `REDDIT_CLIENT_ID/SECRET`, `BSKY_IDENTIFIER/APP_PASSWORD`. The boot log prints which keys are active. `DB_PATH=/data/prism.db` is the image default.
+3. Set `ADMIN_KEY` (required) and optionally the source credentials — `X_BEARER_TOKEN`, `BRAVE_API_KEY` or `BRAVE_API_KEY_FILE` (a key file outside the repo; discovery), `TELEGRAM_API_KEY` (a @BotFather bot token), `REDDIT_CLIENT_ID/SECRET`, `BSKY_IDENTIFIER/APP_PASSWORD`. The boot log prints which keys are active. `DB_PATH=/data/prism.db` is the image default.
 4. Deploy. Health check: `/api/health`. The scheduler starts automatically in production.
 
 Upgrading from v3 is automatic: the database is migrated in place on first boot (media, creators, accounts, tags and moderation history preserved; media re-hashed so new imports dedupe against old ones).

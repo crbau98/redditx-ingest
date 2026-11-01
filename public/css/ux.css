@@ -2,6 +2,9 @@
  * phone layouts of the viewer, Reels and filters. Colours, type and surfaces come from
  * app.css tokens; this file only places things and wires states. */
 
+/* ---------- keyboard focus: one visible ring for every control (P0-3) ---------- */
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
 /* ---------- phone "more" sheet ---------------------------------------------- */
 .menu-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .menu-item { display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 10px 12px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); color: var(--text); text-align: left; font: inherit; cursor: pointer; }

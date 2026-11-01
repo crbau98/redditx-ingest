@@ -61,6 +61,32 @@ export async function render(root, { overview: first }) {
       breakerOpen.length ? h('div', { class: 'stack', style: { marginTop: '12px', gap: '6px' } }, breakerOpen.map(([p, b]) => h('div', { class: 'run-live', style: { background: 'color-mix(in srgb, var(--warn) 14%, transparent)' } }, icon('alert', 'sm'), h('span', { class: 'grow' }, `${platformLabel(p)} is resting (${b.state}) — ${b.lastError || 'repeated failures'}`)))) : null);
 
     const total = o.media.published;
+
+    // "Needs attention": only queues with something in them, one row each. Zero = nothing to show.
+    const attention = [
+      { n: o.queues.review, label: 'Items awaiting review', sub: 'unclear scope or picture-flagged', href: href('/admin/moderation'), tone: 'warn' },
+      { n: o.queues.reports, label: 'Open reports', sub: 'takedowns & safety', href: href('/admin/reports'), tone: 'bad' },
+      { n: o.feeds.failing, label: 'Failing feeds', sub: 'repeated errors or resting breakers', href: href('/admin/feeds?status=error'), tone: 'bad' },
+      { n: o.discovery ? o.discovery.pending : 0, label: 'Discovery candidates waiting', sub: 'scored leads not yet followed', href: href('/admin/discovery'), tone: 'info' },
+      { n: o.identity ? o.identity.pending : 0, label: 'Possible same-person links', sub: 'two creators, one man?', href: href('/admin/identities'), tone: 'info' },
+    ].filter((r) => r.n > 0);
+    const attentionBox = !o.feeds.total
+      ? h('div', { class: 'panel first-run' },
+        h('h3', null, icon('compass', 'sm'), 'No sources yet'),
+        h('p', { class: 'muted' }, 'Add a source, and PRISM starts ingesting.'),
+        h('div', { class: 'row', style: { gap: '8px' } },
+          h('a', { class: 'btn primary', href: href('/admin/sources') }, 'Add a source'),
+          h('a', { class: 'btn', href: href('/admin/feeds') }, 'Seeded feeds')))
+      : h('div', { class: 'panel' },
+        h('h3', null, icon('layers', 'sm'), 'Needs attention'),
+        attention.length
+          ? h('ul', { class: 'attn-list' }, attention.map((r) => h('li', null,
+            h('a', { class: `attn-row${r.tone ? ` ${r.tone}` : ''}`, href: r.href },
+              h('span', { class: 'attn-n num' }, fmt.int(r.n)),
+              h('span', { class: 'grow' }, h('b', null, r.label), h('small', { class: 'muted' }, r.sub)),
+              icon('chev-r', 'sm')))))
+          : h('p', { class: 'muted', style: { margin: 0 } }, 'All clear. Nothing is waiting for you.'));
+
     const onboarding = o.feeds.total && !o.media.total ? h('div', { class: 'panel' },
       h('h3', null, icon('sparkle', 'sm'), 'Get your first content in'),
       h('ol', { class: 'steps', style: { margin: 0, padding: 0 } },
@@ -69,9 +95,10 @@ export async function render(root, { overview: first }) {
         h('li', null, h('div', null, h('b', null, 'Improve reliability. '), 'Optional API keys (Reddit, Bluesky, X) make sources faster and unblockable — see ', h('a', { href: href('/admin/sources'), style: { color: 'var(--accent)' } }, 'Sources'), '.')))) : null;
 
     const maxPub = Math.max(1, ...o.pubByPlatform.map((p) => p.count));
-    holder.replaceChildren(
-      pageHead('Overview', 'Everything at a glance'),
-      h('div', { class: 'kpis' },
+    // Full numbers stay available, collapsed: the default view leads with queues, not tiles.
+    const allNumbers = h('details', { class: 'adm-details' },
+      h('summary', null, 'All numbers'),
+      h('div', { class: 'kpis', style: { marginTop: '12px' } },
         kpi({ value: fmt.num(total), label: 'Published', detail: `${fmt.int(o.last24h.added)} added in 24h`, href: href('/admin/media') }),
         kpi({ value: fmt.int(o.creators.active), label: 'Creators', detail: `${fmt.int(o.creators.total)} known · ${o.creators.blocked} blocked`, href: href('/admin/creators') }),
         kpi({ value: `${o.feeds.enabled}`, label: 'Feeds active', detail: `${o.feeds.total} total`, href: href('/admin/feeds') }),
@@ -80,8 +107,13 @@ export async function render(root, { overview: first }) {
         kpi({ value: o.feeds.failing, label: 'Failing feeds', detail: `${o.last24h.blocked} blocked by safety in 24h`, href: href('/admin/feeds?status=error'), tone: o.feeds.failing ? 'warn' : null }),
         o.imageFilter ? kpi({ value: o.imageFilter.enabled ? (o.imageFilter.failed ? 'unavailable' : fmt.int(o.imageFilter.female)) : 'off', label: 'Women filtered by picture', detail: o.imageFilter.failed ? 'optional ML packages missing — run npm install' : `${fmt.int(o.imageFilter.analyzed)} images checked · library re-check: ${fmt.int(o.imageFilter.sweep.remaining)} left`, href: href('/admin/settings'), tone: o.imageFilter.enabled && o.imageFilter.failed ? 'warn' : null }) : null,
         o.physique ? kpi({ value: o.physique.enabled ? fmt.int(o.physique.hidden) : 'off', label: 'Hidden by body filter', detail: `${fmt.int(o.physique.measured)} bodies measured · threshold ${o.physique.threshold} · ${fmt.int(o.physique.creatorsHidden)} creators hidden · library re-check: ${fmt.int(o.physique.sweep.remaining)} left`, href: href('/admin/settings') }) : null,
-        o.health ? kpi({ value: fmt.int(o.health.gone7d), label: 'Gone at source (7d)', detail: `${fmt.int(o.health.checked)} items checked · ${fmt.int(o.health.reports)} viewer reports`, href: href('/admin/media', { state: 'hidden' }) }) : null),
+        o.health ? kpi({ value: fmt.int(o.health.gone7d), label: 'Gone at source (7d)', detail: `${fmt.int(o.health.checked)} items checked · ${fmt.int(o.health.reports)} viewer reports`, href: href('/admin/media', { state: 'hidden' }) }) : null));
+
+    holder.replaceChildren(
+      pageHead('Needs attention', 'Queues first, numbers behind them'),
+      attentionBox,
       onboarding,
+      allNumbers,
       h('div', { class: 'grid-2' },
         h('div', { class: 'panel' }, h('h3', null, 'New items per hour'), activityChart(o.activity)),
         engineBox),

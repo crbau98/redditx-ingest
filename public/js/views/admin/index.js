@@ -4,19 +4,27 @@ import { adminSession } from '../../store.js';
 import { href, navigate } from '../../router.js';
 
 const TABS = [
-  ['overview', 'Overview', 'layers', () => import('./overview.js')],
-  ['feeds', 'Feeds', 'rss', () => import('./feeds.js')],
-  ['creators', 'Creators', 'users', () => import('./creators.js')],
-  ['identities', 'Same person?', 'link', () => import('./identities.js')],
-  ['discovery', 'Discovery', 'sparkle', () => import('./discovery.js')],
+  ['overview', 'Needs attention', 'layers', () => import('./overview.js')],
   ['moderation', 'Review queue', 'shield', () => import('./moderation.js')],
   ['reports', 'Reports', 'flag', () => import('./reports.js')],
   ['media', 'Media', 'image', () => import('./media.js')],
+  ['creators', 'Creators', 'users', () => import('./creators.js')],
+  ['identities', 'Same person?', 'link', () => import('./identities.js')],
   ['sources', 'Sources', 'compass', () => import('./sources.js')],
-  ['live', 'Live log', 'bolt', () => import('./live.js')],
+  ['feeds', 'Feeds', 'rss', () => import('./feeds.js')],
+  ['discovery', 'Discovery', 'sparkle', () => import('./discovery.js')],
   ['blocklist', 'Blocklist', 'lock', () => import('./blocklist.js')],
   ['audit', 'Audit log', 'clock', () => import('./audit.js')],
+  ['live', 'Live log', 'bolt', () => import('./live.js')],
   ['settings', 'Settings', 'sliders', () => import('./settings.js')],
+];
+
+/** Sidebar grouped by task (tab keys and URLs unchanged, so deep links keep working). */
+const GROUPS = [
+  ['Work queue', ['overview', 'moderation', 'reports', 'media']],
+  ['Creators and sources', ['creators', 'identities', 'sources', 'feeds', 'discovery']],
+  ['Safety and access', ['blocklist', 'audit']],
+  ['System', ['live', 'settings']],
 ];
 
 function keyGate(root, message, retry) {
@@ -68,10 +76,22 @@ export async function admin(root, { params }) {
 
   if (attempt !== attempts) return () => {};
   const badge = (n, tone) => (n ? h('span', { class: `badge ${tone}` }, n > 99 ? '99+' : n) : null);
+  const badgeFor = (key) => {
+    if (key === 'moderation') return badge(overview.queues.review, 'warn');
+    if (key === 'reports') return badge(overview.queues.reports, 'bad');
+    if (key === 'feeds') return badge(overview.feeds.failing, 'bad');
+    if (key === 'discovery' && overview.discovery) return badge(overview.discovery.pending, 'info');
+    if (key === 'identities' && overview.identity) return badge(overview.identity.pending, 'info');
+    return null;
+  };
+  const byKey = new Map(TABS.map((t) => [t[0], t]));
   const side = h('nav', { class: 'adm-side', 'aria-label': 'Admin sections' },
-    h('h4', null, 'Manage'),
-    TABS.map(([key, label, ic]) => h('a', { href: href(`/admin/${key}`), 'aria-current': key === tabKey ? 'page' : null }, icon(ic, 'sm'), label,
-      key === 'moderation' ? badge(overview.queues.review, 'warn') : key === 'reports' ? badge(overview.queues.reports, 'bad') : key === 'feeds' ? badge(overview.feeds.failing, 'bad') : key === 'discovery' && overview.discovery ? badge(overview.discovery.pending, 'info') : key === 'identities' && overview.identity ? badge(overview.identity.pending, 'info') : null)));
+    GROUPS.map(([groupLabel, keys]) => h('section', { class: 'adm-group' },
+      h('h4', null, groupLabel),
+      keys.map((key) => {
+        const t = byKey.get(key);
+        return t ? h('a', { href: href(`/admin/${key}`), 'aria-current': key === tabKey ? 'page' : null }, icon(t[2], 'sm'), t[1], badgeFor(key)) : null;
+      }))));
   const main = h('div', { class: 'adm-main' });
   root.replaceChildren(h('div', { class: 'adm' }, side, main));
 

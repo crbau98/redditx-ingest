@@ -53,6 +53,14 @@ const NOT_HANDLES = new Set(['link', 'links', 'in', 'is', 'bio', 'below', 'above
   'sale', 'off', 'promo', 'subscribe', 'sub', 'dm', 'dms', 'open', 'only', 'fansly', 'fansly.com', 'fans', 'justfor', 'justforfans', 'justfor.fans', 'jff',
   'onlyfans', 'onlyfans.com', 'check', 'new', 'page', 'account', 'vip',
   'click', 'tap', 'see', 'join', 'com']);
+/** Headline words that sit after an em dash in a title ("Best Gay OnlyFans — Top Models …"): a
+ * separator followed by one of these is typography, not a username. Applied to prose matches only. */
+const NOT_PROSE = new Set(['top', 'best', 'hottest', 'models', 'model', 'ranked', 'ranking', 'official', 'all', 'every', 'biggest',
+  'famous', 'popular', 'list', 'lists', 'accounts', 'profiles', 'creators', 'stars', 'star', 'gay', 'male', 'men', 'man',
+  'guide', 'update', 'updated', 'daily', '2025', '2026', 'edition', 'full', 'free', 'hot', 'new',
+  // generic nouns the separator regex picks up out of headlines and captions ("OnlyFans is porn")
+  'porn', 'blowjob', 'squirt', 'threesome', 'sex', 'nude', 'nudes', 'nsfw', 'adult', 'content', 'videos', 'video',
+  'pics', 'photos', 'leaked', 'leak', 'reddit', 'twitter', 'instagram', 'telegram', 'tiktok', 'youtube', 'discord']);
 
 function normal(h) {
   const s = String(h || '').replace(/^@/, '').replace(/[.\-_]+$/, '').toLowerCase();
@@ -112,7 +120,11 @@ function findPaidHandles(text) {
   }
   for (const [service, re] of Object.entries(PROSE_RES)) {
     re.lastIndex = 0;
-    for (const m of s.matchAll(re)) add(service, normal(m[1]));
+    for (const m of s.matchAll(re)) {
+      const h = normal(m[1]);
+      // A separator + headline word ("OnlyFans — Top Models") is typography, not a username.
+      if (h && !NOT_PROSE.has(h)) add(service, h);
+    }
   }
   // keep the OnlyFans order identical to findOnlyFans for callers that migrate gradually
   void findOnlyFans;

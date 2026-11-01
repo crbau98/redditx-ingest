@@ -117,16 +117,37 @@ describe('AI image match', () => {
 });
 
 describe('discovery wiring', () => {
-  test('gff, coomer and image-match passes are exported and gated behind the test flag', () => {
+  test('gff, coomer, image-match and harvest passes are exported and gated behind the test flag', () => {
     assert.equal(typeof discovery.gffDiscovery, 'function');
     assert.equal(typeof discovery.coomerDiscovery, 'function');
+    assert.equal(typeof discovery.directoryHarvest, 'function');
     const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'engine', 'discovery.js'), 'utf8');
     assert.match(src, /!config\.isTest\)\s*report\.gff/, 'gff directory walk is skipped under test');
     assert.match(src, /!config\.isTest\)\s*report\.imageMatch/, 'image match is skipped under test');
+    assert.match(src, /!config\.isTest\)\s*report\.harvest/, 'directory harvest is skipped under test');
+  });
+
+  test('harvest queries are all male-creator queries', () => {
+    const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'engine', 'discovery.js'), 'utf8');
+    const block = src.match(/const HARVEST_QUERIES = \[([\s\S]*?)\];/);
+    assert.ok(block, 'HARVEST_QUERIES is declared');
+    const queries = block[1].match(/'[^']+'/g);
+    assert.ok(queries.length >= 5, 'a handful of rotating queries');
+    for (const q of queries) assert.match(q, /gay|male|performers/i, `male-focused query: ${q}`);
   });
 
   test('lookup probes the mirror for any handle', () => {
     const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'engine', 'lookup.js'), 'utf8');
     assert.match(src, /platform: 'coomer', kind: 'user', target: `onlyfans\/\$\{handle\}`/);
+  });
+
+  test('a GayForFans performer link parses as a creator feed; other paths stay web pages', () => {
+    const links = require('../src/lib/links');
+    const p = links.parseProfile('https://gayforfans.com/performer/austin-wolf-y635w');
+    assert.equal(p.platform, 'gff');
+    assert.equal(p.kind, 'user');
+    assert.equal(p.ingestable, true);
+    const other = links.parseProfile('https://gayforfans.com/creator/jake');
+    assert.ok(other && other.platform === 'web' && other.ingestable, 'non-performer paths fall through to web');
   });
 });

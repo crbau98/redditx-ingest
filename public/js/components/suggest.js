@@ -10,7 +10,7 @@ import { understand, understoodChips, smartSearch } from '../smart.js';
  * Arrow keys move, Enter opens the highlighted row (or runs the smart search),
  * Esc closes. Stale responses are discarded so fast typing never flickers.
  */
-export function attachSuggest(input, { id = 'suggest-box' } = {}) {
+export function attachSuggest(input, { id = 'suggest-box', extraRows = null } = {}) {
   const box = h('div', { class: 'suggest', role: 'listbox', id, hidden: true });
   input.setAttribute('aria-controls', id);
   input.setAttribute('aria-autocomplete', 'list');
@@ -65,14 +65,19 @@ export function attachSuggest(input, { id = 'suggest-box' } = {}) {
       parts.push(label('Search for'), row([h('span', { class: 'u-spark' }, icon('sparkle', 'sm')), h('span', { class: 'u-preview' }, understoodChips(u)), h('kbd', { class: 'u-enter' }, '↵')], () => smartSearch(raw)));
       rows[rows.length - 1].el.classList.add('understood-row');
     }
-    const hasRows = parts.length > 0;
+    const hasRowsEarly = parts.length > 0;
     if (d.creators.length) {
       parts.push(label('Creators'), ...d.creators.map((c) => row([avatar(c, 28), h('span', { class: 'truncate' }, c.display_name || c.handle), h('span', { class: 'muted' }, `@${c.handle}`), h('span', { class: 'n' }, `${fmt.num(c.media_count)} posts`)], () => navigate(`/creator/${c.id}`))));
     }
     if (d.tags.length) parts.push(label('Tags'), ...d.tags.map((t) => row([icon('tag', 'sm'), h('span', null, `#${t.name}`), h('span', { class: 'n' }, fmt.num(t.count))], () => navigate('/explore', { tag: t.name }))));
     if (d.communities.length) parts.push(label('Communities'), ...d.communities.map((c) => row([icon('compass', 'sm'), h('span', { class: 'truncate' }, c.name), h('span', { class: 'muted' }, platformLabel(c.platform)), h('span', { class: 'n' }, fmt.num(c.count))], () => navigate('/explore', { community: c.name }))));
+    // Caller-supplied rows (e.g. Discover's "look up across the open web") always sit last, under the local matches.
+    const typedQ = input.value.trim();
+    if (extraRows && typedQ) parts.push(...extraRows(typedQ, row));
+    // Local matches (creators/tags/communities) and caller rows are real rows: they open the box on their own.
+    const hasRows = hasRowsEarly || parts.some((p) => p && p.classList && p.classList.contains('suggest-row'));
     if (input.value.trim().length >= 3) parts.push(preview);
-    if (!hasRows) { hide(); box.replaceChildren(...parts); return; } // the preview opens it if results arrive
+    if (!hasRows && parts.length <= 1) { hide(); box.replaceChildren(...parts); return; } // the preview opens it if results arrive
     box.replaceChildren(...parts);
     // The input may not be in the DOM yet when attachSuggest() runs, so mount the box on first use.
     if (!box.parentElement && input.parentElement) input.parentElement.appendChild(box);

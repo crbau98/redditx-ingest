@@ -102,10 +102,14 @@ function buildShell() {
   // the long example gets cut off mid-word on a phone, so narrow screens get a short one
   const narrow = window.matchMedia('(max-width: 560px)');
   const searchInput = h('input', { class: 'input', type: 'search', id: 'global-search', 'aria-label': 'Search', enterkeyhint: 'search', autocomplete: 'off' });
-  const paintPlaceholder = () => { searchInput.placeholder = narrow.matches ? 'Search creators, tags…' : 'Search anything — “bearded guys at the beach, videos”'; };
+  const paintPlaceholder = () => { searchInput.placeholder = narrow.matches ? 'Search creators, tags…' : 'Search creators, tags, or describe what you want'; };
   paintPlaceholder();
   narrow.addEventListener('change', paintPlaceholder);
-  attachSuggest(searchInput); // registered first so it can claim Enter for a highlighted suggestion
+  // Local matches first; the last row hands any query to Discover's verified web lookup.
+  attachSuggest(searchInput, {
+    id: 'suggest-box',
+    extraRows: (q, row) => [row([icon('external', 'sm'), h('span', { class: 'grow' }, `Look up “${q.length > 40 ? `${q.slice(0, 40)}…` : q}” on Discover`)], () => navigate('/find', { q }))],
+  });
   searchInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { smartSearch(searchInput.value); searchInput.blur(); }
     if (e.key === 'Escape') searchInput.blur();

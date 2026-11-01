@@ -41,10 +41,11 @@ export async function creators(root, { query }) {
   const grid = h('div', { class: 'creator-grid' });
   const more = h('div', { class: 'loadmore' });
   root.replaceChildren(
-    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Creators'), count, h('div', { class: 'sub' }, 'Everyone with posts in the library — or pull someone new in below.')),
+    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Creators'), count,
+      h('div', { class: 'sub' }, 'Everyone with posts in the library — or pull someone new in below. ',
+        h('a', { class: 'text-link', href: href('/galaxy') }, 'Explore as a 3D galaxy'))),
       h('div', { class: 'row wrap' },
-        h('a', { class: 'btn primary sm', href: href('/find') }, icon('search', 'sm'), 'Find a creator'),
-        h('a', { class: 'btn galaxy-cta sm', href: href('/galaxy') }, icon('sparkle', 'sm'), 'Explore as a 3D galaxy'))),
+        h('a', { class: 'btn primary sm', href: href('/find') }, icon('search', 'sm'), 'Find a creator'))),
     h('div', { class: 'row wrap creator-filters', style: { marginBottom: '18px' } }, search, field('Sort', sortSel), field('Source', platSel), field('Paid page', paidSel), paidRow, clearBtn),
     grid, more);
 
@@ -64,7 +65,7 @@ export async function creators(root, { query }) {
       grid.append(...r.items.map((c) => creatorCard(c)));
       page++;
       done = grid.children.length >= total;
-      if (!grid.children.length) more.replaceChildren(emptyState({ icon: 'users', title: 'No creators found', text: f.q ? `Nothing matches “${f.q}” with these filters. Try fewer filters — or pull him in directly.` : f.paid ? 'No creators with that paid page yet. Discovery adds them as it traces the pages creators promote.' : 'Creators appear here once their content has been ingested.', actions: [h('a', { class: 'btn primary', href: href('/find') }, icon('search', 'sm'), 'Find a creator'), filtersActive ? h('button', { class: 'btn', onclick: () => navigate('/creators', {}, { replace: true }) }, 'Clear filters') : null].filter(Boolean) }));
+      if (!grid.children.length) more.replaceChildren(emptyState({ icon: 'users', title: 'No creators match these filters.', text: f.q ? `Nothing matches “${f.q}” with these filters. Try fewer filters — or pull him in directly.` : f.paid ? 'No creators with that paid page yet. Discovery adds them as it traces the pages creators promote.' : 'Creators appear here once their content has been ingested.', actions: [h('a', { class: 'btn primary', href: href('/find') }, icon('search', 'sm'), 'Find a creator'), filtersActive ? h('button', { class: 'btn', onclick: () => navigate('/creators', {}, { replace: true }) }, 'Clear filters') : null].filter(Boolean) }));
       else more.replaceChildren(done ? h('span', { class: 'muted' }, 'That’s everyone') : h('button', { class: 'btn', onclick: load }, 'Load more'));
     } catch (e) { more.replaceChildren(h('span', { class: 'muted' }, e.message), h('button', { class: 'btn sm', onclick: load }, 'Retry')); }
     finally { loading = false; }

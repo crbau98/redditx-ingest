@@ -9,30 +9,10 @@
    ========================================================================== */
 
 :root {
-  /* palette: a cooler, deeper black with lifted surfaces, so cards and media separate cleanly */
-  --bg: #050508;
-  --bg-elev: #0c0c12;
-  --surface: #111118;
-  --surface-2: #17171f;
-  --surface-3: #22222c;
-  --text: #f6f6fa;
-  --text-2: #c4c4d3;
-  --muted: #8a8aa1;
-  --line: rgba(255, 255, 255, .068);
-  --line-strong: rgba(255, 255, 255, .13);
-  /* type scale */
-  --fs-xs: 12px;
-  --fs-sm: 13.5px;
-  --fs-base: 15px;
-  --fs-md: 17px;
-  --fs-lg: clamp(19px, 1.7vw, 22px);
-  --fs-xl: clamp(26px, 3.2vw, 38px);
-  --fs-display: clamp(40px, 6.2vw, 80px);
-  /* spacing scale */
-  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 24px; --s-6: 32px; --s-7: 48px;
   --radius: 18px;
   --radius-card: 16px;
-  --appbar-h: 62px;
+  /* scrim ink for captions and chips laid over media: fixed, not themed */
+  --scrim-ink: #0b0b0e;
   --glass: color-mix(in srgb, var(--bg) 66%, transparent);
   --glass-strong: color-mix(in srgb, var(--bg-elev) 86%, transparent);
   --glass-blur: blur(22px) saturate(1.8);
@@ -40,14 +20,6 @@
   --aurora-2: color-mix(in srgb, var(--accent) 11%, transparent);
 }
 :root[data-theme='light'] {
-  --bg: #f4f4f7;
-  --bg-elev: #ffffff;
-  --surface: #ffffff;
-  --surface-2: #eeeef4;
-  --surface-3: #e3e3ec;
-  --text: #0e0e16;
-  --text-2: #36364a;
-  --muted: #66667e;
   --glass: color-mix(in srgb, var(--bg) 72%, transparent);
   --glass-strong: color-mix(in srgb, #ffffff 88%, transparent);
   --aurora-1: color-mix(in srgb, var(--accent-2) 9%, transparent);
@@ -142,7 +114,7 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
   .explore-head .explore-count { margin-top: 2px; font-size: 12.5px; }
   .explore-head .row { flex-wrap: nowrap; gap: 6px; }
   /* the actions shrink to icon buttons (their text stays as the accessible name) */
-  .explore-head .row .btn { width: 38px; height: 38px; padding: 0; font-size: 0; gap: 0; }
+  .explore-head .row .btn { width: var(--hit); height: var(--hit); padding: 0; font-size: 0; gap: 0; }
   .explore-head .row .btn svg { width: 18px; height: 18px; }
   .filterbar { padding-top: 8px; padding-bottom: 8px; }
 }
@@ -150,16 +122,16 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
 /* ---------- media cards ---------- */
 .card, .card-media { border-radius: var(--radius-card); }
 .card { transition: box-shadow var(--dur-base) var(--ease-out), transform var(--dur-slow) var(--spring-settle); }
-.card-foot { background: linear-gradient(180deg, rgba(5, 5, 8, 0) 0%, rgba(5, 5, 8, .35) 40%, rgba(5, 5, 8, .88) 100%); }
+.card-foot { background: linear-gradient(180deg, color-mix(in srgb, var(--scrim-ink) 0%, transparent) 0%, color-mix(in srgb, var(--scrim-ink) 35%, transparent) 40%, color-mix(in srgb, var(--scrim-ink) 88%, transparent) 100%); }
 .card-title { font-weight: 650; letter-spacing: -.01em; }
-.card-fav { backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(8, 8, 12, .42); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .14); transition: transform var(--dur-base) var(--spring-snap), background-color var(--dur-quick); }
-.card-fav:hover { background: rgba(8, 8, 12, .62); transform: scale(1.06); }
+.card-fav { backdrop-filter: none; -webkit-backdrop-filter: none; background: color-mix(in srgb, var(--scrim-ink) 42%, transparent); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .14); transition: transform var(--dur-base) var(--spring-snap), background-color var(--dur-quick); }
+.card-fav:hover { background: color-mix(in srgb, var(--scrim-ink) 62%, transparent); transform: scale(1.06); }
 .card-fav:active { transform: scale(.9); }
 @media (hover: hover) {
   .card-fav { opacity: 0; transform: scale(.86); }
   .card:hover .card-fav, .card:focus-within .card-fav, .card-fav[aria-pressed='true'] { opacity: 1; transform: none; }
 }
-.card-badges .pill { backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(8, 8, 12, .5); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12); }
+.card-badges .pill { backdrop-filter: none; -webkit-backdrop-filter: none; background: color-mix(in srgb, var(--scrim-ink) 50%, transparent); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12); }
 @media (max-width: 639px) { .card, .card-media { border-radius: 14px; } }
 
 /* creator cards, collections, tiles: one radius, one lift */
@@ -176,7 +148,7 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
   background-size: 260% 100%, 100% 100%;
   background-repeat: no-repeat;
 }
-.btn.primary { background-position: 130% 0, 0 0; transition: background-position .9s var(--ease-out), box-shadow var(--dur-base), filter var(--dur-base), transform var(--dur-slow) var(--spring); }
+.btn.primary { background-position: 130% 0, 0 0; transition: background-position var(--dur-slow) var(--ease-out), box-shadow var(--dur-base), filter var(--dur-base), transform var(--dur-slow) var(--spring); }
 @media (hover: hover) { .btn.primary:hover { background-position: -30% 0, 0 0; } }
 .btn.icon { transition: background-color var(--dur-quick), transform var(--dur-base) var(--spring-snap), color var(--dur-quick); }
 .btn.icon:hover svg { transform: rotate(-6deg) scale(1.06); }

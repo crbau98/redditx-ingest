@@ -82,6 +82,17 @@ function mediaFilters(q) {
 // Tests get exact values (synchronous refresh).
 const SWR = !config.isTest;
 const warmers = [];
+/** The hot list-query shapes: first execution pays SQLite statement prep (~0.4 s), so boot runs them. */
+const prep = [
+  () => repo.media.list({ sort: 'recent', limit: 48 }),
+  () => repo.media.list({ sort: 'trending', limit: 48 }),
+  () => repo.media.list({ sort: 'foryou', limit: 48 }),
+  () => repo.media.list({ platform: 'reddit', limit: 48 }),
+  () => repo.media.list({ tag: 'gay', limit: 48 }),
+  () => repo.creators.list({ sort: 'media', limit: 48 }),
+  () => repo.media.tags(120, 1),
+  () => repo.media.communities(100),
+];
 const ttl = (ms, fn) => {
   let at = 0; let val; let pending = false;
   const refresh = () => { try { val = fn(); at = Date.now(); } finally { pending = false; } };
@@ -96,7 +107,17 @@ const ttl = (ms, fn) => {
 };
 /** Fill every cache once, one per tick, so the first visitors after a deploy never pay for it. */
 function warm() {
-  const queue = [() => repo.library(), ...warmers];
+  // Statement prep is the expensive part of SQLite's first run of a query shape (~0.4 s here):
+  // touching the hot list queries once at boot keeps the first page load fast for real users.
+  const queue = [...prep, ...warmers, () => repo.library()];
+  const next = () => { const g = queue.shift(); if (!g) return; try { g(); } catch (e) { console.error('[warm]', e.message); } setImmediate(next); };
+  setImmediate(next);
+}
+
+/** The statement-prep half runs immediately: it is microseconds of work per query and must not
+ * wait for the cache warmers — a real page load in the first second pays for a cold statement. */
+function warmPrep() {
+  const queue = [...prep];
   const next = () => { const g = queue.shift(); if (!g) return; try { g(); } catch (e) { console.error('[warm]', e.message); } setImmediate(next); };
   setImmediate(next);
 }
@@ -446,6 +467,7 @@ router.post('/lookup/auto', lookupFollowLimiter, async (req, res) => {
 module.exports = router;
 module.exports.publicMedia = publicMedia;
 module.exports.warm = warm;
+module.exports.warmPrep = warmPrep;
 module.exports.publicCreator = publicCreator;
 module.exports.suggestCached = suggestCached;
 module.exports.suggestCache = suggestCache;

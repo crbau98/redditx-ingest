@@ -67,7 +67,7 @@ function minifyCss(css) {
 }
 
 // The stylesheets of the public app, in cascade order: served as one minified file.
-const CSS_BUNDLE = ['app.css', 'ux.css', 'v6.css'];
+const CSS_BUNDLE = ['tokens.css', 'app.css', 'ux.css', 'v6.css'];
 
 // Development rebuilds the shell on every request (so edits show without a restart): keep the last build until a
 // front-end file changes (a stat of each file is far cheaper than re-hashing and re-minifying them).

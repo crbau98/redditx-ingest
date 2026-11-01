@@ -1,5 +1,57 @@
 # UI changelog
 
+## 2026-11-01 — "Noir, edited": discovery reach, keyless search, and a design/IA pass
+
+### Search that actually answers (no key required)
+- **DuckDuckGo is back as a real provider** (`/html/` + Lite as a second door), on by default (`DDG_SEARCH=0` to opt out). Both endpoints fail fast (6 s, no retries), and when DuckDuckGo walls this network off — anomaly CAPTCHA, 429 or timeout — the provider cools down for 10 minutes instead of stalling every query, then retries itself. Admin → Discovery shows the reason and the time it comes back.
+- **Keyless Bing sits beside DuckDuckGo and their results are merged.** The search order is now three tiers: metered providers first (one paid call, first answer wins), then the keyless tier (Bing + DDG + DDG-Lite) in parallel with results deduped, then SearXNG. Before, Bing answered first and DuckDuckGo was never reached.
+- **Bing's bot-mitigation decoys are detected.** Bing echoes your query perfectly while serving unrelated results ("top gay onlyfans" → dictionary pages for "top"). A result set that shares nothing with the query now counts as a failure (visible in health) and, twice in a row, cools Bing down for 10 minutes — junk never reaches discovery.
+- **`coherent()` guard** and its tests live in `src/lib/websearch.js`.
+- **Brave Search API key from the OpenBot vault**: `BRAVE_API_KEY_FILE` points at a key file outside the workspace, so the secret never lands in the repo or `.env` (`.env.example` documents both forms). Brave's web/image/video search now powers discovery, identity matching and AI image match.
+
+### Discovery: further, and easier to steer
+- **Directory harvest** (`directoryHarvest`): rotates seven listicle/directory queries ("top gay onlyfans creators list", link-hub directories…), reads the top pages (robots.txt honoured, 1.5 MB cap, pages remembered so nothing is re-read), and turns everything on them into signal — paid handles become OnlyFans/Fansly/JFF leads for the existing trace, profile links become scored candidates. One run: 8 pages → 54 leads → 102 candidates.
+- **Anchor `href`s are harvested too**, not just page text: a listicle's creator links often exist only in the href.
+- **Prose false positives filtered** (`OnlyFans — Top Models` → handle "top"): headline words after a separator are typography, not usernames (`NOT_PROSE` in `lib/paid.js`).
+- Coomer page cap is a setting (`coomerPages`, default 40 pages ≈ 2,000 posts on creator feeds).
+- GayForFans performer links now parse as creator feeds wherever any directory or listicle links them.
+
+### Discover page: one box
+- Typing shows **local matches instantly** (creators, tags, communities — no network lookup), with one row underneath: *"Look up … across the open web"* — the only trigger for the rate-limited lookup. Enter works as before.
+- The global search box gained the same last row: *"Look up … on Discover"*.
+- **Answer card**: the best match gets a larger avatar, the name in the display face, a "Verified" badge and evidence chips; the rest follow as evidence cards.
+- **Evidence chips** replace the bullet list: platform chip, then up to three 40-character checks with "+N", pill-shaped, `--surface-2`.
+- Copy per spec: "Too many lookups", "Lookup failed", "No verified accounts for …", "Following. Opening profile…".
+
+### Browse and Explore
+- **Browse reordered** (Sources → Topics → Communities → Tags) with the "Find a creator" button dropped (Discover owns that job).
+- **Tags are equal-size chips with counts** — the log-scaled font sizes were decoration that hurt scanning. Top 40, then "All N tags".
+- **Communities show 8 per platform** with "Show all N" (was a wall of up to 60 chips).
+- **Explore's filter bar reduced**: type, Followed, Hide seen, sort stay visible; source and time hide behind a **Filters** disclosure with the active count. Grid density moved out of the bar (it already lives in display settings).
+- Empty states rewritten: "Nothing matches these filters.", "Nothing has been ingested yet.", "No creators match these filters."
+
+### Admin console
+- **Sidebar grouped by task** (Work queue · Creators and sources · Safety and access · System) with the same tab keys and URLs — deep links keep working.
+- **Overview is now "Needs attention"**: only queues with a count, each one row with the number, label and action link; empty state "All clear. Nothing is waiting for you." The KPI grid moved behind an "All numbers" disclosure.
+- First run shows one card: "No sources yet. Add a source, and PRISM starts ingests." with a single action.
+- Discovery's web-search KPI reports both cooldowns (DuckDuckGo / Bing) with the time they lift.
+
+### Performance
+- **First-hit latency cut 455 ms → 24 ms**: SQLite statement prep for the hot list queries runs at boot (`warmPrep()`), before the cache warmers. A cold statement cost a real page load ~0.4 s.
+- `tokens.css` added to the CSS bundle (one request, 25 KB gzipped total).
+
+### Design direction (Product Design Lead)
+- New `css/tokens.css`: graphite palette (not blue-violet), one accent used for state and the primary action only, Space Grotesk for titles/names + Inter for UI, 4px spacing scale, radius/shadow/motion tokens, light theme with AA-contrast fixes (light accent `#e63f73` → `#c2185b`, 3.95:1 → 5.9:1), reduced-motion collapsing all durations, 44px touch targets on coarse pointers.
+- `:focus-visible` outline everywhere; hard-coded greys in the admin sidebar moved to tokens.
+
+### Verified
+- 941 unit/integration tests pass (new: coherence, prose filters, harvest wiring, gff link parsing).
+- 10/10 E2E tests in real Chromium (age gate, smart search, viewer, creators, takedown form, admin key, phone layout, theme).
+- UI audit: 33 page views (desktop light/dark, phone) — **0 layout overflows, 0 accessibility findings**. Remaining console noise is upstream: expired Reddit preview links (404) and purged GayForFans files (503 "no cache server available"), which the link-health sweep hides.
+- Proxy now sends the site Referer for `cdn.gff.network` (hotlink protection refused the CDN's own origin with a 403).
+
+---
+
 ## 2026-10-31 — v6 "Noir": performance pass and design refresh
 
 ### Measured (phone: 390×844, 4× CPU slowdown, 150 ms / 12 Mbps link; median of 5, `scripts/perf-audit.js`; base = main)

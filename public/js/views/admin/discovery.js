@@ -95,9 +95,13 @@ export async function render(root) {
     const tried = used.filter((p) => p.lastAt);
     const bad = tried.find((p) => p.lastError);
     const engines = used.flatMap((p) => p.engines || []);
-    const detail = bad ? `${bad.name}: ${bad.lastError}`
+    const cooldownBits = [];
+    if (w.ddgCooldown) cooldownBits.push(`DuckDuckGo walled until ${new Date(w.ddgCooldown).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`);
+    if (w.bingCooldown) cooldownBits.push(`Bing decoys until ${new Date(w.bingCooldown).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`);
+    const cooldown = cooldownBits.length ? ` · ${cooldownBits.join(' · ')}` : '';
+    const detail = (bad ? `${bad.name}: ${bad.lastError}`
       : tried.length ? `${tried.map((p) => `${p.name} ${fmt.int(p.ok)} ok · ${fmt.int(p.empty)} empty · ${fmt.int(p.failed)} failed`).join(' / ')}${engines.length ? ` · failing engines: ${engines.join(', ')}` : ''}`
-        : `${used.map((p) => p.name).join(', ')} · not used since the server started`;
+        : `${used.map((p) => p.name).join(', ')} · not used since the server started`) + cooldown;
     const value = w.working ? 'Working' : bad ? 'Failing' : tried.length ? 'No results' : 'Idle';
     return kpi({ value: d.brave.configured && w.working ? `${d.brave.usage.count}/${d.brave.budget}` : value, label: d.brave.configured && w.working ? 'Brave searches today' : 'Web search', detail });
   }
@@ -123,6 +127,9 @@ export async function render(root) {
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Search for communities and custom feeds'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'NSFW subreddits, Lemmy communities and popular Bluesky feeds matching your keywords')), toggle(v.discoveryCommunities, (on) => save({ discoveryCommunities: on }))),
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Lookalikes and people search'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Accounts Bluesky rates as similar to your creators, plus Bluesky and RedGIFs people matching your keywords')), toggle(v.discoveryExpand, (on) => save({ discoveryExpand: on }))),
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Trace OnlyFans creators'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'OnlyFans pages your creators promote lead to the same men’s free accounts on RedGIFs, Bluesky, X, Telegram and link pages. Paid pages named by creators are read like any other public page')), toggle(v.discoveryOnlyFans, (on) => save({ discoveryOnlyFans: on }))),
+      h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'AI image match'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'After a creator is found, search the web for pictures of his and keep the pages where his content shows up (visual match + the page naming him)')), toggle(v.imageMatch, (on) => save({ imageMatch: on }))),
+      h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Image match: creators per run'), num('imageMatchPerRun', 0, 30, 'Image match: creators per run')),
+      h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Image match: similarity needed (%)'), num('imageMatchSimilarity', 40, 99, 'Image match: visual similarity needed')),
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Auto-follow strong communities'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Only male-focused ones; every post from them is still checked on its own')), toggle(v.discoveryAutoCommunities, (on) => save({ discoveryAutoCommunities: on }))),
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Auto-follow at score'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'same name = 6 · each creator who mentions them = 3 · Bluesky lookalike (per creator) = 2 · each who follows them = 1.5 · each creator posting there = 1.5 · each search hit = 2 · audience up to +3 · male-focused bio = +2')), num('discoveryAutoFollowScore', 3, 60, 'Auto-follow at score')),
       h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Max follows per run'), num('discoveryMaxFollowsPerRun', 0, 100, 'Max follows per run')),

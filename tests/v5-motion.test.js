@@ -10,7 +10,8 @@ const path = require('path');
 const { staticGraph } = require('../src/lib/assets');
 
 const pub = path.join(__dirname, '..', 'public');
-const css = fs.readFileSync(path.join(pub, 'css', 'app.css'), 'utf8');
+// Tokens live in tokens.css now (P0-1 consolidation): the motion vocabulary guards read the whole shipped stylesheet.
+const css = ['tokens.css', 'app.css'].map((f) => fs.readFileSync(path.join(pub, 'css', f), 'utf8')).join('\n');
 const js = (f) => fs.readFileSync(path.join(pub, 'js', f), 'utf8');
 
 describe('v5 motion vocabulary', () => {
@@ -23,7 +24,7 @@ describe('v5 motion vocabulary', () => {
 
   test('no component hard-codes a cubic-bezier: only the token fallbacks and the ambient live-dot loop', () => {
     const lines = css.split('\n').filter((l) => /cubic-bezier\(/.test(l) && !/^\s*\*/.test(l));
-    const allowed = lines.filter((l) => /--spring-(snap|glide|settle):/.test(l) || /\.live-dot::after/.test(l));
+    const allowed = lines.filter((l) => /--spring-(snap|glide|settle):/.test(l) || /--ease-out:/.test(l) || /\.live-dot::after/.test(l));
     assert.deepEqual(lines.filter((l) => !allowed.includes(l)), []);
   });
 

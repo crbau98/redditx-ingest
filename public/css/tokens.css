@@ -1,0 +1,104 @@
+/* ==========================================================================
+   PRISM design tokens (single source). Loaded first, before app.css.
+   Dark is the default; light is :root[data-theme='light']. Every colour pair
+   used for text is >= 4.5:1 and every non-text indicator is >= 3:1 (see the
+   contrast notes in the redesign spec). Other stylesheets read these; none
+   redefine them.
+   ========================================================================== */
+
+:root {
+  /* ---- palette: dark (default) ---- */
+  --bg: #0b0b0e;
+  --bg-elev: #111116;
+  --surface: #16161c;
+  --surface-2: #1c1c22;
+  --surface-3: #26262e;
+  --line: rgba(255, 255, 255, .08);
+  --line-strong: rgba(255, 255, 255, .16);
+  --text: #f3f3f5;      /* 17.7:1 on --bg */
+  --text-2: #cbcbd3;    /* 10.5:1 on --surface-2 */
+  --muted: #9b9ba8;     /* 7.2:1 on --bg, 6.2:1 on --surface-2, 5.5:1 on --surface-3 */
+  --accent: #ff5c8a;    /* 6.7:1 as text on --bg */
+  --accent-ink: #1a0a12;/* 6.5:1 on --accent */
+  --focus: #7dd3fc;     /* 11.8:1 on --bg (non-text, needs 3:1) */
+  --good: #34d399;      /* 10.2:1 on --bg */
+  --warn: #fbbf24;      /* verify >= 4.5:1 on --surface-2 before using as text */
+  --bad: #f87171;       /* 7.1:1 on --bg */
+  --grad: linear-gradient(120deg, #8b5cf6 0%, #ff5c8a 55%, #ffb347 100%); /* brand mark + primary sheen only */
+  --aurora: color-mix(in srgb, var(--accent) 7%, transparent);           /* the one ambient glow, Home only */
+
+  /* ---- type ---- */
+  --font-ui: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-display: 'Space Grotesk', Inter, ui-sans-serif, system-ui, sans-serif;
+  --fs-xs: 12px;   --lh-xs: 1.4;
+  --fs-sm: 13.5px; --lh-sm: 1.45;
+  --fs-base: 15px; --lh-base: 1.5;
+  --fs-md: 17px;   --lh-md: 1.5;
+  --fs-lg: clamp(19px, 1.7vw, 22px);  --lh-lg: 1.25;
+  --fs-xl: clamp(26px, 3.2vw, 38px);  --lh-xl: 1.1;
+  --fs-display: clamp(40px, 6.2vw, 80px); --lh-display: .98;
+  --fw-body: 400; --fw-strong: 600; --fw-bold: 700;   /* no 650 */
+  --track-tight: -.035em; --track-label: .1em;
+
+  /* ---- spacing (4px base) ---- */
+  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px;
+  --s-5: 24px; --s-6: 32px; --s-7: 48px; --s-8: 64px;
+
+  /* ---- shape ---- */
+  --r-sm: 10px;    /* inputs, chips inside cards */
+  --r-md: 14px;    /* small cards, mobile media */
+  --r-lg: 18px;    /* panels, tiles, creator cards */
+  --r-pill: 999px;
+
+  /* ---- elevation ---- */
+  --shadow-1: 0 1px 0 var(--line);
+  --shadow-2: 0 8px 24px -12px rgba(0, 0, 0, .6);
+  --shadow-3: 0 24px 60px -20px rgba(0, 0, 0, .75);
+  --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--focus);
+
+  /* ---- motion ---- */
+  --dur-quick: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  --hit: 40px;     /* pointer targets; becomes 44px on coarse pointers */
+
+  /* ---- aliases so existing rules keep working during the migration ---- */
+  --radius: var(--r-lg);
+  --radius-card: var(--r-md);
+  --radius-sm: var(--r-sm);
+  --radius-lg: var(--r-lg);
+  --appbar-h: 60px;
+}
+
+:root[data-theme='light'] {
+  --bg: #f5f5f7;
+  --bg-elev: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #ececf1;
+  --surface-3: #dfdfe7;
+  --line: rgba(17, 17, 22, .09);
+  --line-strong: rgba(17, 17, 22, .18);
+  --text: #111116;      /* 17.3:1 on --bg */
+  --text-2: #33333f;
+  --muted: #5c5c6b;     /* 6.0:1 on --bg, 5.6:1 on --surface-2 */
+  --accent: #c2185b;    /* 5.9:1 as text on white (was #e63f73 at 3.95:1, fails AA) */
+  --accent-ink: #ffffff;/* 5.9:1 on --accent */
+  --focus: #0b63ce;     /* 5.2:1 on --bg */
+  --good: #067647;      /* 5.7:1 on white */
+  --warn: #8a4b00;      /* 6.8:1 on white */
+  --bad: #b42318;       /* 6.6:1 on white */
+  --shadow-1: 0 1px 0 var(--line);
+  --shadow-2: 0 8px 24px -12px rgba(30, 20, 60, .22);
+  --shadow-3: 0 24px 60px -20px rgba(30, 20, 60, .28);
+  --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--focus);
+  --aurora: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+/* one place for reduced motion: durations collapse, springs and sheens stop */
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-quick: 0ms; --dur-base: 0ms; --dur-slow: 0ms; }
+}
+@media (pointer: coarse) {
+  :root { --hit: 44px; }
+}

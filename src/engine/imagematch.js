@@ -166,7 +166,10 @@ async function matchCreator(creator, { budget = 40, aborted = () => false, servi
   return out;
 }
 
-/** Creators whose pictures exist and who have not been matched recently (newest first). */
+/** Creators whose pictures exist and who have not been matched recently (newest first).
+ * A creator with a traced paid page or stored links has a searchable identity — his content exists
+ * elsewhere on the web — so those come first; plain ingest handles (bot-style Reddit names) rarely
+ * resolve to anything a search engine knows. */
 function pickCreators(limit) {
   const stale = new Date(Date.now() - STALE_DAYS * 86400000).toISOString();
   return db.prepare(`SELECT c.id FROM creators c
@@ -174,7 +177,11 @@ function pickCreators(limit) {
       AND (SELECT COUNT(*) FROM media m WHERE m.creator_id = c.id AND m.phash IS NOT NULL AND m.publish_state = 'published') >= 2
       AND COALESCE((SELECT updated_at FROM discovery_state WHERE key = 'imgmatch.' || c.id), '') < ?
     GROUP BY c.id
-    ORDER BY (SELECT COUNT(*) FROM media m WHERE m.creator_id = c.id AND m.phash IS NOT NULL AND m.publish_state = 'published') DESC
+    ORDER BY
+      CASE WHEN EXISTS (SELECT 1 FROM onlyfans_leads l WHERE l.creator_id = c.id AND l.status = 'claimed') THEN 0
+           WHEN c.links IS NOT NULL AND c.links != '[]' AND c.links != '' THEN 1
+           WHEN c.origin != 'ingest' THEN 2 ELSE 3 END,
+      (SELECT COUNT(*) FROM media m WHERE m.creator_id = c.id AND m.phash IS NOT NULL AND m.publish_state = 'published') DESC
     LIMIT ?`).all(stale, limit)
     .map((r) => repo.creators.get(r.id)).filter(Boolean);
 }

@@ -2,6 +2,7 @@ import { h, icon, avatar, emptyState } from '../dom.js';
 import { post } from '../api.js';
 import { navigate, href } from '../router.js';
 import { platformLabel, platformColor } from '../store.js';
+import { attachSuggest } from '../components/suggest.js';
 
 const EXAMPLES = ['Christian Hogue', '@jakipz', 'https://bsky.app/profile/jakipz.bsky.social', 'https://www.youtube.com/@GymGuy', 'UC_x5XG1OV2P6uZZ5FSM9Ttw'];
 
@@ -19,11 +20,22 @@ export async function find(root, { query }) {
   const initial = query.get('q') || '';
   let state = { loading: false, result: null, error: null, rateLimited: false, following: false, followed: false };
 
-  const input = h('input', { class: 'input lg', type: 'search', name: 'q', placeholder: 'Name, @handle, or paste any public link…', value: initial, 'aria-label': 'Find a creator by name, handle or link', autocomplete: 'off', enterkeyhint: 'search' });
+  const input = h('input', { class: 'input lg', type: 'search', name: 'q', placeholder: 'Name, @handle or profile link', value: initial, 'aria-label': 'Find a creator by name, handle or link', autocomplete: 'off', enterkeyhint: 'search' });
   const btn = h('button', { class: 'btn primary lg', type: 'submit' }, icon('search', 'sm'), h('span', null, 'Find'));
   const form = h('form', { class: 'find-form', role: 'search', 'aria-label': 'Find a creator', onsubmit: (e) => { e.preventDefault(); run(); } },
     input, btn);
   const out = h('div', { class: 'stack find-out', style: { marginTop: '18px' }, role: 'status', 'aria-live': 'polite' });
+
+  // Instant local answers while typing (no network lookup), then the one row that triggers the
+  // real, rate-limited web lookup. The lookup runs on submit or this row — never per keystroke.
+  attachSuggest(input, {
+    id: 'find-suggest',
+    extraRows: (q, row) => [row([
+      icon('external', 'sm'),
+      h('span', { class: 'grow' }, `Look up “${q.length > 40 ? `${q.slice(0, 40)}…` : q}” across the open web`),
+      h('kbd', { class: 'u-enter' }, '↵'),
+    ], () => run())],
+  });
 
   async function run() {
     const q = input.value.trim();
@@ -57,21 +69,53 @@ export async function find(root, { query }) {
     } catch (e) { state.following = false; paint(); out.prepend(h('div', { class: 'notice warn', role: 'alert' }, e.message)); }
   }
 
-  function evidenceCard(c) {
-    const ev = (c.evidence || []).slice(0, 3);
+  /** One evidence string → a chip: verified check, ≤40 chars, links out when it carries a URL. */
+  function evidenceChip(text, { link = null } = {}) {
+    const label = String(text || '').replace(/\s+/g, ' ').trim();
+    const short = label.length > 40 ? `${label.slice(0, 39)}…` : label;
+    const inner = [icon('check', 'sm'), h('span', null, short)];
+    return link
+      ? h('a', { class: 'evidence-chip', href: link, target: '_blank', rel: 'noopener noreferrer nofollow', title: label }, ...inner)
+      : h('span', { class: 'evidence-chip', title: label }, ...inner);
+  }
+
+  function evidenceChips(c, { max = 3 } = {}) {
+    const ev = (c.evidence || []);
+    const chips = ev.slice(0, max).map((e) => evidenceChip(e));
+    if (ev.length > max) chips.push(h('span', { class: 'evidence-chip more', title: ev.slice(max).join(' · ') }, `+${ev.length - max}`));
+    chips.unshift(h('span', { class: 'evidence-chip plat', style: { '--c': platformColor(c.platform) } }, platformLabel(c.platform)));
+    return h('div', { class: 'evidence-row' }, chips);
+  }
+
+  /** The best match, promoted: bigger, named, verified — the answer to what the user typed. */
+  function answerCard(c) {
     const sample = c.sample || (c.samples && c.samples[0]);
-    const thumb = sample && (sample.thumb || sample.preview);
+    return h('div', { class: 'find-answer' },
+      h('div', { class: 'row', style: { gap: '14px', alignItems: 'center' } },
+        avatar({ avatar_url: c.avatarUrl, display_name: c.displayName || c.target }, 56),
+        h('div', { style: { minWidth: 0, flex: '1' } },
+          h('div', { class: 'find-answer-name' }, c.displayName || c.target),
+          h('div', { class: 'find-answer-sub muted sm truncate' }, `@${c.target}`),
+          evidenceChips(c)),
+        h('button', { class: 'btn primary', onclick: (e) => followSelected((state.result && state.result.candidates) || [c], e.currentTarget) }, icon('plus', 'sm'), 'Follow as one creator')),
+      c.bio ? h('p', { class: 'muted sm find-cand-bio' }, String(c.bio).slice(0, 220)) : null,
+      sample ? h('a', { class: 'find-sample', href: (sample && sample.url) || c.url || '#', target: '_blank', rel: 'noopener noreferrer nofollow' },
+        sample.thumb || sample.preview ? h('span', { class: 'find-sample-thumb', style: { backgroundImage: `url("${sample.thumb || sample.preview}")` } }) : null,
+        h('span', { class: 'find-sample-txt' }, h('b', null, 'Latest post'), h('small', { class: 'muted' }, String(sample.title || sample.url || '').slice(0, 90)))) : null);
+  }
+
+  function evidenceCard(c) {
+    const sample = c.sample || (c.samples && c.samples[0]);
     const sampleUrl = (sample && sample.url) || c.url || '#';
+    const thumb = sample && (sample.thumb || sample.preview);
     return h('div', { class: 'card find-cand' },
       h('div', { class: 'row', style: { gap: '10px', alignItems: 'center' } },
         avatar({ avatar_url: c.avatarUrl, display_name: c.displayName || c.target }, 40),
         h('div', { style: { minWidth: 0, flex: '1' } },
           h('div', { class: 'find-cand-name' }, c.displayName || c.target, ' ', h('span', { class: 'badge good' }, icon('check', 'sm'), 'Verified')),
-          h('div', { class: 'find-cand-sub' },
-            h('span', { class: 'badge plat', style: { '--c': platformColor(c.platform) } }, platformLabel(c.platform)),
-            h('span', { class: 'muted sm truncate' }, c.target)))),
+          h('div', { class: 'find-cand-sub' }, h('span', { class: 'muted sm truncate' }, c.target)))),
       c.bio ? h('p', { class: 'muted sm find-cand-bio' }, String(c.bio).slice(0, 160)) : null,
-      ev.length ? h('ul', { class: 'find-ev' }, ev.map((e) => h('li', null, icon('check', 'sm'), h('span', null, e)))) : null,
+      evidenceChips(c),
       sample ? h('a', { class: 'find-sample', href: sampleUrl, target: '_blank', rel: 'noopener noreferrer nofollow' },
         thumb ? h('span', { class: 'find-sample-thumb', style: { backgroundImage: `url("${thumb}")` } }) : null,
         h('span', { class: 'find-sample-txt' }, h('b', null, 'Latest post'), h('small', { class: 'muted' }, String(sample.title || sample.url || c.url || '').slice(0, 90)))) : null);
@@ -90,17 +134,17 @@ export async function find(root, { query }) {
         h('div', { class: 'creator-grid', 'aria-hidden': 'true' }, [0, 1, 2].map(() => h('div', { class: 'card find-cand' }, h('div', { class: 'skeleton', style: { height: '86px' } }), h('div', { class: 'skeleton', style: { height: '14px', marginTop: '10px' } })))),
       );
     } else if (state.following) {
-      out.append(h('div', { class: 'find-loading' }, h('div', { class: 'spinner', 'aria-hidden': 'true' }), h('p', { class: 'muted' }, 'Pulling him in — merging his verified accounts into one creator…')));
+      out.append(h('div', { class: 'find-loading' }, h('div', { class: 'spinner', 'aria-hidden': 'true' }), h('p', { class: 'muted' }, 'Following him. Merging verified accounts…')));
     } else if (state.followed) {
-      out.append(h('div', { class: 'notice ok', role: 'status' }, icon('check', 'sm'), ' He’s in — opening his profile…'));
+      out.append(h('div', { class: 'notice ok', role: 'status' }, icon('check', 'sm'), ' Following. Opening profile…'));
     } else if (state.error) {
       out.append(h('div', { class: 'notice warn', role: 'alert' }, state.error),
         emptyState({
           icon: state.rateLimited ? 'clock' : 'alert',
-          title: state.rateLimited ? 'Easy does it — too many lookups' : 'That lookup didn’t go through',
+          title: state.rateLimited ? 'Too many lookups' : 'Lookup failed',
           text: state.rateLimited
-            ? 'Find is rate-limited so one person can’t sweep the whole web. Wait a minute, then try again with his @handle or a direct profile link.'
-            : 'Check the spelling, or paste a direct profile link (Bluesky, YouTube, Reddit…). Paid pages are kept as link-outs — search his free, public accounts here.',
+            ? 'Find is rate-limited so one person can’t sweep the whole web. Try again in a minute, with his @handle or a direct profile link.'
+            : 'Check the spelling, or paste a profile link (Bluesky, YouTube, Reddit…). Paid pages are kept as link-outs — search his free, public accounts here.',
           actions: [h('button', { class: 'btn primary', onclick: run }, icon('refresh', 'sm'), 'Try again')],
         }));
     } else if (state.result) {
@@ -108,18 +152,20 @@ export async function find(root, { query }) {
       if (!cands.length) {
         out.append(emptyState({
           icon: 'users',
-          title: 'No verified public accounts found',
-          text: 'Nothing on the open platforms matched that closely enough to verify. Try his @handle on a different platform, or paste a direct profile link.',
+          title: `No verified accounts for “${input.value.trim() || 'that'}”`,
+          text: 'Try the @handle, or paste a direct profile link. Only accounts that exist and have content are shown — never a plausible-looking URL.',
           actions: [h('a', { class: 'btn', href: href('/creators') }, 'Browse creators instead')],
         }));
       } else {
+        const [best, ...rest] = cands;
         out.append(
           h('div', { class: 'row wrap find-result-head', style: { alignItems: 'center' } },
             h('strong', null, `${cands.length} verified account${cands.length === 1 ? '' : 's'}`),
             h('span', { class: 'muted' }, 'checked against the real platform — never just a plausible URL'),
             h('span', { style: { flex: '1' } }),
-            h('button', { class: 'btn primary', onclick: (e) => followSelected(cands, e.currentTarget) }, icon('plus', 'sm'), 'Follow all as one creator')),
-          h('div', { class: 'creator-grid' }, cands.map(evidenceCard)),
+            cands.length > 1 ? h('button', { class: 'btn primary', onclick: (e) => followSelected(cands, e.currentTarget) }, icon('plus', 'sm'), 'Follow all as one creator') : null),
+          answerCard(best),
+          rest.length ? h('div', { class: 'creator-grid find-rest' }, rest.map(evidenceCard)) : null,
         );
       }
       const ext = state.result.externalLinks || [];
@@ -144,7 +190,7 @@ export async function find(root, { query }) {
   }
 
   root.replaceChildren(
-    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Find a creator'), h('div', { class: 'sub' }, 'Name, performer name, @handle or profile link. Only verified public accounts are followed. Paid pages are kept as link-outs.'))),
+    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Find a creator'), h('div', { class: 'sub' }, 'One box: a name, @handle or profile link. Local matches appear as you type; Enter verifies him across the open web. Only verified accounts are followed — paid pages stay link-outs.'))),
     form,
     out,
   );

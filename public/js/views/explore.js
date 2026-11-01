@@ -48,8 +48,7 @@ export async function explore(root, { query }) {
   const sortSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Sort', onchange: (e) => set({ sort: e.target.value }) }, sortOptions.map(([v, l]) => h('option', { value: v, selected: f.sort === v }, l)));
   const sinceSel = ['top', 'trending'].includes(f.sort) || f.since ? h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Time range', onchange: (e) => set({ since: e.target.value }) }, SINCE.map(([v, l]) => h('option', { value: v, selected: f.since === v }, l))) : null;
   const platSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Filter by source', title: 'Sources PRISM ingests (paid pages are kept as link-outs)', onchange: (e) => set({ platform: e.target.value }) }, h('option', { value: '' }, 'All sources'));
-  const density = h('div', { class: 'seg hide-mobile', role: 'group', 'aria-label': 'Density' }, [['s', 'Dense'], ['m', 'Cozy'], ['l', 'Large']].map(([v, l]) =>
-    h('button', { class: prefs.density === v ? 'on' : '', onclick: (e) => { prefs.density = v; density.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === e.currentTarget)); } }, l)));
+  // Grid density lives in Settings (device-local prefs.density), not in this bar.
 
   // Every active filter is a removable chip. For a smart search they sit in the "Understood as" banner instead.
   const active = [];
@@ -113,7 +112,18 @@ export async function explore(root, { query }) {
   const reelsBtn = h('a', { class: 'btn sm', href: href('/reels', { type: f.type || 'all', sort: f.sort === 'relevance' || f.sort === 'oldest' ? 'recent' : f.sort, platform: f.platform, community: f.community, tag: f.tag, tags: f.tags, anytags: f.anytags, label: f.anytags ? f.label : '', creator: f.creator, since: f.since, after: f.after, q: f.q, following: f.following }), title: 'Play these results full screen' }, icon('film', 'sm'), 'Play as Reels');
 
   const followChip = h('button', { class: `chip${f.following ? ' on' : ''}`, 'aria-pressed': String(!!f.following), title: 'Only posts from creators you follow on this device', 'aria-label': f.following ? 'Show everything (turn off Followed filter)' : 'Show only creators you follow on this device', onclick: () => set({ following: f.following ? '' : '1' }) }, icon('heart', 'sm'), f.following ? 'Followed only' : 'Followed');
-  const bar = h('div', { class: 'filterbar', role: 'toolbar', 'aria-label': 'Explore filters' }, h('div', { class: 'filter-scroll' }, typeSeg, followChip, seenChip, sortSel, sinceSel, platSel), h('span', { class: 'spacer' }), density, active.length ? h('div', { class: 'active-filters' }, active) : null);
+  // Fewer peers: type/sort/seen/followed stay visible; source + time hide behind a "Filters" disclosure.
+  const moreFilters = [sinceSel, platSel].filter(Boolean);
+  const activeCount = (f.platform ? 1 : 0) + (f.since ? 1 : 0);
+  const filtersDisclosure = moreFilters.length ? (() => {
+    let open = window.matchMedia('(min-width: 900px)').matches && activeCount > 0;
+    const panel = h('div', { class: 'filter-more', hidden: !open }, moreFilters);
+    const btn = h('button', { class: `chip filter-more-btn${activeCount ? ' on' : ''}`, type: 'button', 'aria-expanded': String(open), 'aria-controls': 'filter-more' }, icon('sliders', 'sm'), activeCount ? `Filters · ${activeCount}` : 'Filters');
+    panel.id = 'filter-more';
+    btn.addEventListener('click', () => { open = !open; panel.hidden = !open; btn.setAttribute('aria-expanded', String(open)); });
+    return [btn, panel];
+  })() : [];
+  const bar = h('div', { class: 'filterbar', role: 'toolbar', 'aria-label': 'Explore filters' }, h('div', { class: 'filter-scroll' }, typeSeg, followChip, seenChip, sortSel, ...filtersDisclosure), h('span', { class: 'spacer' }), active.length ? h('div', { class: 'active-filters' }, active) : null);
 
   // Tag rail: with tags in play, show tags that go with them (click narrows); otherwise the most used tags.
   // Required tags (tags= / tag=) are what a refinement narrows, so suggestions are measured against
@@ -124,8 +134,8 @@ export async function explore(root, { query }) {
   const tagRail = focusTags.length ? relatedRail(focusTags, { onPick: addTag, title: 'Narrow with', mode: required.length ? 'all' : 'any' }) : h('div', { class: 'row', style: { gap: '8px', overflowX: 'auto', padding: '14px 0 2px', scrollbarWidth: 'none' } });
 
   const emptyHost = h('div', { class: 'stack', style: { justifyItems: 'center' } },
-    f.following && !followIds.length ? emptyState({ icon: 'heart', title: 'You’re not following anyone yet', text: 'Follow creators from their profile and their newest posts will collect here.', actions: [h('a', { class: 'btn primary', href: href('/creators') }, 'Browse creators')] })
-      : emptyState({ icon: 'search', title: 'No matches', text: f.q || f.tags ? 'Try fewer words, or remove a filter.' : 'Nothing has been ingested for these filters yet.', actions: [h('a', { class: 'btn', href: href('/explore') }, 'Clear filters')] }));
+    f.following && !followIds.length ? emptyState({ icon: 'heart', title: 'You’re not following anyone yet', text: 'Follow a creator and their newest posts collect here.', actions: [h('a', { class: 'btn primary', href: href('/creators') }, 'Browse creators')] })
+      : emptyState({ icon: 'search', title: f.q || f.tags || f.tag || f.anytags || f.platform || f.since ? 'Nothing matches these filters.' : 'Nothing has been ingested yet.', text: f.q || f.tags ? 'Try fewer words, or remove a filter.' : 'Sources, topics and tags appear here after the first ingest.', actions: [f.q || f.tags || f.tag || f.anytags || f.platform || f.since ? h('a', { class: 'btn', href: href('/explore') }, 'Clear filters') : h('a', { class: 'btn', href: href('/browse') }, 'Browse sources')] }));
 
   async function onEmpty() {
     if (f.norelax || forYou) return;

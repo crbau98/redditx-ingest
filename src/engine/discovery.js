@@ -693,6 +693,90 @@ async function coomerDiscovery({ queries = 4, perQuery = 2, limit = 6, aborted =
 }
 
 /**
+ * Listicle & directory harvest: the open web already published lists of gay male creators —
+ * "top gay onlyfans" roundups, link-hub directories, forum threads, performer indexes. Search finds
+ * the pages (keyless Bing + DuckDuckGo merge, see lib/websearch), each page is read once (robots.txt
+ * honoured), and everything on it becomes signal:
+ *
+ *   paid handles  → OnlyFans/Fansly/JFF leads → the existing trace finds each man's free accounts
+ *                   → scored candidates → auto-follow (safety + male-scope gates unchanged)
+ *   profile links → directly-scored candidates (same as any other search hit)
+ *
+ * Pages are remembered so a run never re-reads what it already harvested.
+ */
+const HARVEST_QUERIES = [
+  'top gay onlyfans creators list',
+  'gay male onlyfans creators to follow',
+  'gay onlyfans directory link hub',
+  'gay male creators linktree allmylinks directory',
+  'best gay onlyfans accounts list',
+  'gay porn performers onlyfans links list',
+  'gay creators beacons page list 18+',
+];
+
+async function directoryHarvest({ queries = 3, pages = 5, budget, aborted = () => false } = {}) {
+  const out = { searched: 0, read: 0, leads: 0, candidates: 0, rejected: 0 };
+  if (!websearch.configured()) return out;
+  const http = require('../sources/http').forPlatform('harvest', 1100);
+  const cheerio = require('cheerio');
+  const { robotsAllows } = require('../sources/web');
+  const seenPages = new Set(JSON.parse(repo.discoveryState.get('harvest.pages', '[]') || '[]'));
+  let rotate = parseInt(repo.discoveryState.get('harvest.rotate', '0'), 10) || 0;
+  const spent = new Set();
+  const urls = []; // {url, q} — the query stays with the page so the signal names its source
+
+  for (let i = 0; i < queries && !aborted(); i++) {
+    const q = HARVEST_QUERIES[(rotate + i) % HARVEST_QUERIES.length];
+    if (spent.has(q)) continue;
+    spent.add(q);
+    try {
+      const hits = await websearch.search(q, { count: 12, budget });
+      out.searched++;
+      for (const h of hits) if (h.url && !seenPages.has(h.url) && !takedowns.checkUrl(h.url)) urls.push({ url: h.url, q });
+    } catch (e) {
+      if (e && (e.skip || e.budget)) break;
+      events.log('WARN', `Discovery: harvest "${q}" — ${e.message}`);
+    }
+  }
+  repo.discoveryState.set('harvest.rotate', String((rotate + queries) % HARVEST_QUERIES.length));
+
+  for (const { url: pageUrl, q } of urls) {
+    if (aborted() || out.read >= pages) break;
+    if (seenPages.has(pageUrl)) continue;
+    seenPages.add(pageUrl);
+    try {
+      if (!(await robotsAllows(pageUrl))) continue;
+      const html = await http.text(pageUrl, { maxBytes: 1_500_000, retries: 0, timeout: 12000, headers: { accept: 'text/html' } });
+      out.read++;
+      const $ = cheerio.load(String(html));
+      $('script, style, noscript').remove();
+      // Anchor hrefs count too: a listicle's creator links are often the only place the URL exists
+      // (anchor text is just a name), and paid handles hide in query strings and paths.
+      const hrefs = [];
+      $('a[href]').each((_, el) => { const h = $(el).attr('href'); if (h && /^(https?:)?\/\//i.test(h)) hrefs.push(h.replace(/^(?!https?:)/i, 'https:')); });
+      const text = `${$('title').text()}\n${$('h1, h2, h3').text()}\n${$('body').text()}\n${hrefs.join('\n')}`.replace(/[ \t]+/g, ' ').slice(0, 200_000);
+      if (gate(text.slice(0, 4000)).level === 'block') { out.rejected++; continue; }
+
+      // 1. Paid pages named on the page → leads the existing trace works (accounts, scores, auto-follow).
+      out.leads += notePaidHandles(text, null);
+
+      // 2. Profile links on the page → scored candidates (male-scope + safety enforced by consider()).
+      for (const spec of extractLinks(text)) {
+        if (!usable(spec)) continue;
+        if (spec.platform === 'linkinbio') spec = { ...spec, target: spec.target.split('#')[0] };
+        const c = consider(spec, 'search', q || pageUrl, { bio: null, displayName: null });
+        if (c) out.candidates++;
+      }
+    } catch (e) {
+      if (e && /robots/.test(String(e.message))) continue;
+      // one bad page is one page: keep harvesting
+    }
+  }
+  repo.discoveryState.set('harvest.pages', JSON.stringify([...seenPages].slice(-600)));
+  return out;
+}
+
+/**
  * Work the paid leads: (1) pages creators promote that we do not follow yet become discovery
  * candidates for that person's public accounts; (2) followed creators who have a paid page but few
  * known accounts get the same search, and what it finds is linked to them (their content from elsewhere).
@@ -1369,11 +1453,12 @@ async function run({ trigger = 'schedule' } = {}) {
       report.creatorMentions = await discoverCreatorMentions({ budget: s.braveDailyBudget, aborted });
     }
     report.identities = require('./identity').scan();
+    if (s.discoveryExpand && !config.isTest) report.harvest = await directoryHarvest({ budget: s.braveDailyBudget, aborted });
     report.enrich = await enrich();
     report.aiTriage = await require('./ai').triage();
     report.promote = s.autoDiscover || trigger === 'manual' ? promote(s) : { followed: 0, linked: 0 };
     report.pruned = repo.candidates.prune();
-    events.log('INFO', `Discovery ${trigger === 'manual' ? '(manual) ' : ''}finished: ${report.mentions.found} mention leads, ${report.graph ? report.graph.found : 0} graph leads, ${report.topics ? report.topics.found : 0} search leads, ${report.communities ? report.communities.found : 0} community/feed leads, ${report.hangouts ? report.hangouts.found : 0} hangouts, ${report.lookalikes ? report.lookalikes.found : 0} lookalikes, ${report.people ? report.people.found : 0} people-search leads, ${report.identity ? report.identity.linked : 0} identity matches, ${report.seeds ? report.seeds.followed : 0} named creators found, ${report.onlyfans ? report.onlyfans.found : 0} OnlyFans creators traced (${report.onlyfans ? report.onlyfans.linked : 0} accounts linked), ${report.identities.links} same-creator links (${report.identities.merged} merged); followed ${report.promote.followed}, linked ${report.promote.linked}`);
+    events.log('INFO', `Discovery ${trigger === 'manual' ? '(manual) ' : ''}finished: ${report.mentions.found} mention leads, ${report.graph ? report.graph.found : 0} graph leads, ${report.topics ? report.topics.found : 0} search leads, ${report.communities ? report.communities.found : 0} community/feed leads, ${report.hangouts ? report.hangouts.found : 0} hangouts, ${report.lookalikes ? report.lookalikes.found : 0} lookalikes, ${report.people ? report.people.found : 0} people-search leads, ${report.identity ? report.identity.linked : 0} identity matches, ${report.seeds ? report.seeds.followed : 0} named creators found, ${report.onlyfans ? report.onlyfans.found : 0} OnlyFans creators traced (${report.onlyfans ? report.onlyfans.linked : 0} accounts linked), ${report.identities.links} same-creator links (${report.identities.merged} merged), ${report.harvest ? report.harvest.read : 0} directory pages harvested (${report.harvest ? report.harvest.leads : 0} paid leads, ${report.harvest ? report.harvest.candidates : 0} profile links), ${report.gff ? report.gff.followed : 0} performer-directory follows, ${report.imageMatch ? report.imageMatch.pages : 0} image-matched pages; followed ${report.promote.followed}, linked ${report.promote.linked}`);
   } catch (e) {
     report.error = e.message;
     events.log('ERR', `Discovery failed: ${e.message}`);
@@ -1435,4 +1520,4 @@ function start() {
 }
 function stop() { stopFlag = true; clearInterval(timer); timer = null; }
 
-module.exports = { seedCreators, seedStatus, onlyfansDiscovery, coomerDiscovery, gffDiscovery, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskyLookalikes, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };
+module.exports = { seedCreators, seedStatus, onlyfansDiscovery, coomerDiscovery, gffDiscovery, directoryHarvest, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskyLookalikes, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };

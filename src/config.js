@@ -22,6 +22,16 @@ const isProd = env.NODE_ENV === 'production';
 const isTest = env.NODE_ENV === 'test';
 const dbPath = env.DB_PATH || path.join(root, 'data', 'prism.db');
 
+/** Read a secret from a file OUTSIDE the workspace (e.g. the OpenBot key vault). The value never
+ * appears in the repo, in .env, or in logs; a missing/unreadable file is just "not configured". */
+function readKeyFile(file) {
+  if (!file) return '';
+  try {
+    // eslint-disable-next-line global-require
+    return require('fs').readFileSync(file, 'utf8').trim();
+  } catch { return ''; }
+}
+
 module.exports = {
   root,
   isProd,
@@ -72,7 +82,9 @@ module.exports = {
     mastodonToken: env.MASTODON_ACCESS_TOKEN || '',
     misskeyToken: env.MISSKEY_ACCESS_TOKEN || '',
     // Brave Search API (web search) — powers creator discovery and cross-platform identity matching.
-    braveKey: env.BRAVE_API_KEY || env.BRAVE_SEARCH_API_KEY || '',
+    // BRAVE_API_KEY_FILE points at a key file outside the workspace (the OpenBot vault), so the
+    // secret itself never lands in the repo or in any file the repo ships.
+    braveKey: env.BRAVE_API_KEY || env.BRAVE_SEARCH_API_KEY || readKeyFile(env.BRAVE_API_KEY_FILE),
     // Keenable web search (an AI-agent search engine, MCP over HTTP). Used by creator lookup and discovery.
     keenableKey: env.KEENABLE_API_KEY || '',
     // Bright Data (https://brightdata.com) Discover API: intent-ranked web search. BRIGHTDATA_API_KEY is accepted too (same token).
@@ -87,11 +99,13 @@ module.exports = {
   // Web search backends (discovery + creator lookup), tried in this order. SearXNG needs no key: point it at any instance with the JSON format enabled.
   searxngUrl: String(env.SEARXNG_URL || '').trim(),
   searxngEngines: String(env.SEARXNG_ENGINES || '').trim(),
-  ddgEnabled: /^(1|true|yes|on)$/i.test(String(env.DDG_SEARCH || '')),
+  // DuckDuckGo's HTML endpoint (keyless). On by default outside tests; it fails fast when the network
+  // is walled off (see the cooldown in websearch.js) and answers as soon as the wall drops.
+  ddgEnabled: isTest ? !!env.DDG_BASE_URL : !/^(0|false|no|off)$/i.test(String(env.DDG_SEARCH ?? '1')),
   // Keyless Bing HTML search (default on: it is the provider that works without any API key). BING_SEARCH=0 turns it off.
   // Never on under test: unit tests must not reach the live web.
   bingEnabled: !isTest && !/^(0|false|no|off)$/i.test(String(env.BING_SEARCH ?? '1')),
-  searchProviders: list(env.SEARCH_PROVIDERS, ['keenable', 'brave', 'brightdata', 'bing', 'ddg', 'searxng', 'claude']),
+  searchProviders: list(env.SEARCH_PROVIDERS, ['keenable', 'brave', 'brightdata', 'bing', 'ddg', 'ddg-lite', 'searxng', 'claude']),
   // What Discover ranks results against: the intent steers it toward public creator pages and personal galleries.
   // Claude (Anthropic API). Text only: PRISM never sends pictures or videos to it.
   anthropic: {
