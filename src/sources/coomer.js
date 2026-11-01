@@ -145,6 +145,13 @@ module.exports = {
     // The engine gives a feed run 150 s and the pipeline needs its share: stop paging in time rather
     // than being killed mid-request (a killed run stores no cursor, so the work is simply lost).
     const deadline = Date.now() + (probe ? 20000 : 95000);
+    // Every request is sized to what is left of that budget: a page that starts at 90 s must not be
+    // allowed 3 retries × 12 s, which is what pushed whole runs past the engine's 150 s and lost the
+    // cursor. Late in the run, one attempt and a short timeout is the only honest request.
+    const requestOpts = () => {
+      const left = deadline - Date.now();
+      return { ...apiOpts, timeout: Math.max(3_000, Math.min(apiOpts.timeout, left)), retries: left > 25_000 ? apiOpts.retries : 0 };
+    };
     // The mirror only accepts offsets that are multiples of PAGE ("Offset is not a multiple of 50").
     const pageStart = (n) => Math.floor(n / PAGE) * PAGE;
     let offset = 0;        // query offset of the page being read (always a multiple of PAGE)
@@ -159,7 +166,7 @@ module.exports = {
     // front and re-find the boundary (one cheap request; the alternative is missing new posts).
     if (walk > 0 && prevNewest && !ctx.force && !probe) {
       try {
-        const head = await api(pagePath(0), apiOpts);
+        const head = await api(pagePath(0), requestOpts());
         const hasNew = head.some((p) => p.published && p.published > prevNewest);
         if (!hasNew) { skipBelow = walk; consumed = walk; offset = pageStart(walk); phase = 'backfill'; }
       } catch { /* stay at the front: a full pass is always correct, only slower */ }
@@ -171,7 +178,7 @@ module.exports = {
       const maxAttempts = probe ? 1 : 3;
       for (let attempt = 0; attempt < maxAttempts && !json; attempt++) {
         try {
-          json = await api(pagePath(offset), apiOpts);
+          json = await api(pagePath(offset), requestOpts());
         } catch (e) {
           // "Offset N is bigger than total count M" is the mirror's way of saying the list is over.
           if (pastEnd(e)) { json = []; break; }

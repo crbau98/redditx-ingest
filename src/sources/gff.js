@@ -14,12 +14,29 @@
  */
 const cheerio = require('cheerio');
 const http = require('./http').forPlatform('gff', 900);
-const { clip, toIso } = require('./util');
+const { clip, toIso, isChallengeText } = require('./util');
 const { robotsAllows } = require('./web');
 
 const PAGE_VIDEOS = 14;   // video pages read per run (each is one full page fetch)
 const PROBE_VIDEOS = 2;   // a lookup probe asks "does this performer page exist?" — read only two
 const SEEN_KEEP = 400;    // remembered video slugs in the feed cursor
+// When the site puts up a bot check, one long cool-down beats the breaker's 1-hour cap: the whole
+// platform is closed for this long before the next single probe.
+const CHALLENGE_COOLDOWN_MS = 6 * 3600_000;
+
+/** The site is actively blocking this server. Thrown (not swallowed into notes) so the circuit
+ *  breaker sees it and pauses every gff feed; existing items stay in the library as link-outs. */
+function challengeError() {
+  const e = new Error('gayforfans is showing a bot check — the site blocks this server; videos remain link-outs');
+  e.status = 503;
+  e.retryAfter = CHALLENGE_COOLDOWN_MS;
+  e.challenged = true;
+  return e;
+}
+
+function isBlockedStatus(status) {
+  return status === 403 || status === 503 || status === 520 || status === 524;
+}
 
 function durationOf(iso) {
   const m = String(iso || '').match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
@@ -84,8 +101,12 @@ module.exports = {
     try {
       html = await http.text(feed.target, { maxBytes: 3_000_000, retries: 1, headers: { accept: 'text/html' } });
     } catch (e) {
-      return { items: [], notes: [`gayforfans: ${e.message}`], via: 'gff' };
+      // A site-wide block or a systemic failure must reach the circuit breaker, not hide in notes:
+      // before, every gff run "finished empty" while the site was 403ing us, so nothing ever backed off.
+      if (isBlockedStatus(e.status) || isChallengeText(e.body)) throw challengeError();
+      throw e;
     }
+    if (isChallengeText(html)) throw challengeError();
     const page = performerPage(String(html));
     const seen = new Set((ctx.cursor && ctx.cursor.seen) || []);
     // A small explicit limit is the lookup probe ("does this performer exist?"): two video pages
@@ -101,10 +122,12 @@ module.exports = {
       try {
         vh = await http.text(v.url, { maxBytes: 3_000_000, retries: 1, headers: { accept: 'text/html' } });
       } catch (e) {
+        if (isBlockedStatus(e.status) || isChallengeText(e.body)) throw challengeError();
         notes.push(`gayforfans: ${v.slug} — ${e.message}`);
         seen.add(v.slug);
         continue;
       }
+      if (isChallengeText(vh)) throw challengeError();
       seen.add(v.slug);
       const vo = videoObject(String(vh));
       if (!vo || !vo.contentUrl) continue;

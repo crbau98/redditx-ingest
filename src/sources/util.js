@@ -85,4 +85,13 @@ function errorDetail(e) {
 /** Keep reposts (credited to the original poster)? Admin setting "reposts", on by default. */
 function repostsOn() { try { return require('../settings').get().reposts !== false; } catch { return true; } }
 
-module.exports = { repostsOn, toIso, decodeHtml, htmlToText, absUrl, clip, uniq, pickWidth, stripQuery, bestSrcset, originOf, errorDetail };
+/**
+ * Body of a bot-protection interstitial page (Cloudflare managed challenge, "Just a moment...",
+ * an access-denied wall). Used to tell "the site is blocking us" apart from "this page is broken" —
+ * we report it, we do not solve it or route around it.
+ */
+function isChallengeText(body) {
+  return /challenge-platform|cf_chl|Just a moment|Attention Required|checking-your-browser/i.test(String(body || '').slice(0, 8192));
+}
+
+module.exports = { repostsOn, toIso, decodeHtml, htmlToText, absUrl, clip, uniq, pickWidth, stripQuery, bestSrcset, originOf, errorDetail, isChallengeText };

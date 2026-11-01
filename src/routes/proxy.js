@@ -20,6 +20,7 @@ const net = require('../lib/net');
 const cache = require('../lib/media-cache');
 const repo = require('../db/repo');
 const playback = require('../engine/playback');
+const { isChallengeText } = require('../sources/util');
 
 const router = express.Router();
 
@@ -143,7 +144,7 @@ router.get('/hls', async (req, res) => {
     // A bot-protection interstitial (Cloudflare "Just a moment...") is not a broken video: say so, so the
     // player shows a clear state instead of a generic failure. We do not solve or route around the challenge.
     const body = r.body ? r.body.toString('utf8', 0, 4096) : '';
-    if (/challenge-platform|cf_chl|Just a moment/i.test(body)) {
+    if (isChallengeText(body)) {
       return res.status(503).json({ error: 'The source is showing a bot check right now, so this video cannot be streamed here. Open it on the source site.', code: 'source_challenged' });
     }
     return sendError(res, [r.status === 404 ? 404 : 502, 'Upstream error']);
