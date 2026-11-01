@@ -18,7 +18,7 @@ const server = app.listen(config.port, () => {
   console.log(`   Database:  ${config.dbPath}${migration.from !== migration.to ? `  (migrated v${migration.from} → v${migration.to})` : ''}`);
   console.log(`   Admin:     ${config.adminKey ? 'protected by ADMIN_KEY' : config.adminOpen ? 'OPEN (no ADMIN_KEY — fine for local dev only)' : 'DISABLED — set ADMIN_KEY'}`);
   console.log(`   Age gate:  ${config.ageGateEnforce ? 'enforced server-side' : 'off'}`);
-  console.log(`   Scheduler: ${config.schedulerEnabled ? 'on' : 'off (toggle in Admin → Settings)'}`);
+  console.log(`   Scheduler: ${require('./src/settings').get().schedulerEnabled ? 'on (Admin → Settings)' : 'off (toggle in Admin → Settings)'}`);
   console.log(`   Keys:      X ${config.creds.xBearer ? '✓' : '–'} · Brave ${config.creds.braveKey ? '✓' : '–'} · Telegram ${config.creds.telegramBot ? '✓' : '–'} · Reddit ${config.creds.redditClientId ? '✓' : '–'} · Bluesky ${config.creds.bskyIdentifier ? '✓' : '–'}`);
   console.log(`  ${line}\n`);
 });

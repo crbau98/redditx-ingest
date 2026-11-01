@@ -54,7 +54,10 @@ before(async () => {
     '/api/v1/onlyfans/user/musclestud/posts': () => ({ json: MUSCLE_POSTS }),
     '/api/v1/onlyfans/user/fakemale/posts': () => ({ json: FEMALE_POSTS }),
     '/api/v1/onlyfans/user/xxl_92/posts': () => ({ json: OPAQUE_POSTS }),
-    '/api/v1/creators': () => ({ json: [{ id: 'nash.brandt', name: 'nash.brandt', service: 'onlyfans' }] }),
+    '/api/v1/creators': () => ({ json: [
+      { id: 'nash.brandt', name: 'nash.brandt', service: 'onlyfans' },
+      { id: 'adamxlee', name: 'adamxlee', service: 'onlyfans' },
+    ] }),
   });
   prepareEnv({ COOMER_BASE_URL: mock.url, BRAVE_API_KEY: '' });
   process.env.COOMER_BASE_URL = mock.url;
@@ -231,6 +234,15 @@ describe('coomer by name', () => {
     const feed = repo.feeds.list({ platform: 'coomer', kind: 'user' }).items.find((f) => /nash\.brandt/.test(f.target));
     assert.ok(feed, 'the mirrored page is followed');
     assert.equal(feed.creator_id, c.id, 'and attributed to the creator we already knew');
+  });
+
+  test('a creator whose handle is mirrored is matched by that handle too', async () => {
+    const c = repo.creators.create({ handle: 'adamxlee', displayName: 'Adam X Lee', origin: 'ingest' });
+    const out = await discovery.coomerNameDiscovery({ limit: 5 });
+    assert.ok(out.feeds >= 1);
+    const feed = repo.feeds.list({ platform: 'coomer', kind: 'user' }).items.find((f) => /adamxlee/.test(f.target));
+    assert.ok(feed, 'handle match follows the mirrored page');
+    assert.equal(feed.creator_id, c.id);
   });
 
   test('name targets skip creators the mirror already covers and are re-checked on a schedule', () => {

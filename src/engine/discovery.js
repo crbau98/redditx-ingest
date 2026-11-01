@@ -670,11 +670,18 @@ async function coomerDiscovery({ queries = 0, perQuery = 0, limit = 0, aborted =
   const rotate = parseInt(repo.discoveryState.get('coomer.query.rotate', '0'), 10) || 0;
   const picks = scout.pickQueries(rotate, wanted);
   const tally = new Map();
+  // The whole pass is time-boxed. The mirror spaces requests 2.5 s apart, so eight queries read
+  // deeply would run past ten minutes and hold the discovery cycle open; 150 s covers eight queries
+  // at one to two pages each plus a handful of page reads, and the rotation means a shortened run
+  // simply continues the bank next time.
+  const started = Date.now();
+  const budgetMs = 150_000;
+  const left = () => budgetMs - (Date.now() - started);
 
   for (const q of picks) {
-    if (aborted()) break;
+    if (aborted() || left() < 40_000) break; // leave room to verify what was found
     try {
-      const res = await registry.get('coomer').fetch({ platform: 'coomer', kind: 'search', target: q }, { limit: 120 });
+      const res = await registry.get('coomer').fetch({ platform: 'coomer', kind: 'search', target: q }, { limit: 50 });
       out.searched++;
       scout.merge(tally, scout.tally(res.items || [], q));
     } catch (e) { events.log('WARN', `Discovery: coomer "${q}" — ${e.message}`); }
@@ -697,6 +704,7 @@ async function coomerDiscovery({ queries = 0, perQuery = 0, limit = 0, aborted =
 
   for (const entry of ranked) {
     if (aborted() || out.feeds >= cap) break;
+    if (left() < 8_000) break; // a verification read costs 2.5 s + the page fetch
     const handle = entry.handle;
     // A creator page is one creator: a hard-female or unsafe name rejects it before any fetching.
     const verdict = gate(handle, handle.replace(/[._-]+/g, ' '));
@@ -804,10 +812,12 @@ async function coomerNameDiscovery({ limit = 8, scan = 60, aborted = () => false
     const name = String(c.display_name || '').trim();
     if (!name) continue;
     // Cheap local check first: never spend a state write on a name the index cannot match.
-    const hit = index.best({ name });
+    // The handle counts too — a creator followed from Reddit or Bluesky often uses the same handle
+    // on his paid page, and the mirror indexes handles as well as names.
+    const hit = index.best({ handle: c.handle, name });
     out.checked++;
     repo.discoveryState.set(`coomer.name.${c.id}`, new Date().toISOString());
-    if (!hit || hit.how !== 'name') continue;
+    if (!hit) continue;
     out.matched++;
     const verdict = gate(c.handle, name, hit.id);
     const gender = femaleCheck(c.handle, name, hit.id);
