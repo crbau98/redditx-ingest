@@ -1355,10 +1355,14 @@ async function enrich({ limit = 12 } = {}) {
   if (tgBot.configured() || (canTgPreview && tgAdapter && tgAdapter.lookupChannel)) {
     for (const c of repo.candidates.needingDetails('telegram', limit)) {
       try {
-        const info = tgBot.configured()
-          ? await tgBot.channelInfo(c.target)
-          : await tgAdapter.lookupChannel(c.target);
-        if (!info) { repo.candidates.update(c.id, { status: 'rejected', reason: 'Telegram: channel not found or private', decided_at: new Date().toISOString() }); continue; }
+        if (/(?:_bot|bot)$/i.test(c.target)) {
+          repo.candidates.update(c.id, { status: 'rejected', reason: 'Telegram: bots cannot be ingested as feeds', decided_at: new Date().toISOString() });
+          continue;
+        }
+        const info = (tgAdapter && tgAdapter.lookupChannel)
+          ? await tgAdapter.lookupChannel(c.target)
+          : (tgBot.configured() ? await tgBot.channelInfo(c.target) : null);
+        if (!info) { repo.candidates.update(c.id, { status: 'rejected', reason: 'Telegram: channel preview unavailable or private', decided_at: new Date().toISOString() }); continue; }
         const scope = classify([info.title, info.description, c.target], { trusted: false }).scope;
         const j = judgeLookup(c, info.title, info.description);
         if (j.reject) { repo.candidates.update(c.id, j.reject); continue; }

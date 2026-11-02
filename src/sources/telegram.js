@@ -34,6 +34,7 @@ function parseCount(text) {
 /** Public channel username from a t.me link (https://t.me/name/123), or null for private / user links. */
 function forwardHandle(href) {
   const m = /^https?:\/\/(?:www\.)?(?:t|telegram)\.me\/(?!c\/|s\/|joinchat|\+)([A-Za-z][A-Za-z0-9_]{3,31})(?:\/\d+)?\/?(?:\?.*)?$/i.exec(String(href || ''));
+  if (m && /(?:_bot|bot)$/i.test(m[1])) return null;
   return m ? m[1] : null;
 }
 
@@ -44,6 +45,7 @@ function mtForward(msg) {
   let chat = null;
   try { chat = (msg.forward && (msg.forward.chat || msg.forward.sender)) || null; } catch { chat = null; }
   const handle = (chat && chat.username) || null;
+  if (handle && /(?:_bot|bot)$/i.test(handle)) return null;
   const name = (chat && (chat.title || chat.firstName)) || f.fromName || null;
   return handle || name ? { handle, name } : null;
 }
@@ -278,21 +280,35 @@ async function fetchChannel(feed, ctx) {
 
 async function lookupChannel(target) {
   const channel = String(target || '').replace(/^@/, '');
-  if (!channel) return null;
+  if (!channel || /(?:_bot|bot)$/i.test(channel)) return null;
+  let info = null;
   if (bot.configured()) {
-    const info = await bot.channelInfo(channel);
-    if (info) return info;
+    info = await bot.channelInfo(channel).catch(() => null);
+    if (!info) return null;
+    if (info.type && info.type !== 'channel') return null;
   }
-  const webBase = (config.baseUrls && config.baseUrls.telegramWeb) || 'https://t.me';
-  const html = await http.text(`${webBase}/s/${encodeURIComponent(channel)}`, { headers: { accept: 'text/html' }, maxBytes: 3_000_000 });
-  const parsed = parsePage(html, channel);
-  if (!parsed.hasChannel) return null;
-  return {
-    username: channel,
-    title: (parsed.profile && parsed.profile.displayName) || channel,
-    description: (parsed.profile && parsed.profile.bio) || '',
-    members: 0,
-  };
+  const canCheckPreview = !config.isTest || !!process.env.TELEGRAM_WEB_BASE_URL;
+  if (canCheckPreview) {
+    const webBase = (config.baseUrls && config.baseUrls.telegramWeb) || 'https://t.me';
+    try {
+      const html = await http.text(`${webBase}/s/${encodeURIComponent(channel)}`, { headers: { accept: 'text/html' }, maxBytes: 3_000_000 });
+      const parsed = parsePage(html, channel);
+      if (!parsed.hasChannel || (!parsed.messages.length && !/tgme_widget_message/.test(html))) return null;
+      if (!info) {
+        info = {
+          username: channel,
+          title: (parsed.profile && parsed.profile.displayName) || channel,
+          description: (parsed.profile && parsed.profile.bio) || '',
+          members: 0,
+        };
+      }
+    } catch {
+      return null;
+    }
+  } else if (!info) {
+    return null;
+  }
+  return info;
 }
 
 module.exports = {

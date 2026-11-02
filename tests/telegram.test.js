@@ -384,4 +384,36 @@ describe('joined channels: sync + ingestion', () => {
     const f = mt.wrap(Object.assign(new Error('x'), { errorMessage: 'FLOOD_WAIT_30', seconds: 30 }));
     assert.equal(f.status, 429); assert.equal(f.retryAfter, 30000);
   });
+
+  test('bot handles and preview-disabled channels cannot become or resurrect user feeds', async () => {
+    const { parseProfile } = require('../src/lib/links');
+    const p1 = parseProfile('https://t.me/gbandf_bot');
+    assert.equal(p1.ingestable, false, 'bot is not ingestable');
+    assert.equal(p1.external, true, 'bot is external link');
+
+    const p2 = parseProfile('@muscle_bot', { platform: 'telegram' });
+    assert.equal(p2.ingestable, false);
+    assert.equal(p2.external, true);
+
+    assert.equal(tg.forwardHandle('https://t.me/some_bot'), null);
+    assert.equal(tg.mtForward({ fwdFrom: {}, forward: { sender: { username: 'gbandf_bot' } } }), null);
+
+    // lookupChannel rejects bot
+    assert.equal(await tg.lookupChannel('gbandf_bot'), null);
+
+    // targets.addSpec does not resurrect a disabled feed with consecutive failures when origin !== admin
+    const targets = require('../src/services/targets');
+    const f = repo.feeds.upsert({ platform: 'telegram', kind: 'user', target: 'deadpreviewchan', origin: 'discovered' }).feed;
+    repo.feeds.finishRun(f.id, { status: 'error', error: 'Not found (404) — disabled after 3 tries', failures: 3 });
+    repo.feeds.update(f.id, { enabled: false });
+    assert.equal(repo.feeds.get(f.id).enabled, 0);
+
+    // re-add from discovery: does not resurrect
+    const resDiscovery = targets.addSpec({ platform: 'telegram', kind: 'user', target: 'deadpreviewchan', label: '@deadpreviewchan' }, { origin: 'discovered' });
+    assert.equal(repo.feeds.get(f.id).enabled, 0);
+
+    // re-add from admin: resurrects
+    const resAdmin = targets.addSpec({ platform: 'telegram', kind: 'user', target: 'deadpreviewchan', label: '@deadpreviewchan' }, { origin: 'admin' });
+    assert.equal(repo.feeds.get(f.id).enabled, 1);
+  });
 });

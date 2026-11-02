@@ -35,7 +35,7 @@ const resolvers = [
  * 404) on many instances, and from discovery (Admin → Discovery), which searches for real communities itself.
  * Every untrusted (tag / search) seed carries unmistakable male wording: items must read male-focused to publish.
  */
-const SEED_VERSION = 9;
+const SEED_VERSION = 10;
 const seeds = (platform, kind, targets, extra) => targets.map((target) => ({ platform, kind, target, ...extra }));
 const SEEDS = [
   ...seeds('reddit', 'community', ['gaybrosgonewild', 'vlinesabsanddick', 'gaynsfw', 'twinks', 'massivecocks', 'gaymuscle',
@@ -61,12 +61,18 @@ const SEEDS = [
   // must read male-focused, lib/scope). Creator `user` feeds are added by discovery when a traced paid page
   // exists there, which is what pulls a popular creator's whole page in automatically.
   ...seeds('coomer', 'search', ['gay muscle', 'gay jock', 'gay twink', 'gay daddy', 'gay otter', 'gay hunk', 'gay couple', 'gay athlete', 'gay porn star', 'gay muscle for hire'], { trusted: false, intervalMin: 360 }),
-  // Telegram — public channels via web preview (t.me/s/<channel>, no login or key required)
-  ...seeds('telegram', 'user', ['gaymusclemen', 'malephysique', 'gayjocksdaily', 'gayhunksdaily', 'mensfitnesshub', 'gayotters'], { trusted: true, intervalMin: 240 }),
+  // Telegram public feeds: retired from seeds because preview is disabled by Telegram; use MTProto joined channels
 ];
 
 /** Seeds from earlier versions that are not clearly male-only. Existing databases switch them off (origin 'seed' only). */
 const RETIRED_SEEDS = [
+  // Telegram preview-disabled channels (require MTProto joined channels; public web preview unavailable)
+  { platform: 'telegram', kind: 'user', target: 'gaymusclemen' },
+  { platform: 'telegram', kind: 'user', target: 'malephysique' },
+  { platform: 'telegram', kind: 'user', target: 'gayjocksdaily' },
+  { platform: 'telegram', kind: 'user', target: 'gayhunksdaily' },
+  { platform: 'telegram', kind: 'user', target: 'mensfitnesshub' },
+  { platform: 'telegram', kind: 'user', target: 'gayotters' },
   { platform: 'reddit', kind: 'community', target: 'hardbodies' },   // mixed / women-heavy fitness community
   { platform: 'reddit', kind: 'community', target: 'boyswithabs' },
   // bear / stocky communities: only fit, athletic men are wanted (v5 body filter)

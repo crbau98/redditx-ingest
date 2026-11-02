@@ -164,6 +164,7 @@ function followWaysIn(w, feed) {
     }
   }
   for (const handle of w.forwards) {
+    if (/(?:_bot|bot)$/i.test(handle)) continue;
     // a channel the logged-in account already joined is read through MTProto: not a lead
     if (repo.feeds.find('telegram', 'channel', handle) || repo.feeds.find('telegram', 'channel', `@${handle}`)) continue;
     try { discovery.consider({ platform: 'telegram', kind: 'user', target: handle, label: `@${handle}`, ingestable: true }, 'mention', `forwarded in ${feed.label || feed.target}`); } catch { /* best effort */ }

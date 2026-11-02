@@ -83,7 +83,12 @@ function addSpec(spec, { creatorId = null, origin = 'admin', trusted, hint, body
     trusted: trusted !== undefined ? trusted : (['search', 'tag'].includes(spec.kind) ? 0 : 1),
     origin, intervalMin: defaultInterval(spec),
   });
-  if (!res.created && !res.feed.enabled) repo.feeds.update(res.feed.id, { enabled: true, runNow: true });
+  if (!res.created && !res.feed.enabled) {
+    const dead = res.feed.consecutive_failures >= 3 || (res.feed.last_error && /not found|disabled|unavailable/i.test(res.feed.last_error));
+    if (origin === 'admin' || !dead) {
+      repo.feeds.update(res.feed.id, { enabled: true, runNow: true, ...(origin === 'admin' ? { resetErrors: true } : {}) });
+    }
+  }
   return { status: res.created ? 'created' : 'exists', feed: repo.feeds.get(res.feed.id), creator };
 }
 

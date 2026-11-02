@@ -188,7 +188,10 @@ function parseProfile(input, hint = {}) {
     if (p === 'x') return out('x', 'user', m[1], { label: `@${m[1]}` });
     if (p === 'redgifs') return out('redgifs', 'user', m[1].toLowerCase(), { label: m[1] });
     if (p === 'reddit') return out('reddit', 'user', m[1], { label: `u/${m[1]}` });
-    if (p === 'telegram' && /^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(m[1])) return out('telegram', 'user', m[1], { label: `t.me/${m[1]}`, url: `https://t.me/${m[1]}` });
+    if (p === 'telegram' && /^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(m[1])) {
+      if (/(?:_bot|bot)$/i.test(m[1])) return { platform: 'external', kind: 'link', target: `https://t.me/${m[1]}`, ingestable: false, external: true, label: `@${m[1]}`, service: 'Telegram', url: `https://t.me/${m[1]}` };
+      return out('telegram', 'user', m[1], { label: `t.me/${m[1]}`, url: `https://t.me/${m[1]}` });
+    }
     return null; // ambiguous without a hint
   }
   m = raw.match(/^(UC[A-Za-z0-9_-]{10,40})$/);
@@ -234,7 +237,10 @@ function parseProfile(input, hint = {}) {
   if (h === 't.me' || h === 'telegram.me' || h === 'telegram.dog') {
     const name = parts[0] === 's' ? parts[1] : parts[0];
     // invite links (+abc / joinchat) and bare numeric message links are not channels we can follow
-    if (name && /^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(name) && name.toLowerCase() !== 'joinchat') return out('telegram', 'user', name, { label: `t.me/${name}`, url: `https://t.me/${name}` });
+    if (name && /^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(name) && name.toLowerCase() !== 'joinchat') {
+      if (/(?:_bot|bot)$/i.test(name)) return { platform: 'external', kind: 'link', target: url.href, ingestable: false, external: true, label: name, service: 'Telegram', url: url.href };
+      return out('telegram', 'user', name, { label: `t.me/${name}`, url: `https://t.me/${name}` });
+    }
     return { platform: 'external', kind: 'link', target: url.href, ingestable: false, external: true, label: 'Telegram', service: 'Telegram', url: url.href };
   }
 

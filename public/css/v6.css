@@ -341,3 +341,86 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
   .reel-of-chip, .reel-act.of-reel-btn, .hero-pill { transition: none; }
   .reel-of-chip:hover, .hero-pill:hover { transform: none; }
 }
+
+/* ==========================================================================
+   v6.6 Mobile Ergonomics & Visual Layout Fixes
+   ========================================================================== */
+@media (max-width: 639px) {
+  /* Fix Creator Profile button wrapping and overflow */
+  .profile-head {
+    align-items: flex-start;
+  }
+  .profile-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+  }
+  .profile-actions .btn:not(.icon) {
+    flex: 1 1 calc(50% - 8px);
+    min-width: 130px;
+    height: 42px;
+    font-size: 13.5px;
+    justify-content: center;
+  }
+  .profile-actions .btn.icon {
+    width: 42px;
+    height: 42px;
+    flex: none;
+  }
+
+  /* Fix Reels meta overlay on mobile to prevent overlapping action rail */
+  .reel-meta {
+    right: 76px;
+    padding-left: 14px;
+    padding-right: 10px;
+    max-width: calc(100vw - 80px);
+  }
+  .reel-meta .row {
+    flex-wrap: wrap;
+    gap: 6px !important;
+  }
+  .reel-name {
+    font-size: 14px;
+  }
+  .reel-handle {
+    font-size: 11.5px;
+  }
+  .reel-caption {
+    font-size: 13px;
+    -webkit-line-clamp: 2;
+  }
+  .reel-of-chip {
+    height: 26px;
+    padding: 0 8px;
+    font-size: 11px;
+  }
+  .reel-follow {
+    height: 26px;
+    padding: 0 10px;
+    font-size: 11.5px;
+  }
+  .reel-rail {
+    right: 8px;
+    gap: 12px;
+  }
+  .reel-act svg {
+    width: 42px;
+    height: 42px;
+    padding: 10px;
+  }
+  .reel-act.of-reel-btn .of-mark {
+    width: 40px;
+    height: 40px;
+  }
+
+  /* Ensure Explore cards have crisp typography and spacing */
+  .card-foot {
+    padding: 8px 10px 10px;
+  }
+  .card-title {
+    font-size: 13px;
+    line-height: 1.25;
+  }
+}
