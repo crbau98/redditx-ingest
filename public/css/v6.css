@@ -375,7 +375,7 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
     scroll-snap-align: start;
   }
   .filter-scroll .chip, .filter-scroll .seg button {
-    min-height: 36px;
+    min-height: 44px;
     position: relative;
     touch-action: manipulation;
   }
@@ -511,18 +511,49 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
    v6.7 Strict 44px Minimum Touch Target Bounds
    ========================================================================== */
 @media (pointer: coarse), (max-width: 899px) {
-  /* Reels top chrome and app bar touch targets: guaranteed >= 44x44px */
-  .reels-top .btn.icon,
+  /* All buttons, icon buttons, inputs and select controls: guaranteed >= 44px */
+  .btn,
+  .btn.sm,
+  .btn.icon,
   .appbar .btn.icon,
   .appbar-actions .btn.icon,
-  .btn.icon {
-    min-width: 44px;
+  .reels-top .btn.icon,
+  .hero-actions .btn,
+  .page-head .btn,
+  .explore-head .btn,
+  .newpill {
     min-height: 44px;
-    width: 44px;
-    height: 44px;
+    box-sizing: border-box;
     display: inline-flex;
     align-items: center;
     justify-content: center;
+  }
+
+  .btn.icon,
+  .appbar .btn.icon,
+  .appbar-actions .btn.icon,
+  .reels-top .btn.icon {
+    min-width: 44px;
+    width: 44px;
+    height: 44px;
+  }
+
+  /* App bar logo touch target */
+  .brand {
+    min-height: 44px;
+    min-width: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  /* Search input & buttons */
+  .search-bar,
+  .search-bar .input,
+  .search-btn,
+  .input,
+  .select {
+    min-height: 44px;
+    box-sizing: border-box;
   }
 
   .reels-top .reels-tune,
@@ -555,12 +586,12 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
     box-sizing: border-box;
   }
 
-  /* Chips, OnlyFans pills, and Follow buttons: >= 44px */
+  /* Chips, OnlyFans pills, creator links, and Follow buttons: >= 44px */
   .chip,
   .chip.of-pill,
   .reel-of-chip,
   .reel-follow,
-  .btn.sm,
+  .reel-creator,
   .select.sm {
     min-height: 44px;
     box-sizing: border-box;
@@ -579,5 +610,8 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
   }
   .reel-follow {
     padding: 0 16px;
+  }
+  .reel-creator {
+    padding: 0 6px;
   }
 }
