@@ -114,7 +114,7 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
   .explore-head .explore-count { margin-top: 2px; font-size: 12.5px; }
   .explore-head .row { flex-wrap: nowrap; gap: 6px; }
   /* the actions shrink to icon buttons (their text stays as the accessible name) */
-  .explore-head .row .btn { width: var(--hit); height: var(--hit); padding: 0; font-size: 0; gap: 0; }
+  .explore-head .row .btn { width: 44px; height: 44px; min-width: 44px; min-height: 44px; padding: 0; font-size: 0; gap: 0; display: inline-flex; align-items: center; justify-content: center; }
   .explore-head .row .btn svg { width: 18px; height: 18px; }
   .filterbar { padding-top: 8px; padding-bottom: 8px; }
 }
@@ -611,7 +611,33 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
   .reel-follow {
     padding: 0 16px;
   }
-  .reel-creator {
+  .reel-creator,
+  .reel-meta a {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
     padding: 0 6px;
+  }
+
+  /* Card save button and creator links */
+  .card-fav {
+    width: 44px !important;
+    height: 44px !important;
+    min-width: 44px !important;
+    min-height: 44px !important;
+  }
+
+  .card-meta a,
+  .card-creator {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .explore-head .row .btn {
+    width: 44px !important;
+    height: 44px !important;
+    min-width: 44px !important;
+    min-height: 44px !important;
   }
 }

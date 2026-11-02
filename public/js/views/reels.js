@@ -105,7 +105,7 @@ export async function reels(root, { query }) {
 
     const meta = h('div', { class: 'reel-meta' },
       it.creator_id ? h('div', { class: 'row', style: { gap: '10px', alignItems: 'center' } },
-        h('a', { href: href(`/creator/${it.creator_id}`), class: 'row', style: { gap: '10px', minWidth: 0, alignItems: 'center' } }, avatar(it, 40), h('div', { style: { minWidth: 0 } }, h('div', { class: 'reel-name truncate' }, it.creator_name || it.creator_handle), h('div', { class: 'reel-handle truncate' }, `@${it.creator_handle || it.author} · ${platformLabel(it.platform)}`))),
+        h('a', { href: href(`/creator/${it.creator_id}`), class: 'row reel-creator', style: { gap: '10px', minWidth: 0, alignItems: 'center' } }, avatar(it, 40), h('div', { style: { minWidth: 0 } }, h('div', { class: 'reel-name truncate' }, it.creator_name || it.creator_handle), h('div', { class: 'reel-handle truncate' }, `@${it.creator_handle || it.author} · ${platformLabel(it.platform)}`))),
         ofLink,
         followBtn) : h('div', { class: 'reel-handle' }, [it.author, platformLabel(it.platform)].filter(Boolean).join(' · ')),
       it.title ? h('p', { class: 'reel-caption' }, it.title) : null,
