@@ -34,10 +34,13 @@ const AUTO_STRENGTH = 4;
 
 const q = {
   // A name only his bio claimed ('bio') is promoted when an account, profile, merge or the admin confirms it.
-  addAlias: db.prepare(`INSERT INTO creator_aliases (creator_id, norm, alias, kind, platform, source) VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT (creator_id, norm) DO UPDATE SET alias = excluded.alias, kind = excluded.kind, platform = COALESCE(excluded.platform, platform), source = excluded.source
+  addAlias: db.prepare(`INSERT INTO creator_aliases (creator_id, norm, alias, kind, platform, source, signal, evidence_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (creator_id, norm) DO UPDATE SET alias = excluded.alias, kind = excluded.kind, platform = COALESCE(excluded.platform, platform), source = excluded.source,
+      signal = excluded.signal, evidence_url = COALESCE(excluded.evidence_url, evidence_url)
     WHERE creator_aliases.source = 'bio' AND excluded.source != 'bio'`),
-  aliasesOf: db.prepare('SELECT alias, norm, kind, platform, source, created_at FROM creator_aliases WHERE creator_id = ? ORDER BY kind, created_at'),
+  // an alias that already exists keeps its first evidence; this only fills in what is missing
+  addEvidence: db.prepare('UPDATE creator_aliases SET signal = COALESCE(signal, ?), evidence_url = COALESCE(evidence_url, ?) WHERE creator_id = ? AND norm = ?'),
+  aliasesOf: db.prepare('SELECT alias, norm, kind, platform, source, signal, evidence_url, created_at FROM creator_aliases WHERE creator_id = ? ORDER BY kind, created_at'),
   delAlias: db.prepare('DELETE FROM creator_aliases WHERE creator_id = ? AND norm = ?'),
   byNorm: db.prepare(`SELECT DISTINCT a.creator_id FROM creator_aliases a JOIN creators c ON c.id = a.creator_id
     WHERE a.norm = ? AND c.status != 'blocked' LIMIT 20`),
@@ -57,12 +60,22 @@ const pair = (x, y) => (x < y ? [x, y] : [y, x]);
 
 /* ---------------------------------------------------------------- aliases */
 
-/** Record a name or handle for a creator. Returns true when it was new. */
-function addAlias(creatorId, alias, { kind = 'handle', platform = null, source = 'account' } = {}) {
+/** What each kind of alias source rests on, when the caller does not say more. */
+const DEFAULT_SIGNAL = { account: 'own-account', profile: 'own-profile', bio: 'bio-line', admin: 'admin', lookup: 'lookup', merge: 'merge' };
+
+/**
+ * Record a name or handle for a creator, with where it came from: `signal` (the kind of self-declared evidence) and
+ * `evidenceUrl` (the public page that shows it). Returns true when it was new.
+ */
+function addAlias(creatorId, alias, { kind = 'handle', platform = null, source = 'account', signal = null, evidenceUrl = null } = {}) {
   const text = String(alias || '').trim().slice(0, 80);
   const norm = normAlias(text);
   if (!creatorId || !norm || norm.length < 2) return false;
-  return q.addAlias.run(creatorId, norm, text, kind, platform, source).changes > 0;
+  const sig = signal || DEFAULT_SIGNAL[source] || source;
+  const url = evidenceUrl ? String(evidenceUrl).slice(0, 300) : null;
+  const added = q.addAlias.run(creatorId, norm, text, kind, platform, source, sig, url).changes > 0;
+  q.addEvidence.run(sig, url, creatorId, norm);
+  return added;
 }
 
 function aliasesOf(creatorId) { return q.aliasesOf.all(creatorId); }
@@ -129,7 +142,7 @@ function sameName(x, y) {
 
 /**
  * Note one piece of evidence that creators x and y are the same man.
- * @param {{type: string, from?: string, detail?: string}} ev
+ * @param {{type: string, from?: string, detail?: string, url?: string}} ev  url = the public page that shows the evidence
  * @returns {{id, strength, status, merged?: boolean}|null}
  */
 function noteLink(x, y, ev, { autoMerge = true } = {}) {
@@ -138,6 +151,7 @@ function noteLink(x, y, ev, { autoMerge = true } = {}) {
   if (!repo.creators.get(a) || !repo.creators.get(b)) return null;
   let row = q.link.get(a, b);
   const item = { type: ev.type, from: ev.from || null, detail: ev.detail ? String(ev.detail).slice(0, 160) : null };
+  if (ev.url) item.url = String(ev.url).slice(0, 300);
   if (!row) {
     const evidence = [item];
     const id = q.insLink.run(a, b, repo.creators.get(a).handle, repo.creators.get(b).handle, JSON.stringify(evidence), strengthOf(evidence, a, b)).lastInsertRowid;

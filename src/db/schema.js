@@ -662,7 +662,18 @@ function v15(db) {
   `);
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15];
+/**
+ * v16: every name attribution says where it came from. `signal` is the kind of self-declared evidence
+ * ('own-account', 'own-profile', 'bio-line', 'self-declared-name', 'merge', 'admin', 'lookup') and `evidence_url` the
+ * public page that shows it (his own profile or link-in-bio page). Nothing here is inferred from anyone else's posts.
+ */
+function v16(db) {
+  const cols = db.prepare('PRAGMA table_info(creator_aliases)').all().map((c) => c.name);
+  if (!cols.includes('signal')) db.exec('ALTER TABLE creator_aliases ADD COLUMN signal TEXT');
+  if (!cols.includes('evidence_url')) db.exec('ALTER TABLE creator_aliases ADD COLUMN evidence_url TEXT');
+}
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

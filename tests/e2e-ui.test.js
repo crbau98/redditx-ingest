@@ -34,7 +34,7 @@ before(async () => {
       return { json: { id: 'msg_e2e', type: 'message', role: 'assistant', model: body.model, content: [{ type: 'text', text: JSON.stringify(answer) }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 50, output_tokens: 20 } } };
     },
   });
-  const dir = prepareEnv({ DEMO_ART: '1', AGE_GATE_ENFORCE: 'true', ANTHROPIC_API_KEY: 'sk-ant-e2e', ANTHROPIC_BASE_URL: anthropic.url });
+  const dir = prepareEnv({ DEMO_ART: '1', AGE_GATE_ENFORCE: 'true', AI_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'sk-ant-e2e', ANTHROPIC_BASE_URL: anthropic.url });
   // The demo library: 160 generated items from 20 creators (no network, no real content).
   execFileSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'seed-demo.js')], { env: { ...process.env, DB_PATH: path.join(dir, 'test.db') }, stdio: 'ignore' });
   engine = require('../src/engine/engine');
@@ -162,7 +162,7 @@ describe('PRISM in a real browser', { timeout: 300000 }, () => {
     await page.keyboard.press('Enter');
     await page.getByText('Engines: browsers and AI').waitFor();
     const text = await page.locator('main').innerText();
-    assert.match(text, /Claude: claude-opus-5-5/);
+    assert.match(text, /Claude: claude-haiku-5-5/);
     await shot('admin-sources');
     noProblems(problems.filter((p) => !/HTTP 401|status of 401/.test(p)));
   });

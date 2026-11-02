@@ -9,7 +9,7 @@ const { test, describe, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const { start, prepareEnv } = require('./helpers/mock');
 
-let api; let server; let base; let repo; let engine; let claude; let ai; let settingsStore; let websearch;
+let api; let server; let base; let config; let repo; let engine; let claude; let ai; let settingsStore; let websearch;
 const AGE = { cookie: 'prism_age=1' };
 const pub = async (p) => { const res = await fetch(`${base}${p}`, { headers: AGE }); return { status: res.status, json: await res.json() }; };
 const admin = async (p, body) => { const res = await fetch(`${base}${p}`, { method: body ? 'POST' : 'GET', headers: { 'x-admin-key': 'test-key', 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }); return { status: res.status, json: await res.json() }; };
@@ -39,7 +39,8 @@ before(async () => {
       return { json: message([{ type: 'text', text: JSON.stringify(answer) }]) };
     },
   });
-  prepareEnv({ ANTHROPIC_API_KEY: 'sk-ant-test', ANTHROPIC_BASE_URL: api.url, SEARCH_PROVIDERS: 'claude' });
+  prepareEnv({ AI_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'sk-ant-test', ANTHROPIC_BASE_URL: api.url, SEARCH_PROVIDERS: 'claude' });
+  config = require('../src/config');
   repo = require('../src/db/repo');
   engine = require('../src/engine/engine');
   claude = require('../src/lib/claude');
@@ -70,56 +71,93 @@ const post = (creator, tags, extra = {}) => {
 describe('lib/claude: the request and its cost', () => {
   const schema = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false };
 
-  test('one structured request: model, JSON schema output, effort, cached system prompt, refusal fallback', async () => {
+  test('default model is Haiku 5.5: JSON schema output, explicit effort, cached system prompt, no refusal fallback', async () => {
     state.answers.other = () => ({ ok: true });
     const r = await claude.json('probe', { system: 'You are a probe.', input: 'hello', schema, effort: 'low', maxTokens: 500 });
     assert.deepEqual(r, { ok: true });
     const body = state.requests[0];
-    assert.equal(body.model, 'claude-opus-5-5');
+    assert.equal(body.model, 'claude-haiku-5-5');
     assert.equal(body.max_tokens, 500);
     assert.deepEqual(body.output_config, { effort: 'low', format: { type: 'json_schema', schema } });
     assert.deepEqual(body.system, [{ type: 'text', text: 'You are a probe.', cache_control: { type: 'ephemeral' } }]);
     assert.deepEqual(body.messages, [{ role: 'user', content: 'hello' }]);
-    assert.equal(body.fallbacks, 'default');
+    assert.equal(body.fallbacks, undefined, 'Haiku 5.5 is not a refusal-fallback model: the field is not sent');
+    assert.equal(state.headers[0]['anthropic-beta'], undefined, 'and neither is the fallback beta header');
     assert.equal(body.thinking, undefined, 'thinking is left to the model (adaptive); effort controls it');
-    assert.match(String(state.headers[0]['anthropic-beta']), /server-side-fallback-2026-07-01/);
     assert.ok(state.headers[0]['x-api-key'] === 'sk-ant-test' || state.headers[0].authorization === 'Bearer sk-ant-test', 'the key is sent as a credential header');
     assert.equal(claude.usage().calls, 1);
     assert.equal(claude.usage().input, 120);
   });
 
+  test('a model that supports refusal fallback (Opus 5.5) still asks for it', async () => {
+    state.answers.other = () => ({ ok: true });
+    const was = config.anthropic.model;
+    config.anthropic.model = 'claude-opus-5-5';
+    try { await claude.json('probe', { system: 'You are a probe.', input: 'opus', schema, effort: 'low' }); } finally { config.anthropic.model = was; }
+    const body = state.requests[0];
+    assert.equal(body.model, 'claude-opus-5-5');
+    assert.equal(body.fallbacks, 'default');
+    assert.match(String(state.headers[0]['anthropic-beta']), /server-side-fallback-2026-07-01/);
+  });
+
+  test('effort must be set explicitly: a request without one is refused before it is sent', async () => {
+    await assert.rejects(claude.json('probe', { system: 'S', input: 'no effort', schema }), (e) => e instanceof TypeError && /effort/.test(e.message));
+    await assert.rejects(claude.json('probe', { system: 'S', input: 'bad effort', schema, effort: 'turbo' }), TypeError);
+    assert.equal(state.requests.length, 0);
+  });
+
+  test('every claude.json call site in src passes an explicit effort', () => {
+    const fs = require('fs'); const path = require('path');
+    const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith('.js') ? [path.join(d, e.name)] : []));
+    const bad = [];
+    for (const f of walk(path.join(__dirname, '..', 'src'))) {
+      if (f.endsWith(path.join('lib', 'claude.js'))) continue; // the definition, not a call site
+      const src = fs.readFileSync(f, 'utf8');
+      // a call statement runs from "claude.json(" to the first "});" after it
+      for (const m of src.matchAll(/claude\.json\([\s\S]*?\}\);/g)) {
+        if (!/effort:\s*'(low|medium|high|xhigh|max)'/.test(m[0])) bad.push(`${path.relative(path.join(__dirname, '..'), f)}: ${m[0].slice(0, 60)}`);
+      }
+    }
+    assert.deepEqual(bad, []);
+  });
+
   test('the same question twice costs one request', async () => {
     state.answers.other = () => ({ ok: true });
-    await claude.json('probe', { system: 'S', input: 'same', schema });
-    await claude.json('probe', { system: 'S', input: 'same', schema });
+    await claude.json('probe', { system: 'S', input: 'same', schema, effort: 'low' });
+    await claude.json('probe', { system: 'S', input: 'same', schema, effort: 'low' });
     assert.equal(state.requests.length, 1);
   });
 
   test('the daily budget is a hard stop', async () => {
     state.answers.other = () => ({ ok: true });
     settingsStore.update({ aiDailyBudget: 1 });
-    await claude.json('probe', { system: 'S', input: 'one', schema });
-    await assert.rejects(claude.json('probe', { system: 'S', input: 'two', schema }), (e) => e.budget === true);
+    await claude.json('probe', { system: 'S', input: 'one', schema, effort: 'low' });
+    await assert.rejects(claude.json('probe', { system: 'S', input: 'two', schema, effort: 'low' }), (e) => e.budget === true);
     assert.equal(state.requests.length, 1);
   });
 
-  test('a refusal is an error the caller sees as "no answer", counted, never retried', async () => {
+  test('Haiku 5.5 refusal: no fallback model, so a refusal is "no answer" - counted, never retried, never reworded', async () => {
     state.stop = 'refusal';
-    await assert.rejects(claude.json('probe', { system: 'S', input: 'x', schema }), (e) => e.refusal === true && /declined/.test(e.message));
-    assert.equal(state.requests.length, 1);
+    await assert.rejects(claude.json('probe', { system: 'S', input: 'x', schema, effort: 'low' }), (e) => e.refusal === true && e.skip === true && /declined/.test(e.message));
+    assert.equal(state.requests.length, 1, 'exactly one request: no retry');
+    assert.equal(state.requests[0].model, 'claude-haiku-5-5');
+    assert.equal(state.requests[0].fallbacks, undefined);
     assert.equal(claude.usage().refusals, 1);
+    // the same question is asked again later only because nothing was cached for a refusal
+    await assert.rejects(claude.json('probe', { system: 'S', input: 'x', schema, effort: 'low' }), (e) => e.refusal === true);
+    assert.equal(state.requests.length, 2);
   });
 
   test('a rejected key is a quiet skip; the key never appears in the error', async () => {
     state.status = 401;
-    await assert.rejects(claude.json('probe', { system: 'S', input: 'y', schema }), (e) => e.skip === true && /ANTHROPIC_API_KEY/.test(e.message) && !/sk-ant-test/.test(e.message));
+    await assert.rejects(claude.json('probe', { system: 'S', input: 'y', schema, effort: 'low' }), (e) => e.skip === true && /ANTHROPIC_API_KEY/.test(e.message) && !/sk-ant-test/.test(e.message));
   });
 
   test('admin status shows configuration and usage, never the key', async () => {
     const r = await admin('/api/admin/ai');
     assert.equal(r.status, 200);
     assert.equal(r.json.configured, true);
-    assert.equal(r.json.model, 'claude-opus-5-5');
+    assert.equal(r.json.model, 'claude-haiku-5-5');
     assert.ok(!JSON.stringify(r.json).includes('sk-ant-test'));
   });
 });

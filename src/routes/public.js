@@ -11,7 +11,7 @@ const { publicAccounts } = require('../services/targets');
 const { understand, buildVocabulary, PAID } = require('../lib/query');
 const { search } = require('../engine/search');
 const ai = require('../engine/ai');
-const claude = require('../lib/claude');
+const llm = require('../lib/llm');
 const settingsStore = require('../settings');
 const { creatorOnlyFans } = require('../lib/onlyfans');
 const { creatorPaid } = require('../lib/paid');
@@ -180,7 +180,7 @@ router.get('/meta', (req, res) => {
     name: 'PRISM', version: config.version,
     ageGate: { enforce: config.ageGateEnforce, verified: age.isVerified(req) },
     platforms: registry.list().filter((a) => !['web', 'linkinbio'].includes(a.platform)).map((a) => ({ platform: a.platform, label: a.label, color: a.color })),
-    ai: { search: claude.configured() && settingsStore.get().aiSearch },
+    ai: { search: llm.configured() && settingsStore.get().aiSearch },
   });
 });
 
@@ -372,7 +372,7 @@ router.get('/understand', (req, res) => {
   res.json(understoodPayload(understand(q, vocabCached())));
 });
 
-// Each AI reading is one paid API request (answers are cached, and lib/claude enforces a daily budget on top). Over the
+// Each AI reading is one paid API request (answers are cached, and lib/llm enforces a daily budget on top). Over the
 // limit, the rules' reading is answered instead: a search box never shows a 429.
 const aiLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 60, standardHeaders: false, legacyHeaders: false, handler: (req, res, next) => { req.aiLimited = true; next(); } });
 

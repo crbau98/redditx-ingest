@@ -1685,6 +1685,7 @@ async function run({ trigger = 'schedule' } = {}) {
     if (s.discoveryExpand && !config.isTest) report.harvest = await directoryHarvest({ budget: s.braveDailyBudget, aborted });
     report.enrich = await enrich();
     report.aiTriage = await require('./ai').triage();
+    report.aiProfiles = await require('./ai').readProfiles();
     report.promote = s.autoDiscover || trigger === 'manual' ? promote(s) : { followed: 0, linked: 0 };
     report.pruned = repo.candidates.prune();
     events.log('INFO', `Discovery ${trigger === 'manual' ? '(manual) ' : ''}finished: ${report.mentions.found} mention leads, ${report.graph ? report.graph.found : 0} graph leads, ${report.topics ? report.topics.found : 0} search leads, ${report.communities ? report.communities.found : 0} community/feed leads, ${report.hangouts ? report.hangouts.found : 0} hangouts, ${report.lookalikes ? report.lookalikes.found : 0} lookalikes, ${report.people ? report.people.found : 0} people-search leads, ${report.identity ? report.identity.linked : 0} identity matches, ${report.seeds ? report.seeds.followed : 0} named creators found, ${report.onlyfans ? report.onlyfans.found : 0} OnlyFans creators traced (${report.onlyfans ? report.onlyfans.linked : 0} accounts linked), ${report.identities.links} same-creator links (${report.identities.merged} merged), ${report.harvest ? report.harvest.read : 0} directory pages harvested (${report.harvest ? report.harvest.leads : 0} paid leads, ${report.harvest ? report.harvest.candidates : 0} profile links), ${report.gff ? report.gff.followed : 0} performer-directory follows, ${report.coomerIndex ? report.coomerIndex.feeds : 0} creators followed from coomer's creator index (${report.coomerIndex && report.coomerIndex.indexed ? report.coomerIndex.matched : 0} matched of ${report.coomerIndex ? report.coomerIndex.checked : 0} paid handles), ${report.coomerNames ? report.coomerNames.feeds : 0} creators matched on coomer by name, ${report.coomer ? report.coomer.verified : 0} coomer pages verified male (${report.coomer ? report.coomer.deferred : 0} deferred), ${report.imageMatch ? report.imageMatch.pages : 0} image-matched pages; followed ${report.promote.followed}, linked ${report.promote.linked}`);
@@ -1730,7 +1731,7 @@ function status() {
     telegramBot: tgBot.configured(), xApi: !!config.creds.xBearer, communities: s.discoveryCommunities, autoCommunities: s.discoveryAutoCommunities, expand: s.discoveryExpand,
     onlyfans: { enabled: s.discoveryOnlyFans, ...repo.onlyfans.counts() },
     seeds: seedStatus(),
-    ai: { ...require('../lib/claude').status(), discovery: s.aiDiscovery, plannedQueries: require('./ai').plannedQueries() },
+    ai: { ...require('../lib/llm').status(), discovery: s.aiDiscovery, plannedQueries: require('./ai').plannedQueries() },
     auto: s.autoDiscover, intervalMin: s.discoveryIntervalMin, threshold: s.discoveryAutoFollowScore,
   };
 }

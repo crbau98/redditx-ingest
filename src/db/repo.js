@@ -290,9 +290,10 @@ const creators = {
       db.prepare('UPDATE media SET creator_id = ? WHERE creator_id = ?').run(keepId, mergeId);
       db.prepare('UPDATE feeds SET creator_id = ? WHERE creator_id = ?').run(keepId, mergeId);
       db.prepare('UPDATE onlyfans_leads SET creator_id = ? WHERE creator_id = ?').run(keepId, mergeId);
-      db.prepare(`INSERT INTO creator_aliases (creator_id, norm, alias, kind, platform, source, created_at)
-        SELECT ?, norm, alias, kind, platform, source, created_at FROM creator_aliases WHERE creator_id = ? AND true
-        ON CONFLICT (creator_id, norm) DO UPDATE SET alias = excluded.alias, kind = excluded.kind, platform = COALESCE(excluded.platform, platform), source = excluded.source
+      db.prepare(`INSERT INTO creator_aliases (creator_id, norm, alias, kind, platform, source, signal, evidence_url, created_at)
+        SELECT ?, norm, alias, kind, platform, source, signal, evidence_url, created_at FROM creator_aliases WHERE creator_id = ? AND true
+        ON CONFLICT (creator_id, norm) DO UPDATE SET alias = excluded.alias, kind = excluded.kind, platform = COALESCE(excluded.platform, platform), source = excluded.source,
+          signal = COALESCE(excluded.signal, signal), evidence_url = COALESCE(excluded.evidence_url, evidence_url)
         WHERE creator_aliases.source = 'bio' AND excluded.source != 'bio'`).run(keepId, mergeId); // a confirmed name beats one only a bio claimed
       creators.enrich(keepId, { displayName: gone.display_name, bio: gone.bio, avatarUrl: gone.avatar_url, bannerUrl: gone.banner_url, links: JSON.parse(gone.links || '[]') });
       db.prepare('DELETE FROM creators WHERE id = ?').run(mergeId);
