@@ -20,6 +20,10 @@ const MIN_ARM_POINT = 0.2; // elbows / wrists are fuzzier and only used to rule 
 const MASK_ON = 128;       // silhouette alpha (0..255) counted as "person"
 const MIN_TORSO_PX = 40;   // shoulder-to-hip length (in analysed pixels) below which the body is too small to measure
 const MIN_FRONTAL = 0.5;   // shoulder span / torso length: below this the body is turned sideways and the width means little
+const MAX_FRONTAL = 1.5;   // ... and above this the keypoints do not describe one upright torso (a garbled pose; a real one sits at 0.55..1.1)
+const MAX_SKEW_DEG = 30;   // angle between the shoulder line and the hip line: a twisted or mis-assigned pose is not measurable
+const MAX_WS = 1.5;        // belly width / shoulder span, torso length: past these the silhouette is not one torso
+const MAX_WL = 1.3;        //   (a partner, a bed, a crowded frame merged into it), not a very large body: no verdict instead of 100
 const BELLY = [0.45, 0.8];  // where along the shoulder -> hip line the belly is measured (fractions of the torso length)
 const ROWS = 13;
 const MIN_ROWS = 4;
@@ -60,6 +64,9 @@ function measure(keypoints, mask, w, h) {
   const L = dist(sm, hm); const S = dist(ls, rs);
   if (L < MIN_TORSO_PX) return { decided: false, reason: 'body too small' };
   if (S / L < MIN_FRONTAL) return { decided: false, reason: 'body turned sideways' };
+  if (S / L > MAX_FRONTAL) return { decided: false, reason: 'pose not a single upright torso' };
+  const skew = Math.abs(((Math.atan2(ls.y - rs.y, ls.x - rs.x) - Math.atan2(lh.y - rh.y, lh.x - rh.x)) * 180) / Math.PI);
+  if (Math.min(skew, 360 - skew) > MAX_SKEW_DEG) return { decided: false, reason: 'pose not a single upright torso' };
 
   const ax = { x: (hm.x - sm.x) / L, y: (hm.y - sm.y) / L };
   const n = { x: -ax.y, y: ax.x };
@@ -78,9 +85,16 @@ function measure(keypoints, mask, w, h) {
   };
   const maxWalk = Math.ceil(1.5 * L);
   const margin = 0.08 * S;
-  /** Distance from c to the silhouette's edge along dir (a gap of 1-2 px, e.g. a navel shadow, is not an edge). */
+  const inside = (x, y) => { const xi = Math.round(x); const yi = Math.round(y); return xi >= 0 && yi >= 0 && xi < w && yi < h; };
+  /**
+   * Distance from c to the silhouette's edge along dir (a gap of 1-2 px, e.g. a navel shadow, is not an edge).
+   * A silhouette that runs off the mask (the torso crop) has no edge there: the crop border is not a body edge. Counting it
+   * as one made the "belly width" the crop width (shoulders + 1.4 torso lengths, ws ~1.9) for any picture whose silhouette
+   * fills the crop (a partner, a bed, a saturated segmentation), and scored it 100.
+   */
   const edge = (c, dir) => {
     for (let k = 1; k <= maxWalk; k++) {
+      if (!inside(c.x + dir.x * k, c.y + dir.y * k)) return null;
       if (on(c.x + dir.x * k, c.y + dir.y * k)) continue;
       if (on(c.x + dir.x * (k + 1), c.y + dir.y * (k + 1)) || on(c.x + dir.x * (k + 2), c.y + dir.y * (k + 2))) continue;
       return k;
@@ -109,6 +123,7 @@ function measure(keypoints, mask, w, h) {
   widths.sort((a, b) => a - b);
   const W = widths[Math.floor(widths.length / 2)]; // median: one bad row (a hand, a shadow) does not decide
   const ws = W / S; const wl = W / L;
+  if (ws > MAX_WS || wl > MAX_WL) return { decided: false, reason: 'silhouette wider than one torso' };
   // Either ratio clearly heavy is enough: a plain average let a belly as wide as the shoulders pass whenever the torso looked
   // long (camera below, a stretched pose). The other ratio still pulls a borderline reading down a little.
   const a = clamp01((ws - WS[0]) / (WS[1] - WS[0])); const b = clamp01((wl - WL[0]) / (WL[1] - WL[0]));

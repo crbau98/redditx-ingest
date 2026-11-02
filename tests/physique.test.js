@@ -42,6 +42,31 @@ describe('measuring a body (pure geometry)', () => {
     const one = measure(...body({ belly: 30, arms: ['left'] })); // the other arm is up (a mirror selfie)
     assert.equal(one.decided, true); assert.ok(one.score <= 25, `measured from the free side: ${JSON.stringify(one)}`);
   });
+  // Regression (fix/physique-scoring): sampled Coomer / Bluesky thumbnails scored 100 with belly widths of 1.5-2.4 shoulder spans.
+  // The torso crop's border was counted as the body's edge, and silhouettes merged with a partner / bed were read as one belly.
+  test('a silhouette that runs off the torso crop has no edge there: no verdict, not a crop-wide "belly" scored 100', () => {
+    const [kp, mask, w, h] = body({ belly: 120, chest: 120 }); // wider than the 200 px mask: every row is "person" to both borders
+    const r = measure(kp, mask, w, h);
+    assert.equal(r.decided, false, JSON.stringify(r));
+    // one side runs off the crop, the other is a real edge: that side is measured and mirrored, as for a hidden arm
+    const [kp2, mask2, w2, h2] = body({ belly: 30, chest: 40, cx: 40 });
+    const r2 = measure(kp2, mask2, w2, h2);
+    assert.ok(!r2.decided || r2.score <= 25, JSON.stringify(r2));
+  });
+  test('a silhouette far wider than one torso (a partner, a bed) is not a very large body: no verdict', () => {
+    const wide = measure(...body({ belly: 150, chest: 150, w: 600, cx: 300 })); // ~3.7 shoulder spans, fully inside the mask
+    assert.equal(wide.decided, false, JSON.stringify(wide));
+    // ... while a genuinely very large build (belly 1.4 shoulder spans) is still measured and scores 100
+    const big = measure(...body({ belly: 56, chest: 52 }));
+    assert.equal(big.decided, true, JSON.stringify(big)); assert.equal(big.score, 100);
+  });
+  test('keypoints that do not describe one upright torso give no verdict', () => {
+    const [kp, mask, w, h] = body({ belly: 56, chest: 52 });
+    const twisted = kp.map((k) => (k.part === 'leftHip' ? { ...k, position: [k.position[0] - 40, k.position[1] - 80] } : k)); // hips twisted far from the shoulder line
+    assert.equal(measure(twisted, mask, w, h).decided, false);
+    const stretched = kp.map((k) => (k.part === 'leftShoulder' ? { ...k, position: [k.position[0] + 140, k.position[1]] } : k)); // shoulder span 2x the torso length
+    assert.equal(measure(stretched, mask, w, h).decided, false);
+  });
   test('no verdict without a frontal torso in view', () => {
     assert.equal(measure(...body({ sideways: true })).decided, false);
     assert.equal(measure(...body({ noHips: true })).decided, false);
