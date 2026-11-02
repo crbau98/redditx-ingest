@@ -44,6 +44,13 @@ const EXTERNAL = {
   'threads.net': 'Threads',
   'threads.com': 'Threads',
   'grindr.com': 'Grindr',
+  // Portfolio/commission sites that look fediverse-shaped (/users/<id>, /@name) but are not
+  // Mastodon-compatible: keep them as profile links, never as feeds. (v4.16: discovery was
+  // creating mastodon/user feeds here that 404 forever.)
+  'pixiv.net': 'Pixiv',
+  'skeb.jp': 'Skeb',
+  'aipictors.com': 'AI Pictors',
+  'fursona.directory': 'Fursona Directory',
 };
 
 const LINK_HUB_HOSTS = [
@@ -100,7 +107,15 @@ const NOT_MASTODON_HOSTS = [
   'medium.com', 'tiktok.com', 'youtube.com', 'threads.net', 'threads.com',
   'instagram.com', 'substack.com', 'x.com', 'twitter.com', 'bsky.app',
   'reddit.com', 'tumblr.com', 'linktr.ee', 'patreon.com',
+  'pixiv.net', 'skeb.jp', 'aipictors.com', 'fursona.directory',
 ];
+
+/** Canonical profile URL for an "@name@host" handle on a non-fediverse host. */
+const SHORTHAND_EXTERNAL_URL = {
+  'pixiv.net': (n) => `https://www.pixiv.net/users/${encodeURIComponent(n)}`,
+  'skeb.jp': (n) => `https://skeb.jp/@${encodeURIComponent(n)}`,
+  'aipictors.com': (n) => `https://www.aipictors.com/users/${encodeURIComponent(n)}`,
+};
 
 /** Misskey-family servers usually say so in their name; anything else is treated as Mastodon-compatible
  * (and the Mastodon adapter still detects Misskey via NodeInfo at fetch time). */
@@ -150,6 +165,14 @@ function parseProfile(input, hint = {}) {
   if (m) {
     const inst = m[2].toLowerCase();
     if (hint.platform === 'peertube') return out('peertube', 'user', `${m[1]}@${inst}`, { label: `${m[1]}@${inst} (PeerTube)` });
+    // "@name@skeb.jp"-style handles are not fediverse accounts: keep them as profile links
+    // (unless an admin explicitly asked for the fediverse reading via a platform hint).
+    const nd = NOT_MASTODON_HOSTS.find((d) => matches(inst, d));
+    if (nd && hint.platform !== 'bluesky' && hint.platform !== 'mastodon' && hint.platform !== 'misskey') {
+      const tpl = SHORTHAND_EXTERNAL_URL[nd] || ((n) => `https://${inst}/`);
+      const url = tpl(m[1]);
+      return { platform: 'external', kind: 'link', target: url, ingestable: false, external: true, label: `${m[1]} @ ${inst}`, url };
+    }
     const pl = hint.platform === 'misskey' || isMisskeyHost(inst) ? 'misskey' : 'mastodon';
     return out(pl, 'user', `${m[1]}@${inst}`, { label: `@${m[1]}@${m[2]}` });
   }
