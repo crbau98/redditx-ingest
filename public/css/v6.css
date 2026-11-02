@@ -179,3 +179,165 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
 /* Decorative layers (the hero glow drifts and scales past 100% width) must never widen the page on a phone.
    clip, not hidden: no scroll container is created, so the sticky app bar keeps working. */
 #app { overflow-x: clip; }
+
+/* ==========================================================================
+   v6.5 "Élite": Elevated Tactile Micro-Interactions & OnlyFans Luxury Polish
+   - Instant physical feedback (:active scale) across controls (Emil Kowalski).
+   - High-contrast VIP OnlyFans badges, Reels CTA pills, and profile stats ribbon.
+   - Zero live blur on card/pill/reel/why selectors to honor performance guardrails.
+   ========================================================================== */
+
+/* ---------- Tactile micro-interactions (:active feedback) ---------- */
+.btn:active, .chip:active, .seg button:active, .free-pill:active, .smart-chip:active, .topic-card:active {
+  transform: scale(0.97);
+  transition-duration: var(--dur-quick);
+}
+.card:active {
+  transform: scale(0.985);
+  transition-duration: var(--dur-quick);
+}
+.nav a:active {
+  transform: scale(0.95);
+  transition-duration: var(--dur-quick);
+}
+.btn.icon:active {
+  transform: scale(0.90);
+  transition-duration: var(--dur-quick);
+}
+
+/* ---------- Enhanced card depth & hover luminescence ---------- */
+@media (hover: hover) {
+  .card:hover {
+    box-shadow: 0 20px 48px -12px rgba(0, 0, 0, 0.78), 0 0 0 1px color-mix(in srgb, var(--accent) 36%, var(--line));
+    transform: translateY(-3px);
+  }
+}
+
+/* ---------- Appbar hairline sheen & active glow ---------- */
+.appbar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 4%, color-mix(in srgb, var(--line-strong) 40%, transparent) 25%, color-mix(in srgb, var(--accent) 45%, transparent) 50%, color-mix(in srgb, var(--line-strong) 40%, transparent) 75%, transparent 96%);
+  pointer-events: none;
+}
+
+/* ---------- Hero search & quick jump enhancements ---------- */
+.hero-search input {
+  transition: border-color var(--dur-base), box-shadow var(--dur-base) var(--ease-out);
+}
+.hero-pill {
+  transition: transform var(--dur-base) var(--spring-snap), background-color var(--dur-quick), border-color var(--dur-quick), box-shadow var(--dur-quick);
+}
+.hero-pill:hover {
+  transform: translateY(-1px) scale(1.02);
+  box-shadow: 0 4px 14px -4px rgba(0, 0, 0, 0.4);
+}
+.hero-pill:active {
+  transform: scale(0.96);
+}
+
+/* ---------- Reels OnlyFans interactive badges & rail CTA ---------- */
+.reel-of-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, rgba(0, 175, 240, 0.45) 0%, rgba(0, 130, 200, 0.55) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), inset 0 0 0 1px rgba(0, 175, 240, 0.6), 0 4px 14px -3px rgba(0, 175, 240, 0.5);
+  transition: transform var(--dur-base) var(--spring-snap), filter var(--dur-quick);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+.reel-of-chip:hover {
+  transform: scale(1.05);
+  filter: brightness(1.15);
+}
+.reel-of-chip:active {
+  transform: scale(0.95);
+}
+.reel-of-chip.free {
+  background: linear-gradient(135deg, rgba(0, 175, 240, 0.45) 0%, rgba(52, 211, 153, 0.55) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), inset 0 0 0 1px rgba(52, 211, 153, 0.6), 0 4px 14px -3px rgba(52, 211, 153, 0.5);
+}
+.reel-act.of-reel-btn {
+  color: #fff;
+}
+.reel-act.of-reel-btn .of-mark {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, #00aff0 0%, #0084cc 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4), 0 4px 16px rgba(0, 175, 240, 0.45);
+  color: #fff;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  transition: transform var(--dur-base) var(--spring-snap), box-shadow var(--dur-quick);
+}
+.reel-act.of-reel-btn:hover .of-mark {
+  transform: scale(1.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 6px 20px rgba(0, 175, 240, 0.65);
+}
+.reel-act.of-reel-btn:active .of-mark {
+  transform: scale(0.92);
+}
+.reel-act.of-reel-btn.free .of-mark {
+  background: linear-gradient(135deg, #00aff0 0%, #10b981 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4), 0 4px 16px rgba(16, 185, 129, 0.45);
+}
+
+/* ---------- Creator profile: VIP stats ribbon & illuminated halo ---------- */
+.profile-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 20px;
+  border-radius: 999px;
+  background: var(--raise), color-mix(in srgb, var(--surface) 75%, transparent);
+  box-shadow: var(--hi), 0 8px 24px -12px rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--line);
+  margin-top: 14px;
+}
+.profile-stats span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+.profile-stats b.num {
+  color: var(--text);
+  font-weight: 700;
+  font-size: 16px;
+}
+.avatar-ring.live {
+  position: relative;
+}
+.avatar-ring.live::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), #00aff0);
+  z-index: -1;
+  opacity: 0.85;
+  filter: blur(4px);
+  animation: pulse-ring 3s ease-in-out infinite alternate;
+}
+@keyframes pulse-ring {
+  0% { transform: scale(0.98); opacity: 0.6; }
+  100% { transform: scale(1.04); opacity: 0.95; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .avatar-ring.live::after { animation: none; }
+  .reel-of-chip, .reel-act.of-reel-btn, .hero-pill { transition: none; }
+  .reel-of-chip:hover, .hero-pill:hover { transform: none; }
+}

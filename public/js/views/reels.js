@@ -84,9 +84,28 @@ export async function reels(root, { query }) {
     if (followBtn) followBtn.addEventListener('click', () => { const on = follows.toggle({ id: it.creator_id, handle: it.creator_handle, display_name: it.creator_name }); toast(on ? `Following ${it.creator_name || it.creator_handle}` : 'Unfollowed'); });
     paintFollow();
 
+    const ofLink = it.onlyfans ? h('a', {
+      class: `reel-of-chip${it.onlyfans.free ? ' free' : ''}`,
+      href: `https://onlyfans.com/${it.onlyfans.handle}`,
+      target: '_blank',
+      rel: 'noopener noreferrer nofollow',
+      title: `onlyfans.com/${it.onlyfans.handle}`,
+      onclick: (e) => e.stopPropagation(),
+    }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), it.onlyfans.free ? 'OF Free' : 'OnlyFans', icon('external', 'sm')) : null;
+
+    const ofRailBtn = it.onlyfans ? h('a', {
+      class: `reel-act of-reel-btn${it.onlyfans.free ? ' free' : ''}`,
+      href: `https://onlyfans.com/${it.onlyfans.handle}`,
+      target: '_blank',
+      rel: 'noopener noreferrer nofollow',
+      'aria-label': `OnlyFans: ${it.onlyfans.handle}`,
+      title: `Visit ${it.onlyfans.handle} on OnlyFans`,
+    }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), h('span', null, it.onlyfans.free ? 'OF Free' : 'OnlyFans')) : null;
+
     const meta = h('div', { class: 'reel-meta' },
-      it.creator_id ? h('div', { class: 'row', style: { gap: '10px' } },
-        h('a', { href: href(`/creator/${it.creator_id}`), class: 'row', style: { gap: '10px', minWidth: 0 } }, avatar(it, 40), h('div', { style: { minWidth: 0 } }, h('div', { class: 'reel-name truncate' }, it.creator_name || it.creator_handle), h('div', { class: 'reel-handle truncate' }, `@${it.creator_handle || it.author} · ${platformLabel(it.platform)}`))),
+      it.creator_id ? h('div', { class: 'row', style: { gap: '10px', alignItems: 'center' } },
+        h('a', { href: href(`/creator/${it.creator_id}`), class: 'row', style: { gap: '10px', minWidth: 0, alignItems: 'center' } }, avatar(it, 40), h('div', { style: { minWidth: 0 } }, h('div', { class: 'reel-name truncate' }, it.creator_name || it.creator_handle), h('div', { class: 'reel-handle truncate' }, `@${it.creator_handle || it.author} · ${platformLabel(it.platform)}`))),
+        ofLink,
         followBtn) : h('div', { class: 'reel-handle' }, [it.author, platformLabel(it.platform)].filter(Boolean).join(' · ')),
       it.title ? h('p', { class: 'reel-caption' }, it.title) : null,
       h('div', { class: 'row wrap', style: { gap: '6px' } },
@@ -95,6 +114,7 @@ export async function reels(root, { query }) {
 
     const rail = h('div', { class: 'reel-rail' },
       favBtn, collBtn,
+      ofRailBtn,
       h('button', { class: 'reel-act', 'aria-label': 'Details', onclick: () => openLightbox(slides.map((s) => s.it), index) }, icon('info'), h('span', null, 'Details')),
       h('button', { class: 'reel-act', 'aria-label': 'Copy link', onclick: async () => { const url = `${location.origin}${location.pathname}${href('/explore', { m: it.id })}`; toast((await copyText(url)) ? 'Link copied' : 'Could not copy'); } }, icon('share'), h('span', null, 'Share')),
       it.source_url ? h('a', { class: 'reel-act', href: it.source_url, target: '_blank', rel: 'noopener noreferrer nofollow', 'aria-label': 'View original' }, icon('external'), h('span', null, 'Source')) : null);
