@@ -162,7 +162,7 @@ describe('PRISM in a real browser', { timeout: 300000 }, () => {
     await page.keyboard.press('Enter');
     await page.getByText('Engines: browsers and AI').waitFor();
     const text = await page.locator('main').innerText();
-    assert.match(text, /Claude: claude-opus-5-5/);
+    assert.match(text, /Claude: claude-haiku-5-5/);
     await shot('admin-sources');
     noProblems(problems.filter((p) => !/HTTP 401|status of 401/.test(p)));
   });

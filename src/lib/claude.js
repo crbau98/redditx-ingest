@@ -28,6 +28,8 @@ const configured = () => !!(config.creds.anthropicKey && Anthropic);
 // model inside the same call. Accepted for these models on the Claude API.
 const FALLBACK_MODELS = new Set(['claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5-5', 'claude-fable-5-1']);
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
+// Every request states its effort; nothing relies on the model's default.
+const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 
 let client = null;
 let clientKey = '';
@@ -92,6 +94,7 @@ function failure(e) {
 async function call(params, { timeoutMs } = {}) {
   if (!configured()) throw skipErr('Claude is not configured: set ANTHROPIC_API_KEY');
   if (budgetLeft() <= 0) throw Object.assign(new Error('Claude daily budget reached (setting aiDailyBudget)'), { budget: true });
+  if (!params.output_config || !EFFORTS.has(params.output_config.effort)) throw new TypeError('Claude request without an explicit output_config.effort');
   const model = config.anthropic.model;
   const body = { model, ...params };
   if (config.anthropic.fallbacks && FALLBACK_MODELS.has(model)) { body.betas = [FALLBACK_BETA]; body.fallbacks = 'default'; }
@@ -111,10 +114,11 @@ const textOf = (res) => (res.content || []).filter((b) => b.type === 'text').map
 /**
  * A structured answer: JSON matching `schema`.
  * @param {string} purpose label for logs and the cache key
- * @param {{system: string, input: string|object, schema: object, effort?: string, maxTokens?: number, ttlMs?: number, timeoutMs?: number}} o
+ * @param {{system: string, input: string|object, schema: object, effort: string, maxTokens?: number, ttlMs?: number, timeoutMs?: number}} o
  *   timeoutMs: give up sooner than ANTHROPIC_TIMEOUT_MS, without retries (for requests someone is waiting on)
  */
-async function json(purpose, { system, input, schema, effort = 'low', maxTokens = 8000, ttlMs = 24 * 3600 * 1000, timeoutMs }) {
+async function json(purpose, { system, input, schema, effort, maxTokens = 8000, ttlMs = 24 * 3600 * 1000, timeoutMs }) {
+  if (!EFFORTS.has(effort)) throw new TypeError(`claude.json(${purpose}): effort must be set explicitly (${[...EFFORTS].join('|')})`);
   const text = typeof input === 'string' ? input : JSON.stringify(input);
   const key = keyOf(purpose, config.anthropic.model, system, text, schema);
   const hit = cached(key, ttlMs);

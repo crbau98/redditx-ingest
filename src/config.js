@@ -112,7 +112,7 @@ module.exports = {
   // What Discover ranks results against: the intent steers it toward public creator pages and personal galleries.
   // Claude (Anthropic API). Text only: PRISM never sends pictures or videos to it.
   anthropic: {
-    model: String(env.ANTHROPIC_MODEL || 'claude-opus-5-5').trim(),
+    model: String(env.ANTHROPIC_MODEL || 'claude-haiku-5-5').trim(),
     timeoutMs: int(env.ANTHROPIC_TIMEOUT_MS, 60000),
     // Ask the API to retry a request a safety classifier declined on a fallback model (server-side, beta; Claude API only).
     fallbacks: !/^(0|false|no|off)$/i.test(String(env.ANTHROPIC_FALLBACKS || '1')),
