@@ -625,6 +625,8 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
     height: 44px !important;
     min-width: 44px !important;
     min-height: 44px !important;
+    transform: none !important;
+    opacity: 1 !important;
   }
 
   .card-meta a,
