@@ -619,6 +619,23 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
     padding: 0 6px;
   }
 
+  /* Disable 3D perspective and rise scale distortion on touch viewports so bounding rects remain unscaled */
+  .card, .creator-card, .coll-card, .browse-tile {
+    transform: none !important;
+    scale: 1 !important;
+    animation: none !important;
+  }
+
+  /* Footer links & buttons touch target: >=44px */
+  .footer a,
+  .footer button {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    padding: 0 8px;
+    box-sizing: border-box;
+  }
+
   /* Card save button and creator links */
   .card-fav {
     width: 44px !important;

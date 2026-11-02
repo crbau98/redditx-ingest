@@ -693,7 +693,7 @@ body::before { content: ''; position: fixed; inset: 0; z-index: -1; pointer-even
     }
   }
 }
-@keyframes rise { from { opacity: 0; translate: 0 26px; scale: .97; } }
+@keyframes rise { from { opacity: 0; translate: 0 26px; } }
 
 /* ---------- viewer: ambient glow ------------------------------------------ */
 .lb { overflow: hidden; background: rgba(4, 4, 7, .96); }
