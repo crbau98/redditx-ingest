@@ -21,13 +21,13 @@
     "express-rate-limit": "^7.4.1",
     "helmet": "^8.0.0",
     "morgan": "^1.10.0",
-    "uuid": "^14.0.0"
+    "uuid": "^14.0.3"
   },
   "engines": {
     "node": ">=20.18.1"
   },
   "devDependencies": {
-    "hls.js": "^1.7.3"
+    "hls.js": "^1.7.4"
   },
   "license": "UNLICENSED",
   "optionalDependencies": {
