@@ -511,29 +511,73 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
    v6.7 Strict 44px Minimum Touch Target Bounds
    ========================================================================== */
 @media (pointer: coarse), (max-width: 899px) {
-  /* Reels top chrome touch targets */
-  .reels-top .btn.icon, .reels-top .reels-tune, .reels-top .chip {
+  /* Reels top chrome and app bar touch targets: guaranteed >= 44x44px */
+  .reels-top .btn.icon,
+  .appbar .btn.icon,
+  .appbar-actions .btn.icon,
+  .btn.icon {
+    min-width: 44px;
+    min-height: 44px;
+    width: 44px;
+    height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .reels-top .reels-tune,
+  .reels-top .chip {
     min-height: 44px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
   }
-  .reels-top .btn.icon {
+
+  /* Navigation tabs in top app bar */
+  .nav a {
+    min-height: 44px;
     min-width: 44px;
-  }
-  
-  /* Reels overlay badges and follow button */
-  .reel-of-chip {
-    min-height: 36px;
-    padding: 0 12px;
-  }
-  .reel-follow {
-    min-height: 36px;
-    padding: 0 14px;
+    padding: 10px 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
   }
 
-  /* Explore & feed chips minimum touch target */
-  .chip, .seg button {
-    min-height: 38px;
+  /* Segmented control buttons (Videos / Photos / All): >= 44px touch target */
+  .seg {
+    min-height: 44px;
+    align-items: center;
+  }
+  .seg button {
+    min-height: 44px;
+    padding: 0 16px;
+    box-sizing: border-box;
+  }
+
+  /* Chips, OnlyFans pills, and Follow buttons: >= 44px */
+  .chip,
+  .chip.of-pill,
+  .reel-of-chip,
+  .reel-follow,
+  .btn.sm,
+  .select.sm {
+    min-height: 44px;
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .select.sm {
+    display: inline-block;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+
+  .reel-of-chip {
+    padding: 0 14px;
+  }
+  .reel-follow {
+    padding: 0 16px;
   }
 }

@@ -6,6 +6,7 @@ import { attachVideo, releaseVideo } from '../components/video.js';
 import { openCollectionPicker } from '../components/collections.js';
 import { openLightbox, lightboxOpen } from '../components/ondemand.js';
 import { heartBurst, ambientBackdrop } from '../components/fx.js';
+import { planWindow } from '../components/reel-window.js';
 
 const SORTS = [['foryou', 'For you'], ['trending', 'Trending'], ['random', 'Shuffle'], ['recent', 'Newest'], ['top', 'Top']];
 const PAGE = 12;
@@ -223,7 +224,7 @@ export async function reels(root, { query }) {
     if (!v || s.handle) return;
     v.muted = true; v.preload = 'auto';
     s.handle = attachVideo(v, s.it);
-    s.handle.autoplay = false;
+    s.handle.demote();
   }
 
   function setActive(i) {
@@ -231,12 +232,13 @@ export async function reels(root, { query }) {
     if (slides[active]) { settle(slides[active]); slides[active].el.classList.remove('is-active'); }
     active = i;
     slides[i].el.classList.add('is-active');
+    const plan = planWindow(i, slides.length);
     slides.forEach((s, k) => {
       if (k === i) activate(s);
-      // the next one buffers; the previous one keeps its buffer, so swiping back is instant too
-      else if (k === i + 1 || k === i - 1) {
-        if (s.handle) { s.handle.autoplay = false; const v = s.stage.querySelector('video'); if (v) v.pause(); } else if (k === i + 1) warm(s); else mount(s);
-      } else if (Math.abs(k - i) <= 2) { deactivate(s); mount(s); } else unmount(s);
+      // the next one buffers; the previous one keeps a small buffer, so swiping back is still instant
+      else if (plan.warm.includes(k)) {
+        if (s.handle) { s.handle.demote(); const v = s.stage.querySelector('video'); if (v) v.pause(); } else if (k === i + 1) warm(s); else mount(s);
+      } else if (plan.near.includes(k)) { deactivate(s); mount(s); } else unmount(s);
     });
     if (i >= slides.length - 4) load();
   }
@@ -292,13 +294,20 @@ export async function reels(root, { query }) {
   }
 
   /* ---------------------------------------------------------------- input */
-  const go = (d) => { const s = slides[Math.max(0, Math.min(slides.length - 1, active + d))]; if (s) s.el.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+  // Swipes and keys move one slide; people who ask for less motion get an instant jump instead.
+  const reduceMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const jump = (k) => { const s = slides[k]; if (s) s.el.scrollIntoView({ behavior: reduceMotion() ? 'auto' : 'smooth', block: 'start' }); };
+  const go = (d) => jump(Math.max(0, Math.min(slides.length - 1, active + d)));
   const onKey = (e) => {
     if (lightboxOpen() || document.getElementById('modal-root').children.length || e.target.closest('input, textarea, select') || e.metaKey || e.ctrlKey || e.altKey) return;
     const s = slides[active];
     switch (e.key) {
       case 'ArrowDown': case 'j': case 'PageDown': e.preventDefault(); go(1); break;
       case 'ArrowUp': case 'k': case 'PageUp': e.preventDefault(); go(-1); break;
+      case 'ArrowRight': e.preventDefault(); go(1); break;
+      case 'ArrowLeft': e.preventDefault(); go(-1); break;
+      case 'Home': e.preventDefault(); jump(0); break;
+      case 'End': e.preventDefault(); jump(slides.length - 1); break;
       case ' ': { e.preventDefault(); const v = s && s.stage.querySelector('video'); if (v) { if (v.paused) v.play().catch(() => {}); else v.pause(); } break; }
       case 'm': case 'M': setMuted(!prefs.muted); break;
       case 'f': case 'F': if (s) favorites.toggle(s.it.id, s.it); break;

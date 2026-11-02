@@ -1,6 +1,6 @@
 import { h, icon, fmt, emptyState, toast, promptDialog } from '../dom.js';
 import { get } from '../api.js';
-import { navigate, href } from '../router.js';
+import { navigate, href, parse } from '../router.js';
 import { prefs, platformLabel, follows, searches, tastes, history as viewHistory, bus } from '../store.js';
 import { createFeed } from '../components/feed.js';
 import { understand, findRelaxation, relatedRail } from '../smart.js';
@@ -20,9 +20,17 @@ export async function explore(root, { query }) {
   const filterOnly = (x) => Object.fromEntries(Object.entries(x).filter(([k]) => !UI_KEYS.includes(k)));
   // Changing a filter by hand ends the "relaxed" notice (the new filters are the user's own now).
   const set = (patch) => {
-    const next = { ...f, relaxed: '', from: '', norelax: '', ...patch };
+    const current = Object.fromEntries(parse().query.entries());
+    if (platSel && platSel.value !== undefined) current.platform = platSel.value;
+    if (sortSel && sortSel.value !== undefined) current.sort = sortSel.value;
+    if (sinceSel && sinceSel.value !== undefined) current.since = sinceSel.value;
+    const next = { ...f, ...current, relaxed: '', from: '', norelax: '', ...patch };
     if (next.sort === 'relevance' && !next.q) next.sort = 'recent';
     if (!next.tags && !next.creator && !next.q && !next.anytags) { next.smart = ''; next.raw = ''; }
+    Object.assign(f, next);
+    if (platSel && patch.platform !== undefined) platSel.value = patch.platform;
+    if (sortSel && patch.sort !== undefined) sortSel.value = patch.sort;
+    if (sinceSel && patch.since !== undefined) sinceSel.value = patch.since;
     navigate('/explore', next, { replace: true }); window.scrollTo({ top: 0 });
   };
   const tagList = f.tags ? f.tags.split(',').filter(Boolean) : [];
@@ -47,7 +55,10 @@ export async function explore(root, { query }) {
     h('button', { class: f.type === v ? 'on' : '', onclick: () => set({ type: v }), 'aria-pressed': String(f.type === v) }, icon(ic, 'sm'), l)));
   const sortSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Sort', onchange: (e) => set({ sort: e.target.value }) }, sortOptions.map(([v, l]) => h('option', { value: v, selected: f.sort === v }, l)));
   const sinceSel = ['top', 'trending'].includes(f.sort) || f.since ? h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Time range', onchange: (e) => set({ since: e.target.value }) }, SINCE.map(([v, l]) => h('option', { value: v, selected: f.since === v }, l))) : null;
-  const platSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Filter by source', title: 'Sources PRISM ingests (paid pages are kept as link-outs)', onchange: (e) => set({ platform: e.target.value }) }, h('option', { value: '' }, 'All sources'));
+  const platSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Filter by source', title: 'Sources PRISM ingests (paid pages are kept as link-outs)', onchange: (e) => set({ platform: e.target.value }) },
+    h('option', { value: '' }, 'All sources'),
+    ...(f.platform ? [h('option', { value: f.platform, selected: true }, platformLabel(f.platform))] : [])
+  );
   // Grid density lives in Settings (device-local prefs.density), not in this bar.
 
   // Every active filter is a removable chip. For a smart search they sit in the "Understood as" banner instead.
@@ -184,7 +195,13 @@ export async function explore(root, { query }) {
   });
 
   // Fill the dynamic option lists without blocking the feed.
-  get('/api/platforms').then((list) => { for (const p of list) platSel.appendChild(h('option', { value: p.platform, selected: f.platform === p.platform }, `${platformLabel(p.platform)} (${fmt.num(p.count)})`)); }).catch(() => {});
+  get('/api/platforms').then((list) => {
+    platSel.replaceChildren(
+      h('option', { value: '' }, 'All sources'),
+      ...list.map((p) => h('option', { value: p.platform, selected: f.platform === p.platform }, `${platformLabel(p.platform)} (${fmt.num(p.count)})`))
+    );
+    if (f.platform) platSel.value = f.platform;
+  }).catch(() => {});
   get('/api/creators', { sort: 'media', platform: f.platform || undefined, limit: 16 }).then((res) => {
     const list = (res && res.items) || [];
     if (!list.length) { creatorRail.remove(); return; }

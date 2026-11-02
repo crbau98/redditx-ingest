@@ -19,6 +19,9 @@ export function attachVideo(v, it) {
     hls: null, dead: false, autoplay: true,
     destroy() { this.dead = true; if (this.hls) { try { this.hls.destroy(); } catch { /* ignore */ } this.hls = null; } },
     promote() { this.autoplay = true; if (this.hls) { this.hls.config.maxBufferLength = 30; this.hls.config.maxMaxBufferLength = 60; } },
+    // demote(): the slide stopped being the one on screen. Give back the large buffer it earned while
+    // playing, so the neighbours kept warm don't hold 30–60 s of video each.
+    demote() { this.autoplay = false; if (this.hls) { this.hls.config.maxBufferLength = 6; this.hls.config.maxMaxBufferLength = 8; } },
   };
   const hls = it.hls_url || (isM3u8(it.media_url) ? it.media_url : null);
   const mp4 = isM3u8(it.media_url) ? null : it.media_url;
