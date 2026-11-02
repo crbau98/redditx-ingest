@@ -23,41 +23,146 @@ export async function creators(root, { query }) {
   };
 
   const count = h('div', { class: 'sub' }, ' ');
-  const search = h('input', { class: 'input sm', type: 'search', placeholder: 'Search creators…', value: f.q, style: { maxWidth: '260px' }, 'aria-label': 'Search creators' });
+  const search = h('input', {
+    class: 'input sm',
+    type: 'search',
+    placeholder: 'Search creators…',
+    value: f.q,
+    style: { maxWidth: '240px' },
+    'aria-label': 'Search creators',
+  });
   search.addEventListener('input', debounce(() => set({ q: search.value.trim() }), 350));
-  const sortSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Sort creators', onchange: (e) => set({ sort: e.target.value }) }, SORTS.map(([v, l]) => h('option', { value: v, selected: f.sort === v }, l)));
-  const platSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Filter by free source', onchange: (e) => set({ platform: e.target.value }) }, h('option', { value: '' }, 'All sources'));
-  const paidSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Filter by paid page (link-outs)', title: 'Creators with a paid page (link-outs)', onchange: (e) => set({ paid: e.target.value }) },
-    PAID_OPTS.map(([v, l]) => h('option', { value: v, selected: (f.paid || '') === v }, l)));
+
+  const isAll = !f.q && !f.paid && f.sort === 'media' && !f.platform && !f.fresh;
+  const allChip = h('button', {
+    type: 'button',
+    class: `chip${isAll ? ' on' : ''}`,
+    'aria-pressed': String(isAll),
+    title: 'Show all creators',
+    onclick: () => { search.value = ''; navigate('/creators', {}, { replace: true }); },
+  }, icon('users', 'sm'), 'All');
+
+  const ofChip = h('button', {
+    type: 'button',
+    class: `chip of-pill${f.paid === 'onlyfans' ? ' on' : ''}`,
+    'aria-pressed': String(f.paid === 'onlyfans'),
+    title: 'Only creators with an OnlyFans linkout',
+    onclick: () => set({ paid: f.paid === 'onlyfans' ? '' : 'onlyfans' }),
+  }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), 'OnlyFans');
+
+  const topRatedChip = h('button', {
+    type: 'button',
+    class: `chip${f.sort === 'score' ? ' on' : ''}`,
+    'aria-pressed': String(f.sort === 'score'),
+    title: 'Sort by highest rated creator content',
+    onclick: () => set({ sort: f.sort === 'score' ? 'media' : 'score' }),
+  }, icon('flame', 'sm'), 'Top Rated');
+
+  const mostPostsChip = h('button', {
+    type: 'button',
+    class: `chip${f.sort === 'media' && !isAll ? ' on' : ''}`,
+    'aria-pressed': String(f.sort === 'media' && !isAll),
+    title: 'Sort by post tally',
+    onclick: () => set({ sort: 'media' }),
+  }, icon('grid', 'sm'), 'Most Posts');
+
+  const recentChip = h('button', {
+    type: 'button',
+    class: `chip${f.sort === 'recent' ? ' on' : ''}`,
+    'aria-pressed': String(f.sort === 'recent'),
+    title: 'Sort by recently active creators',
+    onclick: () => set({ sort: f.sort === 'recent' ? 'media' : 'recent' }),
+  }, icon('clock', 'sm'), 'Recently Active');
+
+  const newChip = h('button', {
+    type: 'button',
+    class: `chip${f.sort === 'new' ? ' on' : ''}`,
+    'aria-pressed': String(f.sort === 'new'),
+    title: 'Sort by newly discovered creators',
+    onclick: () => set({ sort: f.sort === 'new' ? 'media' : 'new' }),
+  }, icon('sparkle', 'sm'), 'Newest');
+
+  const platSel = h('select', {
+    class: 'select sm',
+    style: { width: 'auto' },
+    'aria-label': 'Filter by free source',
+    onchange: (e) => set({ platform: e.target.value }),
+  }, h('option', { value: '' }, 'All sources'));
+
+  const freshSel = h('select', {
+    class: 'select sm',
+    style: { width: 'auto' },
+    'aria-label': 'Posted recently',
+    onchange: (e) => set({ fresh: e.target.value }),
+  }, FRESH.map(([v, l]) => h('option', { value: v, selected: f.fresh === v }, l)));
+
   const field = (label, el) => h('label', { class: 'filter-field' }, h('span', { class: 'filter-label' }, label), el);
-  const freshSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Posted recently', onchange: (e) => set({ fresh: e.target.value }) },
-    FRESH.map(([v, l]) => h('option', { value: v, selected: f.fresh === v }, l)));
+
   const filtersActive = Boolean(f.q || f.sort !== 'media' || f.platform || f.paid || f.fresh);
-  const clearBtn = filtersActive ? h('button', { class: 'chip clear-all', onclick: () => { search.value = ''; navigate('/creators', {}, { replace: true }); }, 'aria-label': 'Clear all creator filters' }, 'Clear all') : null;
-  const PAID_PILLS = [['onlyfans', 'OnlyFans', 'of'], ['fansly', 'Fansly', 'fansly'], ['justforfans', 'JFF', 'jff']];
-  const paidRow = h('div', { class: 'row wrap paid-quick', role: 'group', 'aria-label': 'Quick paid-page filters' },
-    PAID_PILLS.map(([v, label, cls]) => {
-      const on = f.paid === v;
-      return h('button', {
-        type: 'button',
-        class: `chip paid-filter ${cls}${on ? ' on' : ''}`,
-        'aria-pressed': String(on),
-        title: `Creators with a ${label} link-out`,
-        onclick: () => set({ paid: on ? '' : v }),
-      }, cls === 'of' ? h('span', { class: 'of-mark', 'aria-hidden': 'true' }) : h('span', { class: 'paid-dot', 'aria-hidden': 'true' }), label);
-    }));
+  const clearBtn = filtersActive ? h('button', {
+    class: 'chip clear-all',
+    onclick: () => { search.value = ''; navigate('/creators', {}, { replace: true }); },
+    'aria-label': 'Clear all creator filters',
+  }, 'Clear all') : null;
+
+  // Secondary disclosure for Source and Activity
+  const moreFilters = [field('Source', platSel), field('Activity', freshSel)].filter(Boolean);
+  const activeExtraCount = (f.platform ? 1 : 0) + (f.fresh ? 1 : 0);
+  const filtersDisclosure = (() => {
+    let open = window.matchMedia('(min-width: 900px)').matches && activeExtraCount > 0;
+    const panel = h('div', { class: 'filter-more', hidden: !open }, moreFilters);
+    const btn = h('button', {
+      class: `chip filter-more-btn${activeExtraCount ? ' on' : ''}`,
+      type: 'button',
+      'aria-expanded': String(open),
+      'aria-controls': 'creators-filter-more',
+    }, icon('sliders', 'sm'), activeExtraCount ? `Filters · ${activeExtraCount}` : 'Filters');
+    panel.id = 'creators-filter-more';
+    btn.addEventListener('click', () => {
+      open = !open;
+      panel.hidden = !open;
+      btn.setAttribute('aria-expanded', String(open));
+    });
+    return [btn, panel];
+  })();
+
   const grid = h('div', { class: 'creator-grid' });
   const more = h('div', { class: 'loadmore' });
-  root.replaceChildren(
-    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Creators'), count,
-      h('div', { class: 'sub' }, 'Everyone with posts in the library — or pull someone new in below. ',
-        h('a', { class: 'text-link', href: href('/galaxy') }, 'Explore as a 3D galaxy'))),
-      h('div', { class: 'row wrap' },
-        h('a', { class: 'btn primary sm', href: href('/find') }, icon('search', 'sm'), 'Find a creator'))),
-    h('div', { class: 'row wrap creator-filters', style: { marginBottom: '18px' } }, search, field('Sort', sortSel), field('Source', platSel), field('Paid page', paidSel), field('Posted', freshSel), paidRow, clearBtn),
-    grid, more);
 
-  get('/api/platforms').then((list) => { for (const p of list) platSel.appendChild(h('option', { value: p.platform, selected: f.platform === p.platform }, platformLabel(p.platform))); }).catch(() => {});
+  root.replaceChildren(
+    h('div', { class: 'page-head' },
+      h('div', null,
+        h('h1', null, 'Creators'),
+        count,
+        h('div', { class: 'sub' },
+          'Explore verified creators and direct OnlyFans linkouts in the library. ',
+          h('a', { class: 'text-link', href: href('/galaxy') }, 'Explore as a 3D galaxy')
+        )
+      ),
+      h('div', { class: 'row wrap' },
+        h('a', { class: 'btn primary sm', href: href('/find') }, icon('search', 'sm'), 'Find a creator')
+      )
+    ),
+    h('div', { class: 'filterbar creator-filters', role: 'toolbar', 'aria-label': 'Creator filters' },
+      h('div', { class: 'filter-scroll' },
+        search,
+        allChip,
+        ofChip,
+        topRatedChip,
+        mostPostsChip,
+        recentChip,
+        newChip,
+        ...filtersDisclosure,
+        clearBtn
+      )
+    ),
+    grid,
+    more
+  );
+
+  get('/api/platforms').then((list) => {
+    for (const p of list) platSel.appendChild(h('option', { value: p.platform, selected: f.platform === p.platform }, platformLabel(p.platform)));
+  }).catch(() => {});
 
   let page = 0; let total = 0; let loading = false; let destroyed = false; let done = false;
   async function load() {
@@ -73,7 +178,7 @@ export async function creators(root, { query }) {
       grid.append(...r.items.map((c) => creatorCard(c)));
       page++;
       done = grid.children.length >= total;
-      if (!grid.children.length) more.replaceChildren(emptyState({ icon: 'users', title: 'No creators match these filters.', text: f.q ? `Nothing matches “${f.q}” with these filters. Try fewer filters — or pull him in directly.` : f.paid ? 'No creators with that paid page yet. Discovery adds them as it traces the pages creators promote.' : 'Creators appear here once their content has been ingested.', actions: [h('a', { class: 'btn primary', href: href('/find', f.q ? { q: f.q } : {}) }, icon('search', 'sm'), f.q ? `Find “${f.q}” across the web` : 'Find a creator'), filtersActive ? h('button', { class: 'btn', onclick: () => navigate('/creators', {}, { replace: true }) }, 'Clear filters') : null].filter(Boolean) }));
+      if (!grid.children.length) more.replaceChildren(emptyState({ icon: 'users', title: 'No creators found', text: f.q ? `No creators matched “${f.q}” with current filters. Try searching across the web or resetting filters.` : f.paid ? 'No creators found with that linkout yet. As new accounts are scanned, linkouts update automatically.' : 'Creators appear here once content has been indexed into the library.', actions: [h('a', { class: 'btn primary', href: href('/find', f.q ? { q: f.q } : {}) }, icon('search', 'sm'), f.q ? `Find “${f.q}” across the web` : 'Find a creator'), filtersActive ? h('button', { class: 'btn', onclick: () => navigate('/creators', {}, { replace: true }) }, 'Clear filters') : null].filter(Boolean) }));
       else more.replaceChildren(done ? h('span', { class: 'muted' }, 'That’s everyone') : h('button', { class: 'btn', onclick: load }, 'Load more'));
     } catch (e) { more.replaceChildren(h('span', { class: 'muted' }, e.message), h('button', { class: 'btn sm', onclick: load }, 'Retry')); }
     finally { loading = false; }

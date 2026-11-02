@@ -63,6 +63,15 @@ async function sweep({ probe = false, limit = 1_000_000 } = {}) {
     repo.blocklist.add('creator', `${f.platform}:${String(f.target).toLowerCase()}`, `scope sweep (feed): ${g.rule}`);
     res.femaleFeeds++;
   }
+    // Feeds with chronic consecutive failures or broken targets are disabled to keep scheduler clean.
+  for (const f of repo.db.prepare("SELECT id, platform, kind, target, label, consecutive_failures, last_error FROM feeds WHERE enabled = 1 AND consecutive_failures >= 3").all()) {
+    const isBroken = f.consecutive_failures >= 5 || (f.last_error && /not found|disabled|preview-disabled|suspended|banned|404|410|unavailable/i.test(f.last_error));
+    if (isBroken) {
+      repo.feeds.update(f.id, { enabled: false });
+      events.log("INFO", `Sweep: disabled failing feed ${f.platform}:${f.kind}:${f.target} (${f.consecutive_failures} failures)`);
+    }
+  }
+
   events.log('OK', `Sweep done: checked ${res.checked} · blocked ${res.blocked} · to review ${res.review} · hidden ${res.hidden}${probe ? ` · dead ${res.dead}` : ''} · male-only scope: ${res.female} removed, ${res.femaleReview} to review, ${res.femaleCreators} creators, ${res.femaleFeeds} feeds`);
   return res;
 }

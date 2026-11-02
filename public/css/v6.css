@@ -586,6 +586,23 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
     box-sizing: border-box;
   }
 
+  /* Creator action buttons and filter chips touch bounds: >= 44px */
+  .creator-head .btn.sm,
+  .creator-actions .btn.sm,
+  .creator-actions .of-cta,
+  .creator-actions .fansly-cta,
+  .creator-actions .jff-cta,
+  .creator-filters .chip,
+  .creator-filters .select.sm {
+    min-height: 44px;
+    min-width: 44px;
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 12px;
+  }
+
   /* Chips, OnlyFans pills, creator links, and Follow buttons: >= 44px */
   .chip,
   .chip.of-pill,

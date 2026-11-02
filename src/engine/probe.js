@@ -18,20 +18,35 @@ const looksBinaryMedia = (b) => b.length >= 12 && (MAGIC.some((sig) => sig.every
 const REFERER_BY_HOST = {
   'cdn.gff.network': 'https://gayforfans.com/',
   'gff.network': 'https://gayforfans.com/',
+  'justthegays.tv': 'https://justthegays.tv/',
+  'gayforfans.com': 'https://gayforfans.com/',
   'coomer.st': 'https://coomer.st/',
   'img.coomer.st': 'https://coomer.st/',
+  'coomer.su': 'https://coomer.su/',
+  'img.coomer.su': 'https://coomer.su/',
   'redd.it': 'https://www.reddit.com/',
   'i.redd.it': 'https://www.reddit.com/',
   'preview.redd.it': 'https://www.reddit.com/',
 };
+
+function refererForHost(host, origin) {
+  if (host.includes('coomer.')) {
+    const domain = host.replace(/^.*?(coomer\.[a-z]+)$/, '$1');
+    return `https://${domain}/`;
+  }
+  if (host.includes('gff.network') || host.includes('gayforfans.com')) return 'https://gayforfans.com/';
+  if (host.includes('justthegays.tv')) return 'https://justthegays.tv/';
+  if (host.includes('redd.it') || host.includes('reddit.com')) return 'https://www.reddit.com/';
+  const ref = Object.entries(REFERER_BY_HOST).find(([h]) => host === h || host.endsWith('.' + h));
+  return ref ? ref[1] : (origin ? `${origin}/` : '');
+}
 
 async function probeMedia(url, type, { timeout = 10000, minBytes = 4000 } = {}) {
   let opened;
   let u;
   try { u = new URL(url); } catch { /* invalid */ }
   const host = u ? u.hostname.toLowerCase().replace(/^www\./, '') : '';
-  const ref = Object.entries(REFERER_BY_HOST).find(([h]) => host === h || host.endsWith('.' + h));
-  const referer = ref ? ref[1] : (u ? `${u.origin}/` : '');
+  const referer = refererForHost(host, u ? u.origin : '');
   const headers = {
     range: 'bytes=0-16383',
     referer,
@@ -41,7 +56,7 @@ async function probeMedia(url, type, { timeout = 10000, minBytes = 4000 } = {}) 
   try {
     opened = await net.open(url, { headers, timeout, maxRedirects: 4 });
   } catch (e) {
-    if ((host === 'coomer.st' || host.endsWith('.coomer.st')) && u && /^\/data\/.+\.(?:jpe?g|png|webp|gif)$/i.test(u.pathname)) {
+    if (host.includes('coomer') && u && /^\/data\/.+\.(?:jpe?g|png|webp|gif)$/i.test(u.pathname)) {
       try {
         const thumbUrl = `https://img.coomer.st/thumbnail${u.pathname}`;
         opened = await net.open(thumbUrl, { headers: { ...headers, referer: 'https://coomer.st/' }, timeout: 6000, maxRedirects: 3 });
@@ -52,8 +67,25 @@ async function probeMedia(url, type, { timeout = 10000, minBytes = 4000 } = {}) 
       return { ok: false, reason: e.code === 'EBLOCKED' ? 'blocked host' : `unreachable: ${e.message}` };
     }
   }
-  const { res, req } = opened;
-  const status = res.statusCode;
+
+  let { res, req } = opened;
+  let status = res.statusCode;
+
+  // If a coomer data URL failed with 403/404, attempt fallback to thumbnail
+  if (status >= 400 && host.includes('coomer') && u && /^\/data\/.+\.(?:jpe?g|png|webp|gif)$/i.test(u.pathname)) {
+    try {
+      res.resume(); req.destroy();
+      const thumbUrl = `https://img.coomer.st/thumbnail${u.pathname}`;
+      const fallback = await net.open(thumbUrl, { headers: { ...headers, referer: 'https://coomer.st/' }, timeout: 6000, maxRedirects: 3 });
+      if (fallback.res.statusCode < 400) {
+        opened = fallback;
+        res = opened.res;
+        req = opened.req;
+        status = res.statusCode;
+      }
+    } catch { /* proceed with initial error */ }
+  }
+
   const ctype = String(res.headers['content-type'] || '').toLowerCase();
   const total = Number((String(res.headers['content-range'] || '').split('/')[1])) || Number(res.headers['content-length']) || null;
 
@@ -62,11 +94,15 @@ async function probeMedia(url, type, { timeout = 10000, minBytes = 4000 } = {}) 
     res.resume(); req.destroy();
     return { ok: false, reason: challenge ? `http ${status} (Cloudflare bot challenge: this server's IP is walled off)` : `http ${status}`, challenge };
   }
-  if (ctype.includes('text/html') || ctype.includes('application/json') || ctype.includes('text/plain')) {
+
+  const isHls = /\.m3u8(?:\?|$)/i.test(url) || /\/manifest(?:\?|$)/i.test(url) || type === 'video';
+  const isHlsCtype = /^(?:application\/(?:vnd\.apple\.mpegurl|x-mpegurl|octet-stream)|text\/(?:plain|uri-list))/i.test(ctype);
+
+  if (ctype.includes('text/html') || ctype.includes('application/json') || (ctype.includes('text/plain') && !isHls)) {
     res.resume(); req.destroy();
     return { ok: false, reason: `not media (${ctype.split(';')[0]})` };
   }
-  if (total !== null && total < minBytes) { res.resume(); req.destroy(); return { ok: false, reason: `too small (${total} B)` }; }
+  if (!isHls && total !== null && total < minBytes) { res.resume(); req.destroy(); return { ok: false, reason: `too small (${total} B)` }; }
 
   // Read enough to (a) sniff magic bytes and (b) detect tiny placeholders even when the server
   // sends no Content-Length (chunked): a body that ENDS before minBytes is too small.
@@ -77,9 +113,11 @@ async function probeMedia(url, type, { timeout = 10000, minBytes = 4000 } = {}) 
     res.on('end', () => done(true)); res.on('error', () => done(false));
     setTimeout(() => done(false), timeout).unref();
   });
-  if (ended && head.length < minBytes && status !== 206) return { ok: false, reason: `too small (${head.length} B)` };
+
+  const isHlsManifest = isHls && (head.slice(0, 7).toString('ascii') === '#EXTM3U' || isHlsCtype);
+  if (!isHlsManifest && ended && head.length < minBytes && status !== 206) return { ok: false, reason: `too small (${head.length} B)` };
   const mediaCtype = /^(image|video)\//.test(ctype);
-  if (!mediaCtype && !looksBinaryMedia(head) && !/^application\/(octet-stream|mp4|vnd\.apple\.mpegurl|x-mpegurl)/.test(ctype)) {
+  if (!mediaCtype && !looksBinaryMedia(head) && !isHlsManifest && !/^application\/(octet-stream|mp4|vnd\.apple\.mpegurl|x-mpegurl)/.test(ctype)) {
     return { ok: false, reason: `not image/video bytes (${ctype || 'no content-type'})` };
   }
   return { ok: true, contentType: ctype, bytes: total };

@@ -27,7 +27,7 @@ const brave = require('../lib/brave');
 const websearch = require('../lib/websearch');
 const tgBot = require('../lib/telegram-bot');
 const registry = require('../sources');
-const { parseProfile, extractLinks, profileUrl, linkHubHandle, isMisskeyHost } = require('../lib/links');
+const { parseProfile, extractLinks, profileUrl, linkHubHandle, isMisskeyHost, cleanDisplayName, cleanSlug } = require('../lib/links');
 const { checkText } = require('../lib/safety');
 const takedowns = require('../lib/takedowns');
 const { classify, femaleCheck } = require('../lib/scope');
@@ -1504,7 +1504,7 @@ function reject(id, { reason = 'rejected by admin', actor = 'admin', block = fal
  * yet, gate them (safety + male-scope), and register each performer page as a feed — his page then
  * pulls his whole video library through the gff adapter.
  */
-async function gffDiscovery({ pages = 2, perPage = 12, coomerLimit = 12, aborted = () => false } = {}) {
+async function gffDiscovery({ pages = 2, perPage = 6, coomerLimit = 12, maxFollows = 12, aborted = () => false } = {}) {
   const out = { scanned: 0, followed: 0, rejected: 0, seen: 0, coomer: 0 };
   const t = require('../services/targets');
   const index = require('../lib/coomer-index');
@@ -1553,7 +1553,9 @@ async function gffDiscovery({ pages = 2, perPage = 12, coomerLimit = 12, aborted
     if (links.length && coomerLimit > 0 && !indexReady) { indexReady = true; await index.ensure(); }
     for (const l of links) {
       if (aborted()) break;
-      const name = l.label || l.slug.replace(/-[a-z0-9]{4,6}$/i, '').replace(/[-_]+/g, ' ');
+      if (out.followed >= maxFollows) break;
+      const baseSlug = cleanSlug(l.slug);
+      const name = cleanDisplayName(l.label) || (baseSlug ? baseSlug.split(/[-_]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(' ') : l.slug);
       // Same gates as every other discovery: safety first, then male-only scope, then the body filter.
       const verdict = gate(name, l.slug);
       const gender = femaleCheck(name, l.slug);

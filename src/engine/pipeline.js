@@ -164,6 +164,27 @@ function knownCreator(item, feed) {
   return mentionedKnownCreator(item, feed);
 }
 
+
+function isGenericRedditAuthor(handle) {
+  if (!handle) return false;
+  const h = String(handle).trim();
+  if (/^[A-Za-z]{2,20}[-_][A-Za-z]{2,20}(?:[-_][0-9]{1,5}|[0-9]{1,5})$/.test(h)) return true;
+  if (/^[A-Z][a-z]{2,15}[A-Z][a-z]{2,15}[0-9]{1,5}$/.test(h)) return true;
+  return false;
+}
+
+function hasAdultCreatorLinks(item) {
+  if (!item) return false;
+  const textBlob = [item.title, item.text, item.altText, item.authorBio, ...(item.links || [])].filter(Boolean).join("\n");
+  const paidHandles = paid.findPaidHandles(textBlob);
+  if (paidHandles.length > 0) return true;
+  for (const l of extractLinks(textBlob)) {
+    if (l.external && ["OnlyFans", "Fansly", "JustFor.Fans", "LoyalFans", "ManyVids", "Patreon", "SubscribeStar"].includes(l.service)) return true;
+    if (l.platform === "linkinbio" || ["linktree", "beacons", "allmylinks", "campsite", "snipfeed", "solo.to"].includes(l.platform)) return true;
+  }
+  return false;
+}
+
 /** Which creator does this item belong to? May create one. */
 function resolveCreator(item, feed, adapter) {
   // Feeds that belong to a specific creator (their profile, their RSS, their page).
@@ -219,6 +240,8 @@ function resolveCreator(item, feed, adapter) {
   if (SKIP_AUTHORS.has(handle.toLowerCase())) return null;
   // Creator-level safety: handle / display name.
   if (checkText(handle, item.authorName).level === 'block') return { blocked: true };
+
+  if (platform === 'reddit' && isGenericRedditAuthor(handle) && !hasAdultCreatorLinks(item)) return null;
 
   const c = repo.creators.create({ handle, displayName: item.authorName || handle, avatarUrl: item.authorAvatar, origin: 'ingest' });
   if ((feed.kind === 'channel' || (platform === 'telegram' && feed.kind === 'user')) && !feed.creator_id && !item.repostOf) {

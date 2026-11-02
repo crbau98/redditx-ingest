@@ -309,11 +309,16 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     const failures = (feed.consecutive_failures || 0) + 1;
     breaker.failure(feed.platform, e);
     const gone = e.status === 404 || e.status === 410;
+    const brokenTarget = /not found|target no longer exists|account suspended|user not found|user_banned|channel is private|preview disabled|preview-disabled|feed unavailable/i.test(e.message || "");
     repo.feeds.finishRun(feed.id, { status: 'error', error: e.message, failures, nextRunAt: computeNextRun(feed, failures, e.retryAfter || 0) });
-    if (gone && failures >= 3) {
+    if ((gone || brokenTarget) && failures >= 3) {
       repo.feeds.update(feed.id, { enabled: false });
-      repo.feeds.finishRun(feed.id, { status: 'error', error: `Not found (${e.status}) — disabled after ${failures} tries`, failures, nextRunAt: null });
-      events.log('WARN', `${tag} disabled: target no longer exists`);
+      repo.feeds.finishRun(feed.id, { status: 'error', error: `${gone ? `Not found (${e.status})` : "Target broken"} — disabled after ${failures} tries`, failures, nextRunAt: null });
+      events.log('WARN', `${tag} disabled: ${gone ? "target no longer exists" : e.message}`);
+    } else if (failures >= 5) {
+      repo.feeds.update(feed.id, { enabled: false });
+      repo.feeds.finishRun(feed.id, { status: 'error', error: `Chronic failure (${failures} consecutive errors: ${e.message}) — disabled`, failures, nextRunAt: null });
+      events.log('WARN', `${tag} disabled: ${failures} consecutive failures`);
     }
     events.log('ERR', `${tag}: ${e.message}`);
     return finish('error', { error: e.message });

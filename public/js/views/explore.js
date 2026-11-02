@@ -51,8 +51,37 @@ export async function explore(root, { query }) {
 
   const sortOptions = [...(f.q ? [['relevance', 'Best match']] : []), ...(tastes.ready() || f.sort === 'foryou' ? [['foryou', 'For you']] : []), ...SORTS];
   const forYou = f.sort === 'foryou';
-  const typeSeg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Media type' }, [['', 'All', 'grid'], ['image', 'Photos', 'image'], ['video', 'Videos', 'video']].map(([v, l, ic]) =>
-    h('button', { class: f.type === v ? 'on' : '', onclick: () => set({ type: v }), 'aria-pressed': String(f.type === v) }, icon(ic, 'sm'), l)));
+  const isAll = !f.type && !f.paid && f.sort !== 'top';
+  const allChip = h('button', {
+    class: `chip${isAll ? ' on' : ''}`,
+    'aria-pressed': String(isAll),
+    title: 'Show all media types and creators',
+    onclick: () => set({ type: '', paid: '', sort: f.sort === 'top' ? 'recent' : f.sort }),
+  }, icon('grid', 'sm'), 'All');
+  const ofChip = h('button', {
+    class: `chip of-pill${f.paid === 'onlyfans' ? ' on' : ''}`,
+    'aria-pressed': String(f.paid === 'onlyfans'),
+    title: 'Show only posts from verified male OnlyFans creators',
+    onclick: () => set({ paid: f.paid === 'onlyfans' ? '' : 'onlyfans' }),
+  }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), 'OnlyFans');
+  const videosChip = h('button', {
+    class: `chip${f.type === 'video' ? ' on' : ''}`,
+    'aria-pressed': String(f.type === 'video'),
+    title: 'Show videos only',
+    onclick: () => set({ type: f.type === 'video' ? '' : 'video' }),
+  }, icon('video', 'sm'), 'Videos');
+  const photosChip = h('button', {
+    class: `chip${f.type === 'image' ? ' on' : ''}`,
+    'aria-pressed': String(f.type === 'image'),
+    title: 'Show photos only',
+    onclick: () => set({ type: f.type === 'image' ? '' : 'image' }),
+  }, icon('image', 'sm'), 'Photos');
+  const topRatedChip = h('button', {
+    class: `chip${f.sort === 'top' ? ' on' : ''}`,
+    'aria-pressed': String(f.sort === 'top'),
+    title: 'Sort by top rated posts',
+    onclick: () => set({ sort: f.sort === 'top' ? 'recent' : 'top' }),
+  }, icon('flame', 'sm'), 'Top Rated');
   const sortSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Sort', onchange: (e) => set({ sort: e.target.value }) }, sortOptions.map(([v, l]) => h('option', { value: v, selected: f.sort === v }, l)));
   const sinceSel = ['top', 'trending'].includes(f.sort) || f.since ? h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Time range', onchange: (e) => set({ since: e.target.value }) }, SINCE.map(([v, l]) => h('option', { value: v, selected: f.since === v }, l))) : null;
   const platSel = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Filter by source', title: 'Sources PRISM ingests (paid pages are kept as link-outs)', onchange: (e) => set({ platform: e.target.value }) },
@@ -121,19 +150,12 @@ export async function explore(root, { query }) {
   if (existingFeed) searches.markSeen(existingFeed.id);
 
   const seenChip = h('button', { class: `chip${prefs.hideSeen ? ' on' : ''}`, 'aria-pressed': String(prefs.hideSeen), title: 'Hide items you have already opened', onclick: () => { prefs.hideSeen = !prefs.hideSeen; } }, icon('eye', 'sm'), 'Hide seen');
-    const ofChip = h('button', {
-    class: `chip of-pill${f.paid === 'onlyfans' ? ' on' : ''}`,
-    'aria-pressed': String(f.paid === 'onlyfans'),
-    title: 'Show only posts from verified male OnlyFans creators',
-    onclick: () => set({ paid: f.paid === 'onlyfans' ? '' : 'onlyfans' }),
-  }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), 'OnlyFans');
+  const followChip = h('button', { class: `chip${f.following ? ' on' : ''}`, 'aria-pressed': String(!!f.following), title: 'Only posts from creators you follow on this device', 'aria-label': f.following ? 'Show everything (turn off Followed filter)' : 'Show only creators you follow on this device', onclick: () => set({ following: f.following ? '' : '1' }) }, icon('heart', 'sm'), f.following ? 'Followed only' : 'Followed');
 
   const reelsBtn = h('a', { class: 'btn sm', href: href('/reels', { type: f.type || 'all', sort: f.sort === 'relevance' || f.sort === 'oldest' ? 'recent' : f.sort, platform: f.platform, community: f.community, tag: f.tag, tags: f.tags, anytags: f.anytags, label: f.anytags ? f.label : '', creator: f.creator, since: f.since, after: f.after, q: f.q, following: f.following, paid: f.paid || undefined }), title: 'Play these results full screen' }, icon('film', 'sm'), 'Play as Reels');
 
-  const followChip = h('button', { class: `chip${f.following ? ' on' : ''}`, 'aria-pressed': String(!!f.following), title: 'Only posts from creators you follow on this device', 'aria-label': f.following ? 'Show everything (turn off Followed filter)' : 'Show only creators you follow on this device', onclick: () => set({ following: f.following ? '' : '1' }) }, icon('heart', 'sm'), f.following ? 'Followed only' : 'Followed');
-  // Fewer peers: type/sort/seen/followed stay visible; source + time hide behind a "Filters" disclosure.
-  const moreFilters = [sinceSel, platSel].filter(Boolean);
-  const activeCount = (f.platform ? 1 : 0) + (f.since ? 1 : 0);
+  const moreFilters = [sinceSel, platSel, seenChip].filter(Boolean);
+  const activeCount = (f.platform ? 1 : 0) + (f.since ? 1 : 0) + (prefs.hideSeen ? 1 : 0);
   const filtersDisclosure = moreFilters.length ? (() => {
     let open = window.matchMedia('(min-width: 900px)').matches && activeCount > 0;
     const panel = h('div', { class: 'filter-more', hidden: !open }, moreFilters);
@@ -142,7 +164,7 @@ export async function explore(root, { query }) {
     btn.addEventListener('click', () => { open = !open; panel.hidden = !open; btn.setAttribute('aria-expanded', String(open)); });
     return [btn, panel];
   })() : [];
-  const bar = h('div', { class: 'filterbar', role: 'toolbar', 'aria-label': 'Explore filters' }, h('div', { class: 'filter-scroll' }, typeSeg, ofChip, followChip, seenChip, sortSel, ...filtersDisclosure), h('span', { class: 'spacer' }), active.length ? h('div', { class: 'active-filters' }, active) : null);
+  const bar = h('div', { class: 'filterbar', role: 'toolbar', 'aria-label': 'Explore filters' }, h('div', { class: 'filter-scroll' }, allChip, ofChip, videosChip, photosChip, topRatedChip, followChip, sortSel, ...filtersDisclosure), h('span', { class: 'spacer' }), active.length ? h('div', { class: 'active-filters' }, active) : null);
 
   // Tag rail: with tags in play, show tags that go with them (click narrows); otherwise the most used tags.
   // Required tags (tags= / tag=) are what a refinement narrows, so suggestions are measured against
@@ -154,11 +176,11 @@ export async function explore(root, { query }) {
 
   const creatorRail = h('div', { class: 'row', style: { gap: '8px', overflowX: 'auto', padding: '10px 0 2px', scrollbarWidth: 'none' }, role: 'group', 'aria-label': 'Filter by creator' });
 
-  const emptyHost = h('div', { class: 'stack', style: { justifyItems: 'center' } },
+  const emptyHost = h('div', { class: 'stack empty-wrap', style: { justifyItems: 'center', width: '100%', padding: '36px 0' } },
     f.following && !followIds.length ? emptyState({ icon: 'heart', title: 'You’re not following anyone yet', text: 'Follow a creator and their newest posts collect here.', actions: [h('a', { class: 'btn primary', href: href('/creators') }, 'Browse creators')] })
-      : emptyState({ icon: 'search', title: f.q || f.tags || f.tag || f.anytags || f.platform || f.since ? 'Nothing matches these filters.' : 'Nothing has been ingested yet.', text: f.q || f.tags ? 'Try fewer words, or remove a filter — or look up this creator across the web.' : 'Sources, topics and tags appear here after the first ingest.', actions: [
+      : emptyState({ icon: 'search', title: f.q || f.tags || f.tag || f.anytags || f.platform || f.since || f.paid || f.type ? 'Nothing matches these filters.' : 'Nothing has been ingested yet.', text: f.q || f.tags ? 'Try fewer words, or remove a filter — or look up this creator across the web.' : 'Sources, topics and tags appear here after the first ingest.', actions: [
         f.q ? h('a', { class: 'btn primary', href: href('/find', { q: f.q }) }, icon('search', 'sm'), `Find “${f.q}” across the web`) : null,
-        f.q || f.tags || f.tag || f.anytags || f.platform || f.since ? h('a', { class: 'btn', href: href('/explore') }, 'Clear filters') : h('a', { class: 'btn', href: href('/browse') }, 'Browse sources'),
+        f.q || f.tags || f.tag || f.anytags || f.platform || f.since || f.paid || f.type ? h('a', { class: 'btn', href: href('/explore') }, 'Clear filters') : h('a', { class: 'btn', href: href('/browse') }, 'Browse sources'),
       ].filter(Boolean) }));
 
   async function onEmpty() {

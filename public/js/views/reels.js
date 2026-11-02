@@ -296,15 +296,34 @@ export async function reels(root, { query }) {
       if (!slides.length && !done) { loading = false; return load(); }
       if (active < 0 && slides.length) setActive(0);
     } catch (e) {
-      if (!slides.length) track.replaceChildren(h('div', { class: 'reel reel-end' }, emptyState({ icon: 'alert', title: 'Couldn’t load', text: e.message, actions: [h('button', { class: 'btn primary', onclick: () => { loading = false; load(); } }, 'Try again')] })));
+      if (!slides.length) track.replaceChildren(h('div', { class: 'reel reel-end' }, emptyState({ icon: 'alert', title: 'Couldn’t load reels', text: e.message || 'An error occurred while loading reels.', actions: [h('button', { class: 'btn primary', onclick: () => { loading = false; load(); } }, 'Try again'), h('a', { class: 'btn', href: href('/explore') }, 'Back to Explore')] })));
       else toast(e.message || 'Could not load more', 'err');
     } finally { loading = false; }
   }
 
   function endSlide() {
     return h('section', { class: 'reel reel-end' }, slides.length
-      ? emptyState({ icon: 'sparkle', title: 'You’re all caught up', text: `That’s everything for ${context}.`, actions: [h('button', { class: 'btn primary', onclick: () => (f.sort === 'random' ? restart() : set({ sort: 'random' })) }, icon('shuffle', 'sm'), 'Shuffle again'), h('a', { class: 'btn', href: href('/explore', { type: f.type === 'all' ? '' : f.type, tag: f.tag, platform: f.platform, community: f.community, q: f.q }) }, 'Open in Explore')] })
-      : emptyState({ icon: 'film', title: 'Nothing to play', text: f.type === 'video' ? 'No videos match. Try “All” to include photos.' : 'Nothing matches these filters yet.', actions: [f.type === 'video' ? h('button', { class: 'btn primary', onclick: () => set({ type: 'all' }) }, 'Show photos too') : null, h('a', { class: 'btn', href: href('/explore') }, 'Explore')].filter(Boolean) }));
+      ? emptyState({
+          icon: 'sparkle',
+          title: 'You’re all caught up',
+          text: `That’s everything in this reel for ${context}.`,
+          actions: [
+            h('button', { class: 'btn primary', onclick: () => (f.sort === 'random' ? restart() : set({ sort: 'random' })) }, icon('shuffle', 'sm'), 'Shuffle again'),
+            h('a', { class: 'btn', href: href('/explore', { type: f.type === 'all' ? '' : f.type, tag: f.tag, platform: f.platform, community: f.community, q: f.q, paid: f.paid }) }, 'Open in Explore'),
+          ],
+        })
+      : emptyState({
+          icon: 'film',
+          title: 'No reels to play',
+          text: f.type === 'video'
+            ? 'No matching videos found. Switch to “All” to include photos, or clear filters.'
+            : 'No matching media found for these filters.',
+          actions: [
+            f.type === 'video' ? h('button', { class: 'btn primary', onclick: () => set({ type: 'all' }) }, 'Show photos too') : null,
+            h('button', { class: 'btn', onclick: () => set({ type: 'video', paid: '', sort: 'foryou' }) }, 'Reset Reels'),
+            h('a', { class: 'btn', href: href('/explore') }, 'Explore library'),
+          ].filter(Boolean),
+        }));
   }
 
   /** Start over in place (a new shuffle) without a route change. */

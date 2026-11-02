@@ -10,29 +10,30 @@ const registry = require('../sources');
 const { checkText } = require('../lib/safety');
 const { femaleCheck } = require('../lib/scope');
 const physiqueText = require('../lib/physique').textCheck;
-const { profileUrl } = require('../lib/links');
+const { profileUrl, cleanDisplayName, cleanSlug } = require('../lib/links');
 
 /** Clean a raw platform target ("onlyfans/renogold", "https://gayforfans.com/performer/reno-gold-c2gav", "Paul Wagner (paulwagner)") into a human handle and display name. */
 function cleanCreatorNames(spec) {
-  const rawLabel = spec.label ? String(spec.label).replace(/^[@u/]+/, '').trim() : '';
-  const rawTarget = String(spec.target || '').trim();
-  if (spec.platform === 'gff' || /^https?:\/\/(?:gayforfans\.com|justthegays\.tv)\/performer\//i.test(rawTarget)) {
-    const slug = (rawTarget.match(/\/performer\/([a-z0-9-]+)/i) || [])[1] || '';
-    // The slug ends in a site id ("reno-gold-66", "alejandro-pino-hotalex6-x9b1v"): drop it.
-    const baseSlug = slug.replace(/-[a-z0-9]{4,6}$/i, '');
+  const rawLabel = spec.label ? String(spec.label).replace(/^[@u/]+/, "").trim() : "";
+  const rawTarget = String(spec.target || "").trim();
+  if (spec.platform === "gff" || /^https?:\/\/(?:gayforfans\.com|justthegays\.tv)\/performer\//i.test(rawTarget)) {
+    const slug = (rawTarget.match(/\/performer\/([a-z0-9-]+)/i) || [])[1] || "";
+    const baseSlug = cleanSlug(slug);
     const paren = rawLabel.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
-    const displayName = paren ? paren[1].trim() : (rawLabel && !/^https?:/i.test(rawLabel) && rawLabel !== slug ? rawLabel : baseSlug.split(/[-_]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(' '));
-    // The handle is the name plus his stage/paid handle ("alejandro-pino-hotalex6" → "alejandropinohotalex6"),
-    // so two pages of the same man share it.
-    const handle = paren ? paren[2].trim().replace(/^@/, '') : baseSlug.replace(/-/g, '');
+    let displayName = paren ? cleanDisplayName(paren[1]) : (rawLabel && !/^https?:/i.test(rawLabel) && rawLabel !== slug ? cleanDisplayName(rawLabel) : "");
+    if (!displayName && baseSlug) {
+      displayName = baseSlug.split(/[-_]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
+    }
+    const handle = paren ? paren[2].trim().replace(/^@/, "") : baseSlug.replace(/-/g, "");
     return { handle: handle || slug, displayName: displayName || handle || slug };
   }
-  if (spec.platform === 'coomer') {
-    const bare = rawTarget.replace(/^(?:onlyfans|fansly|patreon|subscribestar|gd|justforfans)\//i, '');
-    const cleanLabel = rawLabel.replace(/\s*\((?:onlyfans|fansly|patreon|subscribestar|gd|justforfans)\s+on\s+coomer\)\s*$/i, '').trim();
+  if (spec.platform === "coomer") {
+    const bare = rawTarget.replace(/^(?:onlyfans|fansly|patreon|subscribestar|gd|justforfans)\//i, "");
+    const cleanLabel = cleanDisplayName(rawLabel.replace(/\s*\((?:onlyfans|fansly|patreon|subscribestar|gd|justforfans)\s+on\s+coomer\)\s*$/i, "").trim());
     return { handle: bare || rawTarget, displayName: cleanLabel || bare || rawTarget };
   }
-  return { handle: rawTarget, displayName: rawLabel || rawTarget };
+  const cleanLabel = cleanDisplayName(rawLabel);
+  return { handle: rawTarget, displayName: cleanLabel || rawLabel || rawTarget };
 }
 
 const defaultInterval = (spec) => {

@@ -399,4 +399,35 @@ function profileUrl(platform, kind, target) {
   }
 }
 
-module.exports = { parseProfile, extractLinks, profileUrl, isMisskeyHost, isPeertubeHost, isLinkHubUrl, linkHubHandle, EXTERNAL, LINKINBIO, LINK_HUB_HOSTS };
+
+/**
+ * Clean creator display name: strip ranking badges, SEO slogans, directory hashes,
+ * and trailing parenthesized handles so handles are never mashed into display names.
+ */
+function cleanDisplayName(name) {
+  if (!name) return "";
+  let n = String(name).replace(/\s+/g, " ").trim();
+  // Strip ranking badges like #34, #1
+  n = n.replace(/^#\d+\s*/, "");
+  // Strip SEO slogans & marketing tags
+  n = n.replace(/\s+[-–—|•·]\s*(?:porn|OnlyFans|Fansly|nude|nudes|leaked|leaks|free|sex|videos?|explicit|official|uncensored|gay|hot|models?|creators?|justthegays|gayforfans|coomer).*$/i, "");
+  n = n.replace(/\s*\|\s*.*$/i, "");
+  n = n.replace(/\s+-\s+(?:porn|OnlyFans|Fansly|nude|nudes|leaked|leaks|free|sex|videos?|explicit|official|uncensored|justthegays|gayforfans|coomer).*$/i, "");
+  n = n.replace(/\s+(?:on\s+JustTheGays|on\s+GayForFans|on\s+Coomer|on\s+OnlyFans|on\s+Fansly|on\s+Reddit).*$/i, "");
+  n = n.replace(/(?:\s*#[a-zA-Z0-9_]+)+$/, "");
+  // Strip trailing parenthesized handles: "Paul Wagner (paulwagner)" -> "Paul Wagner"
+  n = n.replace(/\s*\([^)]*\)\s*$/, "");
+  return n.trim();
+}
+
+/**
+ * Clean performer/directory slug: drop site hash IDs, numeric suffixes, and directory prefixes.
+ * e.g. "performer/reno-gold-66" -> "reno-gold", "christian-hogue-113" -> "christian-hogue"
+ */
+function cleanSlug(slug) {
+  let s = String(slug || "").trim().replace(/^\/+/, "").replace(/^performer\//i, "").replace(/^\/+|\/+$/g, "");
+  s = s.replace(/-(?:[a-z0-9]{4,8}|\d{1,6})$/i, "");
+  return s;
+}
+
+module.exports = { parseProfile, extractLinks, profileUrl, isMisskeyHost, isPeertubeHost, isLinkHubUrl, linkHubHandle, cleanDisplayName, cleanSlug, EXTERNAL, LINKINBIO, LINK_HUB_HOSTS };

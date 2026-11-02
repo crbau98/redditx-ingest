@@ -27,6 +27,7 @@ const cheerio = require('cheerio');
 const http = require('./http').forPlatform('gff', 900);
 const { clip, toIso, isChallengeText } = require('./util');
 const { robotsAllows } = require('./web');
+const { cleanDisplayName } = require('../lib/links');
 
 const PAGE_VIDEOS = 14;   // video pages read per run (each is one full page fetch)
 const PROBE_VIDEOS = 2;   // a lookup probe asks "does this performer page exist?" — read only two
@@ -46,8 +47,7 @@ const performerUrl = (host, slug) => `https://${host}/performer/${slug}`;
  * Strip the rank and the stage handle, and keep the display name.
  */
 function performerNameFrom(text) {
-  const t = String(text || '').replace(/\s+/g, ' ').trim();
-  return t.replace(/^#\d+\s*/, '').replace(/\s*\([^)]*\)\s*$/, '').trim() || t.replace(/^#\d+\s*/, '').trim();
+  return cleanDisplayName(text) || String(text || "").replace(/^#\d+\s*/, "").trim();
 }
 
 /**
