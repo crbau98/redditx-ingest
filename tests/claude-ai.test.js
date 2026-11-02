@@ -39,7 +39,7 @@ before(async () => {
       return { json: message([{ type: 'text', text: JSON.stringify(answer) }]) };
     },
   });
-  prepareEnv({ ANTHROPIC_API_KEY: 'sk-ant-test', ANTHROPIC_BASE_URL: api.url, SEARCH_PROVIDERS: 'claude' });
+  prepareEnv({ AI_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'sk-ant-test', ANTHROPIC_BASE_URL: api.url, SEARCH_PROVIDERS: 'claude' });
   config = require('../src/config');
   repo = require('../src/db/repo');
   engine = require('../src/engine/engine');

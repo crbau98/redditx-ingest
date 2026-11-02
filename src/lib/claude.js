@@ -14,14 +14,13 @@
  * question costs nothing; the system prompt is marked for prompt caching. A declined request (stop_reason "refusal")
  * is an error the caller treats like "no answer" - it is never retried in another wording. Inert without ANTHROPIC_API_KEY.
  */
-const crypto = require('crypto');
 const config = require('../config');
-const repo = require('../db/repo');
 
 let Anthropic = null;
 try { Anthropic = require('@anthropic-ai/sdk'); Anthropic = Anthropic.default || Anthropic; } catch { Anthropic = null; }
 
-const today = () => new Date().toISOString().slice(0, 10);
+const usageStore = require('./aiusage');
+
 const configured = () => !!(config.creds.anthropicKey && Anthropic);
 
 // Server-side refusal fallback (beta): when a safety classifier declines, the API re-runs the request on a fallback
@@ -42,46 +41,10 @@ function getClient() {
   return client;
 }
 
-/* ------------------------------------------------------------------ budget */
-function usage() {
-  let u = {};
-  try { u = JSON.parse(repo.settings.get('ai.usage') || '{}'); } catch { u = {}; }
-  const t = u.total || { calls: 0, input: 0, output: 0 };
-  return u.day === today()
-    ? { day: u.day, calls: u.calls || 0, input: u.input || 0, output: u.output || 0, refusals: u.refusals || 0, total: t }
-    : { day: today(), calls: 0, input: 0, output: 0, refusals: 0, total: t };
-}
-function record(res, { refusal = false } = {}) {
-  const u = usage();
-  const inTok = (res && res.usage && (res.usage.input_tokens || 0) + (res.usage.cache_read_input_tokens || 0) + (res.usage.cache_creation_input_tokens || 0)) || 0;
-  const outTok = (res && res.usage && res.usage.output_tokens) || 0;
-  repo.settings.set('ai.usage', JSON.stringify({
-    day: u.day, calls: u.calls + 1, input: u.input + inTok, output: u.output + outTok, refusals: u.refusals + (refusal ? 1 : 0),
-    total: { calls: u.total.calls + 1, input: u.total.input + inTok, output: u.total.output + outTok },
-  }));
-}
-function budgetLeft() {
-  const s = require('../settings').get();
-  return Math.max(0, s.aiDailyBudget - usage().calls);
-}
-
-/* ------------------------------------------------------------------- cache */
-const cache = new Map(); // key -> {at, value}
-const CACHE_MAX = 500;
-const keyOf = (...parts) => crypto.createHash('sha256').update(JSON.stringify(parts)).digest('hex');
-function cached(key, ttlMs) {
-  const hit = cache.get(key);
-  if (hit && Date.now() - hit.at < ttlMs) return hit;
-  if (hit) cache.delete(key);
-  return null;
-}
-function remember(key, value) {
-  cache.set(key, { at: Date.now(), value });
-  if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
-}
+const { usage, budgetLeft, cached, remember, keyOf } = usageStore;
 
 /* ------------------------------------------------------------------ errors */
-const skipErr = (msg, extra = {}) => Object.assign(new Error(msg), { skip: true, ...extra });
+const { skipErr } = usageStore;
 function failure(e) {
   if (!Anthropic || !(e instanceof Anthropic.APIError)) return e;
   if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) return skipErr(`Anthropic rejected the API key (HTTP ${e.status}); check ANTHROPIC_API_KEY`, { status: e.status });
@@ -107,6 +70,13 @@ async function call(params, { timeoutMs } = {}) {
   }
   record(res);
   return res;
+}
+
+/** Count one Messages API response against today's usage. */
+function record(res, { refusal = false } = {}) {
+  const inTok = (res && res.usage && (res.usage.input_tokens || 0) + (res.usage.cache_read_input_tokens || 0) + (res.usage.cache_creation_input_tokens || 0)) || 0;
+  const outTok = (res && res.usage && res.usage.output_tokens) || 0;
+  usageStore.record(inTok, outTok, { refusal });
 }
 
 const textOf = (res) => (res.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
@@ -190,9 +160,9 @@ async function webSearch(q, { count = 10, site } = {}) {
 
 function status() {
   const s = require('../settings').get();
-  return { configured: configured(), sdk: !!Anthropic, model: config.anthropic.model, budget: s.aiDailyBudget, usage: usage(), cached: cache.size };
+  return { configured: configured(), sdk: !!Anthropic, model: config.anthropic.model, budget: s.aiDailyBudget, usage: usage(), cached: usageStore.cacheSize() };
 }
 
-function _reset() { cache.clear(); client = null; clientKey = ''; }
+function _reset() { usageStore.clearCache(); client = null; clientKey = ''; }
 
 module.exports = { configured, json, webSearch, usage, budgetLeft, status, _reset, FALLBACK_MODELS };

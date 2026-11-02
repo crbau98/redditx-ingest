@@ -25,7 +25,7 @@ before(async () => {
       return { json: message([{ type: 'text', text: JSON.stringify(state.answer(body)) }]) };
     },
   });
-  prepareEnv({ ANTHROPIC_API_KEY: 'sk-ant-test', ANTHROPIC_BASE_URL: api.url });
+  prepareEnv({ AI_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'sk-ant-test', ANTHROPIC_BASE_URL: api.url });
   repo = require('../src/db/repo');
   engine = require('../src/engine/engine');
   claude = require('../src/lib/claude');

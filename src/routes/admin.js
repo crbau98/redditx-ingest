@@ -94,20 +94,20 @@ router.post('/browser4/expand', async (req, res) => {
 /** Claude: configured?, model, today's usage against the budget, and what discovery planned. Never the key. */
 router.get('/ai', (req, res) => {
   const cfg = settingsStore.get();
-  res.json({ ...require('../lib/claude').status(), search: cfg.aiSearch, discovery: cfg.aiDiscovery, plannedQueries: require('../engine/ai').plannedQueries() });
+  res.json({ ...require('../lib/llm').status(), search: cfg.aiSearch, discovery: cfg.aiDiscovery, plannedQueries: require('../engine/ai').plannedQueries() });
 });
 /** Plan discovery queries now (instead of waiting for the daily plan). */
 router.post('/ai/plan', async (req, res) => {
-  if (!require('../lib/claude').configured()) return bad(res, 'Claude is not configured on this server (set ANTHROPIC_API_KEY)', 409);
+  if (!require('../lib/llm').configured()) return bad(res, `${require('../lib/llm').label()} is not configured on this server (set ${require('../lib/llm').keyName()})`, 409);
   const r = await require('../engine/ai').planQueries({ force: true });
-  if (!r) return bad(res, 'Claude could not plan queries (setting off, budget spent, or the request failed: see the log)', 502);
+  if (!r) return bad(res, 'The AI could not plan queries (setting off, budget spent, or the request failed: see the log)', 502);
   res.json({ ...r, plannedQueries: require('../engine/ai').plannedQueries() });
 });
 /** Triage the next discovered accounts now. */
 router.post('/ai/triage', async (req, res) => {
-  if (!require('../lib/claude').configured()) return bad(res, 'Claude is not configured on this server (set ANTHROPIC_API_KEY)', 409);
+  if (!require('../lib/llm').configured()) return bad(res, `${require('../lib/llm').label()} is not configured on this server (set ${require('../lib/llm').keyName()})`, 409);
   const r = await require('../engine/ai').triage({ limit: int(req.body && req.body.limit, 1, 50, 15) });
-  if (!r) return bad(res, 'Claude could not triage (setting off, budget spent, or the request failed: see the log)', 502);
+  if (!r) return bad(res, 'The AI could not triage (setting off, budget spent, or the request failed: see the log)', 502);
   res.json(r);
 });
 

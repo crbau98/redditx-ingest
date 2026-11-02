@@ -1,6 +1,6 @@
 'use strict';
 /**
- * What PRISM asks Claude (lib/claude.js), and what it does with the answers.
+ * What PRISM asks the AI (lib/llm.js: OpenAI by default, Claude when AI_PROVIDER=anthropic), and what it does with the answers.
  *
  *   readSearch(text, vocab)   a search the rules could not fully read ("otter vibes, sweaty post-run stuff") is mapped
  *                             onto the library's own vocabulary and rewritten in the syntax lib/query.js understands
@@ -27,7 +27,7 @@
  * is spent, so callers never depend on it.
  */
 const repo = require('../db/repo');
-const claude = require('../lib/claude');
+const llm = require('../lib/llm');
 const settingsStore = require('../settings');
 const events = require('./events');
 const { understand, PAID } = require('../lib/query');
@@ -103,10 +103,10 @@ function rewrite(a, vocab) {
  */
 async function readSearch(text, vocab) {
   const raw = String(text || '').trim().slice(0, 200);
-  if (!raw || !claude.configured() || !settingsStore.get().aiSearch) return null;
+  if (!raw || !llm.configured() || !settingsStore.get().aiSearch) return null;
   let a;
   try {
-    a = await claude.json('search', { system: searchSystem(tagChoices(vocab)), input: raw, schema: SEARCH_SCHEMA, effort: 'low', maxTokens: 4000, timeoutMs: SEARCH_TIMEOUT_MS });
+    a = await llm.json('search', { system: searchSystem(tagChoices(vocab)), input: raw, schema: SEARCH_SCHEMA, effort: 'low', maxTokens: 4000, timeoutMs: SEARCH_TIMEOUT_MS });
   } catch (e) {
     if (!e.skip && !e.budget) events.log('WARN', `AI search: ${e.message}`);
     return null;
@@ -140,7 +140,7 @@ function plannedQueries() {
 /** Plans a fresh set of discovery queries at most once a day. @returns {Promise<{planned: number}|null>} */
 async function planQueries({ force = false } = {}) {
   const s = settingsStore.get();
-  if (!claude.configured() || !s.aiDiscovery) return null;
+  if (!llm.configured() || !s.aiDiscovery) return null;
   const at = repo.discoveryState.touchedAt(QUERY_KEY);
   if (!force && at && Date.now() - new Date(at).getTime() < 20 * 3600 * 1000) return { planned: 0, kept: plannedQueries().length };
   const lib = repo.library();
@@ -148,7 +148,7 @@ async function planQueries({ force = false } = {}) {
   const existing = String(s.discoveryQueries || '').split('\n').map((q) => q.trim()).filter(Boolean);
   let a;
   try {
-    a = await claude.json('queries', { system: QUERY_SYSTEM, input: { library_themes: themes, existing_queries: existing, previous_ai_queries: plannedQueries() }, schema: QUERY_SCHEMA, effort: 'medium', maxTokens: 8000, ttlMs: 3600 * 1000 });
+    a = await llm.json('queries', { system: QUERY_SYSTEM, input: { library_themes: themes, existing_queries: existing, previous_ai_queries: plannedQueries() }, schema: QUERY_SCHEMA, effort: 'medium', maxTokens: 8000, ttlMs: 3600 * 1000 });
   } catch (e) {
     if (!e.skip && !e.budget) events.log('WARN', `AI discovery queries: ${e.message}`);
     return null;
@@ -202,7 +202,7 @@ const HOLD_AT = 0.8;
 /** @returns {Promise<{judged, boosted, held, rejected}|null>} */
 async function triage({ limit = 15 } = {}) {
   const s = settingsStore.get();
-  if (!claude.configured() || !s.aiDiscovery) return null;
+  if (!llm.configured() || !s.aiDiscovery) return null;
   const rows = repo.db.prepare(`SELECT id FROM candidates WHERE status = 'pending' AND kind IN ('user', 'page')
       AND (bio IS NOT NULL OR display_name IS NOT NULL) AND signals NOT LIKE '%"aiTriage"%' ORDER BY score DESC, id LIMIT ?`).all(limit)
     .map((r) => repo.candidates.get(r.id)).filter(Boolean);
@@ -210,7 +210,7 @@ async function triage({ limit = 15 } = {}) {
   const input = rows.map((c, i) => ({ n: i + 1, platform: c.platform, handle: c.target, name: c.display_name || '', bio: String(c.bio || '').slice(0, 600) }));
   let a;
   try {
-    a = await claude.json('triage', { system: TRIAGE_SYSTEM, input: { accounts: input }, schema: TRIAGE_SCHEMA, effort: 'medium', maxTokens: 12000 });
+    a = await llm.json('triage', { system: TRIAGE_SYSTEM, input: { accounts: input }, schema: TRIAGE_SCHEMA, effort: 'medium', maxTokens: 12000 });
   } catch (e) {
     if (!e.skip && !e.budget) events.log('WARN', `AI triage: ${e.message}`);
     return null;
@@ -328,7 +328,7 @@ const LEMMY_RE = /^[a-z0-9_]{2,40}@[a-z0-9.-]+\.[a-z]{2,}$/i;
  */
 async function readProfiles({ limit = 8 } = {}) {
   const s = settingsStore.get();
-  if (!claude.configured() || !s.aiDiscovery) return null;
+  if (!llm.configured() || !s.aiDiscovery) return null;
   const now = Date.now();
   const rows = repo.db.prepare(`SELECT id FROM creators WHERE status = 'active' AND (COALESCE(bio, '') != '' OR COALESCE(links, '[]') NOT IN ('[]', ''))
       ORDER BY media_count DESC, id LIMIT 300`).all()
@@ -340,7 +340,7 @@ async function readProfiles({ limit = 8 } = {}) {
   const input = rows.map((c, i) => ({ n: i + 1, handle: c.handle, name: c.display_name || '', text: texts[i].text.slice(0, 1500) }));
   let a;
   try {
-    a = await claude.json('profiles', { system: PROFILE_SYSTEM, input: { creators: input }, schema: PROFILE_SCHEMA, effort: 'medium', maxTokens: 12000 });
+    a = await llm.json('profiles', { system: PROFILE_SYSTEM, input: { creators: input }, schema: PROFILE_SCHEMA, effort: 'medium', maxTokens: 12000 });
   } catch (e) {
     if (!e.skip && !e.budget) events.log('WARN', `AI profile reading: ${e.message}`);
     return null;
@@ -391,4 +391,4 @@ async function readProfiles({ limit = 8 } = {}) {
   return out;
 }
 
-module.exports = { readSearch, rewrite, tagChoices, planQueries, plannedQueries, triage, readProfiles, grounded, PROFILE_SCHEMA, SEARCH_SCHEMA, BOOST_AT, HOLD_AT };
+module.exports = { readSearch, rewrite, tagChoices, planQueries, plannedQueries, triage, readProfiles, grounded, PROFILE_SCHEMA, SEARCH_SCHEMA, QUERY_SCHEMA, TRIAGE_SCHEMA, BOOST_AT, HOLD_AT };

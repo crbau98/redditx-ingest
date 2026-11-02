@@ -95,6 +95,9 @@ module.exports = {
     // Anthropic API key: Claude reads searches, plans discovery queries, triages discovered accounts and (as a last-resort
     // search provider) searches the web. Everything AI is inert without it.
     anthropicKey: env.ANTHROPIC_API_KEY || '',
+    // OpenAI API key (the default AI provider, see `ai` below). OPENAI_API_KEY_FILE points at a key file outside the
+    // workspace, like BRAVE_API_KEY_FILE, so the secret never lands in the repo.
+    openaiKey: env.OPENAI_API_KEY || readKeyFile(env.OPENAI_API_KEY_FILE),
     // Telegram Bot API token (from @BotFather, "123456:ABC…"): channel metadata and existence checks.
     telegramBot: env.TELEGRAM_API_KEY || env.TELEGRAM_BOT_TOKEN || '',
   },
@@ -110,7 +113,16 @@ module.exports = {
   bingEnabled: !isTest && !/^(0|false|no|off)$/i.test(String(env.BING_SEARCH ?? '1')),
   searchProviders: list(env.SEARCH_PROVIDERS, ['keenable', 'brave', 'brightdata', 'bing', 'ddg', 'ddg-lite', 'searxng', 'claude']),
   // What Discover ranks results against: the intent steers it toward public creator pages and personal galleries.
-  // Claude (Anthropic API). Text only: PRISM never sends pictures or videos to it.
+  // Which model provider does the AI work (search reading, discovery queries, triage, profile reading): 'openai' (default)
+  // or 'anthropic'. Anything else falls back to the default. Text only: PRISM never sends pictures or videos to either.
+  ai: { provider: /^(anthropic|claude)$/i.test(String(env.AI_PROVIDER || '').trim()) ? 'anthropic' : 'openai' },
+  // OpenAI (Responses API). Model default gpt-6.1-sol.
+  openai: {
+    model: String(env.OPENAI_MODEL || 'gpt-6.1-sol').trim(),
+    timeoutMs: int(env.OPENAI_TIMEOUT_MS, 90000),
+    retryMs: int(env.OPENAI_RETRY_MS, 400), // base wait before a retry of a 429 / 5xx / network error (two retries)
+  },
+  // Claude (Anthropic API), selectable with AI_PROVIDER=anthropic and always the web-search provider when its key is set.
   anthropic: {
     model: String(env.ANTHROPIC_MODEL || 'claude-haiku-5-5').trim(),
     timeoutMs: int(env.ANTHROPIC_TIMEOUT_MS, 60000),
@@ -201,6 +213,7 @@ module.exports = {
     keenable: env.KEENABLE_BASE_URL || 'https://api.keenable.ai/mcp',
     brightdata: String(env.BRIGHTDATA_BASE_URL || 'https://api.brightdata.com').replace(/\/+$/, ''),
     anthropic: String(env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/+$/, ''),
+    openai: String(env.OPENAI_BASE_URL || 'https://api.openai.com').replace(/\/+$/, ''),
     // Tumblr's global tag feeds (blog feeds live on <blog>.tumblr.com or the blog's own domain).
     tumblr: String(env.TUMBLR_BASE_URL || 'https://www.tumblr.com').replace(/\/+$/, ''),
     // The public mirror index (posts API + creator index + thumbnail CDN).

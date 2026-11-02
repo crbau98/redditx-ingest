@@ -1731,7 +1731,7 @@ function status() {
     telegramBot: tgBot.configured(), xApi: !!config.creds.xBearer, communities: s.discoveryCommunities, autoCommunities: s.discoveryAutoCommunities, expand: s.discoveryExpand,
     onlyfans: { enabled: s.discoveryOnlyFans, ...repo.onlyfans.counts() },
     seeds: seedStatus(),
-    ai: { ...require('../lib/claude').status(), discovery: s.aiDiscovery, plannedQueries: require('./ai').plannedQueries() },
+    ai: { ...require('../lib/llm').status(), discovery: s.aiDiscovery, plannedQueries: require('./ai').plannedQueries() },
     auto: s.autoDiscover, intervalMin: s.discoveryIntervalMin, threshold: s.discoveryAutoFollowScore,
   };
 }
