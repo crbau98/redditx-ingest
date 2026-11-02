@@ -215,8 +215,8 @@ module.exports = {
   // api_id / api_hash come from https://my.telegram.org -> API development tools. The login session is created once with
   // `node scripts/telegram-login.js` and kept in the data volume (or TELEGRAM_SESSION).
   telegram: {
-    apiId: int(env.TELEGRAM_API_ID, 0),
-    apiHash: String(env.TELEGRAM_API_HASH || '').trim(),
+    apiId: int(String(env.TELEGRAM_API_ID || '').replace(/[<>]/g, ''), 0),
+    apiHash: String(env.TELEGRAM_API_HASH || '').trim().replace(/^[<"']|[>"']$/g, ''),
     session: String(env.TELEGRAM_SESSION || '').trim(),
     maxMb: int(env.TELEGRAM_MAX_MB, 200),            // larger videos are skipped
     syncHours: int(env.TELEGRAM_SYNC_HOURS, 12),     // how often the joined-channel list is re-read
