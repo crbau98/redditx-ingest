@@ -21,9 +21,9 @@ const { ofHandle, findOnlyFans, freeHint, ofLink, creatorOnlyFans } = require('.
 /** Paid creator platforms PRISM keeps as profile link-outs. `trace` = discovery follows the page's free
  * public accounts the way it does OnlyFans (handle-based lookups + web search; the page itself is just another public page now). */
 const SERVICES = {
-  'OnlyFans': { hosts: ['onlyfans.com'], trace: true },
-  'Fansly': { hosts: ['fansly.com'], trace: true },
-  'JustFor.Fans': { hosts: ['justfor.fans'], trace: true },
+  'OnlyFans': { hosts: ['onlyfans.com', 'only.fans'], trace: true },
+  'Fansly': { hosts: ['fansly.com', 'fans.ly'], trace: true },
+  'JustFor.Fans': { hosts: ['justfor.fans', 'justforfans.com'], trace: true },
   'ManyVids': { hosts: ['manyvids.com'], trace: false },
   'LoyalFans': { hosts: ['loyalfans.com'], trace: false },
   'Fanvue': { hosts: ['fanvue.com'], trace: false },
@@ -72,7 +72,8 @@ function normal(h) {
 function fanslyHandle(input) {
   let url;
   try { url = new URL(/^[a-z]+:\/\//i.test(input) ? input : `https://${input}`); } catch { return null; }
-  if (!matches(url.hostname.toLowerCase().replace(/^www\./, ''), 'fansly.com')) return null;
+  const h = url.hostname.toLowerCase().replace(/^www\./, '');
+  if (!matches(h, 'fansly.com') && !matches(h, 'fans.ly')) return null;
   const parts = url.pathname.split('/').filter(Boolean).map((p) => { try { return decodeURIComponent(p); } catch { return p; } });
   if (!parts.length) return null;
   return normal(parts[0]);
@@ -82,7 +83,8 @@ function fanslyHandle(input) {
 function jffHandle(input) {
   let url;
   try { url = new URL(/^[a-z]+:\/\//i.test(input) ? input : `https://${input}`); } catch { return null; }
-  if (!matches(url.hostname.toLowerCase().replace(/^www\./, ''), 'justfor.fans')) return null;
+  const h = url.hostname.toLowerCase().replace(/^www\./, '');
+  if (!matches(h, 'justfor.fans') && !matches(h, 'justforfans.com')) return null;
   const parts = url.pathname.split('/').filter(Boolean).map((p) => { try { return decodeURIComponent(p); } catch { return p; } });
   if (!parts.length) return null;
   return normal(parts[0]);
@@ -98,9 +100,9 @@ function paidHandle(service, url) {
 }
 
 const LINK_RES = {
-  'OnlyFans': /(?:https?:\/\/)?(?:www\.)?onlyfans\.com\/[^\s<>"'`)\]}|,]+/gi,
-  'Fansly': /(?:https?:\/\/)?(?:www\.)?fansly\.com\/[^\s<>"'`)\]}|,]+/gi,
-  'JustFor.Fans': /(?:https?:\/\/)?(?:www\.)?justfor\.fans\/[^\s<>"'`)\]}|,]+/gi,
+  'OnlyFans': /(?:https?:\/\/)?(?:www\.)?(?:onlyfans\.com|only\.fans)\/[^\s<>"'`)\]}|,]+/gi,
+  'Fansly': /(?:https?:\/\/)?(?:www\.)?(?:fansly\.com|fans\.ly)\/[^\s<>"'`)\]}|,]+/gi,
+  'JustFor.Fans': /(?:https?:\/\/)?(?:www\.)?(?:justfor\.fans|justforfans\.com)\/[^\s<>"'`)\]}|,]+/gi,
 };
 const PROSE_RES = {
   'OnlyFans': /\b(?:only\s?fans|onlyfans)\s*(?:[:=\-–—→>]|\bis\b)\s*@?([A-Za-z0-9][A-Za-z0-9_.-]{1,40})/gi,

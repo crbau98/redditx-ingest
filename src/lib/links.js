@@ -17,7 +17,9 @@ const paid = require('./paid');
 
 const EXTERNAL = {
   'onlyfans.com': 'OnlyFans',
+  'only.fans': 'OnlyFans',
   'fansly.com': 'Fansly',
+  'fans.ly': 'Fansly',
   'patreon.com': 'Patreon',
   'instagram.com': 'Instagram',
   'tiktok.com': 'TikTok',
@@ -28,6 +30,7 @@ const EXTERNAL = {
   'throne.com': 'Throne',
   'fanvue.com': 'Fanvue',
   'justfor.fans': 'JustFor.Fans',
+  'justforfans.com': 'JustFor.Fans',
   'manyvids.com': 'ManyVids',
   'clips4sale.com': 'Clips4Sale',
   'loyalfans.com': 'LoyalFans',
@@ -54,10 +57,11 @@ const EXTERNAL = {
 };
 
 const LINK_HUB_HOSTS = [
-  'linktr.ee', 'beacons.ai', 'allmylinks.com', 'carrd.co', 'campsite.bio',
+  'linktr.ee', 'beacons.ai', 'beacons.page', 'allmylinks.com', 'carrd.co', 'campsite.bio',
   'solo.to', 'bento.me', 'direct.me', 'milkshake.app', 'msha.ke',
   'hoo.be', 'snipfeed.co', 'lnk.bio', 'taplink.cc', 'bio.site',
   'linkin.bio', 'bio.link', 'linkpop.com', 'withkoji.com', 'stan.store',
+  'linkr.bio', 'wlo.link',
 ];
 const LINKINBIO = LINK_HUB_HOSTS;
 
@@ -348,7 +352,7 @@ function extractLinks(text) {
   const found = [];
   const seen = new Set();
   // Full URLs, plus the bare "onlyfans.com/name" / "linktr.ee/name" / "name.carrd.co" people type into bios.
-  const urlRe = /(?:https?:\/\/|www\.)[^\s<>"')\]]+|(?<![\w./@-])(?:(?:onlyfans\.com|fansly\.com|justfor\.fans|manyvids\.com|loyalfans\.com|fanvue\.com|fancentro\.com|clips4sale\.com|linktr\.ee|beacons\.ai|allmylinks\.com|carrd\.co|campsite\.bio|solo\.to|bento\.me|direct\.me|milkshake\.app|msha\.ke|hoo\.be|snipfeed\.co|lnk\.bio|taplink\.cc|bio\.site|linkin\.bio|bio\.link|linkpop\.com|withkoji\.com|stan\.store)\/[^\s<>"')\]]+|[a-z0-9_-]{3,32}\.carrd\.co(?:\/[^\s<>"')\]]*)?)/gi;
+  const urlRe = /(?:https?:\/\/|www\.)[^\s<>"')\]]+|(?<![\w./@-])(?:(?:onlyfans\.com|only\.fans|fansly\.com|fans\.ly|justfor\.fans|justforfans\.com|manyvids\.com|loyalfans\.com|fanvue\.com|fancentro\.com|clips4sale\.com|linktr\.ee|beacons\.ai|beacons\.page|allmylinks\.com|carrd\.co|campsite\.bio|solo\.to|bento\.me|direct\.me|milkshake\.app|msha\.ke|hoo\.be|snipfeed\.co|lnk\.bio|taplink\.cc|bio\.site|linkin\.bio|bio\.link|linkpop\.com|withkoji\.com|stan\.store|linkr\.bio|wlo\.link)\/[^\s<>"')\]]+|[a-z0-9_-]{3,32}\.carrd\.co(?:\/[^\s<>"')\]]*)?)/gi;
   for (const u of String(text || '').match(urlRe) || []) {
     const p = parseProfile(u);
     if (!p) continue;

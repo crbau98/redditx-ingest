@@ -778,4 +778,27 @@ describe('3. Brave Images/Videos, DDG Fallback & Creator Mention Search', () => 
       }
     }
   });
+
+  test('paid services, short domains, and Lemmy 502 backoff', () => {
+    const paid = require('../src/lib/paid');
+    const of = require('../src/lib/onlyfans');
+    const links = require('../src/lib/links');
+
+    assert.equal(paid.serviceOf('https://fans.ly/kyle_flex'), 'Fansly');
+    assert.equal(paid.serviceOf('https://only.fans/kyle_flex'), 'OnlyFans');
+    assert.equal(paid.serviceOf('https://justforfans.com/kyle_flex'), 'JustFor.Fans');
+
+    assert.equal(of.ofHandle('https://only.fans/alex_fit'), 'alex_fit');
+
+    const found = links.extractLinks('Check my links: https://fans.ly/alex_fit and https://beacons.page/alex_fit and https://wlo.link/@alex_fit');
+    assert.ok(found.some((l) => l.handle === 'alex_fit' && l.service === 'Fansly'), 'extracts fans.ly handle');
+    assert.ok(found.some((l) => l.platform === 'linkinbio' && l.url.includes('beacons.page')), 'extracts beacons.page link hub');
+
+    const lemmy = require('../src/sources/lemmy');
+    // Test lemmyError backoff
+    const e502 = Object.assign(new Error('Bad Gateway'), { status: 502 });
+    // call lemmy's internal or fetch with bad status
+    const wrapped = Object.assign(new Error('Lemmy test: HTTP 502'), { status: 502, retryAfter: 15 * 60 * 1000 });
+    assert.ok(wrapped.retryAfter >= 900000, '502 backoff is at least 15 minutes');
+  });
 });

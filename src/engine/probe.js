@@ -14,12 +14,43 @@ const MAGIC = [
 ];
 const looksBinaryMedia = (b) => b.length >= 12 && (MAGIC.some((sig) => sig.every((x, i) => b[i] === x)) || b.slice(4, 8).toString('ascii') === 'ftyp' || b.slice(0, 4).toString('ascii') === 'avif');
 
+/** Hotlink protection referrers required by CDNs */
+const REFERER_BY_HOST = {
+  'cdn.gff.network': 'https://gayforfans.com/',
+  'gff.network': 'https://gayforfans.com/',
+  'coomer.st': 'https://coomer.st/',
+  'img.coomer.st': 'https://coomer.st/',
+  'redd.it': 'https://www.reddit.com/',
+  'i.redd.it': 'https://www.reddit.com/',
+  'preview.redd.it': 'https://www.reddit.com/',
+};
+
 async function probeMedia(url, type, { timeout = 10000, minBytes = 4000 } = {}) {
   let opened;
+  let u;
+  try { u = new URL(url); } catch { /* invalid */ }
+  const host = u ? u.hostname.toLowerCase().replace(/^www\./, '') : '';
+  const ref = Object.entries(REFERER_BY_HOST).find(([h]) => host === h || host.endsWith('.' + h));
+  const referer = ref ? ref[1] : (u ? `${u.origin}/` : '');
+  const headers = {
+    range: 'bytes=0-16383',
+    referer,
+    'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    accept: 'image/avif,image/webp,video/*,image/*;q=0.8,*/*;q=0.5',
+  };
   try {
-    opened = await net.open(url, { headers: { range: 'bytes=0-16383' }, timeout, maxRedirects: 4 });
+    opened = await net.open(url, { headers, timeout, maxRedirects: 4 });
   } catch (e) {
-    return { ok: false, reason: e.code === 'EBLOCKED' ? 'blocked host' : `unreachable: ${e.message}` };
+    if ((host === 'coomer.st' || host.endsWith('.coomer.st')) && u && /^\/data\/.+\.(?:jpe?g|png|webp|gif)$/i.test(u.pathname)) {
+      try {
+        const thumbUrl = `https://img.coomer.st/thumbnail${u.pathname}`;
+        opened = await net.open(thumbUrl, { headers: { ...headers, referer: 'https://coomer.st/' }, timeout: 6000, maxRedirects: 3 });
+      } catch (e2) {
+        return { ok: false, reason: e.code === 'EBLOCKED' ? 'blocked host' : `unreachable: ${e.message}` };
+      }
+    } else {
+      return { ok: false, reason: e.code === 'EBLOCKED' ? 'blocked host' : `unreachable: ${e.message}` };
+    }
   }
   const { res, req } = opened;
   const status = res.statusCode;

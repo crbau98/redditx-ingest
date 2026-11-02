@@ -31,15 +31,15 @@ function ofHandle(input) {
   let url;
   try { url = new URL(/^[a-z]+:\/\//i.test(input) ? input : `https://${input}`); } catch { return null; }
   const host = url.hostname.toLowerCase().replace(/^www\./, '');
-  if (host !== 'onlyfans.com' && !host.endsWith('.onlyfans.com')) return null;
-  if (host !== 'onlyfans.com') return null; // cdn / static hosts
+  if (host !== 'onlyfans.com' && host !== 'only.fans' && !host.endsWith('.onlyfans.com')) return null;
+  if (host !== 'onlyfans.com' && host !== 'only.fans') return null; // cdn / static hosts
   const parts = url.pathname.split('/').filter(Boolean).map((p) => { try { return decodeURIComponent(p); } catch { return p; } });
   if (!parts.length) return null;
   if (/^\d+$/.test(parts[0]) && parts[1]) return normal(parts[1]); // post permalink: /<id>/<name>
   return normal(parts[0]);
 }
 
-const LINK_RE = /(?:https?:\/\/)?(?:www\.)?onlyfans\.com\/[^\s<>"'`)\]}|,]+/gi;
+const LINK_RE = /(?:https?:\/\/)?(?:www\.)?(?:onlyfans\.com|only\.fans)\/[^\s<>"'`)\]}|,]+/gi;
 const PROSE_RE = /\b(?:only\s?fans|onlyfans)\s*(?:[:=\-–—→>]|\bis\b)\s*@?([A-Za-z0-9][A-Za-z0-9_.-]{1,40})/gi;
 
 /** Every distinct OF handle a text names, in order. */

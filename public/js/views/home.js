@@ -171,7 +171,7 @@ export async function home(root) {
     h('div', { class: 'hero-quick-jump', role: 'group', 'aria-label': 'Featured feeds and creators' },
       h('span', { class: 'hero-quick-label' }, 'Featured'),
       h('a', { class: 'chip hero-pill of-pill', href: href('/explore', { paid: 'onlyfans' }) }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), 'OnlyFans'),
-      h('a', { class: 'chip hero-pill fresh-pill', href: href('/explore', { fresh: '7' }) }, '✨ Fresh 2026'),
+      h('a', { class: 'chip hero-pill fresh-pill', href: href('/explore', { fresh: '7' }) }, icon('sparkle', 'sm'), 'Fresh 2026'),
       h('a', { class: 'chip hero-pill video-pill', href: href('/explore', { type: 'video' }) }, icon('video', 'sm'), 'HD Videos'),
       ...(data.topCreators || []).slice(0, 5).map((c) =>
         h('a', { class: 'chip hero-pill creator-pill', href: href(`/creator/${c.id}`), title: `${c.display_name || c.handle} (${c.media_count} posts)` },

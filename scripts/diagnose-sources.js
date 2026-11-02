@@ -63,6 +63,7 @@ function hint(platform, e) {
   const msg = String((e && e.message) || e);
   const st = e && e.status;
   if (platform === 'reddit' && (st === 403 || st === 429 || (/every transport/.test(msg) && !/ENOTFOUND|ECONNREFUSED|EAI_AGAIN/.test(msg)))) return 'Reddit blocks datacenter IPs. Create a "script" app at reddit.com/prefs/apps and set REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET (OAuth is the reliable route).';
+  if (platform === 'lemmy' && (st === 502 || st === 503 || st === 504)) return 'This Lemmy instance is temporarily down or unreachable (HTTP 502/503/504). Backing off cleanly until the instance recovers.';
   if (platform === 'bluesky' && /BSKY_|app password|auth/i.test(msg)) return 'Bluesky search needs an app password: set BSKY_IDENTIFIER and BSKY_APP_PASSWORD.';
   if (platform === 'x' && (st === 402 || /HTTP 402/.test(msg))) return 'X_BEARER_TOKEN has no paid plan or credits (402): PRISM now falls back to keyless X; buy X API credits or remove the token.';
   if (platform === 'x') return 'X without a working X_BEARER_TOKEN is best effort: keyless X finds posts through web search, so check that web search works.';

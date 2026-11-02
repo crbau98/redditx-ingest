@@ -114,7 +114,7 @@ export async function creator(root, { params, query }) {
 
   const searchPost = h('input', { class: 'input sm', type: 'search', placeholder: `Search @${c.handle}'s posts…`, value: qFilter, style: { width: 'auto', minWidth: '160px', maxWidth: '240px', marginBottom: '8px' }, 'aria-label': `Search in @${c.handle}'s posts` });
   searchPost.addEventListener('input', debounce(() => setQ({ q: searchPost.value.trim() }), 350));
-  const feed = createFeed({ endpoint: `/api/creators/${c.id}/media`, query: { type, sort, platform: platform || undefined, q: qFilter || undefined }, empty: emptyState({ icon: 'image', title: 'Nothing here yet', text: qFilter ? `No posts matching “${qFilter}”.` : 'No published posts match this tab.' }) });
+  const feed = createFeed({ endpoint: `/api/creators/${c.id}/media`, query: { type, sort, platform: platform || undefined, q: qFilter || undefined }, empty: emptyState({ icon: 'image', title: 'Nothing here yet', text: qFilter ? `No posts matching “${qFilter}”.` : (type === 'video' ? 'No videos published yet.' : type === 'image' ? 'No photos published yet.' : 'No published posts yet.') }) });
 
   const stage = h('section', { class: `stage${art ? '' : ' bare'}` },
     art ? h('div', { class: 'stage-media', 'aria-hidden': 'true' }, h('img', { class: 'stage-img', src: proxied(art), alt: '', decoding: 'async', fetchpriority: 'high' })) : null,
@@ -156,7 +156,7 @@ export async function creator(root, { params, query }) {
     const anchor = root.querySelector('.tabs');
     if (!anchor) return;
     anchor.closest('.row').before(h('section', { class: 'section', style: { marginTop: '28px' } },
-      h('div', { class: 'section-head' }, h('div', null, h('h2', null, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), 'More OnlyFans creators like him'), h('div', { class: 'sub' }, 'Similar style, each with his own page'))),
+      h('div', { class: 'section-head' }, h('div', null, h('h2', null, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), `More creators like ${c.display_name || c.handle}`), h('div', { class: 'sub' }, 'Similar style, each with their own page'))),
       h('div', { class: 'rail' }, list.map((x) => creatorCard(x, { mini: true })))), h('div', { style: { height: '8px' } }));
   }).catch(() => {});
   // Chameleon: the profile takes its accent colours from the creator's own artwork.

@@ -117,7 +117,7 @@ export async function reels(root, { query }) {
       ofRailBtn,
       h('button', { class: 'reel-act', 'aria-label': 'Details', onclick: () => openLightbox(slides.map((s) => s.it), index) }, icon('info'), h('span', null, 'Details')),
       h('button', { class: 'reel-act', 'aria-label': 'Copy link', onclick: async () => { const url = `${location.origin}${location.pathname}${href('/explore', { m: it.id })}`; toast((await copyText(url)) ? 'Link copied' : 'Could not copy'); } }, icon('share'), h('span', null, 'Share')),
-      it.source_url ? h('a', { class: 'reel-act', href: it.source_url, target: '_blank', rel: 'noopener noreferrer nofollow', 'aria-label': 'View original' }, icon('external'), h('span', null, 'Source')) : null);
+      it.source_url ? h('a', { class: 'reel-act', href: it.source_url, target: '_blank', rel: 'noopener noreferrer nofollow', 'aria-label': 'View original' }, icon('external'), h('span', null, 'Original')) : null);
 
     const el = h('section', { class: 'reel', dataset: { index: String(index) }, 'aria-label': it.title || `Item ${index + 1}` }, bg, stage, meta, rail, isVideo ? bar : null);
     const s = { it, el, stage, bg, bar, isVideo, poster, handle: null, mounted: false, paintFav, paintColl, paintFollow };

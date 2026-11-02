@@ -856,6 +856,9 @@ const HARVEST_QUERIES = [
   'best gay onlyfans accounts list',
   'gay porn performers onlyfans links list',
   'gay creators beacons page list 18+',
+  'gay creators fansly justforfans links list',
+  'male onlyfans model beacons bio linktree',
+  'gay adult creator links allmylinks directory',
 ];
 
 async function directoryHarvest({ queries = 3, pages = 5, budget, aborted = () => false } = {}) {

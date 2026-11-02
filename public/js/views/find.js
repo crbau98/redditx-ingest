@@ -3,6 +3,7 @@ import { post } from '../api.js';
 import { navigate, href } from '../router.js';
 import { platformLabel, platformColor } from '../store.js';
 import { attachSuggest } from '../components/suggest.js';
+import { lookupCache } from '../lookup-cache.js';
 
 const EXAMPLES = ['Reno Gold', 'Christian Hogue', 'Alejandro Pino', '@jakipz', 'Diego Sans', 'Malik Delgaty', 'Austin Wolf'];
 
@@ -44,10 +45,18 @@ export async function find(root, { query }) {
     // includes ?q=, so a dispatched event remounts this view and `if (initial) run()` below would
     // fire a second /api/lookup for the same query (each one counts against the rate limit).
     history.replaceState(null, '', href('/find', { q }));
+    // A query that already resolved this session is answered locally: no rate-limit spend, no 30s wait.
+    const cached = lookupCache.get(q);
+    if (cached) {
+      state = { loading: false, result: cached, error: null, rateLimited: false, following: false, followed: false };
+      paint();
+      return;
+    }
     state = { loading: true, result: null, error: null, rateLimited: false, following: false, followed: false };
     paint();
     try {
       state.result = await post('/api/lookup', { query: q });
+      lookupCache.set(q, state.result);
     } catch (e) {
       state.error = e.message;
       state.rateLimited = e.status === 429 || /rate|too many|slow down/i.test(e.message || '');

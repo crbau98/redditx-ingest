@@ -65,7 +65,10 @@ function lemmyError(e, host) {
   const detail = errorDetail(e);
   const err = new Error(`Lemmy ${host}: HTTP ${e.status}${detail ? ` ${detail}` : ''}`);
   // Lemmy 0.19 answers an unknown/removed community or user with HTTP 400 couldnt_find_*; report it as gone so the engine can disable the feed.
-  err.status = /couldnt_find_(community|person)|not_found/i.test(detail) ? 404 : e.status; err.retryAfter = e.retryAfter; err.body = e.body;
+  err.status = /couldnt_find_(community|person)|not_found/i.test(detail) ? 404 : e.status;
+  // Systemic gateway / server errors on Lemmy instances back off for at least 15 min instead of hammering the broken instance.
+  err.retryAfter = e.retryAfter || ([502, 503, 504].includes(e.status) ? 15 * 60 * 1000 : 0);
+  err.body = e.body;
   return err;
 }
 
