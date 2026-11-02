@@ -37,6 +37,11 @@ const apiKey = () => {
 const configured = () => !!apiKey();
 
 /** "1, 18000" style X-RateLimit-* headers: [per-second, per-month] values. */
+// HTTP 402 / a spent monthly quota does not clear until the plan resets (the second number of x-ratelimit-reset, in seconds):
+// until then Brave is not called at all, instead of costing a round trip per query that can only fail the same way.
+let quotaDeadUntil = 0;
+const quotaState = () => ({ exhausted: Date.now() < quotaDeadUntil, until: quotaDeadUntil ? new Date(quotaDeadUntil).toISOString() : null });
+const _resetQuota = () => { quotaDeadUntil = 0; };
 const pair = (h) => String(h || '').split(',').map((x) => Number(x.trim()));
 const strip = (s) => {
   let out = String(s || '');
@@ -169,6 +174,7 @@ const ddgReachable = () => !config.isTest || !!(process.env.DDG_BASE_URL || proc
 async function braveRequest(path, params, { budget = 40 } = {}) {
   const key = apiKey();
   if (!key) throw Object.assign(new Error('BRAVE_API_KEY is not set'), { skip: true });
+  if (Date.now() < quotaDeadUntil) throw Object.assign(new Error(`Brave plan limit reached (HTTP 402); not retried until ${new Date(quotaDeadUntil).toISOString()}`), { skip: true, status: 402, budget: true });
   if (usage().count >= budget) throw Object.assign(new Error(`Brave daily budget reached (${budget}/day; raise Settings → Brave searches per day or set SEARXNG_URL for free fallback)`), { budget: true });
   const baseUrl = String(process.env.BRAVE_BASE_URL || config.baseUrls.brave || 'https://api.search.brave.com').replace(/\/+$/, '');
   const cleanPath = baseUrl.endsWith('/res/v1') && path.startsWith('/res/v1') ? path.slice('/res/v1'.length) : path;
@@ -188,6 +194,8 @@ async function braveRequest(path, params, { budget = 40 } = {}) {
   if (res.status === 402) {
     // The plan's quota is spent (HTTP 402 = payment required). Retrying cannot help until the plan
     // is topped up, so this is a skip: the keyless tier answers instead of burning a call each time.
+    const resetS = pair(res.headers['x-ratelimit-reset'])[1];
+    quotaDeadUntil = Date.now() + Math.min(Math.max((Number.isFinite(resetS) ? resetS : 0) * 1000, 6 * 3600 * 1000), 31 * 24 * 3600 * 1000);
     throw Object.assign(new Error('Brave plan limit reached (HTTP 402) — the keyless search tier answers instead'), { skip: true, status: res.status, budget: true });
   }
   if (res.status === 422) {
@@ -449,4 +457,6 @@ module.exports = {
   bingImages,
   usage,
   configured,
+  quotaState,
+  _resetQuota,
 };

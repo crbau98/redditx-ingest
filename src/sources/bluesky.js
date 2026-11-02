@@ -221,6 +221,8 @@ module.exports = {
   },
 };
 
+const BACKFILL_PAGES = 3; // extra pages of older posts per run
+
 async function fetchFeed(feed, ctx) {
   const cursor = ctx.cursor || {};
   const items = [];
@@ -259,7 +261,23 @@ async function fetchFeed(feed, ctx) {
     if (!next || reachedKnown) break;
   }
 
+  // Older history of a creator's account: the first run reads 4 pages (200 posts) from the top and remembers where it stopped
+  // (`bfNext`); every later run reads BACKFILL_PAGES more from there until the account runs out, so a creator's depth grows
+  // run after run instead of ending at his newest 200 posts.
+  let bfNext = cursor.bfNext || (!cursor.newestAt && next) || null;
+  let bfDone = !!cursor.bfDone || (!cursor.newestAt && !next);
+  if (feed.kind === 'user' && cursor.newestAt && bfNext && !bfDone && !ctx.aborted() && !(ctx.limit && ctx.limit < 20)) {
+    let at = bfNext;
+    for (let page = 0; page < BACKFILL_PAGES && at; page++) {
+      if (ctx.aborted()) break;
+      const json = await http.json(`${base}/xrpc/app.bsky.feed.getAuthorFeed?actor=${encodeURIComponent(String(feed.target).replace(/^@/, ''))}&filter=posts_with_media&limit=50&includePins=false&cursor=${encodeURIComponent(at)}`);
+      for (const entry of json.feed || []) for (const it of parsePostView(entry)) items.push({ ...it, query: null });
+      at = json.cursor || null;
+    }
+    bfNext = at; bfDone = !at;
+  }
   let profile;
   if (feed.kind === 'user' && (ctx.needProfile || !cursor.newestAt)) profile = await fetchProfile(feed.target);
-  return { items, cursor: newest ? { newestAt: newest } : undefined, profile, via: feed.kind === 'search' ? 'search' : feed.kind === 'user' ? 'appview' : `appview-${feed.kind}` };
+  const nextCursor = newest ? { newestAt: newest, ...(feed.kind === 'user' && bfNext && !bfDone ? { bfNext } : {}), ...(feed.kind === 'user' && bfDone ? { bfDone: true } : {}) } : undefined;
+  return { items, cursor: nextCursor, profile, via: feed.kind === 'search' ? 'search' : feed.kind === 'user' ? 'appview' : `appview-${feed.kind}` };
 }

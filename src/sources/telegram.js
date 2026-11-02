@@ -351,7 +351,7 @@ module.exports = {
       const parsed = parsePage(html, channel);
       if (!parsed.hasChannel || (!parsed.messages.length && page === 0 && !/tgme_widget_message/.test(html))) {
         // With a bot token we can at least tell "doesn't exist" from "exists but hides its preview".
-        let why = 'Channel preview unavailable (web preview disabled, restricted or not found)';
+        let why = 'Channel preview unavailable (web preview disabled, restricted or not found): Telegram hides the public web preview of adult channels, so only a joined account (TELEGRAM_API_ID + TELEGRAM_API_HASH + login session) can read it';
         if (bot.configured()) {
           const info = await bot.channelInfo(channel).catch(() => undefined);
           if (info === null) why = 'Telegram says this channel does not exist (or is private)';

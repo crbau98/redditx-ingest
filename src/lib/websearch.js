@@ -306,7 +306,7 @@ function status() {
     ddgCooldown: Date.now() < ddgCooldownUntil ? new Date(ddgCooldownUntil).toISOString() : null,
     ddgLiteCooldown: Date.now() < ddgLiteCooldownUntil ? new Date(ddgLiteCooldownUntil).toISOString() : null,
     bingCooldown: Date.now() < bingCooldownUntil ? new Date(bingCooldownUntil).toISOString() : null,
-    brave: { configured: brave.configured(), usage: brave.usage() },
+    brave: { configured: brave.configured(), usage: brave.usage(), quota: brave.quotaState() },
     keenable: { configured: keenable.configured(), usage: keenable.usage() },
     brightdata: { configured: brightdata.configured(), usage: brightdata.usage() },
     claude: { configured: claude.configured(), usage: claude.usage() },

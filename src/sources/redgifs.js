@@ -1,4 +1,5 @@
 'use strict';
+const BACKFILL_PAGES = 2; // extra pages of a creator's older GIFs per run
 /**
  * RedGIFs adapter (public v2 API with a temporary guest token).
  *
@@ -179,9 +180,26 @@ module.exports = {
     let newest = cursor.newestAt || null;
     const maxPages = cursor.newestAt ? 1 : 2;
     let profile;
-    for (let page = 1; page <= maxPages; page++) {
+    // A creator's older GIFs: the first run reads pages 1-2, every later run reads BACKFILL_PAGES more (`bfPage` = next page
+    // to read) until his list ends, so depth keeps growing instead of stopping at his newest 160.
+    const backfill = feed.kind === 'user' && cursor.newestAt && !cursor.bfDone && !(ctx.limit && ctx.limit < 20);
+    let bfPage = cursor.bfPage || 3; // a cursor from before backfill existed also starts behind the first two pages
+    let bfDone = !!cursor.bfDone;
+    const pages = [];
+    for (let p = 1; p <= maxPages; p++) pages.push({ page: p, old: false });
+    if (backfill && bfPage) for (let p = bfPage; p < bfPage + BACKFILL_PAGES; p++) pages.push({ page: p, old: true });
+    for (const { page, old } of pages) {
       if (ctx.aborted()) break;
       const json = await api(`${path}&page=${page}`);
+      if (feed.kind === 'user') {
+        const total = json.pages || 1;
+        if (old || (!cursor.newestAt && page === maxPages)) { bfPage = page + 1; if (bfPage > total) bfDone = true; }
+      }
+      if (old) {
+        for (const gif of json.gifs || []) { const it = itemFromGif(gif, null); if (it) items.push(it); }
+        if (page >= (json.pages || 1)) break;
+        continue;
+      }
       for (const gif of json.gifs || []) {
         const it = itemFromGif(gif, feed.kind === 'search' ? feed.target : null);
         if (!it) continue;
@@ -195,6 +213,7 @@ module.exports = {
       }
       if (page >= (json.pages || 1)) break;
     }
-    return { items, cursor: newest ? { newestAt: newest } : undefined, profile, via: 'api' };
+    const nextCursor = newest ? { newestAt: newest, ...(feed.kind === 'user' && bfDone ? { bfDone: true } : feed.kind === 'user' && bfPage ? { bfPage } : {}) } : undefined;
+    return { items, cursor: nextCursor, profile, via: 'api' };
   },
 };

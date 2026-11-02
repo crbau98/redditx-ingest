@@ -12,8 +12,10 @@
  */
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const repo = require('../db/repo');
 const registry = require('../sources');
+const { deriveFeeds } = require('../sources/seed-feeds');
 const settingsStore = require('../settings');
 const config = require('../config');
 const breaker = require('./breaker');
@@ -190,6 +192,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
   events.admin('run:start', entry);
   const runId = repo.runs.start(feed.id, trigger);
   const tag = `${feed.platform}/${feed.kind}:${feed.target}`;
+  const host = ['lemmy', 'mastodon', 'misskey', 'peertube'].includes(feed.platform) ? breaker.feedHost(feed) : null;
 
   const finish = (status, extra = {}) => {
     repo.runs.finish(runId, { status, ...stats, via: extra.via, error: extra.error, durationMs: Date.now() - started });
@@ -207,6 +210,14 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     }
     const conf = adapter.isConfigured(feed.kind);
     if (!conf.ok) throw Object.assign(new Error(conf.note || 'not configured'), { skip: true });
+    // A server that keeps answering 502/503/504 is skipped until its host breaker reopens (other servers of the platform run).
+    const hostUntil = host ? breaker.hostOpenUntil(host) : 0;
+    if (hostUntil) {
+      breaker.release(feed.platform);
+      repo.feeds.finishRun(feed.id, { status: 'skipped', error: `${host} is answering with gateway errors; retrying after ${new Date(hostUntil).toISOString()}`, failures: feed.consecutive_failures, nextRunAt: new Date(hostUntil + 1000).toISOString() });
+      events.log('INFO', `${tag} skipped: ${host} host breaker open`);
+      return finish('skipped', { error: `${host} host breaker open` });
+    }
 
     const cursor = parseJson(feed.cursor);
     // A deeper read (a creator lookup pulling in "everything") may ask for more than the routine per-run cap.
@@ -245,9 +256,18 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     // timeout below only covers `adapter.fetch`: a hung probe used to leave the feed "running" for
     // hours, holding its platform slot so every other feed on that platform waited behind it.
     const itemDeadline = Date.now() + ITEM_PHASE_MS;
+    const gone = { stopped: false };
+    const ownerGone = () => {
+      if (!feed.creator_id || feed.kind !== 'user' || stats.blocked + stats.skipped < 3) return false;
+      const c = repo.creators.get(feed.creator_id);
+      return !!c && c.status !== 'active';
+    };
     const worker = async () => {
       for (;;) {
         if (ctx.aborted() || Date.now() > itemDeadline) return;
+        // A creator's own feed whose creator was hidden/blocked mid-run (the body filter hides him after a few measured pictures)
+        // would refuse every remaining item one by one: stop instead of walking the other few hundred.
+        if (ownerGone()) { gone.stopped = true; return; }
         const raw = items[next++];
         if (!raw) return;
         let r;
@@ -294,6 +314,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
       error: (result.notes && result.notes.length) ? `via ${result.via}: ${result.notes[0]}` : null,
     });
     breaker.success(feed.platform);
+    breaker.hostSuccess(host);
     const skipSummary = Object.entries(reasons).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k}×${v}`).join(', ');
     events.log(stats.added ? 'OK' : 'INFO', `${tag} [${result.via || 'n/a'}] fetched ${stats.fetched} · +${stats.added} · dupes ${stats.dupes} · skipped ${stats.skipped}${stats.blocked ? ` · blocked ${stats.blocked}` : ''}${skipSummary ? ` (${skipSummary})` : ''}`);
     if (zeroWhy) events.log('INFO', `${tag}: ${zeroWhy}`);
@@ -307,10 +328,14 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
       return finish('skipped', { error: e.message });
     }
     const failures = (feed.consecutive_failures || 0) + 1;
-    breaker.failure(feed.platform, e);
+    // One instance's gateway errors trip that host's breaker (after 2), not the whole platform's (after 4).
+    if (host && breaker.isGateway(e)) {
+      if (breaker.hostFailure(host, e)) events.log('WARN', `${tag}: ${host} keeps answering ${e.status}; skipping that host until ${new Date(breaker.hostOpenUntil(host)).toISOString()}`);
+      breaker.release(feed.platform);
+    } else breaker.failure(feed.platform, e);
     const gone = e.status === 404 || e.status === 410;
     const brokenTarget = /not found|target no longer exists|account suspended|user not found|user_banned|channel is private|preview disabled|preview-disabled|feed unavailable/i.test(e.message || "");
-    repo.feeds.finishRun(feed.id, { status: 'error', error: e.message, failures, nextRunAt: computeNextRun(feed, failures, e.retryAfter || 0) });
+    repo.feeds.finishRun(feed.id, { status: 'error', error: e.message, failures, nextRunAt: computeNextRun(feed, failures, Math.max(e.retryAfter || 0, host ? Math.max(0, breaker.hostOpenUntil(host) - Date.now()) : 0)) });
     if ((gone || brokenTarget) && failures >= 3) {
       repo.feeds.update(feed.id, { enabled: false });
       repo.feeds.finishRun(feed.id, { status: 'error', error: `${gone ? `Not found (${e.status})` : "Target broken"} — disabled after ${failures} tries`, failures, nextRunAt: null });
@@ -465,9 +490,19 @@ function seedCuratedCreators(db) {
         }
       } catch { /* ignore invalid JSON in links */ }
     }
-    let feedIdx = 1;
+    // One feed per account the seed knows about (Coomer page, Bluesky, RedGIFs, GayForFans, link-in-bio, own site), not only
+    // Coomer: see sources/seed-feeds. Targets that were a Bluesky handle in an OnlyFans slot are repaired there.
+    const derived = deriveFeeds(seed);
+    for (const f of derived) {
+      const id = `seed-${f.platform}-${f.kind}-${crypto.createHash('md5').update(f.target.toLowerCase()).digest('hex').slice(0, 10)}`;
+      insertFeed.run(id, f.platform, f.kind, f.target, f.label, f.creator_id, f.interval_min || 240);
+    }
+    // Databases seeded by an older version carry the broken Coomer targets: switch those off (only feeds PRISM itself seeded).
+    const good = new Set(derived.filter((f) => f.platform === 'coomer').map((f) => f.target.toLowerCase()));
     for (const f of seed.feeds || []) {
-      insertFeed.run(`seed-feed-${feedIdx++}`, f.platform, f.kind, f.target, f.label, f.creator_id, f.interval_min || 240);
+      if (f.platform === 'coomer' && !good.has(String(f.target).toLowerCase())) {
+        db.prepare("UPDATE feeds SET enabled = 0 WHERE platform = 'coomer' AND kind = 'user' AND target = ? AND origin = 'seed'").run(f.target);
+      }
     }
     for (const m of seed.media || []) {
       insertMedia.run(m);
@@ -481,7 +516,7 @@ function seedCuratedCreators(db) {
   });
 
   tx();
-  events.log("INFO", `Seeded ${seed.creators.length} curated creators, ${(seed.feeds || []).length} feeds, and ${(seed.media || []).length} media items`);
+  events.log("INFO", `Seeded ${seed.creators.length} curated creators, ${deriveFeeds(seed).length} feeds, and ${(seed.media || []).length} media items`);
   return seed.creators.length;
 }
 

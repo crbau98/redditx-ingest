@@ -35,7 +35,7 @@ const resolvers = [
  * 404) on many instances, and from discovery (Admin → Discovery), which searches for real communities itself.
  * Every untrusted (tag / search) seed carries unmistakable male wording: items must read male-focused to publish.
  */
-const SEED_VERSION = 11;
+const SEED_VERSION = 12;
 const seeds = (platform, kind, targets, extra) => targets.map((target) => ({ platform, kind, target, ...extra }));
 const SEEDS = [
   ...seeds('reddit', 'community', ['gaybrosgonewild', 'vlinesabsanddick', 'gaynsfw', 'twinks', 'massivecocks', 'gaymuscle',
