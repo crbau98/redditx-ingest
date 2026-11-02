@@ -31,7 +31,8 @@ const q = {
 /** Hosts whose links we know how to refresh. */
 function canRefresh(host) {
   const h = String(host || '').toLowerCase();
-  return hostMatches(h, 'redgifs.com') || hostMatches(h, 'twimg.com');
+  return hostMatches(h, 'redgifs.com') || hostMatches(h, 'twimg.com')
+    || hostMatches(h, 'telesco.pe') || hostMatches(h, 'telegram-cdn.org') || hostMatches(h, 'cdn-telegram.org');
 }
 
 /** RedGIFs gif id from a media link (media.redgifs.com/SomeName-mobile.mp4) or a watch page. */
@@ -49,6 +50,18 @@ const tweetId = (row) => {
   return row.platform === 'x' && /^\d+$/.test(row.source_id || '') ? row.source_id : null;
 };
 
+function telegramMsg(row) {
+  for (const u of [row.source_url]) {
+    const m = /t(?:elegram)?\.me\/(?:s\/)?([A-Za-z0-9_]+)\/(\d+)/i.exec(u || '');
+    if (m) return { channel: m[1], id: Number(m[2]) };
+  }
+  if (row.platform === 'telegram' && row.source_id) {
+    const m = /^([A-Za-z0-9_]+)\/(\d+)$/.exec(row.source_id);
+    if (m) return { channel: m[1], id: Number(m[2]) };
+  }
+  return null;
+}
+
 /** Ask the item's source for a current link. */
 async function fresh(row) {
   const host = (() => { try { return new URL(row.media_url).hostname.toLowerCase(); } catch { return ''; } })();
@@ -65,6 +78,19 @@ async function fresh(row) {
     const same = items.filter((it) => it.mediaType === row.media_type);
     const it = items[row.position || 0] && items[row.position || 0].mediaType === row.media_type ? items[row.position || 0] : same[0];
     return it && it.mediaUrl ? { mediaUrl: it.mediaUrl, previewUrl: it.previewUrl || null } : null;
+  }
+  if (hostMatches(host, 'telesco.pe') || hostMatches(host, 'telegram-cdn.org') || hostMatches(host, 'cdn-telegram.org') || row.platform === 'telegram') {
+    const info = telegramMsg(row);
+    if (!info) return null;
+    const http = require('../sources/http').forPlatform('telegram', 1500);
+    const tg = registry.get('telegram');
+    const html = await http.text('https://t.me/s/' + info.channel + '/' + info.id);
+    const parsed = tg.parsePage ? tg.parsePage(html, info.channel) : null;
+    if (!parsed || !parsed.messages) return null;
+    const msg = parsed.messages.find((m) => m.id === info.id);
+    if (!msg || !msg.media || !msg.media.length) return null;
+    const it = msg.media[row.position || 0] || msg.media[0];
+    return it && it.url ? { mediaUrl: it.url, previewUrl: it.preview || it.url } : null;
   }
   return null;
 }

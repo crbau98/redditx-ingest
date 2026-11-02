@@ -78,7 +78,7 @@ function isNamesake(query, handle, displayName) {
   const q = String(query || '').trim();
   const qw = q.toLowerCase().split(/\s+/).filter((w) => w.length >= 2);
   if (qw.length < 2) return false; // a single word cannot tell a namesake from the man
-  const h = String(handle || '').toLowerCase().replace(/\.bsky\.social$/, '');
+  const h = String(handle || '').toLowerCase().replace(/\.bsky\.social$/, '').replace(/^(?:onlyfans|fansly|candfans|subscribestar|patreon|boosty|coomer|kemono)\//i, '');
   // The handle must be built from the typed name (otherwise it is simply a different person).
   const core = qw.join('');
   if (!h.includes(core) && !qw.every((w) => h.includes(w))) return false;

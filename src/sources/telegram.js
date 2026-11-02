@@ -335,10 +335,13 @@ module.exports = {
     const cursor = ctx.cursor || {};
     const items = [];
     let newestId = cursor.newestId || 0;
+    let oldestId = cursor.oldestId || 0;
+    let done = !!cursor.done;
     let before = null;
     let profile;
     let pageProfile = null;
     const maxPages = cursor.newestId ? 5 : 3;
+    let reachedKnown = false;
     // Incremental runs keep paging until they reach a known post: the first page
     // only holds ~20 messages, so a busy channel can publish more than a page
     // between runs (240 min interval) and the excess would otherwise be skipped.
@@ -368,7 +371,6 @@ module.exports = {
           pageProfile = profile;
         }
       }
-      let reachedKnown = false;
       let addedOnPage = 0;
       for (const msg of parsed.messages.sort((a, b) => b.id - a.id)) {
         if (before !== null && msg.id >= before) continue;
@@ -377,9 +379,40 @@ module.exports = {
         items.push(...toItems(msg, channel, pageProfile));
         addedOnPage++;
       }
+      if (Number.isFinite(parsed.minId) && (!oldestId || parsed.minId < oldestId)) {
+        oldestId = parsed.minId;
+      }
+      if (parsed.messages.length < 5) done = true;
       if (reachedKnown || !addedOnPage || !Number.isFinite(parsed.minId) || (before !== null && parsed.minId >= before)) break;
       before = parsed.minId;
     }
-    return { items, cursor: newestId ? { newestId } : undefined, profile, via: 'web-preview' };
+
+    // Backfill older history on incremental runs if channel has more messages
+    if (!done && oldestId && !ctx.aborted() && cursor.newestId) {
+      const backfillPages = 2;
+      let bBefore = oldestId;
+      for (let p = 0; p < backfillPages; p++) {
+        if (ctx.aborted()) break;
+        const bHtml = await http.text(`${webBase}/s/${encodeURIComponent(channel)}?before=${bBefore}`, { headers: { accept: 'text/html' }, maxBytes: 3_000_000 });
+        const bParsed = parsePage(bHtml, channel);
+        if (!bParsed.messages.length || !Number.isFinite(bParsed.minId) || bParsed.minId >= bBefore) {
+          done = true;
+          break;
+        }
+        for (const msg of bParsed.messages.sort((a, b) => b.id - a.id)) {
+          if (msg.id >= bBefore) continue;
+          items.push(...toItems(msg, channel, pageProfile));
+        }
+        bBefore = bParsed.minId;
+        oldestId = bParsed.minId;
+        if (bParsed.messages.length < 5) {
+          done = true;
+          break;
+        }
+      }
+    }
+
+    const nextCursor = newestId ? { newestId, ...(oldestId ? { oldestId } : {}), ...(done ? { done: true } : {}) } : undefined;
+    return { items, cursor: nextCursor, profile, via: 'web-preview' };
   },
 };
