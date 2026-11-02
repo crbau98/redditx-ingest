@@ -135,6 +135,24 @@ const creatorQ = {
       WHERE m.creator_id = ? AND m.publish_state = 'published' AND t.name NOT IN (${PLATFORM_TAGS_SQL}) GROUP BY t.id ORDER BY n DESC LIMIT 12`),
 };
 
+function paidClause(key, tablePrefix = '') {
+  const p = String(key || '').toLowerCase().trim();
+  const col = tablePrefix ? `${tablePrefix}.links` : 'links';
+  if (p === 'onlyfans' || p === 'onlyfans.com') {
+    return { sql: `(${col} GLOB '*onlyfans.com/[A-Za-z0-9]*' OR ${col} LIKE '%"service":"OnlyFans"%' OR ${col} LIKE '%onlyfans.com/%')`, params: [] };
+  }
+  if (p === 'fansly' || p === 'fansly.com') {
+    return { sql: `(${col} GLOB '*fansly.com/[A-Za-z0-9]*' OR ${col} LIKE '%"service":"Fansly"%' OR ${col} LIKE '%fansly.com/%')`, params: [] };
+  }
+  if (p === 'justforfans' || p === 'justfor.fans' || p === 'jff') {
+    return { sql: `(${col} LIKE '%justfor.fans/%' OR ${col} LIKE '%"service":"JustFor.Fans"%')`, params: [] };
+  }
+  if (p === 'gayforfans' || p === 'gayforfans.com' || p === 'gff') {
+    return { sql: `(${col} LIKE '%gayforfans.com/%' OR ${col} LIKE '%"service":"GayForFans"%')`, params: [] };
+  }
+  return { sql: `${col} LIKE ? ESCAPE '\\'`, params: [`%${p.replace(/[\\%_]/g, (x) => '\\' + x)}%`] };
+}
+
 const creators = {
   get(id) { return serializeCreator(creatorQ.get.get(id)); },
   byAccount(platform, handle) {
@@ -220,7 +238,7 @@ const creators = {
     // "posted in the last N days": who is actually publishing right now.
     const fresh = freshDays ? Math.min(Math.max(parseInt(freshDays, 10) || 0, 0), 3650) : 0;
     if (fresh) { where.push('c.last_media_at >= ?'); params.push(new Date(Date.now() - fresh * 86400000).toISOString()); }
-    if (paidHost) { where.push("c.links LIKE ? ESCAPE '\\'"); params.push(`%${String(paidHost).replace(/[\\%_]/g, (x) => `\\${x}`)}/%`); }
+    if (paidHost) { const pc = paidClause(paidHost, 'c'); where.push(pc.sql); params.push(...pc.params); }
     if (!admin) { where.push("c.status = 'active'", "c.scope != 'excluded'"); }
     const min = minMedia !== undefined ? minMedia : (admin ? 0 : 1);
     if (min > 0) { where.push('c.media_count >= ?'); params.push(min); }
@@ -799,7 +817,7 @@ function buildMediaWhere(f) {
   if (f.community) { where.push('m.community = ? COLLATE NOCASE'); params.push(f.community); }
   if (f.creator) { where.push('m.creator_id = ?'); params.push(f.creator); }
   // creators with a page on a paid platform ("on Fansly"): their free posts, from any source
-  if (f.paidHost) { where.push("m.creator_id IN (SELECT id FROM creators WHERE links LIKE ? ESCAPE '\\')"); params.push(`%${String(f.paidHost).replace(/[\\%_]/g, (x) => `\\${x}`)}/%`); }
+  if (f.paidHost) { const pc = paidClause(f.paidHost); where.push(`m.creator_id IN (SELECT id FROM creators WHERE ${pc.sql})`); params.push(...pc.params); }
   // pictures the physique model measured as lean or athletic (0..100 heaviness; -1 and 101 are markers)
   if (f.build === 'fit') where.push('m.physique BETWEEN 0 AND 30');
   if (Array.isArray(f.creators)) {

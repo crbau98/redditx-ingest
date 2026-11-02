@@ -283,7 +283,13 @@ module.exports = {
         bio: null,
         avatarUrl: iconUrl(svc0, handle0),
         bannerUrl: bannerUrl(svc0, handle0),
-        links: [],
+        links: svc0 === 'onlyfans'
+          ? [{ platform: 'external', service: 'OnlyFans', label: `OnlyFans · ${handle0}`, url: `https://onlyfans.com/${handle0}`, handle: handle0 }]
+          : svc0 === 'fansly'
+            ? [{ platform: 'external', service: 'Fansly', label: `Fansly · ${handle0}`, url: `https://fansly.com/${handle0}`, handle: handle0 }]
+            : svc0 === 'justforfans'
+              ? [{ platform: 'external', service: 'JustFor.Fans', label: `JustFor.Fans · ${handle0}`, url: `https://justfor.fans/${handle0}`, handle: handle0 }]
+              : [],
       } : null,
       notes,
       via: 'coomer-api',

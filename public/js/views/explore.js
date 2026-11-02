@@ -14,7 +14,7 @@ export async function explore(root, { query }) {
   const f = {
     type: query.get('type') || '', sort: query.get('sort') || (query.get('q') ? 'relevance' : 'recent'), platform: query.get('platform') || '',
     community: query.get('community') || '', tag: query.get('tag') || '', q: query.get('q') || '', since: query.get('since') || '', following: query.get('following') || '',
-    tags: query.get('tags') || '', anytags: query.get('anytags') || '', creator: query.get('creator') || '', after: query.get('after') || '',
+    tags: query.get('tags') || '', anytags: query.get('anytags') || '', creator: query.get('creator') || '', after: query.get('after') || '', paid: query.get('paid') || '',
     smart: query.get('smart') || '', raw: query.get('raw') || '', ai: query.get('ai') || '', relaxed: query.get('relaxed') || '', from: query.get('from') || '', norelax: query.get('norelax') || '', label: query.get('label') || '',
   };
   const filterOnly = (x) => Object.fromEntries(Object.entries(x).filter(([k]) => !UI_KEYS.includes(k)));
@@ -31,7 +31,7 @@ export async function explore(root, { query }) {
   const followIds = f.following ? follows.list().map((c) => c.id).slice(0, 100) : null;
   const toApi = (x) => ({
     type: x.type, sort: x.sort === 'relevance' ? undefined : x.sort, platform: x.platform, community: x.community, tag: x.tag, q: x.q, since: x.since,
-    tags: x.tags || undefined, anytags: x.anytags || undefined, creator: x.creator || undefined, after: x.after || undefined,
+    tags: x.tags || undefined, anytags: x.anytags || undefined, creator: x.creator || undefined, after: x.after || undefined, paid: x.paid || undefined,
     creators: followIds ? (followIds.length ? followIds.join(',') : '00000000-0000-0000-0000-000000000000') : undefined,
   });
   const anyFilter = f.q || f.tag || f.tags || f.anytags || f.creator || f.community || f.following;
@@ -63,6 +63,7 @@ export async function explore(root, { query }) {
   if (f.platform) chip(platformLabel(f.platform), { platform: '' }, 'u-platform');
   if (f.since) chip(SINCE.find((s) => s[0] === f.since)[1], { since: '' }, 'u-since');
   if (f.after) chip(`New since ${fmt.ago(f.after)}`, { after: '' }, 'u-since');
+  if (f.paid) chip(f.paid === 'onlyfans' ? 'OnlyFans' : f.paid, { paid: '' }, 'u-paid');
   if (f.smart && f.type) chip(f.type === 'video' ? 'Videos' : 'Photos', { type: '' }, 'u-type');
   let creatorName = null;
   if (f.creator) {
@@ -109,7 +110,14 @@ export async function explore(root, { query }) {
   if (existingFeed) searches.markSeen(existingFeed.id);
 
   const seenChip = h('button', { class: `chip${prefs.hideSeen ? ' on' : ''}`, 'aria-pressed': String(prefs.hideSeen), title: 'Hide items you have already opened', onclick: () => { prefs.hideSeen = !prefs.hideSeen; } }, icon('eye', 'sm'), 'Hide seen');
-  const reelsBtn = h('a', { class: 'btn sm', href: href('/reels', { type: f.type || 'all', sort: f.sort === 'relevance' || f.sort === 'oldest' ? 'recent' : f.sort, platform: f.platform, community: f.community, tag: f.tag, tags: f.tags, anytags: f.anytags, label: f.anytags ? f.label : '', creator: f.creator, since: f.since, after: f.after, q: f.q, following: f.following }), title: 'Play these results full screen' }, icon('film', 'sm'), 'Play as Reels');
+    const ofChip = h('button', {
+    class: `chip of-pill${f.paid === 'onlyfans' ? ' on' : ''}`,
+    'aria-pressed': String(f.paid === 'onlyfans'),
+    title: 'Show only posts from verified male OnlyFans creators',
+    onclick: () => set({ paid: f.paid === 'onlyfans' ? '' : 'onlyfans' }),
+  }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), 'OnlyFans');
+
+  const reelsBtn = h('a', { class: 'btn sm', href: href('/reels', { type: f.type || 'all', sort: f.sort === 'relevance' || f.sort === 'oldest' ? 'recent' : f.sort, platform: f.platform, community: f.community, tag: f.tag, tags: f.tags, anytags: f.anytags, label: f.anytags ? f.label : '', creator: f.creator, since: f.since, after: f.after, q: f.q, following: f.following, paid: f.paid || undefined }), title: 'Play these results full screen' }, icon('film', 'sm'), 'Play as Reels');
 
   const followChip = h('button', { class: `chip${f.following ? ' on' : ''}`, 'aria-pressed': String(!!f.following), title: 'Only posts from creators you follow on this device', 'aria-label': f.following ? 'Show everything (turn off Followed filter)' : 'Show only creators you follow on this device', onclick: () => set({ following: f.following ? '' : '1' }) }, icon('heart', 'sm'), f.following ? 'Followed only' : 'Followed');
   // Fewer peers: type/sort/seen/followed stay visible; source + time hide behind a "Filters" disclosure.
@@ -123,7 +131,7 @@ export async function explore(root, { query }) {
     btn.addEventListener('click', () => { open = !open; panel.hidden = !open; btn.setAttribute('aria-expanded', String(open)); });
     return [btn, panel];
   })() : [];
-  const bar = h('div', { class: 'filterbar', role: 'toolbar', 'aria-label': 'Explore filters' }, h('div', { class: 'filter-scroll' }, typeSeg, followChip, seenChip, sortSel, ...filtersDisclosure), h('span', { class: 'spacer' }), active.length ? h('div', { class: 'active-filters' }, active) : null);
+  const bar = h('div', { class: 'filterbar', role: 'toolbar', 'aria-label': 'Explore filters' }, h('div', { class: 'filter-scroll' }, typeSeg, ofChip, followChip, seenChip, sortSel, ...filtersDisclosure), h('span', { class: 'spacer' }), active.length ? h('div', { class: 'active-filters' }, active) : null);
 
   // Tag rail: with tags in play, show tags that go with them (click narrows); otherwise the most used tags.
   // Required tags (tags= / tag=) are what a refinement narrows, so suggestions are measured against

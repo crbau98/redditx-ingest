@@ -323,7 +323,7 @@ module.exports = {
     return {
       items,
       cursor: { seen: kept },
-      profile: page.name ? { displayName: page.name, avatarUrl: page.avatar, bannerUrl: page.banner, bio: null, links: [] } : null,
+      profile: page.name ? { displayName: page.name, avatarUrl: page.avatar, bannerUrl: page.banner, bio: null, links: [{ platform: 'external', service: 'GayForFans', label: `GayForFans · ${page.name}`, url: feed.target, handle: page.name }] } : null,
       notes,
       via: 'gff-html',
     };
