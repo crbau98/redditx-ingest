@@ -35,7 +35,7 @@ export function creatorCard(c, { mini = false, badge = null, spotlight = false }
       ? [jff.free ? 'JFF · Free' : 'JFF', jff.free ? 'Has a free JustFor.Fans page' : 'Has a JustFor.Fans page', `jff${jff.free ? ' free' : ''}`]
       : null;
   const ofLabel = c.onlyfans ? (c.onlyfans.trial ? 'Free Trial' : c.onlyfans.promo ? 'OF Promo' : c.onlyfans.free ? 'Free OF' : 'OnlyFans') : null;
-  const ofCtaBtn = c.onlyfans && spotlight
+  const ofCtaBtn = c.onlyfans && (spotlight || !mini)
     ? h('a', {
         class: `btn sm of-cta${c.onlyfans.free ? ' free' : c.onlyfans.trial ? ' trial' : c.onlyfans.promo ? ' promo' : ''}`,
         href: c.onlyfans.url,
@@ -82,7 +82,7 @@ export function creatorCard(c, { mini = false, badge = null, spotlight = false }
       avatar(c, spotlight ? 64 : 56),
       h('div', { style: { minWidth: '0', flex: '1' } },
         h('div', { class: 'creator-name' }, c.display_name || c.handle, c.verified ? icon('verified', 'fill') : null, isNew ? h('span', { class: 'badge good' }, 'New') : null,
-          c.onlyfans ? h('a', { class: `badge of${c.onlyfans.free ? ' free' : c.onlyfans.trial ? ' trial' : c.onlyfans.promo ? ' promo' : ''}`, href: c.onlyfans.url, target: '_blank', rel: 'noopener noreferrer nofollow', onclick: (e) => e.stopPropagation(), title: `Open onlyfans.com/${c.onlyfans.handle}` }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), c.onlyfans.trial ? 'OF · Trial' : c.onlyfans.promo ? 'OF · Promo' : c.onlyfans.free ? 'OF · Free' : 'OF') : null,
+          c.onlyfans ? h('span', { class: `badge of${c.onlyfans.free ? ' free' : c.onlyfans.trial ? ' trial' : c.onlyfans.promo ? ' promo' : ''}`, title: `OnlyFans · @${c.onlyfans.handle}` }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), c.onlyfans.trial ? 'OF · Trial' : c.onlyfans.promo ? 'OF · Promo' : c.onlyfans.free ? 'OF · Free' : 'OF') : null,
           paidBadge ? h('span', { class: `badge ${paidBadge[2]}`, title: paidBadge[1] }, paidBadge[0]) : null),
         h('div', { class: 'creator-handle' }, `@${c.handle}`)),
       h('div', { class: 'row', style: { gap: '6px', flexShrink: 0 } }, ofCtaBtn, followBtn)),

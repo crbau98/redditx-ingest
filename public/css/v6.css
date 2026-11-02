@@ -660,3 +660,13 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
     min-height: 44px !important;
   }
 }
+
+
+/* Ensure inline text links meet touch bounds on mobile */
+@media (pointer: coarse), (max-width: 899px) {
+  .text-link {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+}

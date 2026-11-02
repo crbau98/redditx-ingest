@@ -44,6 +44,8 @@ export function createOrbit(items, { onOpen, compact = false } = {}) {
       const facing = Math.cos((a * Math.PI) / 180); // 1 = front, -1 = back
       cards[i].style.setProperty('--f', facing.toFixed(3));
       cards[i].tabIndex = facing > 0.7 ? 0 : -1;
+      cards[i].disabled = facing <= 0.5;
+      cards[i].style.pointerEvents = facing > 0.5 ? "auto" : "none";
     }
   };
   const loop = (now) => {
