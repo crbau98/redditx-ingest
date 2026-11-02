@@ -10,6 +10,8 @@
  *   - A platform that is simply not configured is "skipped", not "failed".
  *   - Everything an adapter returns passes the same pipeline (safety first).
  */
+const fs = require('fs');
+const path = require('path');
 const repo = require('../db/repo');
 const registry = require('../sources');
 const settingsStore = require('../settings');
@@ -397,6 +399,87 @@ function status() {
 }
 
 /* ---------------------------------------------------------------- lifecycle */
+function seedCuratedCreators(db) {
+  const seedPath = path.join(__dirname, "../sources/creators-seed.json");
+  if (!fs.existsSync(seedPath)) return 0;
+  let seed;
+  try {
+    seed = JSON.parse(fs.readFileSync(seedPath, "utf8"));
+  } catch (err) {
+    events.log("ERR", `Failed to parse creators-seed.json: ${err.message}`);
+    return 0;
+  }
+  if (!seed || !Array.isArray(seed.creators) || !seed.creators.length) return 0;
+
+  const insertCreator = db.prepare(`
+    INSERT INTO creators (id, handle, display_name, bio, avatar_url, banner_url, links, verified, scope, status, origin)
+    VALUES (@id, @handle, @display_name, @bio, @avatar_url, @banner_url, @links, @verified, 'in', 'active', 'seed')
+    ON CONFLICT(id) DO UPDATE SET
+      links = excluded.links,
+      avatar_url = COALESCE(creators.avatar_url, excluded.avatar_url),
+      banner_url = COALESCE(creators.banner_url, excluded.banner_url)
+  `);
+
+  const insertFeed = db.prepare(`
+    INSERT INTO feeds (id, platform, kind, target, label, creator_id, enabled, trusted, origin, interval_min)
+    VALUES (?, ?, ?, ?, ?, ?, 1, 1, 'seed', ?)
+    ON CONFLICT(platform, kind, target) DO NOTHING
+  `);
+
+  const insertMedia = db.prepare(`
+    INSERT INTO media (
+      id, creator_id, feed_id, platform, source_id, source_key, post_key, position,
+      source_url, author, title, description, media_type, media_url, preview_url,
+      thumbnail_url, hls_url, has_audio, width, height, duration, score, likes,
+      views, hot, hash, nsfw_level, scope, publish_state, tags_text, posted_at, thumb_url, tint
+    ) VALUES (
+      @id, @creator_id, NULL, @platform, @source_id, @source_key, @post_key, @position,
+      @source_url, @author, @title, @description, @media_type, @media_url, @preview_url,
+      @thumbnail_url, @hls_url, @has_audio, @width, @height, @duration, @score, @likes,
+      @views, @hot, @hash, @nsfw_level, @scope, @publish_state, @tags_text, @posted_at, @thumb_url, @tint
+    )
+    ON CONFLICT(hash) DO NOTHING
+    ON CONFLICT(source_key) DO NOTHING
+  `);
+
+  const insertLead = db.prepare(`
+    INSERT INTO onlyfans_leads (service, handle, creator_id, status, origin, checked_at)
+    VALUES ('OnlyFans', ?, ?, 'claimed', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    ON CONFLICT(service, handle) DO UPDATE SET creator_id = excluded.creator_id, status = 'claimed'
+  `);
+
+  const tx = db.transaction(() => {
+    for (const c of seed.creators) {
+      insertCreator.run(c);
+      try {
+        const parsedLinks = JSON.parse(c.links || "[]");
+        for (const l of parsedLinks) {
+          if (l.service === "OnlyFans" && l.handle) {
+            insertLead.run(l.handle.toLowerCase(), c.id);
+          }
+        }
+      } catch { /* ignore invalid JSON in links */ }
+    }
+    let feedIdx = 1;
+    for (const f of seed.feeds || []) {
+      insertFeed.run(`seed-feed-${feedIdx++}`, f.platform, f.kind, f.target, f.label, f.creator_id, f.interval_min || 240);
+    }
+    for (const m of seed.media || []) {
+      insertMedia.run(m);
+    }
+    db.prepare(`
+      UPDATE creators SET
+        media_count = (SELECT COUNT(*) FROM media WHERE creator_id = creators.id AND publish_state = 'published'),
+        video_count = (SELECT COUNT(*) FROM media WHERE creator_id = creators.id AND publish_state = 'published' AND media_type = 'video'),
+        total_score = COALESCE((SELECT SUM(score) FROM media WHERE creator_id = creators.id), 0)
+    `).run();
+  });
+
+  tx();
+  events.log("INFO", `Seeded ${seed.creators.length} curated creators, ${(seed.feeds || []).length} feeds, and ${(seed.media || []).length} media items`);
+  return seed.creators.length;
+}
+
 function seedDefaults() {
   const seen = parseInt(repo.settings.get('seed_version') || '0', 10);
   if (seen >= registry.SEED_VERSION) return 0;
@@ -411,6 +494,7 @@ function seedDefaults() {
     const f = repo.feeds.find(r.platform, r.kind, r.target);
     if (f && f.origin === 'seed' && f.enabled) repo.feeds.update(f.id, { enabled: false });
   }
+  seedCuratedCreators(repo.db);
   repo.settings.set('seed_version', String(registry.SEED_VERSION));
   return created;
 }
@@ -436,4 +520,4 @@ function shutdown() {
   state.timer = null; state.hotTimer = null; state.stopRequested = true;
 }
 
-module.exports = { start, shutdown, tick, runFeed, enqueue, enqueuePlatforms, stopAll, pause, resume, status, seedDefaults, computeNextRun, tempo, adoptDiscoveredFeeds, _state: state, _waysIn: { noteWaysIn, followWaysIn } };
+module.exports = { start, shutdown, tick, runFeed, enqueue, enqueuePlatforms, stopAll, pause, resume, status, seedDefaults, seedCuratedCreators, computeNextRun, tempo, adoptDiscoveredFeeds, _state: state, _waysIn: { noteWaysIn, followWaysIn } };
