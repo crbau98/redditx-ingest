@@ -345,8 +345,65 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
 /* ==========================================================================
    v6.6 Mobile Ergonomics & Visual Layout Fixes
    ========================================================================== */
+@media (max-width: 899px) {
+  /* Phone header respects top notch/safe area and positions sticky filterbar */
+  .appbar {
+    padding-top: env(safe-area-inset-top);
+    height: calc(var(--appbar-h) + env(safe-area-inset-top));
+  }
+  .filterbar {
+    top: calc(var(--appbar-h) + env(safe-area-inset-top));
+  }
+
+  /* Bottomnav tactile hit targets & feedback */
+  .bottomnav a {
+    min-height: 48px;
+    min-width: 44px;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+@media (max-width: 640px) {
+  /* Filter horizontal scroll: momentum flick & snap */
+  .filter-scroll {
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+  .filter-scroll > * {
+    scroll-snap-align: start;
+  }
+  .filter-scroll .chip, .filter-scroll .seg button {
+    min-height: 36px;
+    position: relative;
+    touch-action: manipulation;
+  }
+  .filter-scroll .chip::after, .filter-scroll .seg button::after {
+    content: "";
+    position: absolute;
+    inset: -4px 0;
+  }
+
+  /* Sheet modal: tactile pull grab handle & containment */
+  .overlay.sheet .modal {
+    position: relative;
+    touch-action: pan-y;
+  }
+  .overlay.sheet .modal::before {
+    content: "";
+    display: block;
+    width: 38px;
+    height: 4px;
+    border-radius: var(--r-pill);
+    background: var(--line-strong);
+    margin: -10px auto 14px;
+    opacity: 0.8;
+  }
+}
+
 @media (max-width: 639px) {
-  /* Fix Creator Profile button wrapping and overflow */
+  /* Fix Creator Profile button wrapping and overflow with 44px min touch target */
   .profile-head {
     align-items: flex-start;
   }
@@ -360,13 +417,13 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
   .profile-actions .btn:not(.icon) {
     flex: 1 1 calc(50% - 8px);
     min-width: 130px;
-    height: 42px;
+    height: 44px;
     font-size: 13.5px;
     justify-content: center;
   }
   .profile-actions .btn.icon {
-    width: 42px;
-    height: 42px;
+    width: 44px;
+    height: 44px;
     flex: none;
   }
 
@@ -391,28 +448,47 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
     font-size: 13px;
     -webkit-line-clamp: 2;
   }
+  /* Reels mobile touch targets - 44px minimum */
   .reel-of-chip {
-    height: 26px;
-    padding: 0 8px;
-    font-size: 11px;
-  }
-  .reel-follow {
-    height: 26px;
+    height: 30px;
     padding: 0 10px;
     font-size: 11.5px;
+    position: relative;
+    touch-action: manipulation;
+  }
+  .reel-of-chip::after {
+    content: "";
+    position: absolute;
+    inset: -7px -4px;
+  }
+  .reel-follow {
+    height: 30px;
+    padding: 0 12px;
+    font-size: 12px;
+    position: relative;
+    touch-action: manipulation;
+  }
+  .reel-follow::after {
+    content: "";
+    position: absolute;
+    inset: -7px -4px;
   }
   .reel-rail {
     right: 8px;
     gap: 12px;
   }
   .reel-act svg {
-    width: 42px;
-    height: 42px;
-    padding: 10px;
+    width: 46px;
+    height: 46px;
+    padding: 11px;
   }
   .reel-act.of-reel-btn .of-mark {
-    width: 40px;
-    height: 40px;
+    width: 44px;
+    height: 44px;
+  }
+  .reel-act {
+    min-width: 44px;
+    min-height: 44px;
   }
 
   /* Ensure Explore cards have crisp typography and spacing */
@@ -423,4 +499,10 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
     font-size: 13px;
     line-height: 1.25;
   }
+}
+
+/* Strict performance guardrail: zero live backdrop blur on /card|pill|reel|why/ selectors */
+.card-fav, .card-why, .card-badges .pill, .reel-hint, .reel-of-chip, .pill {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }

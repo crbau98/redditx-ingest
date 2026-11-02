@@ -1,5 +1,23 @@
 # UI changelog
 
+## 2026-11-02 — "Velocità": Mobile ergonomics, 44px touch targets, and zero-blur guardrails
+
+### Mobile ergonomics & touch targets (minimum 44px)
+- **Bottomnav & action rails**: Bottom navigation items enforced at min 48px hit targets with `touch-action: manipulation` and transparent tap highlight.
+- **Reels action buttons & pills**: Reels side-rail action buttons expanded to 46px hit circles; OnlyFans Reels CTA expanded to 44px touch circle.
+- **Creator chips & follow pills**: `.reel-of-chip` and `.reel-follow` received `::after` touch-target hit expansion ensuring full >= 44px compliance on mobile touchscreens without visual bloating.
+- **Creator profile buttons**: Profile header actions updated to 44px minimum height with clean 2-column wrapping on phones.
+
+### Mobile header notch & modal sheet gestures
+- **Appbar notch & dynamic island safe area**: On viewports <= 899px, `.appbar` respects `env(safe-area-inset-top)` with proportional top padding and dynamic height; sticky `.filterbar` offset updated to match, preventing filter controls from being obscured behind the status bar.
+- **Filter horizontal momentum scroll**: Horizontal filter rail equipped with momentum flick (`-webkit-overflow-scrolling: touch`), proximity scroll snap (`scroll-snap-type: x proximity`), and containment.
+- **Modal sheet pull handle & drag-to-dismiss gesture**: Bottom sheet modals now feature an illuminated tactile grab pill handle and touch drag gestures (`touchstart`, `touchmove`, `touchend`) with live vertical translation and opacity fade, dismissing on downward flick or >75px drag.
+
+### Strict performance guardrails: zero live blur
+- **Live backdrop blur eliminated**: Removed `backdrop-filter: blur(...)` from `.card-fav`, `.reel-hint`, and `.card-why`, and enforced an explicit `backdrop-filter: none !important` guardrail across all `/card|pill|reel|why/` selectors. Live video playback and masonry scroll no longer recompute composited blur passes on every frame, keeping mobile Reels at solid 60fps with 0% dropped frames.
+
+---
+
 ## 2026-11-01 — "Noir, edited": discovery reach, keyless search, and a design/IA pass
 
 ### Search that actually answers (no key required)

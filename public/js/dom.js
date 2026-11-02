@@ -157,6 +157,29 @@ export function openModal({ title, sub, body, actions = [], wide = false, sheet 
     if (e.key === 'Escape' && root.lastElementChild === overlay) { e.stopPropagation(); close(); }
   };
   overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
+  if (sheet) {
+    let startY = 0; let curY = 0; let tracking = false;
+    modal.addEventListener('touchstart', (e) => {
+      if (modal.scrollTop > 0) return;
+      startY = e.touches[0].clientY; curY = startY; tracking = true;
+    }, { passive: true });
+    modal.addEventListener('touchmove', (e) => {
+      if (!tracking) return;
+      curY = e.touches[0].clientY;
+      const dy = curY - startY;
+      if (dy > 0) {
+        modal.style.transform = `translateY(${dy}px)`;
+        overlay.style.opacity = `${Math.max(0, 1 - dy / 320)}`;
+      }
+    }, { passive: true });
+    modal.addEventListener('touchend', () => {
+      if (!tracking) return;
+      tracking = false;
+      const dy = curY - startY;
+      if (dy > 75) close();
+      else { modal.style.transform = ''; overlay.style.opacity = ''; }
+    }, { passive: true });
+  }
   document.addEventListener('keydown', onKey, true);
   root.appendChild(overlay);
   document.body.classList.add('no-scroll');
