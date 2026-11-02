@@ -120,6 +120,22 @@ describe('Frequent Co-Stars & Collabs', () => {
 });
 
 describe('OnlyFans Free Trials & Limited-Time Promos', () => {
+
+  test('lightbox / viewer collabs integration: /api/creators/:id/collabs returns co-stars with avatars', async () => {
+    const c1 = repo.creators.create({ handle: 'co_alex', displayName: 'Alex Alpha', avatarUrl: 'https://example.com/alex.jpg' });
+    const c2 = repo.creators.create({ handle: 'co_ben', displayName: 'Ben Bravo', avatarUrl: 'https://example.com/ben.jpg' });
+    createPost(c1, 'Hot scene with @co_ben on OnlyFans https://onlyfans.com/co_ben');
+    const res = await pub(`/api/creators/${c1.id}/collabs`);
+    assert.equal(res.status, 200);
+    assert.ok(Array.isArray(res.json));
+    assert.ok(res.json.length >= 1);
+    const ben = res.json.find((x) => x.id === c2.id);
+    assert.ok(ben, 'Ben is returned as a co-star');
+    assert.equal(ben.handle, 'co_ben');
+    assert.equal(ben.avatar_url, 'https://example.com/ben.jpg');
+    assert.ok(ben.collab_count >= 1);
+  });
+
   test('publicCreator flags trial and promo on onlyfans object', async () => {
     const promoGuy = repo.creators.create({
       handle: 'promoguy',

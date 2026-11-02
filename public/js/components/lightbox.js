@@ -406,6 +406,7 @@ function paintInfo() {
   const box = S.info$;
   const rel = h('div', { class: 'lb-related' });
   const moreFrom = it.creator_id ? creatorStrip(it) : null;
+  const collabs = it.creator_id ? collabStrip(it) : null;
   box.replaceChildren(
     it.creator_id ? h('div', { class: 'lb-creator' },
       // the name link beside it carries the label; this one is a larger pointer target only
@@ -415,6 +416,7 @@ function paintInfo() {
         it.onlyfans ? h('a', { class: `btn sm of-cta${it.onlyfans.free ? ' free' : ''}`, href: it.onlyfans.url, target: '_blank', rel: 'noopener noreferrer nofollow', title: `Open onlyfans.com/${it.onlyfans.handle}` }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), it.onlyfans.free ? 'Free OF' : 'OnlyFans', icon('external', 'sm')) : null,
         h('button', { class: `btn sm${follows.has(it.creator_id) ? '' : ' primary'}`, onclick: () => { const on = follows.toggle({ id: it.creator_id, handle: it.creator_handle, display_name: it.creator_name }); toast(on ? 'Following' : 'Unfollowed'); } }, follows.has(it.creator_id) ? 'Following' : 'Follow'))) : null,
     it.creator_id ? moreFrom : null,
+    it.creator_id ? collabs : null,
     it.title ? h('h3', null, it.title) : null,
     it.description ? h('p', { class: 'muted', style: { whiteSpace: 'pre-line', fontSize: '14px' } }, it.description.slice(0, 400)) : null,
     h('dl', { class: 'kv' },
@@ -500,6 +502,45 @@ function creatorStrip(it) {
       if (byCreator.size > 40) byCreator.delete(byCreator.keys().next().value);
       paint(r.items);
     }).catch(() => strip.remove());
+  }
+  return el;
+}
+
+
+const collabsCache = new Map(); // creator_id -> { at, items }
+
+/** Frequent co-stars and collabs in the viewer: men who scene or feature with this creator. */
+function collabStrip(it) {
+  const name = it.creator_name || it.creator_handle || 'him';
+  const strip = h('div', { class: 'lb-collab-strip', role: 'list' });
+  const el = h('section', { class: 'lb-collabs', 'aria-label': `Co-stars & Collabs with ${name}` },
+    h('div', { class: 'lb-more-head' },
+      h('span', { class: 'lb-more-title' }, icon('users', 'sm'), 'Co-Stars & Collabs')),
+    strip);
+  const paint = (items) => {
+    if (!S || cur() !== it) return;
+    if (!items || !items.length) { el.remove(); return; }
+    strip.replaceChildren(...items.map((c) => {
+      const av = c.avatar_url ? h('span', { class: 'lb-collab-av', style: { backgroundImage: `url("${proxied(c.avatar_url)}")` } }) : h('span', { class: 'lb-collab-dot' });
+      return h('a', {
+        class: 'lb-collab-chip', role: 'listitem',
+        href: href(`/creator/${c.id}`),
+        'aria-label': `${c.display_name || c.handle}${c.collab_count > 1 ? ` (${c.collab_count} collabs)` : ''}`,
+        onclick: () => closeSilently(),
+      },
+      av,
+      h('span', { class: 'lb-collab-name' }, c.display_name || c.handle),
+      c.collab_count > 1 ? h('span', { class: 'badge sm' }, String(c.collab_count)) : null);
+    }));
+  };
+  const hit = collabsCache.get(it.creator_id);
+  if (hit && Date.now() - hit.at < 180000) paint(hit.items);
+  else {
+    get(`/api/creators/${it.creator_id}/collabs`, { limit: 8 }).then((items) => {
+      collabsCache.set(it.creator_id, { at: Date.now(), items });
+      if (collabsCache.size > 40) collabsCache.delete(collabsCache.keys().next().value);
+      paint(items);
+    }).catch(() => el.remove());
   }
   return el;
 }

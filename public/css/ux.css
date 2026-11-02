@@ -181,3 +181,12 @@
   .lb-lab { display: block; font-size: 10.5px; font-weight: 600; letter-spacing: .02em; color: rgba(255, 255, 255, .75); }
   .lb-actions .btn.icon.on .lb-lab { color: var(--accent); }
 }
+
+.lb-collabs { display: grid; gap: 8px; margin-top: -2px; }
+.lb-collab-strip { display: flex; gap: 6px; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none; padding-bottom: 2px; }
+.lb-collab-strip::-webkit-scrollbar { display: none; }
+.lb-collab-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 6px; border-radius: 999px; background: var(--surface-2); border: 1px solid rgba(255, 255, 255, .08); font-size: 12px; font-weight: 500; color: var(--text); white-space: nowrap; text-decoration: none; transition: background var(--dur-quick), border-color var(--dur-quick); }
+.lb-collab-chip:hover { background: var(--surface-3); border-color: var(--accent); }
+.lb-collab-av { width: 18px; height: 18px; border-radius: 50%; background-size: cover; background-position: center; flex-shrink: 0; }
+.lb-collab-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+.lb-collab-name { overflow: hidden; text-overflow: ellipsis; max-width: 120px; }

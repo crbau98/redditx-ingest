@@ -24,7 +24,12 @@ before(async () => {
   youtube.__mockFeed = feedXml;
 });
 
-after(async () => { await mock.close(); });
+after(async () => {
+  await mock.close();
+  const net = require('../src/lib/net');
+  net.httpsAgent?.destroy();
+  net.httpAgent?.destroy();
+});
 
 test('youtube link parsing: channels ingestable, watch links stay external', () => {
   const ch = links.parseProfile('https://www.youtube.com/@gymguy');
@@ -88,12 +93,15 @@ test('public lookup routes exist behind age gate with rate limits', async () => 
   try {
     // In test env the age gate is off, so the route runs: expect a shaped
     // lookup answer (candidates or a validation error), not a 404.
-    const res = await fetch(`http://127.0.0.1:${port}/api/lookup`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'gymguy' }) });
+    const res = await fetch(`http://127.0.0.1:${port}/api/lookup`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
     assert.ok([200, 400, 401, 403, 429].includes(res.status), `unexpected status ${res.status}`);
     assert.notEqual(res.status, 404);
     const body = await res.json();
     assert.ok(body && (Array.isArray(body.candidates) || body.error), JSON.stringify(body).slice(0, 200));
-  } finally { srv.close(); }
+  } finally {
+    srv.closeAllConnections?.();
+    await new Promise((r) => srv.close(r));
+  }
 });
 
 test('publicMedia exposes thumb_url and tint for grids', () => {
