@@ -44,6 +44,7 @@ export async function reels(root, { query }) {
     h('button', { class: 'btn icon ghost', 'aria-label': 'Back', title: 'Back', onclick: () => (window.history.length > 1 ? window.history.back() : navigate('/')) }, icon('chev-l')),
     h('div', { class: 'reels-title truncate' }, icon('film', 'sm'), context),
     h('div', { class: 'seg sm', role: 'group', 'aria-label': 'Media type' }, [['video', 'Videos'], ['all', 'All'], ['image', 'Photos']].map(([v, l]) => h('button', { class: f.type === v ? 'on' : '', 'aria-pressed': String(f.type === v), onclick: () => set({ type: v }) }, l))),
+    h('button', { class: `chip sm of-pill${f.paid === 'onlyfans' ? ' on' : ''}`, 'aria-pressed': String(f.paid === 'onlyfans'), title: f.paid === 'onlyfans' ? 'Showing OnlyFans creators only — tap for all' : 'Filter Reels to OnlyFans creators', onclick: () => set({ paid: f.paid === 'onlyfans' ? '' : 'onlyfans' }) }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), 'OnlyFans'),
     h('select', { class: 'select sm', 'aria-label': 'Order', onchange: (e) => set({ sort: e.target.value }) }, SORTS.map(([v, l]) => h('option', { value: v, selected: f.sort === v }, l))),
     // narrow phones: the type switch and order don't fit beside the title, so one button opens both
     h('button', { class: 'btn sm ghost reels-tune', 'aria-label': 'Choose what plays', 'aria-haspopup': 'dialog', onclick: openTune }, icon('sliders', 'sm'), (SORTS.find((x) => x[0] === f.sort) || [])[1] || 'Order'),

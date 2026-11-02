@@ -255,7 +255,7 @@ const creators = {
       params.push(platform);
     }
     const order = {
-      media: "(c.origin = 'admin') DESC, c.media_count DESC, c.total_score DESC",
+      media: "((c.links GLOB '*onlyfans.com/[A-Za-z0-9]*' OR c.links LIKE '%onlyfans.com/%' OR c.links LIKE '%OnlyFans%') AND c.media_count >= 5) DESC, (c.origin = 'admin') DESC, c.media_count DESC, c.total_score DESC",
       score: 'c.total_score DESC',
       recent: 'c.last_media_at DESC',
       new: 'c.created_at DESC',
@@ -1311,16 +1311,19 @@ function adminOverview() {
 
 function discover() {
   const pageOf = (f) => media.list({ ...f, noCount: true }).items;
-  // Suggested creators: admin/lookup-curated creators first, then OnlyFans/paid-page creators with media, then by media count.
+  // Suggested creators: OnlyFans creators with media first, then admin/lookup-curated creators, then by media count.
   const featured = db.prepare(`${SELECT_CREATOR_CARD}
     WHERE c.status = 'active' AND c.scope != 'excluded' AND c.media_count >= 2
-    ORDER BY (c.origin = 'admin') DESC,
+    ORDER BY ((c.links GLOB '*onlyfans.com/[A-Za-z0-9]*' OR c.links LIKE '%onlyfans.com/%' OR c.links LIKE '%OnlyFans%') AND c.media_count >= 5) DESC,
+             (c.origin = 'admin') DESC,
              (c.links GLOB '*onlyfans.com/[A-Za-z0-9]*' OR c.links GLOB '*fansly.com/[A-Za-z0-9]*') DESC,
              c.media_count DESC, c.total_score DESC LIMIT 16`).all().map(serializeCreator);
+  const ofTrending = pageOf({ paidHost: 'onlyfans', sort: 'trending', limit: 20 });
+  const ofVideos = pageOf({ type: 'video', paidHost: 'onlyfans', sort: 'recent', limit: 14 });
   return {
     stats: publicStats(),
-    trending: pageOf({ sort: 'trending', limit: 20 }),
-    freshVideos: pageOf({ type: 'video', sort: 'recent', limit: 14 }),
+    trending: ofTrending.length >= 8 ? ofTrending : pageOf({ sort: 'trending', limit: 20 }),
+    freshVideos: ofVideos.length >= 6 ? ofVideos : pageOf({ type: 'video', sort: 'recent', limit: 14 }),
     topCreators: featured.length ? featured : creators.list({ sort: 'media', limit: 16, minMedia: 2 }).items,
     newCreators: creators.list({ sort: 'new', limit: 12, minMedia: 2 }).items,
     rising: creators.rising(12),

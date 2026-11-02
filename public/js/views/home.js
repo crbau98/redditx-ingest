@@ -224,7 +224,7 @@ export async function home(root) {
   if (since) parts.push(since);
   if (picker) parts.push(picker);
   if (data.topCreators && data.topCreators.length) {
-    parts.push(h('section', { class: 'section suggested-spotlight' }, sectionHead('users', 'Suggested creators', 'Top creators with videos and photos in the library — tap to open, or follow them here', { href: href('/creators'), label: 'All creators' }),
+    parts.push(h('section', { class: 'section suggested-spotlight' }, sectionHead('users', 'Featured OnlyFans Creators', 'Top creators with verified OnlyFans pages and media in the library — tap to open or follow', { href: href('/creators', { paid: 'onlyfans' }), label: 'All OnlyFans creators' }),
       h('div', { class: 'rail' }, data.topCreators.map((c) => creatorCard(c, { spotlight: true })))));
   }
   const forYou = await forYouSection(open);
@@ -262,7 +262,7 @@ export async function home(root) {
 
 
   if (data.trending.length) {
-    parts.push(h('section', { class: 'section' }, sectionHead('flame', 'Trending now', 'What people are watching and saving', { href: href('/explore', { sort: 'trending' }), label: 'See all' }), rail(data.trending, { open: open(data.trending) })));
+    parts.push(h('section', { class: 'section' }, sectionHead('flame', 'Trending OnlyFans & Creators', 'Top posts from verified OnlyFans and independent creators', { href: href('/explore', { sort: 'trending', paid: 'onlyfans' }), label: 'See all' }), rail(data.trending, { open: open(data.trending) })));
   }
   const topics = await topicsP;
   if (topics) parts.push(h('section', { class: 'section' }, sectionHead('layers', 'Topics', 'Themes the library keeps coming back to — found from tags that travel together', { href: href('/browse'), label: 'Browse all' }), topics));
@@ -271,7 +271,7 @@ export async function home(root) {
       h('div', { class: 'rail' }, data.rising.map((c) => creatorCard(c, { mini: true, badge: `+${c.week_count} this week` })))));
   }
   if (data.freshVideos.length) {
-    parts.push(h('section', { class: 'section' }, sectionHead('video', 'Fresh videos', 'Newest clips from across all sources', { href: href('/explore', { type: 'video', sort: 'recent' }), label: 'More videos' }), rail(data.freshVideos, { open: open(data.freshVideos) })));
+    parts.push(h('section', { class: 'section' }, sectionHead('video', 'Fresh OnlyFans & Creator Clips', 'Newest creator video clips in the library', { href: href('/explore', { type: 'video', sort: 'recent', paid: 'onlyfans' }), label: 'More videos' }), rail(data.freshVideos, { open: open(data.freshVideos) })));
   }
   if (data.communities.length || data.platforms.length) {
     parts.push(h('section', { class: 'section' }, sectionHead('compass', 'Browse by source'),

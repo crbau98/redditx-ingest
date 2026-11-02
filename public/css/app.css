@@ -978,9 +978,11 @@ main.tinted .tag { border-color: color-mix(in srgb, var(--accent) 30%, var(--lin
 .btn.of-cta.free { background: linear-gradient(120deg, var(--of-2), var(--of) 55%, #34d399); }
 .btn.paid-cta.fansly.free { background: linear-gradient(120deg, #0c85d0, var(--fansly) 55%, #34d399); }
 .btn.paid-cta.jff.free { background: linear-gradient(120deg, #7e22ce, var(--jff) 55%, #34d399); }
-.chip.of-chip .of-mark { width: 10px; height: 10px; border-width: 2.5px; margin-right: 6px; color: var(--of); }
-.chip.of-chip.on { background: var(--of); border-color: var(--of); color: #fff; }
-.chip.of-chip.on .of-mark { color: #fff; }
+.chip.of-chip .of-mark, .chip.of-pill .of-mark { width: 10px; height: 10px; border-width: 2.5px; margin-right: 6px; color: var(--of); }
+.chip.of-chip, .chip.of-pill { border-color: rgba(0, 175, 240, 0.45); }
+.chip.of-chip:hover, .chip.of-pill:hover { border-color: var(--of); background: rgba(0, 175, 240, 0.14); }
+.chip.of-chip.on, .chip.of-pill.on { background: var(--of) !important; border-color: var(--of) !important; color: #fff !important; box-shadow: 0 0 16px rgba(0, 175, 240, 0.45); }
+.chip.of-chip.on .of-mark, .chip.of-pill.on .of-mark { color: #fff; }
 .paid-quick { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .chip.paid-filter { height: 32px; padding: 0 12px; font-size: 12.5px; font-weight: 600; gap: 6px; }
 .chip.paid-filter .paid-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--paid-c, var(--of)); box-shadow: 0 0 8px var(--paid-c, var(--of)); }
