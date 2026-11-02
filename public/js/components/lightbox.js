@@ -209,7 +209,19 @@ function paintDock(it) {
     }
   }, follows.has(it.creator_id) ? 'Following' : 'Follow');
 
-  S.dock.replaceChildren(creatorLink, followBtn, thumbsHolder);
+  const ofBtn = it.onlyfans
+    ? h('a', {
+        class: `btn sm of-cta${it.onlyfans.free ? ' free' : ''}`,
+        href: it.onlyfans.url,
+        target: '_blank',
+        rel: 'noopener noreferrer nofollow',
+        title: `Open onlyfans.com/${it.onlyfans.handle}`,
+        style: { padding: '4px 10px', height: '28px', fontSize: '12px' },
+        onclick: (e) => e.stopPropagation(),
+      }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), it.onlyfans.free ? 'Free OF' : 'OnlyFans', icon('external', 'sm'))
+    : null;
+
+  S.dock.replaceChildren(creatorLink, ofBtn, followBtn, thumbsHolder);
 
   const fillThumbs = (items) => {
     if (!S || cur() !== it) return;
@@ -399,7 +411,9 @@ function paintInfo() {
       // the name link beside it carries the label; this one is a larger pointer target only
       h('a', { href: href(`/creator/${it.creator_id}`), tabindex: '-1', 'aria-hidden': 'true', onclick: () => closeSilently() }, avatar(it, 44)),
       h('div', { class: 'grow' }, h('a', { href: href(`/creator/${it.creator_id}`), class: 'creator-name', onclick: () => closeSilently() }, it.creator_name || it.creator_handle), h('div', { class: 'creator-handle' }, `@${it.creator_handle || it.author}`)),
-      h('button', { class: `btn sm${follows.has(it.creator_id) ? '' : ' primary'}`, onclick: () => { const on = follows.toggle({ id: it.creator_id, handle: it.creator_handle, display_name: it.creator_name }); toast(on ? 'Following' : 'Unfollowed'); } }, follows.has(it.creator_id) ? 'Following' : 'Follow')) : null,
+      h('div', { class: 'row', style: { gap: '6px' } },
+        it.onlyfans ? h('a', { class: `btn sm of-cta${it.onlyfans.free ? ' free' : ''}`, href: it.onlyfans.url, target: '_blank', rel: 'noopener noreferrer nofollow', title: `Open onlyfans.com/${it.onlyfans.handle}` }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), it.onlyfans.free ? 'Free OF' : 'OnlyFans', icon('external', 'sm')) : null,
+        h('button', { class: `btn sm${follows.has(it.creator_id) ? '' : ' primary'}`, onclick: () => { const on = follows.toggle({ id: it.creator_id, handle: it.creator_handle, display_name: it.creator_name }); toast(on ? 'Following' : 'Unfollowed'); } }, follows.has(it.creator_id) ? 'Following' : 'Follow'))) : null,
     it.creator_id ? moreFrom : null,
     it.title ? h('h3', null, it.title) : null,
     it.description ? h('p', { class: 'muted', style: { whiteSpace: 'pre-line', fontSize: '14px' } }, it.description.slice(0, 400)) : null,

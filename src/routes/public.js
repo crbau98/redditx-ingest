@@ -30,6 +30,7 @@ function publicMedia(m) {
     platform: m.platform, community: m.community, author: m.author, source_url: m.source_url,
     score: m.score, likes: m.likes, views: m.views, nsfw_level: m.nsfw_level, posted_at: m.posted_at,
     creator_id: m.creator_id, creator_handle: m.creator_handle, creator_name: m.creator_name, creator_avatar: m.creator_avatar,
+    onlyfans: m.creator_links ? creatorOnlyFans({ links: m.creator_links }) : null,
     tags: m.tags || (m.tags_text ? m.tags_text.split(' ').filter(Boolean).slice(0, 10) : []),
     position: m.position, post_key: m.post_key,
     ...(m.reason ? { reason: m.reason } : {}),

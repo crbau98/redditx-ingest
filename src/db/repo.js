@@ -778,7 +778,7 @@ const SINCE_DAYS = { day: 1, week: 7, month: 30, year: 365 };
 // BM25 column weights for media_fts(title, author, community, tags_text, description).
 const FTS_WEIGHTS = '5.0, 4.0, 2.0, 4.0, 1.0';
 
-const MEDIA_SELECT = `SELECT m.*, c.handle AS creator_handle, c.display_name AS creator_name, c.avatar_url AS creator_avatar
+const MEDIA_SELECT = `SELECT m.*, c.handle AS creator_handle, c.display_name AS creator_name, c.avatar_url AS creator_avatar, c.links AS creator_links
   FROM media m LEFT JOIN creators c ON c.id = m.creator_id`;
 
 function serializeMedia(row) {
@@ -1058,7 +1058,7 @@ const media = {
     const total = f.noCount ? null : (join
       ? cachedCount(`SELECT COUNT(*) AS n FROM media m WHERE m.seq IN (SELECT rowid FROM media_fts WHERE media_fts MATCH ?) AND ${whereSql}`, [...joinParams, ...params])
       : cachedCount(`SELECT COUNT(*) AS n FROM media m WHERE ${whereSql}`, params));
-    const rows = db.prepare(`SELECT m.*, c.handle AS creator_handle, c.display_name AS creator_name, c.avatar_url AS creator_avatar ${base}
+    const rows = db.prepare(`SELECT m.*, c.handle AS creator_handle, c.display_name AS creator_name, c.avatar_url AS creator_avatar, c.links AS creator_links ${base}
       ORDER BY ${order} LIMIT ? OFFSET ?`).all(...joinParams, ...params, ...orderParams, limit, page * limit);
     return { items: rows.map(serializeMedia), total, page, limit };
   },

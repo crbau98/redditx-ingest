@@ -150,6 +150,7 @@ export function mediaCard(item, { open, compact = false, why = null, eager = fal
   const whyChip = why ? h('span', { class: 'card-why', title: 'Why you are seeing this' }, icon('sparkle', 'sm'), why) : null;
   if (whyChip && compact) media.appendChild(whyChip);
   media.appendChild(h('div', { class: 'card-badges' },
+    item.onlyfans ? h('span', { class: `pill of${item.onlyfans.free ? ' free' : ''}`, title: `OnlyFans: ${item.onlyfans.handle}` }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), item.onlyfans.free ? 'OF Free' : 'OnlyFans') : null,
     isVideo ? h('span', { class: 'pill' }, icon('play', 'fill'), item.duration ? fmt.duration(item.duration) : 'Video') : null,
     item.nsfw_level === 'suggestive' ? h('span', { class: 'pill' }, 'Suggestive') : null,
     viewHistory.has(item.id) ? h('span', { class: 'pill seen', title: 'You opened this before' }, icon('eye', 'sm'), 'Seen') : null));
@@ -182,7 +183,7 @@ export function mediaCard(item, { open, compact = false, why = null, eager = fal
       whyChip,
       item.title ? h('div', { class: 'card-title' }, item.title) : null,
       h('div', { class: 'card-meta' },
-        item.creator_id ? h('a', { href: href(`/creator/${item.creator_id}`), class: 'row', style: { gap: '6px', minWidth: 0 }, onclick: (e) => e.stopPropagation() }, avatar(item, 20), h('span', { class: 'truncate' }, item.creator_name || item.creator_handle || item.author)) : h('span', { class: 'truncate' }, item.author || ''),
+        item.creator_id ? h('a', { href: href(`/creator/${item.creator_id}`), class: 'row', style: { gap: '6px', minWidth: 0 }, onclick: (e) => e.stopPropagation() }, avatar(item, 20), h('span', { class: 'truncate' }, item.creator_name || item.creator_handle || item.author), item.onlyfans ? h('span', { class: `badge of${item.onlyfans.free ? ' free' : ''}`, style: { fontSize: '10.5px', padding: '1px 5px', height: 'auto' } }, 'OF') : null) : h('span', { class: 'truncate' }, item.author || ''),
         h('span', { class: 'grow' }),
         h('span', { class: 'badge plat', style: { '--c': platformColor(item.platform) } }, platformLabel(item.platform)))));
   }

@@ -34,6 +34,17 @@ export function creatorCard(c, { mini = false, badge = null, spotlight = false }
     : jff
       ? [jff.free ? 'JFF · Free' : 'JFF', jff.free ? 'Has a free JustFor.Fans page' : 'Has a JustFor.Fans page', `jff${jff.free ? ' free' : ''}`]
       : null;
+  const ofCtaBtn = c.onlyfans && spotlight
+    ? h('a', {
+        class: `btn sm of-cta${c.onlyfans.free ? ' free' : ''}`,
+        href: c.onlyfans.url,
+        target: '_blank',
+        rel: 'noopener noreferrer nofollow',
+        title: `Open onlyfans.com/${c.onlyfans.handle}`,
+        onclick: (e) => e.stopPropagation(),
+      }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), c.onlyfans.free ? 'Free OF' : 'OnlyFans', icon('external', 'sm'))
+    : null;
+
   const followBtn = h('button', {
     type: 'button',
     class: `btn sm${follows.has(c.id) ? ' on' : ''}`,
@@ -70,10 +81,10 @@ export function creatorCard(c, { mini = false, badge = null, spotlight = false }
       avatar(c, spotlight ? 64 : 56),
       h('div', { style: { minWidth: '0', flex: '1' } },
         h('div', { class: 'creator-name' }, c.display_name || c.handle, c.verified ? icon('verified', 'fill') : null, isNew ? h('span', { class: 'badge good' }, 'New') : null,
-          c.onlyfans ? h('span', { class: `badge of${c.onlyfans.free ? ' free' : ''}`, title: c.onlyfans.free ? 'Has a free OnlyFans page' : 'Has an OnlyFans page' }, c.onlyfans.free ? 'OF · Free' : 'OF') : null,
+          c.onlyfans ? h('a', { class: `badge of${c.onlyfans.free ? ' free' : ''}`, href: c.onlyfans.url, target: '_blank', rel: 'noopener noreferrer nofollow', onclick: (e) => e.stopPropagation(), title: `Open onlyfans.com/${c.onlyfans.handle}` }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), c.onlyfans.free ? 'OF · Free' : 'OF') : null,
           paidBadge ? h('span', { class: `badge ${paidBadge[2]}`, title: paidBadge[1] }, paidBadge[0]) : null),
         h('div', { class: 'creator-handle' }, `@${c.handle}`)),
-      followBtn),
+      h('div', { class: 'row', style: { gap: '6px', flexShrink: 0 } }, ofCtaBtn, followBtn)),
     h('div', { class: 'creator-stats' },
       h('span', null, h('b', null, fmt.num(c.media_count)), ' posts'),
       c.video_count ? h('span', null, h('b', null, fmt.num(c.video_count)), ' videos') : null,
