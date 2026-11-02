@@ -377,6 +377,85 @@ creators.similar = function similar(id, limit = 12, { onlyfans: ofOnly = false }
 };
 
 /**
+ * Creators who co-star or frequently collaborate with this creator.
+ * Sourced from mutual post mentions (@handle, OnlyFans/Fansly links), candidate co-mentions,
+ * and incoming scene tags. Bidirectional mentions receive higher ranking weights.
+ */
+creators.collabs = function collabs(id, limit = 12) {
+  const c = creators.get(id);
+  if (!c || c.status !== 'active') return [];
+
+  const selfHandles = new Set([c.handle.toLowerCase()]);
+  if (c.display_name) selfHandles.add(c.display_name.toLowerCase());
+  try {
+    const aliases = db.prepare('SELECT alias FROM creator_aliases WHERE creator_id = ?').all(c.id);
+    for (const a of aliases) if (a.alias) selfHandles.add(a.alias.toLowerCase());
+  } catch { /* best effort */ }
+  try {
+    const feedsRows = db.prepare('SELECT target FROM feeds WHERE creator_id = ?').all(c.id);
+    for (const f of feedsRows) if (f.target) selfHandles.add(f.target.toLowerCase());
+  } catch { /* best effort */ }
+  if (Array.isArray(c.links)) {
+    for (const l of c.links) if (l && l.handle) selfHandles.add(l.handle.toLowerCase());
+  }
+
+  // 1. Outgoing mentions in media by this creator
+  const myMedia = db.prepare("SELECT title, description FROM media WHERE creator_id = ? AND publish_state = 'published' AND (title LIKE '%@%' OR description LIKE '%@%' OR title LIKE '%onlyfans.com/%' OR description LIKE '%onlyfans.com/%' OR title LIKE '%/u/%' OR description LIKE '%/u/%')").all(c.id);
+  const mentionCounts = new Map();
+  for (const m of myMedia) {
+    const text = `${m.title || ''} ${m.description || ''}`;
+    const handles = new Set();
+    for (const match of text.matchAll(/@([a-zA-Z0-9_]{3,30})/g)) handles.add(match[1].toLowerCase());
+    for (const match of text.matchAll(/(?:^|[^\w/])\/?u\/([a-zA-Z0-9_-]{3,30})/g)) handles.add(match[1].toLowerCase());
+    for (const match of text.matchAll(/(?:onlyfans|fansly)\.com\/([a-zA-Z0-9_.-]{3,30})/gi)) handles.add(match[1].toLowerCase());
+    for (const h of handles) {
+      if (!selfHandles.has(h)) mentionCounts.set(h, (mentionCounts.get(h) || 0) + 1);
+    }
+  }
+
+  const creatorScores = new Map();
+  const targetHandles = [...mentionCounts.keys()];
+  if (targetHandles.length) {
+    const placeholders = targetHandles.map(() => '?').join(',');
+    const matched = db.prepare(`SELECT id, lower(handle) as h FROM creators WHERE status = 'active' AND scope != 'excluded' AND lower(handle) IN (${placeholders}) AND id != ?`).all(...targetHandles, c.id);
+    for (const row of matched) {
+      creatorScores.set(row.id, (creatorScores.get(row.id) || 0) + (mentionCounts.get(row.h) || 1));
+    }
+    const matchedAliases = db.prepare(`SELECT ca.creator_id as id, lower(ca.alias) as a FROM creator_aliases ca JOIN creators c ON c.id = ca.creator_id WHERE c.status = 'active' AND c.scope != 'excluded' AND lower(ca.alias) IN (${placeholders}) AND c.id != ?`).all(...targetHandles, c.id);
+    for (const row of matchedAliases) {
+      creatorScores.set(row.id, (creatorScores.get(row.id) || 0) + (mentionCounts.get(row.a) || 1));
+    }
+  }
+
+  // 2. Incoming mentions via FTS (other creators posting about this creator)
+  try {
+    const ftsTerm = c.handle.replace(/[^a-zA-Z0-9_]/g, '');
+    if (ftsTerm.length >= 3) {
+      const incoming = db.prepare("SELECT m.creator_id, COUNT(*) as count FROM media_fts f JOIN media m ON m.seq = f.rowid WHERE media_fts MATCH ? AND m.creator_id != ? AND m.creator_id IS NOT NULL AND m.publish_state = 'published' GROUP BY m.creator_id").all(ftsTerm, c.id);
+      for (const inc of incoming) {
+        const existing = creatorScores.get(inc.creator_id) || 0;
+        creatorScores.set(inc.creator_id, existing + inc.count * (existing > 0 ? 3 : 1));
+      }
+    }
+  } catch { /* best effort */ }
+
+  // 3. Candidates discovery co-mentions
+  try {
+    const candidateRows = db.prepare("SELECT creator_id FROM candidates WHERE status IN ('followed', 'linked') AND creator_id IS NOT NULL AND creator_id != ? AND signals LIKE ?").all(c.id, '%"' + c.id + '"%');
+    for (const row of candidateRows) {
+      creatorScores.set(row.creator_id, (creatorScores.get(row.creator_id) || 0) + 2);
+    }
+  } catch { /* best effort */ }
+
+  const sortedIds = [...creatorScores.entries()].sort((a, b) => b[1] - a[1]).map(([cid]) => cid).slice(0, limit);
+  if (!sortedIds.length) return [];
+
+  const found = db.prepare(`${SELECT_CREATOR_CARD} WHERE c.id IN (${sortedIds.map(() => '?').join(',')}) AND c.status = 'active' AND c.scope != 'excluded'`).all(...sortedIds).map(serializeCreator);
+  found.sort((a, b) => creatorScores.get(b.id) - creatorScores.get(a.id));
+  return found.map((card) => ({ ...card, collab_count: creatorScores.get(card.id) || 1 }));
+};
+
+/**
  * Probable duplicate creators (the same person added twice, usually from different platforms).
  * Evidence, strongest first: the same link-in-bio / profile link, the same profile picture, handles
  * that collapse to the same string once punctuation and filler suffixes (_xo, _fit, official…) go,

@@ -60,10 +60,25 @@ export async function reels(root, { query }) {
   const shell = h('div', { class: 'reels', role: 'region', 'aria-label': 'Reels' }, top, track);
   root.replaceChildren(shell);
 
+  let hudTimer = null;
+  function showHud(ic, text) {
+    let hud = shell.querySelector('.reel-hud');
+    if (!hud) {
+      hud = h('div', { class: 'reel-hud', 'aria-live': 'polite' });
+      shell.appendChild(hud);
+    }
+    hud.replaceChildren(icon(ic), h('span', null, text));
+    hud.classList.remove('fade');
+    void hud.offsetWidth;
+    clearTimeout(hudTimer);
+    hudTimer = setTimeout(() => { if (hud.isConnected) hud.classList.add('fade'); }, 750);
+  }
+
   function setMuted(m) {
     prefs.muted = m; paintMute();
     const s = slides[active]; const v = s && s.el.querySelector('video');
     if (v) { v.muted = m; if (!m) v.play().catch(() => {}); }
+    showHud(m ? 'mute' : 'volume', m ? 'Muted' : 'Sound On');
   }
 
   /* --------------------------------------------------------------- slides */
@@ -127,15 +142,22 @@ export async function reels(root, { query }) {
     let lastTap = 0; let tapTimer = null;
     stage.addEventListener('click', () => {
       const now = Date.now();
-      if (now - lastTap < 280) {
+      if (now - lastTap < 300) {
         clearTimeout(tapTimer); lastTap = 0;
         if (!favorites.has(it.id)) favorites.toggle(it.id, it);
-        const sr = stage.getBoundingClientRect(); heartBurst(sr.left + sr.width / 2, sr.top + sr.height / 2, { count: 14 });
+        const sr = stage.getBoundingClientRect(); heartBurst(sr.left + sr.width / 2, sr.top + sr.height / 2, { count: 16 });
         const b = h('div', { class: 'lb-heart-burst' }, icon('heart', 'fill')); stage.appendChild(b); setTimeout(() => b.remove(), 750);
+        showHud('heart', 'Saved');
         return;
       }
       lastTap = now;
-      tapTimer = setTimeout(() => { const v = stage.querySelector('video'); if (v) { if (v.paused) v.play().catch(() => {}); else v.pause(); } }, 280);
+      tapTimer = setTimeout(() => {
+        const v = stage.querySelector('video');
+        if (v) {
+          if (v.paused) { v.play().catch(() => {}); showHud('play', 'Play'); }
+          else { v.pause(); showHud('pause', 'Paused'); }
+        }
+      }, 300);
     });
     return s;
   }

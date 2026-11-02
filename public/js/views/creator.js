@@ -101,8 +101,8 @@ export async function creator(root, { params, query }) {
     h('div', { class: 'profile-info' }, h('h1', null, c.display_name || c.handle, c.verified ? icon('verified', 'fill') : null), h('div', { class: 'creator-handle' }, `@${c.handle}`),
       aka.length ? h('div', { class: 'aka' }, 'Also goes by ', aka.join(', ')) : null),
     h('div', { class: 'profile-actions' }, followBtn,
-      c.onlyfans ? h('a', { class: `btn of-cta${c.onlyfans.free ? ' free' : ''}`, href: c.onlyfans.url, target: '_blank', rel: 'noopener noreferrer nofollow', title: `onlyfans.com/${c.onlyfans.handle}` },
-        h('span', { class: 'of-mark', 'aria-hidden': 'true' }), c.onlyfans.free ? 'Free OnlyFans' : 'OnlyFans', icon('external', 'sm')) : null,
+      c.onlyfans ? h('a', { class: `btn of-cta${c.onlyfans.free ? ' free' : c.onlyfans.trial ? ' trial' : c.onlyfans.promo ? ' promo' : ''}`, href: c.onlyfans.url, target: '_blank', rel: 'noopener noreferrer nofollow', title: `onlyfans.com/${c.onlyfans.handle}` },
+        h('span', { class: 'of-mark', 'aria-hidden': 'true' }), c.onlyfans.trial ? 'Free Trial' : c.onlyfans.promo ? 'OnlyFans · Sale' : c.onlyfans.free ? 'Free OnlyFans' : 'OnlyFans', icon('external', 'sm')) : null,
       ...paidCtas,
       c.media_count ? h('a', { class: 'btn glass', href: href('/reels', { creator: c.id, sort: 'recent', type: 'all' }), title: 'Watch everything in full-screen vertical Reels' }, icon('film', 'sm'), 'Watch Reels') : null,
       h('button', { class: 'btn icon', 'aria-label': 'Copy profile link', title: 'Copy link', onclick: async () => toast((await copyText(location.href)) ? 'Link copied' : 'Could not copy') }, icon('share')),
@@ -141,6 +141,15 @@ export async function creator(root, { params, query }) {
     const panel = root.isConnected && activityPanel(a);
     const anchor = root.querySelector('.tabs');
     if (panel && anchor) anchor.closest('.row').before(panel, h('div', { style: { height: '22px' } }));
+  }).catch(() => {});
+  // Co-stars and collabs: men who co-star or mention each other in posts
+  get(`/api/creators/${c.id}/collabs`, { limit: 12 }).then((list) => {
+    if (!list.length || !root.isConnected) return;
+    const anchor = root.querySelector('.tabs');
+    if (!anchor) return;
+    anchor.closest('.row').before(h('section', { class: 'section', style: { marginTop: '28px' } },
+      h('div', { class: 'section-head' }, h('div', null, h('h2', null, icon('users'), 'Frequent Co-Stars & Collabs'), h('div', { class: 'sub' }, 'Creators they scene or feature with'))),
+      h('div', { class: 'rail' }, list.map((x) => creatorCard(x, { mini: true, badge: x.collab_count > 1 ? `${x.collab_count} collabs` : 'Co-Star' })))), h('div', { style: { height: '8px' } }));
   }).catch(() => {});
   get(`/api/creators/${c.id}/similar`, { limit: 12 }).then((list) => {
     if (!list.length || !root.isConnected) return;

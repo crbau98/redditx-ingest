@@ -976,6 +976,13 @@ main.tinted .tag { border-color: color-mix(in srgb, var(--accent) 30%, var(--lin
 .btn.of-cta:hover, .btn.paid-cta:hover { filter: brightness(1.08); transform: translateY(-1px); }
 .btn.of-cta::before, .btn.paid-cta::before { content: ''; position: absolute; inset: 0; z-index: -1; background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, .35) 50%, transparent 70%); transform: translateX(-120%); animation: of-sheen 3.6s var(--ease, ease) 1s infinite; }
 .btn.of-cta.free { background: linear-gradient(120deg, var(--of-2), var(--of) 55%, #34d399); }
+.badge.of.trial { background: linear-gradient(120deg, color-mix(in srgb, var(--of) 28%, transparent), color-mix(in srgb, #f59e0b 26%, transparent)); color: #fbbf24; }
+.badge.of.promo { background: linear-gradient(120deg, color-mix(in srgb, var(--of) 28%, transparent), color-mix(in srgb, #ec4899 26%, transparent)); color: #f472b6; }
+.btn.of-cta.trial { background: linear-gradient(120deg, var(--of-2), var(--of) 55%, #f59e0b); }
+.btn.of-cta.promo { background: linear-gradient(120deg, var(--of-2), var(--of) 55%, #ec4899); }
+.reel-hud { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display: inline-flex; align-items: center; gap: 8px; padding: 12px 20px; border-radius: 999px; background: rgba(15, 23, 42, .88); border: 1px solid rgba(255, 255, 255, .15); box-shadow: 0 10px 30px rgba(0, 0, 0, .5); color: #fff; font-size: 15px; font-weight: 600; pointer-events: none; z-index: 10; opacity: 1; transition: opacity var(--dur-base) var(--ease), transform var(--dur-base) var(--ease); }
+.reel-hud.fade { opacity: 0; transform: translate(-50%, -50%) scale(.92); }
+.reel-hud svg { width: 22px; height: 22px; fill: currentColor; }
 .btn.paid-cta.fansly.free { background: linear-gradient(120deg, #0c85d0, var(--fansly) 55%, #34d399); }
 .btn.paid-cta.jff.free { background: linear-gradient(120deg, #7e22ce, var(--jff) 55%, #34d399); }
 .chip.of-chip .of-mark, .chip.of-pill .of-mark { width: 10px; height: 10px; border-width: 2.5px; margin-right: 6px; color: var(--of); }

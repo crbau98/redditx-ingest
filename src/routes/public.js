@@ -40,11 +40,18 @@ function publicMedia(m) {
 
 function publicCreator(c) {
   if (!c) return null;
+  const of = creatorOnlyFans(c);
+  if (of) {
+    const isTrial = (Array.isArray(c.links) && c.links.some((l) => /action\/trial/i.test(l.url || ''))) || /onlyfans\.com\/action\/trial/i.test(c.bio || '');
+    const hasPromo = (Array.isArray(c.links) && c.links.some((l) => l.promo || /promo|discount|sale/i.test(l.label || ''))) || (c.bio && /\b(?:\d{2}\s?%\s?off|free\s+trial|limited\s+time|promo\s+link|discount|sale)\b/i.test(c.bio));
+    if (isTrial) of.trial = true;
+    if (hasPromo && !of.free) of.promo = true;
+  }
   return {
     id: c.id, handle: c.handle, display_name: c.display_name, bio: c.bio, avatar_url: c.avatar_url, banner_url: c.banner_url,
     links: c.links, verified: c.verified, media_count: c.media_count, video_count: c.video_count, total_score: c.total_score,
     last_media_at: c.last_media_at, previews: c.previews, platforms: c.platforms, added_at: c.created_at,
-    onlyfans: creatorOnlyFans(c), paid: creatorPaid(c),
+    onlyfans: of, paid: creatorPaid(c),
   };
 }
 
@@ -315,6 +322,14 @@ router.get('/creators/:id/similar', (req, res) => {
     }
   }
   res.json(repo.creators.similar(c.id, repo.clampInt(req.query.limit, 1, 24, 12), { onlyfans: req.query.onlyfans === '1' }).map(publicCreator));
+});
+
+router.get('/creators/:id/collabs', (req, res) => {
+  const c = repo.creators.get(req.params.id);
+  if (!c || c.status !== 'active') return res.status(404).json({ error: 'Not found' });
+  const limit = repo.clampInt(req.query.limit, 1, 24, 12);
+  const collabs = repo.creators.collabs(c.id, limit);
+  res.json(collabs.map((x) => ({ ...publicCreator(x), collab_count: x.collab_count })));
 });
 
 const recs = require('../engine/recommend');
