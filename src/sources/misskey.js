@@ -184,7 +184,20 @@ module.exports = {
     if (feed.kind === 'user') {
       const { name, host } = splitTarget(feed.target);
       if (!name || !host) throw new Error('Misskey user target must look like name@instance.tld');
-      const u = await showUser(host, name);
+      let u;
+      try {
+        u = await showUser(host, name);
+      } catch (e) {
+        // Fediverse user on a server that speaks Mastodon API (e.g. mstdn.jp, mastodon.social):
+        // fetch via Mastodon adapter rather than failing the feed.
+        const mastodon = require('./mastodon');
+        try {
+          const r = await mastodon.fetch({ ...feed, platform: 'mastodon' }, ctx);
+          return { ...r, via: 'mastodon-api', notes: [...(r.notes || []), `${host} does not speak Misskey API; read through Mastodon API`] };
+        } catch {
+          throw e;
+        }
+      }
       jobs.push({ host, endpoint: 'users/notes', body: { userId: u.id, withFiles: true, includeReplies: false, includeMyRenotes: repostsOn() } });
       if (ctx.needProfile || !cursor.newestAt) profile = profileOf(u);
     } else {

@@ -27,7 +27,7 @@ const brave = require('../lib/brave');
 const websearch = require('../lib/websearch');
 const tgBot = require('../lib/telegram-bot');
 const registry = require('../sources');
-const { parseProfile, extractLinks, profileUrl, linkHubHandle } = require('../lib/links');
+const { parseProfile, extractLinks, profileUrl, linkHubHandle, isMisskeyHost } = require('../lib/links');
 const { checkText } = require('../lib/safety');
 const takedowns = require('../lib/takedowns');
 const { classify, femaleCheck } = require('../lib/scope');
@@ -533,7 +533,9 @@ async function peopleSearch({ aborted = () => false } = {}) {
         out.searched++;
         for (const u of await mk.searchUsers(kw, host, 10)) {
           if (!CREATOR_STRONG.test(`${u.displayName || ''} ${u.description || ''}`)) continue;
-          const c = consider(parseProfile(`@${u.username}@${u.host}`, { platform: 'misskey' }), 'search', `misskey-people:${kw}`, { displayName: u.displayName, bio: u.description, avatarUrl: u.avatar, popularity: u.followers });
+          const uHost = (u.host || host).toLowerCase();
+          const plHint = uHost === host.toLowerCase() || isMisskeyHost(uHost) ? { platform: 'misskey' } : { platform: 'mastodon' };
+          const c = consider(parseProfile(`@${u.username}@${uHost}`, plHint), 'search', `misskey-people:${kw}`, { displayName: u.displayName, bio: u.description, avatarUrl: u.avatar, popularity: u.followers });
           if (c && c.status === 'pending' && c.scope !== 'excluded') { out.found++; out.misskey++; }
         }
       } catch (e) { events.log('WARN', `Discovery: Misskey people search "${kw}" on ${host} — ${e.message}`); }

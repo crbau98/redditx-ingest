@@ -160,3 +160,11 @@ test('Misskey sign-in wall is a clear skip error', async () => {
     await assert.rejects(() => misskey.fetch({ kind: 'user', target: `zed@${hostOf(wall)}` }, ctx()), (e) => e.skip === true && /requires sign-in/.test(e.message) && /MISSKEY_ACCESS_TOKEN/.test(e.message));
   } finally { await wall.close(); }
 });
+
+test('a Mastodon server behind a Misskey-looking user link is read through Mastodon API', async () => {
+  // Mastodon server 404s on /api/users/show; Misskey falls back to Mastodon API
+  const out = await misskey.fetch({ kind: 'user', target: `zed@${hostOf(open)}` }, ctx());
+  assert.equal(out.via, 'mastodon-api');
+  assert.ok(out.items.length >= 1);
+  assert.ok(out.notes.some((n) => /does not speak Misskey API/.test(n)));
+});
