@@ -64,6 +64,25 @@ function knownTelegramLinks(creator) {
 }
 
 /**
+ * Does a channel's own text claim to be HIS page? Only an ownership phrase in the same sentence as his name/handle counts ("official
+ * page of Rex Carter", "I'm @rexcarter", "my channel"), and any negation or fan-page wording anywhere in the text rules it out
+ * ("not affiliated with @rex", "fake @rex", "fan page", "unofficial"). A bare mention of "@handle" proves nothing.
+ */
+const NEGATION = /\b(?:not|never|isn'?t|no)\b[^.!?\n]{0,30}\b(?:affiliated|official|him|his|related|connected|owned|run|managed|associated)\b|\b(?:un-?official|fake|fan[\s-]?(?:page|account|channel|club|made)|parody|impersonat\w*|tribute|copycat|scam|not\s+(?:the\s+)?real|no\s+relation)\b/i;
+const OWNERSHIP_PHRASE = /\b(?:official(?:\s+(?:page|channel|account|telegram))?|my\s+(?:own\s+)?(?:official\s+)?(?:channel|page|account|telegram|content)|i(?:'m|\s+am)|this\s+is\s+(?:the\s+)?(?:official\s+)?(?:channel|page|account)\s+of|follow\s+me|dm\s+me|(?:channel|page|account)\s+of)\b/i;
+function claimsOwnership(title, about, names) {
+  const text = `${title || ''}. ${about || ''}`.toLowerCase();
+  if (NEGATION.test(text)) return false;
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const wanted = [...new Set(names.map((n) => String(n || '').toLowerCase().replace(/^@/, '').trim()).filter((n) => n.length >= 4))];
+  for (const sentence of text.split(/[.!?\n|·•]+/)) {
+    if (!OWNERSHIP_PHRASE.test(sentence)) continue;
+    if (wanted.some((n) => new RegExp(`(?<![a-z0-9_])${esc(n)}(?![a-z0-9_])`).test(sentence))) return true;
+  }
+  return false;
+}
+
+/**
  * Look a creator's handles up on Telegram. Returns { searched, followed:[username], leads:[{username,title,why}], skipped }.
  * One call per creator per 30 days unless `force`.
  */
@@ -89,8 +108,8 @@ async function lookupHandles(creatorId, { force = false } = {}) {
       let about = '';
       try { const p = await mt.profile(ch.username, { avatar: false }); about = String(p.about || ''); aiguard.mark([p.title, p.about]); } catch { /* the title alone then */ }
       const text = `${ch.title} ${about}`.toLowerCase();
-      const backed = linked.has(String(ch.username).toLowerCase()) || names.some((n) => n.length >= 5 && n !== handle && text.includes(n)) || (about && text.includes(`@${handle}`));
-      if (!backed) { out.leads.push({ username: ch.username, title: ch.title, why: 'exact username, but nothing else ties it to him' }); continue; }
+      const backed = linked.has(String(ch.username).toLowerCase()) || claimsOwnership(ch.title, about, [handle, ...names]);
+      if (!backed) { out.leads.push({ username: ch.username, title: ch.title, why: 'exact username, but his own links do not name it and its description does not claim to be his' }); continue; }
       const r = require('./targets').addSpec({ platform: 'telegram', kind: 'channel', target: ch.username, label: ch.title, ingestable: true }, { creatorId: creator.id, origin: 'discovered', trusted: 0 });
       if (r.status === 'created' || r.status === 'exists') out.followed.push(ch.username);
     }
@@ -134,4 +153,4 @@ async function joinApproved() {
 
 function status() { const b = budget(); const cfg = settingsStore.get(); return { ready: ready(cfg), searchesToday: b.searches, searchesPerDay: cfg.telegramSearchesPerDay, joinsToday: b.joins, joinsPerDay: cfg.telegramJoinsPerDay }; }
 
-module.exports = { ready, upgradeSpec, lookupHandles, queueLookup, joinApproved, handlesOf, status };
+module.exports = { claimsOwnership, ready, upgradeSpec, lookupHandles, queueLookup, joinApproved, handlesOf, status };

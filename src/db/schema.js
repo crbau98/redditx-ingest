@@ -673,7 +673,17 @@ function v16(db) {
   if (!cols.includes('evidence_url')) db.exec('ALTER TABLE creator_aliases ADD COLUMN evidence_url TEXT');
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16];
+/**
+ * v17: provenance for Telegram content, so the "no AI on Telegram content" guard survives a restart. `telegram_text` keeps every
+ * piece of text read from Telegram (normalised), `creators.bio_source` says which platform a stored bio came from.
+ */
+function v17(db) {
+  db.exec('CREATE TABLE IF NOT EXISTS telegram_text (norm TEXT PRIMARY KEY, at TEXT NOT NULL DEFAULT (' + NOW + '))');
+  const cols = db.prepare('PRAGMA table_info(creators)').all().map((c) => c.name);
+  if (!cols.includes('bio_source')) db.exec('ALTER TABLE creators ADD COLUMN bio_source TEXT');
+}
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

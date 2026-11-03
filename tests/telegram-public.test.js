@@ -130,3 +130,54 @@ describe('no AI on Telegram content (Telegram API Terms §1.5)', () => {
     }
   });
 });
+
+/* ------------------------------------------------------------------ review fixes */
+describe('follow rule: ownership, not a mention', () => {
+  const names = ['rexcarter', 'rex carter'];
+  test('only an ownership phrase next to his name counts; negations, fan pages and bare mentions do not', () => {
+    for (const ok of ['official page of Rex Carter', "I'm @rexcarter, follow me", 'this is the official channel of rexcarter']) assert.equal(tp.claimsOwnership('', ok, names), true, ok);
+    for (const bad of ['not affiliated with @rexcarter', 'fake @rexcarter channel', 'Rex Carter fan page. official updates', 'unofficial rexcarter archive', 'posts about @rexcarter and others', 'my channel. rexcarter is great']) assert.equal(tp.claimsOwnership('', bad, names), false, bad);
+  });
+  test('an exact-username channel that says "not affiliated with @handle" becomes a lead, not a feed', async () => {
+    const c = repo.creators.create({ handle: 'maxfit', displayName: 'Max Fit', origin: 'admin' });
+    const cl = fakeClient({ publicChannels: [chan(90, 'maxfit', 'Max Fit Archive')], search: { maxfit: [{ id: '90', username: 'maxfit', title: 'Max Fit Archive', members: 100, kind: 'channel' }] } });
+    cl.invoke = async () => ({ fullChat: { about: 'not affiliated with @maxfit, just a fan page', participantsCount: 10 } });
+    mt._setFactory(async () => cl);
+    repo.settings.set('tg_budget', JSON.stringify({ day: new Date().toISOString().slice(0, 10), searches: 0, joins: 0, lastJoinAt: 0 }));
+    settingsStore.update({ telegramSearchesPerDay: 12 });
+    const r = await tp.lookupHandles(c.id, { force: true });
+    assert.deepEqual(r.followed, []);
+    assert.ok(r.leads.some((l) => l.username === 'maxfit'));
+    assert.ok(!repo.feeds.find('telegram', 'channel', 'maxfit'));
+  });
+});
+
+describe('the AI guard survives a restart', () => {
+  test('text read from Telegram in one process is still refused by a brand-new process on the same database', () => {
+    const { spawnSync } = require('child_process');
+    const env = { ...process.env, DB_PATH: process.env.DB_PATH };
+    const root = path.join(__dirname, '..');
+    const bio = 'Channel for hairy gym guys and their daily workouts';
+    // process 1: Telegram text is read (marked), and a creator bio is stored with its source
+    const a = spawnSync(process.execPath, ['-e', `
+      const g = require('./src/lib/aiguard'); const repo = require('./src/db/repo');
+      g.mark(${JSON.stringify(bio)});
+      const c = repo.creators.create({ handle: 'tgperson', displayName: 'TG Person', origin: 'admin' });
+      repo.creators.enrich(c.id, { bio: 'bio read from a telegram channel, kept for later' });
+      repo.db.prepare("UPDATE creators SET bio_source = 'telegram' WHERE id = ?").run(c.id);
+    `], { cwd: root, env, encoding: 'utf8' });
+    assert.equal(a.status, 0, a.stderr);
+    // process 2: nothing registered in memory; the guard must still refuse
+    const b = spawnSync(process.execPath, ['-e', `
+      const g = require('./src/lib/aiguard');
+      const out = {};
+      out.direct = g.tainted(${JSON.stringify(bio)});
+      out.embedded = g.tainted({ creators: [{ text: 'before ' + ${JSON.stringify(bio)} + ' after' }] });
+      out.storedBio = g.tainted({ creators: [{ text: 'x bio read from a telegram channel, kept for later' }] });
+      out.clean = g.tainted({ creators: [{ text: 'a bluesky bio with nothing from telegram in it' }] });
+      process.stdout.write(JSON.stringify(out));
+    `], { cwd: root, env, encoding: 'utf8' });
+    assert.equal(b.status, 0, b.stderr);
+    assert.deepEqual(JSON.parse(b.stdout.trim().split('\n').pop()), { direct: true, embedded: true, storedBio: true, clean: false });
+  });
+});

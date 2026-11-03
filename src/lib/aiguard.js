@@ -11,6 +11,8 @@
  * Media never goes to a hosted model in this codebase (the image checks run on the server itself); the guard test pins that.
  */
 const taint = new Set();
+let loaded = false;
+const db = () => { try { return require('../db/repo').db; } catch { return null; } };
 const MAX_TAINT = 40000;
 const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
 const POST_LINK = /(?:^|[^a-z0-9])(?:t|telegram)\.me\/(?:c\/\d+|s\/[a-z0-9_]+|[a-z0-9_]{4,})\/\d+/i;
@@ -22,11 +24,31 @@ function mark(value) {
   if (typeof value === 'object') { for (const v of Object.values(value)) mark(v); return; }
   const t = norm(value);
   if (t.length < 8) return;
+  if (taint.has(t)) return;
   taint.add(t);
   if (taint.size > MAX_TAINT) taint.delete(taint.values().next().value);
+  persist(t);
+}
+
+/** Survive a restart: every piece of Telegram text is also written to the database, and read back before the first check. */
+function persist(t) {
+  try { const d = db(); if (d) d.prepare('INSERT OR IGNORE INTO telegram_text (norm) VALUES (?)').run(t.slice(0, 4000)); } catch { /* the in-memory copy still guards this process */ }
+}
+function load() {
+  if (loaded) return;
+  loaded = true;
+  const d = db(); if (!d) return;
+  try {
+    for (const r of d.prepare('SELECT norm FROM telegram_text ORDER BY rowid DESC LIMIT ?').all(MAX_TAINT)) taint.add(r.norm);
+    // rows that came from Telegram even if the text table was pruned: creators whose stored bio is from a Telegram channel, and
+    // discovery candidates found on Telegram
+    for (const r of d.prepare("SELECT bio, display_name FROM creators WHERE bio_source = 'telegram'").all()) for (const v of [r.bio, r.display_name]) { const t = norm(v); if (t.length >= 8) taint.add(t); }
+    for (const r of d.prepare("SELECT bio, display_name, target FROM candidates WHERE platform = 'telegram'").all()) for (const v of [r.bio, r.display_name]) { const t = norm(v); if (t.length >= 8) taint.add(t); }
+  } catch { /* tables not there yet (very first start) */ }
 }
 
 function tainted(value, depth = 0) {
+  if (depth === 0) load();
   if (value === null || value === undefined || depth > 8) return false;
   if (typeof value === 'string') {
     if (POST_LINK.test(value)) return true;
@@ -61,5 +83,5 @@ function scrub(input, purpose = 'ai') {
 }
 const refuse = (purpose) => Object.assign(new Error(`AI request "${purpose}" refused: it contains Telegram content (Telegram API Terms §1.5)`), { aiGuard: true, refusal: true });
 
-function _reset() { taint.clear(); }
+function _reset({ keepDb = false } = {}) { taint.clear(); loaded = false; if (!keepDb) { try { const d = db(); if (d) d.prepare('DELETE FROM telegram_text').run(); } catch { /* none */ } } }
 module.exports = { mark, tainted, scrub, refuse, _reset };

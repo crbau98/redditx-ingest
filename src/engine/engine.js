@@ -247,6 +247,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     // the fetch can take a while: profile decisions read the body filter's settings as they are now (see physique.live)
     const hadCreator = !!feed.creator_id;
     if (result.profile) applyProfile(feed, result.profile, { ...cfg, liveBody: true });
+    noteBioSource(feed, result.profile);
     adoptDiscoveredFeeds(result, feed, cfg);
     if (result.links && feed.creator_id) applyProfile(feed, { links: result.links }, { ...cfg, liveBody: true });
 
@@ -361,6 +362,16 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
 }
 
 /* --------------------------------------------------------------- scheduler */
+/** Remember which platform a stored creator bio came from (the AI guard refuses Telegram-derived text, also after a restart). */
+function noteBioSource(feed, profile) {
+  try {
+    if (!feed.creator_id || !profile || !profile.bio) return;
+    const c = repo.creators.get(feed.creator_id);
+    if (!c || !c.bio || !String(c.bio).includes(String(profile.bio).slice(0, 20))) return;
+    repo.db.prepare('UPDATE creators SET bio_source = ? WHERE id = ?').run(feed.platform === 'telegram' ? 'telegram' : feed.platform, c.id);
+  } catch { /* provenance is best effort; the text table still guards */ }
+}
+
 /** Feeds that may run at once per platform. Each adapter's HTTP calls still go through the per-platform limiter
  * (lib/limiter: spaced requests, 429 cool-downs), so more slots overlap the slow part (probing, image checks, writes) without
  * hitting a host harder. Override with the `platformSlots` setting. */
