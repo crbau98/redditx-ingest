@@ -8,7 +8,7 @@ let mock; let websearch; let brave; const hits = { brave: 0, searx: 0 }; const m
 before(async () => {
   mock = await start({
     '/res/v1/web/search': () => { hits.brave++; return mode.brave === 'ok' ? { json: { web: { results: [{ url: 'https://x.com/a', title: '<b>A</b>', description: 'brave result' }] } } } : { status: 403, json: {} }; },
-    '/search': (req, res, url) => { hits.searx++; return mode.searx === 'ok' ? { json: { results: [{ url: 'https://bsky.app/profile/a.bsky.social', title: 'A on Bluesky', content: '<i>searx</i> result' }] } } : { status: 500, body: 'down' }; },
+    '/search': (req, res, url) => { hits.searx++; return mode.searx === 'ok' ? { json: { results: [{ url: 'https://bsky.app/profile/a.bsky.social', title: `${url.searchParams.get('q')} on Bluesky`, content: '<i>searx</i> result' }] } } : { status: 500, body: 'down' }; },
   });
   prepareEnv({ BRAVE_BASE_URL: mock.url, BRAVE_API_KEY: 'k', SEARXNG_URL: mock.url, SEARCH_PROVIDERS: 'brave,searxng' });
   websearch = require('../src/lib/websearch');

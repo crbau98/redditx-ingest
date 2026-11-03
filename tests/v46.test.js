@@ -159,19 +159,11 @@ describe('far-reaching discovery', () => {
   test('communities and custom feeds are usable leads; arbitrary sites are not', () => {
     const { parseProfile } = require('../src/lib/links');
     assert.ok(discovery.usable(parseProfile('r/gaybros')));
-    assert.ok(discovery.usable(parseProfile('https://lemmynsfw.com/c/gaybros')));
+    assert.equal(discovery.usable(parseProfile('https://lemmynsfw.com/c/gaybros')), false);
     assert.ok(discovery.usable(parseProfile('at://did:plc:x/app.bsky.feed.generator/abc')));
     assert.ok(!discovery.usable(parseProfile('https://example.com/blog')));
   });
-  test('community search: NSFW subreddits, adult Bluesky feeds, Lemmy lists — safety and scope still apply', async () => {
-    const lemmy = registry.get('lemmy');
-    const orig = lemmy.listCommunities;
-    let lemmyCalls = 0;
-    lemmy.listCommunities = async (host) => { lemmyCalls++; return [
-      { name: 'gaymen', host, title: 'Gay men', description: 'NSFW gay men', nsfw: true, subscribers: 3000 },
-      { name: 'cats', host, title: 'Cats', description: 'cats', nsfw: false, subscribers: 9000 },
-    ]; };
-    try {
+  test('community search: NSFW subreddits, adult Bluesky feeds — safety and scope still apply', async () => {
       const r = await discovery.communityDiscovery({ keywords: 1 });
       assert.equal(state.subSearches.length, 1); assert.equal(state.feedSearches.length, 1);
       assert.equal(r.reddit, 1, 'only the NSFW, safe, on-topic subreddit is a lead');
@@ -185,13 +177,8 @@ describe('far-reaching discovery', () => {
       const feed = repo.candidates.find('bluesky', 'feedgen', 'at://did:plc:feedmaker/app.bsky.feed.generator/gaynsfw');
       assert.ok(feed); assert.equal(feed.signals.popularity, 5400);
       assert.equal(repo.candidates.find('bluesky', 'feedgen', 'at://did:plc:news/app.bsky.feed.generator/gaynews'), null, 'non-adult feeds are not leads');
-      assert.ok(repo.candidates.find('lemmy', 'community', 'gaymen@lemmy.test'));
-      assert.equal(repo.candidates.find('lemmy', 'community', 'cats@lemmy.test'), null);
-      // Lemmy lists are read at most once a day per instance; keywords rotate.
       await discovery.communityDiscovery({ keywords: 1 });
-      assert.equal(lemmyCalls, 1);
       assert.notEqual(state.subSearches[1], state.subSearches[0]);
-    } finally { lemmy.listCommunities = orig; }
   });
   test('the stricter community gate applies on every path, not just community search', () => {
     const { parseProfile } = require('../src/lib/links');
@@ -201,18 +188,6 @@ describe('far-reaching discovery', () => {
     // ... while a person with the same wording still waits for a human
     const person = discovery.consider(parseProfile('https://bsky.app/profile/teenfan.bsky.social'), 'mention', 'c1', { bio: 'teen boys' });
     assert.equal(person.status, 'pending'); assert.match(person.reason, /needs review/);
-  });
-  test('a failed Lemmy read is retried on the next run instead of waiting a day', async () => {
-    const lemmy = registry.get('lemmy');
-    const orig = lemmy.listCommunities;
-    let calls = 0;
-    lemmy.listCommunities = async () => { calls++; throw new Error('timeout'); };
-    try {
-      repo.discoveryState.set('lemmy.list.lemmy.test', '');
-      await discovery.communityDiscovery({ keywords: 0 });
-      await discovery.communityDiscovery({ keywords: 0 });
-      assert.equal(calls, 2);
-    } finally { lemmy.listCommunities = orig; }
   });
   test('auto-follow: strong male-focused communities follow untrusted (posts still checked); the switch turns it off', () => {
     const sub = repo.candidates.find('reddit', 'community', 'gaybrosgonewild');
@@ -241,9 +216,9 @@ describe('far-reaching discovery', () => {
     assert.ok(!repo.candidates.needingDetails('bluesky', 100).some((c) => c.kind !== 'user'));
   });
   test('a human follow of a community is trusted', () => {
-    const c = discovery.consider(require('../src/lib/links').parseProfile('https://lemmynsfw.com/c/hairymen'), 'search', 'lemmy:x', { displayName: 'Hairy men', bio: 'gay hairy men' });
+    const c = discovery.consider(require('../src/lib/links').parseProfile('r/hairymen'), 'search', 'reddit:x', { displayName: 'Hairy men', bio: 'gay hairy men' });
     assert.ok(discovery.follow(c.id, { actor: 'admin' }).ok);
-    assert.equal(repo.feeds.find('lemmy', 'community', 'hairymen@lemmynsfw.com').trusted, 1);
+    assert.equal(repo.feeds.find('reddit', 'community', 'hairymen').trusted, 1);
   });
   test('X leads get bios and follower counts in one batched lookup', async () => {
     const { parseProfile } = require('../src/lib/links');

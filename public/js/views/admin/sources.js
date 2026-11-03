@@ -8,7 +8,6 @@ const ENV_HELP = {
   bluesky: ['BSKY_IDENTIFIER', 'BSKY_APP_PASSWORD'],
   x: ['X_BEARER_TOKEN'],
   mastodon: ['MASTODON_ACCESS_TOKEN (optional)', 'MASTODON_INSTANCES'],
-  lemmy: ['LEMMY_INSTANCES'],
   telegram: ['TELEGRAM_API_ID', 'TELEGRAM_API_HASH', 'MEDIA_STORE_* (bucket)'],
 };
 const BLURB = {
@@ -18,7 +17,6 @@ const BLURB = {
   mastodon: 'Creators and hashtags on any Mastodon-compatible server. Public API; some servers require sign-in for public timelines. Boosts are kept and credited to the original poster.',
   tumblr: 'Blogs and tags through Tumblr’s public RSS. Reblogs are kept and credited to the original blog; images are upgraded to the largest size.',
   peertube: 'PeerTube accounts, channels, tags and keyword search across the federation (Sepia Search). Videos play as MP4 or HLS.',
-  lemmy: 'Communities and users on Lemmy instances (API v3 with v4 fallback).',
   x: 'Creator timelines and searches. The official API (bearer token) is reliable; without it only a best-effort keyless route is available.',
   telegram: 'Two ways in. Public channels through the web preview (t.me/s/…, no login). And, once you log in (node scripts/telegram-login.js), every channel and group your account has joined, public or private, with full history; files are copied into your bucket (R2/B2) so nothing sits on the server.',
   rss: 'Any RSS / Atom / JSON Feed — creators’ own sites, Tumblr blogs (/rss), Mastodon and Bluesky profile feeds. The most stable way to follow anything.',

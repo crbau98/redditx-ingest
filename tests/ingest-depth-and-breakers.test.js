@@ -118,7 +118,7 @@ test('host breaker: two 502s from one instance skip that host, not the platform'
 
 test('a feed on a tripped host is skipped without a request and rescheduled after the cooldown', async () => {
   breaker.reset();
-  const f = repo.feeds.upsert({ platform: 'lemmy', kind: 'community', target: 'gayporn@down.example', origin: 'admin', trusted: 1, runNow: true }).feed;
+  const f = repo.feeds.upsert({ platform: 'mastodon', kind: 'tag', target: 'gayporn@down.example', origin: 'admin', trusted: 1, runNow: true }).feed;
   breaker.hostFailure('down.example', Object.assign(new Error('Bad Gateway'), { status: 502 }));
   breaker.hostFailure('down.example', Object.assign(new Error('Bad Gateway'), { status: 502 }));
   const r = await engine.runFeed(f.id, 'schedule');

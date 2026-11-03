@@ -69,7 +69,7 @@ const SCHEMA = {
       'gay justfor.fans creator telegram', 'gay fitness creator youtube channel', 'gay model pixelfed portfolio'].join('\n'),
   },
   // --- discovery reach (v4.6) ---
-  discoveryCommunities: { type: 'bool', default: true, label: 'Search Reddit, Lemmy and Bluesky for communities and custom feeds', group: 'discovery' },
+  discoveryCommunities: { type: 'bool', default: true, label: 'Search Reddit and Bluesky for communities and custom feeds', group: 'discovery' },
   // --- link health (v4.8) ---
   linkHealth: { type: 'bool', default: true, label: 'Check media at the source and hide what has been removed there', group: 'maintenance' },
   linkHealthPerSweep: { type: 'int', default: 40, min: 0, max: 500, label: 'Items re-checked every 10 minutes', group: 'maintenance' },

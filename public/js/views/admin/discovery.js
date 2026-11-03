@@ -58,11 +58,11 @@ export async function render(root) {
   let data; let seedsText = '';
 
   const runBtn = h('button', { class: 'btn primary', onclick: (e) => act(e.currentTarget, async () => { await adminPost('/discovery/run'); toast('Discovery started — watch the Live log', 'ok'); setTimeout(load, 2500); }) }, icon('sparkle', 'sm'), 'Run discovery now');
-  head.append(pageHead('Discovery', 'Finds creators you are not following yet: who your creators mention and follow, keyword searches on Reddit, Lemmy and Bluesky, directory and list pages across the open web, the Coomer index and the GayForFans performer ranking, then image-matches their content — scores every lead and follows the strong ones automatically.', runBtn));
+  head.append(pageHead('Discovery', 'Finds creators you are not following yet: who your creators mention and follow, keyword searches on Reddit and Bluesky, directory and list pages across the open web, the Coomer index and the GayForFans performer ranking, then image-matches their content — scores every lead and follows the strong ones automatically.', runBtn));
 
   const search = h('input', { class: 'input sm', type: 'search', 'aria-label': 'Search candidates', placeholder: 'Search candidates…', value: f.q, style: { maxWidth: '220px' } });
   search.addEventListener('input', debounce(() => set({ q: search.value.trim(), page: 0 }), 350));
-  const PLATFORMS = [['', 'All platforms'], ['bluesky', 'Bluesky'], ['reddit', 'Reddit'], ['redgifs', 'RedGIFs'], ['x', 'X'], ['telegram', 'Telegram'], ['mastodon', 'Mastodon'], ['misskey', 'Misskey'], ['lemmy', 'Lemmy'], ['tumblr', 'Tumblr'], ['peertube', 'PeerTube'], ['linkinbio', 'Link pages']];
+  const PLATFORMS = [['', 'All platforms'], ['bluesky', 'Bluesky'], ['reddit', 'Reddit'], ['redgifs', 'RedGIFs'], ['x', 'X'], ['telegram', 'Telegram'], ['mastodon', 'Mastodon'], ['misskey', 'Misskey'], ['tumblr', 'Tumblr'], ['peertube', 'PeerTube'], ['linkinbio', 'Link pages']];
   const bar = h('div', { class: 'toolbar' },
     h('div', { class: 'seg', role: 'group', 'aria-label': 'Status' }, STATUSES.map(([v, l]) => h('button', { class: f.status === v ? 'on' : '', onclick: () => set({ status: v, page: 0 }) }, l))),
     search,
@@ -140,10 +140,10 @@ export async function render(root) {
         keyBadge(d.xApi, 'X API', 'X_BEARER_TOKEN — reliable X timelines and searches'),
         keyBadge(d.telegramBot, 'Telegram bot', 'TELEGRAM_API_KEY — channel checks and full descriptions'),
         keyBadge(true, 'Bluesky graph', 'Public, no key needed'), keyBadge(true, 'Mentions', 'Read from posts already ingested'),
-        keyBadge(v.discoveryCommunities, 'Communities & feeds', 'Reddit subreddit search, Lemmy community lists, Bluesky custom-feed search — public, no key needed')),
+        keyBadge(v.discoveryCommunities, 'Communities & feeds', 'Reddit subreddit search, Bluesky custom-feed search — public, no key needed')),
       h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Follow strong candidates automatically'), toggle(v.autoDiscover, (on) => save({ autoDiscover: on }))),
       h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Read who your Bluesky creators follow'), toggle(v.discoveryGraph, (on) => save({ discoveryGraph: on }))),
-      h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Search for communities and custom feeds'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'NSFW subreddits, Lemmy communities and popular Bluesky feeds matching your keywords')), toggle(v.discoveryCommunities, (on) => save({ discoveryCommunities: on }))),
+      h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Search for communities and custom feeds'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'NSFW subreddits and popular Bluesky feeds matching your keywords')), toggle(v.discoveryCommunities, (on) => save({ discoveryCommunities: on }))),
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Bluesky suggestions and people search'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Accounts Bluesky rates as similar to your creators, plus Bluesky and RedGIFs people matching your keywords')), toggle(v.discoveryExpand, (on) => save({ discoveryExpand: on }))),
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Trace OnlyFans creators'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'OnlyFans pages your creators promote lead to the same men’s free accounts on RedGIFs, Bluesky, X, Telegram and link pages. Paid pages named by creators are read like any other public page')), toggle(v.discoveryOnlyFans, (on) => save({ discoveryOnlyFans: on }))),
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Image match (same picture)'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'After a creator is found, search the web for his pictures and note where the very same picture (a repost or copy of his file) appears. A page becomes his feed only if it also names him; a look-alike is never a match')), toggle(v.imageMatch, (on) => save({ imageMatch: on }))),

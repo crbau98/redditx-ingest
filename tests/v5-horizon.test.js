@@ -70,14 +70,14 @@ test('youtube adapter is registered with user/channel kinds', () => {
   assert.equal(a.isConfigured('user').ok, true);
 });
 
-test('lookup directSpecs include youtube, peertube and lemmy probes', () => {
+test('lookup directSpecs include youtube and peertube probes, without retired Lemmy', () => {
   const lookup = require('../src/engine/lookup');
   const q = lookup.parseQuery('gymguy');
   const specs = lookup.directSpecs(q);
   const plats = new Set(specs.map((s) => s.platform));
   assert.ok(plats.has('youtube'), `missing youtube in ${[...plats]}`);
   assert.ok(plats.has('peertube'), `missing peertube in ${[...plats]}`);
-  assert.ok(plats.has('lemmy'), `missing lemmy in ${[...plats]}`);
+  assert.equal(plats.has('lemmy'), false);
   const qChan = lookup.parseQuery('https://www.youtube.com/channel/UC1234567890abcdefghij');
   assert.ok(qChan.spec && qChan.spec.platform === 'youtube' && qChan.spec.kind === 'channel');
   const qBare = lookup.parseQuery('UC_x5XG1OV2P6uZZ5FSM9Ttw');

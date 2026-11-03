@@ -26,7 +26,7 @@ const SINCE = {
 };
 const PLATFORM_WORDS = {
   reddit: ['reddit', 'subreddit', 'subreddits'], redgifs: ['redgifs', 'redgif'], bluesky: ['bluesky', 'bsky'],
-  mastodon: ['mastodon', 'fediverse', 'toots'], misskey: ['misskey', 'sharkey'], tumblr: ['tumblr'], peertube: ['peertube'], lemmy: ['lemmy'],
+  mastodon: ['mastodon', 'fediverse', 'toots'], misskey: ['misskey', 'sharkey'], tumblr: ['tumblr'], peertube: ['peertube'],
   x: ['twitter', 'tweets', 'tweet', 'x.com'], telegram: ['telegram', 'tg'], rss: ['rss', 'blog', 'blogs'],
 };
 // Paid creator platforms: PRISM shows these as profile cards and link-outs, so "on Fansly" means

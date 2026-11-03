@@ -331,11 +331,7 @@ function parseProfile(input, hint = {}) {
       const chan = parts[1].includes('@') ? parts[1] : `${parts[1]}@${h}`;
       return out('peertube', 'channel', chan.toLowerCase(), { label: `${chan.toLowerCase()} (PeerTube channel)`, url: url.href });
     }
-    // Lemmy: /c/community@instance or /c/community, /u/user
-    if (parts[0] === 'c' && parts[1] && !matches(h, 'youtube.com')) {
-      const [name, inst] = parts[1].split('@');
-      return out('lemmy', 'community', `${name}@${inst || h}`, { label: `c/${name}@${inst || h}`, url: url.href });
-    }
+
   }
 
   // Feeds

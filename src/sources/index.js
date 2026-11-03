@@ -9,7 +9,6 @@ const adapters = [
   require('./bluesky'),
   require('./mastodon'),
   require('./misskey'),
-  require('./lemmy'),
   require('./peertube'),
   require('./tumblr'),
   require('./x'),
@@ -48,12 +47,6 @@ const SEEDS = [
   ...seeds('x', 'search', ['gay muscle', 'gay jock', 'gaymuscle', 'gay hunk'], { trusted: false, intervalMin: 240 }),
   ...seeds('mastodon', 'tag', ['gay', 'gaymuscle', 'gayotter', 'gayjock', 'gaynsfw', 'malenude', 'gaycock'], { trusted: false, intervalMin: 180 }),
   ...seeds('misskey', 'tag', ['ゲイ', '筋肉', 'gay', 'gaymuscle', 'gaynsfw'], { trusted: false, intervalMin: 180 }),
-  // Lemmy communities verified live on lemmynsfw.com (names, activity and the posts API). The directory community
-  // "nsfwgaycommunities" and the daily NSFW community listing in discovery find more by themselves.
-  ...seeds('lemmy', 'community', ['gayporn@lemmynsfw.com', 'gaybrosgonewild@lemmynsfw.com', 'gayporngifs@lemmynsfw.com'], { trusted: true, intervalMin: 120 }),
-  ...seeds('lemmy', 'community', ['bulge@lemmynsfw.com', 'cocks@lemmynsfw.com', 'iwanttosuckcock@lemmynsfw.com'], { trusted: false, intervalMin: 120 }),
-  // Verified live on lemmynsfw.com (community API, not removed, posts > 0): male communities, same shape as gayporn@.
-  ...seeds('lemmy', 'community', ['gayvideos@lemmynsfw.com', 'gaylockerroom@lemmynsfw.com', 'gayrimming@lemmynsfw.com', 'gayanal@lemmynsfw.com'], { trusted: true, intervalMin: 120 }),
   ...seeds('peertube', 'search', ['gay', 'gay muscle', 'gay amateur', 'gay jock', 'gay hunk'], { trusted: false, intervalMin: 240 }),
   ...seeds('peertube', 'tag', ['gay'], { trusted: false, intervalMin: 240 }),
   ...seeds('bluesky', 'search', ['gaymuscle', 'gayjock', 'gayotter', 'gaynsfw', 'malenude'], { trusted: false, intervalMin: 180 }),

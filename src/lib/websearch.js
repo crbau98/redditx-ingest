@@ -318,7 +318,7 @@ function status() {
  * @param {{count?: number, budget?: number, fresh?: boolean, site?: string, preferKeyless?: boolean}} opts `budget` = metered calls per day (Brave, Keenable); `site` restricts results to one domain
  * @returns {Promise<Array<{url,title,description}> & {provider?: string}>}
  *
- * Metered providers keep first-hit semantics (spend one call, stop). The keyless tier — Bing and
+ * Metered providers keep first-hit semantics (spend one call, stop). The free tier — SearXNG, Bing and
  * DuckDuckGo's two endpoints — runs in parallel and its results are merged, so DDG answers show up
  * alongside Bing instead of never being reached behind it. A walled DDG fails fast (cooldown) and
  * costs the query nothing.
@@ -338,7 +338,7 @@ const dedupe = (list) => {
 };
 
 async function search(q, { count = 20, budget = 40, fresh = false, site, preferKeyless = false } = {}) {
-  const key = `${count}|${site || ''}|${q}`;
+  const key = `${count}|${site || ''}|${preferKeyless}|${q}`;
   const hit = cache.get(key);
   if (!fresh && hit && hit.results.length && Date.now() - hit.at < CACHE_MS) return hit.results;
   const configured = order().filter((p) => PROVIDERS[p].configured());
@@ -367,14 +367,14 @@ async function search(q, { count = 20, budget = 40, fresh = false, site, preferK
   };
 
   const metered = configured.filter((p) => METERED.includes(p));
-  const free = configured.filter((p) => KEYLESS.includes(p));
-  // Tier 3: everything else (SearXNG and any custom provider) — free but slower / less universal.
-  const rest = configured.filter((p) => !METERED.includes(p) && !KEYLESS.includes(p));
+  const free = configured.filter((p) => KEYLESS.includes(p) || p === 'searxng');
+  // Tier 3: any remaining configured providers.
+  const rest = configured.filter((p) => !METERED.includes(p) && !KEYLESS.includes(p) && p !== 'searxng');
 
   /** Tier 1: metered providers, one paid call each at most — first answer wins. */
   const paidTier = () => sequential(metered);
 
-  /** Tier 2: keyless Bing + DuckDuckGo endpoints in parallel, merged and deduped.
+  /** Tier 2: SearXNG, Bing and DuckDuckGo endpoints in parallel, merged and deduped.
    *  DuckDuckGo's answers come first: it is the door that answers creator names exactly, while
    *  Bing intermittently answers with bot-mitigation decoys ("Christian" for "Christian Hogue").
    *  A provider whose results are incoherent with the query is dropped rather than merged. */
@@ -393,21 +393,18 @@ async function search(q, { count = 20, budget = 40, fresh = false, site, preferK
       if (!coherent(a.results, q)) { dropped.push(a.name); continue; }
       kept.push(a);
     }
-    const merged = dedupe(kept.flatMap((a) => a.results));
+    const merged = dedupe(kept.flatMap((a) => a.results.map((r) => ({ ...r, provider: a.name }))));
     if (merged.length) {
       const label = kept.map((a) => a.name).join('+') || 'keyless';
       return remember(label, merged);
     }
-    // Nothing coherent: keep the raw answers rather than losing them (a provider may be right and
-    // the coherence check too strict for a very short query).
-    const raw = dedupe(answered.flatMap((a) => a.results));
-    if (raw.length) return remember(answered.filter((a) => a.results.length).map((a) => a.name).join('+') || 'keyless', raw);
+    if (dropped.length) lastErr = Object.assign(new Error(`web search: incoherent results from ${dropped.join(', ')}`), { status: 502 });
     const firstFail = settled.find((s) => s.status === 'rejected');
     lastErr = lastErr || (firstFail && firstFail.reason) || lastErr;
     return null;
   };
 
-  /** Tier 3: SearXNG and anything custom — free, last because it is the least universal. */
+  /** Tier 3: any remaining providers. */
   const tailTier = () => sequential(rest);
 
   // The daily Brave counter is shared by lookup, discovery and image match. Secondary passes
