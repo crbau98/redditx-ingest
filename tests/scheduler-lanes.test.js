@@ -91,3 +91,50 @@ test('a run that stopped inside the history comes back after the backfill gap, a
     assert.ok(new Date(row.next_run_at).getTime() - Date.now() > settingsStore.get().backfillGapMin * 60000, 'done: back to the normal poll interval');
   } finally { a.fetch = real; }
 });
+
+/* ------------------------------------------------------------------ review fixes */
+const aged = (id, { successAgoMin = 600, dueAgoMin = 1, cursor = { newestAt: 'x' }, failures = 0 } = {}) => repo.db.prepare("UPDATE feeds SET last_success_at = datetime('now', ?), next_run_at = datetime('now', ?), cursor = ?, consecutive_failures = ?, created_at = datetime('now','-30 days') WHERE id = ?")
+  .run(`-${successAgoMin} minutes`, `-${dueAgoMin} minutes`, JSON.stringify(cursor), failures, id);
+
+test('fairness: with 7 platforms each holding 100 due feeds, every platform gets a near-equal share of 400 picks', () => {
+  const cfg = settingsStore.get();
+  const plats = ['reddit', 'coomer', 'bluesky', 'gff', 'web', 'mastodon', 'lemmy'];
+  for (const p of plats) for (let i = 0; i < 100; i++) aged(mk(p, `${p}${i}`).id, { dueAgoMin: 5 + i });
+  const got = {};
+  for (let i = 0; i < 400; i++) { const w = engine._nextWork(cfg); assert.ok(w, `pick ${i}`); got[w.feed.platform] = (got[w.feed.platform] || 0) + 1; repo.db.prepare("UPDATE feeds SET next_run_at = datetime('now','+1 day') WHERE id = ?").run(w.feed.id); }
+  for (const p of plats) assert.ok(got[p] >= 400 / 7 - 6 && got[p] <= 400 / 7 + 6, `${p} got ${got[p]} of 400: ${JSON.stringify(got)}`);
+});
+
+test('a refresh feed due 30 s ago beats a backlog of 80 older backfill feeds on the same platform', () => {
+  const cfg = settingsStore.get();
+  for (let i = 0; i < 80; i++) aged(mk('bluesky', `bf${i}`).id, { dueAgoMin: 2000 + i, cursor: { newestAt: 'x', bfNext: 'c' } });
+  const fresh = mk('bluesky', 'refresh'); aged(fresh.id, { dueAgoMin: 0.5 });
+  const w = engine._nextWork(cfg);
+  assert.equal(w.feed.id, fresh.id); assert.equal(w.lane, 1);
+});
+
+test('lane 0 is user-priority or genuinely new: 541 old never-succeeded feeds and feeds that keep failing do not get it', () => {
+  const cfg = settingsStore.get();
+  const old = mk('telegram', 'old'); repo.db.prepare("UPDATE feeds SET created_at = datetime('now','-10 days') WHERE id = ?").run(old.id);
+  const failing = mk('telegram', 'failing'); repo.db.prepare("UPDATE feeds SET consecutive_failures = 3 WHERE id = ?").run(failing.id);
+  const fresh = mk('telegram', 'fresh');
+  const prio = mk('telegram', 'prio', { priority: 3 });
+  const f = (x) => backfill.laneOf(repo.feeds.get(x.id), cfg);
+  assert.equal(f(old), 1); assert.equal(f(failing), 1); assert.equal(f(fresh), 0); assert.equal(f(prio), 0);
+  budget._reset();
+  const cap = { ...cfg, platformDailyRuns: 'telegram=1' };
+  budget.charge('telegram', 1);
+  assert.equal(budget.allow('telegram', backfill.laneOf(repo.feeds.get(old.id), cap), cap), false, 'an old unread feed is subject to the budget');
+});
+
+test('image-filter concurrency has its own cap, whatever the number of feed slots', async () => {
+  const imagefilter = require('../src/lib/imagefilter');
+  settingsStore.update({ imageFilterConcurrency: 3 });
+  let now = 0; let peak = 0;
+  imagefilter._setAnalyzer(async () => { now++; peak = Math.max(peak, now); await new Promise((r) => setTimeout(r, 15)); now--; return { status: 'ok', faces: [], hash: null }; });
+  try {
+    await Promise.all(Array.from({ length: 24 }, (_, i) => imagefilter.checkItem({ sourceId: `s${i}`, localImage: Buffer.from([1, 2, 3, 4]), mediaType: 'image' }, { faces: false })));
+    assert.ok(peak <= 3 && peak >= 2, `peak ${peak}`);
+    assert.equal(imagefilter.gate().active, 0);
+  } finally { imagefilter._reset(); settingsStore.update({ imageFilterConcurrency: 4 }); }
+});
