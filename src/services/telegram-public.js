@@ -56,7 +56,9 @@ function handlesOf(creator) {
 }
 
 function knownTelegramLinks(creator) {
-  let links = []; try { links = JSON.parse(creator.links || '[]'); } catch { links = []; }
+  let links = creator.links;
+  if (typeof links === 'string') { try { links = JSON.parse(links || '[]'); } catch { links = []; } }
+  if (!Array.isArray(links)) links = [];
   const out = new Set();
   for (const l of links) for (const s of extractLinks(String(l.url || ''))) if (s.platform === 'telegram') out.add(String(s.target).toLowerCase());
   for (const s of extractLinks(String(creator.bio || ''))) if (s.platform === 'telegram') out.add(String(s.target).toLowerCase());
@@ -83,7 +85,8 @@ function claimsOwnership(title, about, names) {
 }
 
 /**
- * Look a creator's handles up on Telegram. Returns { searched, followed:[username], leads:[{username,title,why}], skipped }.
+ * Look a creator's handles up on Telegram. Auto-follows ONLY a channel that his own links name; the rest become leads (kept in
+ * discovery state `tg.leads.<creator id>`). Returns { searched, followed:[username], leads:[{username,title,why}], skipped }.
  * One call per creator per 30 days unless `force`.
  */
 async function lookupHandles(creatorId, { force = false } = {}) {
@@ -108,8 +111,12 @@ async function lookupHandles(creatorId, { force = false } = {}) {
       let about = '';
       try { const p = await mt.profile(ch.username, { avatar: false }); about = String(p.about || ''); aiguard.mark([p.title, p.about]); } catch { /* the title alone then */ }
       const text = `${ch.title} ${about}`.toLowerCase();
-      const backed = linked.has(String(ch.username).toLowerCase()) || claimsOwnership(ch.title, about, [handle, ...names]);
-      if (!backed) { out.leads.push({ username: ch.username, title: ch.title, why: 'exact username, but his own links do not name it and its description does not claim to be his' }); continue; }
+      // The channel controls its own title and description, so they prove nothing about who runs it (an impersonator writes "official
+      // page of ..."). Only HIS OWN links naming the channel make it his; every other exact-username hit is a lead for an admin.
+      if (!linked.has(String(ch.username).toLowerCase())) {
+        out.leads.push({ username: ch.username, title: ch.title, claimsOwnership: claimsOwnership(ch.title, about, [handle, ...names]), why: 'exact username, but none of his own links names this channel' });
+        continue;
+      }
       const r = require('./targets').addSpec({ platform: 'telegram', kind: 'channel', target: ch.username, label: ch.title, ingestable: true }, { creatorId: creator.id, origin: 'discovered', trusted: 0 });
       if (r.status === 'created' || r.status === 'exists') out.followed.push(ch.username);
     }
@@ -122,6 +129,7 @@ async function lookupHandles(creatorId, { force = false } = {}) {
     try { for (const h of await mt.searchPosts(tag, { limit: 30 })) if (!out.followed.includes(h.username)) out.leads.push({ username: h.username, title: h.title, why: `${h.hits} post(s) with #${tag}` }); } catch (e) { events.log('WARN', `Telegram hashtag "${tag}": ${e.message}`); }
   }
   repo.discoveryState.set(stamp, new Date().toISOString());
+  if (out.leads.length) repo.discoveryState.set(`tg.leads.${creator.id}`, JSON.stringify(out.leads.slice(0, 20))); // for an admin to review
   events.log('INFO', `Telegram lookup for ${creator.display_name || creator.handle}: ${out.searched} search(es), followed ${out.followed.length}, ${out.leads.length} lead(s)`);
   return out;
 }

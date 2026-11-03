@@ -71,14 +71,15 @@ describe('public channels by username', () => {
     assert.ok(got.items.every((i) => i.mediaUrl.includes('/tg/50/')));
   });
 
-  test('searches are budgeted and an exact username needs a second sign before it is followed; leads are not followed', async () => {
+  test('searches are budgeted; a channel is followed only when his own links name it; leads are not followed', async () => {
     const c = repo.creators.create({ handle: 'rexcarter', displayName: 'Rex Carter', origin: 'admin' });
+    repo.db.prepare('UPDATE creators SET links = ? WHERE id = ?').run(JSON.stringify([{ platform: 'external', service: 'Telegram', label: 'Telegram', url: 'https://t.me/rexcarter' }]), c.id);
     client = fakeClient({ publicChannels: [chan(70, 'rexcarter', 'Rex Carter Official'), chan(71, 'rexcarter2', 'Other')], search: { rexcarter: [{ id: '70', username: 'rexcarter', title: 'Rex Carter Official', members: 900, kind: 'channel' }] },
       posts: { rexcarter: [{ id: '71', username: 'rexcarter2', title: 'Other', hits: 3 }] } });
     mt._setFactory(async () => client);
     settingsStore.update({ telegramSearchesPerDay: 3 });
     const r = await tp.lookupHandles(c.id, { force: true });
-    assert.deepEqual(r.followed, ['rexcarter'], 'exact username, and the description names him');
+    assert.deepEqual(r.followed, ['rexcarter'], 'exact username, and HIS OWN links name the channel');
     assert.ok(r.leads.some((l) => l.username === 'rexcarter2'), 'hashtag hit is only a lead');
     assert.ok(!repo.feeds.find('telegram', 'channel', 'rexcarter2'));
     assert.equal(repo.feeds.find('telegram', 'channel', 'rexcarter').creator_id, c.id);
@@ -179,5 +180,74 @@ describe('the AI guard survives a restart', () => {
     `], { cwd: root, env, encoding: 'utf8' });
     assert.equal(b.status, 0, b.stderr);
     assert.deepEqual(JSON.parse(b.stdout.trim().split('\n').pop()), { direct: true, embedded: true, storedBio: true, clean: false });
+  });
+});
+
+describe('impersonators and provenance (Crucible)', () => {
+  test('exact username + any text the channel writes about itself is never enough: unofficial / scam / "is a fake" / "official page of" all become leads', async () => {
+    const c = repo.creators.create({ handle: 'zedfit', displayName: 'Zed Fit', origin: 'admin' });
+    const cases = [['unofficial fan page, not affiliated with @zedfit', 'Zed Fit fan page'], ['scam alert: do not trust @zedfit impostors', 'Scam alert'], ['Zed Fit is a fake, ignore', 'Beware'],
+      ['official page of Zed Fit, follow me @zedfit', 'Zed Fit Official'], ['cool pics', 'Daily pics']];
+    for (const [about, title] of cases) {
+      const cl = fakeClient({ publicChannels: [chan(95, 'zedfit', title)], search: { zedfit: [{ id: '95', username: 'zedfit', title, members: 5, kind: 'channel' }] } });
+      cl.invoke = async () => ({ fullChat: { about, participantsCount: 5 } });
+      mt._setFactory(async () => cl);
+      repo.settings.set('tg_budget', JSON.stringify({ day: new Date().toISOString().slice(0, 10), searches: 0, joins: 0, lastJoinAt: 0 }));
+      settingsStore.update({ telegramSearchesPerDay: 50 });
+      repo.db.prepare("DELETE FROM feeds WHERE platform = 'telegram' AND target = 'zedfit'").run();
+      const r = await tp.lookupHandles(c.id, { force: true });
+      assert.deepEqual(r.followed, [], about);
+      assert.ok(r.leads.some((l) => l.username === 'zedfit'), about);
+      assert.ok(!repo.feeds.find('telegram', 'channel', 'zedfit'), about);
+    }
+    assert.ok(JSON.parse(repo.discoveryState.get(`tg.leads.${c.id}`, '[]')).length, 'leads are kept for an admin');
+  });
+
+  test('provenance by row: after a restart a creator who has a Telegram feed is refused as AI input, with short strings, tags and web-search args covered', () => {
+    const { spawnSync } = require('child_process');
+    const root = path.join(__dirname, '..');
+    const env = { ...process.env, DB_PATH: process.env.DB_PATH };
+    const a = spawnSync(process.execPath, ['-e', `
+      const repo = require('./src/db/repo');
+      const c = repo.creators.create({ handle: 'rexcarter', displayName: 'Rex Carter', origin: 'admin' });
+      repo.creators.enrich(c.id, { bio: 'Official channel of Rex Carter - daily gym updates and more' });
+      repo.feeds.upsert({ platform: 'telegram', kind: 'channel', target: 'rexchan', creatorId: c.id, origin: 'admin' });
+      const tag = repo.db.prepare("INSERT INTO tags (name) VALUES ('kettlebell') ").run().lastInsertRowid;
+      const m = repo.db.prepare("SELECT id FROM media LIMIT 1").get();
+      if (!m) { repo.db.prepare("INSERT INTO media (id, platform, source_id, source_key, source_url, media_type, media_url, hash, publish_state, scope, nsfw_level) VALUES ('tgm1','telegram','a','telegram:a:0','u','image','u','h1','published','in','explicit')").run(); }
+      repo.db.prepare("UPDATE media SET platform = 'telegram' WHERE id = COALESCE((SELECT id FROM media WHERE id = 'tgm1'), (SELECT id FROM media LIMIT 1))").run();
+      repo.db.prepare("INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES ((SELECT id FROM media WHERE platform = 'telegram' LIMIT 1), ?)").run(tag);
+    `], { cwd: root, env, encoding: 'utf8' });
+    assert.equal(a.status, 0, a.stderr);
+    const b = spawnSync(process.execPath, ['-e', `
+      const g = require('./src/lib/aiguard');
+      const o = {};
+      o.bio = g.tainted({ creators: [{ n: 1, handle: 'x', name: 'y', text: 'Official channel of Rex Carter - daily gym updates and more' }] });
+      o.handle = g.tainted({ creators: [{ n: 1, handle: 'rexcarter', name: '', text: '' }] });
+      o.shortName = g.tainted({ accounts: [{ name: 'Rex Carter' }] });
+      o.tag = g.tainted({ library_themes: ['kettlebell (14)', 'sunset (3)'] });
+      o.scrubbed = g.scrub({ library_themes: ['kettlebell (14)', 'sunset (3)'], existing_queries: [] }, 'queries').library_themes;
+      o.clean = g.tainted({ creators: [{ handle: 'someoneelse', name: 'Other Guy', text: 'a bluesky bio' }] });
+      process.stdout.write(JSON.stringify(o));
+    `], { cwd: root, env, encoding: 'utf8' });
+    assert.equal(b.status, 0, b.stderr);
+    assert.deepEqual(JSON.parse(b.stdout.trim().split('\n').pop()), { bio: true, handle: true, shortName: true, tag: true, scrubbed: ['sunset (3)'], clean: false });
+  });
+
+  test('pacing is pinned: reads (profile, dialogs) and downloads are serialised and spaced', async () => {
+    const cl = fakeClient({ joined: [chan(1, 'pacechan', 'Pace')], messages: { 1: [photoMsg(1, 'x')] } });
+    let inflight = 0; let peak = 0; const starts = [];
+    cl.downloadMedia = async () => { inflight++; peak = Math.max(peak, inflight); starts.push(Date.now()); await new Promise((r) => setTimeout(r, 15)); inflight--; return Buffer.alloc(10, 1); };
+    const reads = [];
+    const realInvoke = cl.invoke; cl.invoke = async (...a) => { reads.push(Date.now()); return realInvoke(...a); };
+    mt._setFactory(async () => cl);
+    mt._setGaps({ read: 80, download: 80 });
+    try {
+      await Promise.all([mt.profile('pacechan', { avatar: false }), mt.profile('pacechan', { avatar: false }), mt.profile('pacechan', { avatar: false })]);
+      assert.ok(reads.length === 3 && reads[1] - reads[0] >= 70 && reads[2] - reads[1] >= 70, `profile reads ${JSON.stringify(reads.map((t) => t - reads[0]))}`);
+      await Promise.all([1, 2, 3, 4].map((i) => mt.download({ id: i })));
+      assert.equal(peak, 1, 'downloads one at a time');
+      assert.ok(starts[3] - starts[0] >= 220, 'and spaced');
+    } finally { mt._setGaps({}); mt._setFactory(null); }
   });
 });

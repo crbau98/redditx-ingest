@@ -84,7 +84,8 @@ const num = (v) => { const n = Number(str(v)); return Number.isFinite(n) ? n : 0
 const clsOf = (o) => (o && (o.className || (o.constructor && o.constructor.name))) || '';
 
 /** Joined channels and supergroups (not private chats, not small groups): [{id, username, title, members, kind}] */
-async function dialogs() {
+async function dialogs() { return paced('read', dialogsNow); }
+async function dialogsNow() {
   try {
     const c = await client();
     const out = [];
@@ -105,7 +106,7 @@ async function entityOf(target) {
   const key = String(target).replace(/^@/, '').toLowerCase();
   if (entities.has(key)) return entities.get(key);
   const c = await client();
-  if (!warmed && /^id:/.test(key)) await dialogs(); // private channels are only resolvable once the dialog list has been read
+  if (!warmed && /^id:/.test(key)) await dialogsNow(); // private channels are only resolvable once the dialog list has been read
   if (entities.has(key)) return entities.get(key);
   try {
     const raw = /^id:/.test(key) ? key.slice(3) : String(target).replace(/^@/, '');
@@ -128,7 +129,7 @@ async function entityOf(target) {
  * `exhausted`: nothing more lies beyond this page in the direction read.
  */
 async function messages(target, { minId = 0, offsetId = 0, reverse = false, limit = 50 } = {}) {
-  return paced('telegram-mt-read', READ_GAP_MS, () => messagesNow(target, { minId, offsetId, reverse, limit }));
+  return paced('read', () => messagesNow(target, { minId, offsetId, reverse, limit }));
 }
 async function messagesNow(target, { minId = 0, offsetId = 0, reverse = false, limit = 50 } = {}) {
   try {
@@ -197,7 +198,8 @@ function describeMedia(msg, { maxBytes = config.telegram.maxMb * 1024 * 1024 } =
 }
 
 /** Download a message's media to `file`, or return a Buffer when `file` is omitted. `thumb` fetches the poster frame of a video. */
-async function download(msg, { file, thumb = false } = {}) {
+async function download(msg, opts = {}) { return paced('download', () => downloadNow(msg, opts)); }
+async function downloadNow(msg, { file, thumb = false } = {}) {
   try {
     const c = await client();
     const opts = {};
@@ -214,7 +216,8 @@ async function download(msg, { file, thumb = false } = {}) {
 }
 
 /** { title, about, members, avatar: Buffer|null } for a channel. */
-async function profile(target, { avatar = true } = {}) {
+async function profile(target, opts = {}) { return paced('read', () => profileNow(target, opts)); }
+async function profileNow(target, { avatar = true } = {}) {
   try {
     const c = await client();
     const entity = await entityOf(target);
@@ -237,12 +240,19 @@ async function profile(target, { avatar = true } = {}) {
  * searches and joins, which Telegram watches much more closely, 30 s and 2 h. Nothing in this module posts, sends or edits
  * anything (the guard test greps for it): it reads, searches, and joins channels from an approved list.
  */
-const READ_GAP_MS = 1200; const SEARCH_GAP_MS = 30 * 1000; const JOIN_GAP_MS = 2 * 3600 * 1000;
-const paced = (key, gap, fn) => (factory ? fn() : limiter.schedule(key, gap, fn));
+const GAPS = { read: 1200, download: 400, search: 30 * 1000, join: 2 * 3600 * 1000 };
+let gaps = GAPS;
+/** Run `fn` through the limiter for `kind` (calls of one kind are serialised and spaced). With a fake client (tests) the gaps are 0 unless a
+ * test pins them with _setGaps(). Never nest two paced calls of the same kind: the inner one would wait on the outer. */
+const paced = (kind, fn) => {
+  const gap = gaps[kind] || 0;
+  if (factory && !gap) return fn();
+  return limiter.schedule(`telegram-mt-${kind}`, gap, fn);
+};
 
 /** Public channels whose username or title matches `q` (contacts.Search, free): [{id, username, title, members, kind}]. */
 async function searchChannels(q, { limit = 8 } = {}) {
-  return paced('telegram-mt-search', SEARCH_GAP_MS, async () => {
+  return paced('search', async () => {
     try {
       const c = await client();
       if (factory && c.searchChannels) return c.searchChannels(q, limit);
@@ -262,7 +272,7 @@ async function searchChannels(q, { limit = 8 } = {}) {
 
 /** Posts carrying a hashtag, across public channels the account has not joined (channels.SearchPosts): distinct channels with a hit. */
 async function searchPosts(hashtag, { limit = 30 } = {}) {
-  return paced('telegram-mt-search', SEARCH_GAP_MS, async () => {
+  return paced('search', async () => {
     try {
       const c = await client();
       if (factory && c.searchPosts) return c.searchPosts(hashtag, limit);
@@ -285,7 +295,7 @@ async function searchPosts(hashtag, { limit = 30 } = {}) {
 
 /** Join ONE public channel / group by username. Callers keep the approved list and the daily cap (services/telegram-public). */
 async function joinChannel(username) {
-  return paced('telegram-mt-join', JOIN_GAP_MS, async () => {
+  return paced('join', async () => {
     try {
       const c = await client();
       const entity = await entityOf(username);
@@ -306,5 +316,7 @@ async function shutdown() {
 module.exports = {
   configured, dialogs, messages, describeMedia, download, profile, entityOf, shutdown, wrap, searchChannels, searchPosts, joinChannel,
   sessionString, saveSession, SESSION_FILE, MIME_FOR_EXT,
-  _setFactory(fn) { factory = fn; clientPromise = null; warmed = false; entities.clear(); },
+  _setFactory(fn) { factory = fn; clientPromise = null; warmed = false; entities.clear(); gaps = fn ? { read: 0, download: 0, search: 0, join: 0 } : GAPS; },
+  _setGaps(g) { gaps = { read: 0, download: 0, search: 0, join: 0, ...g }; },
+  _gaps: () => gaps,
 };
