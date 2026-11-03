@@ -876,9 +876,9 @@ const mediaQ = {
   byKey: db.prepare('SELECT id FROM media WHERE source_key = ?'),
   byPost: db.prepare('SELECT 1 AS ok FROM media WHERE post_key = ? LIMIT 1'),
   insert: db.prepare(`INSERT INTO media (id, creator_id, feed_id, platform, source_id, source_key, post_key, position, source_url, community, author, title, description,
-      media_type, media_url, preview_url, thumbnail_url, hls_url, has_audio, width, height, duration, mime_type, score, hash, nsfw_level, scope, publish_state, review_reason, posted_at, phash, physique)
+      media_type, media_url, preview_url, thumbnail_url, hls_url, has_audio, width, height, duration, mime_type, score, hash, nsfw_level, scope, publish_state, review_reason, posted_at, phash, physique, attribution_evidence)
     VALUES (@id, @creator_id, @feed_id, @platform, @source_id, @source_key, @post_key, @position, @source_url, @community, @author, @title, @description,
-      @media_type, @media_url, @preview_url, @thumbnail_url, @hls_url, @has_audio, @width, @height, @duration, @mime_type, @score, @hash, @nsfw_level, @scope, @publish_state, @review_reason, @posted_at, @phash, @physique)`),
+      @media_type, @media_url, @preview_url, @thumbnail_url, @hls_url, @has_audio, @width, @height, @duration, @mime_type, @score, @hash, @nsfw_level, @scope, @publish_state, @review_reason, @posted_at, @phash, @physique, @attribution_evidence)`),
   state: db.prepare("UPDATE media SET publish_state = ?, review_reason = COALESCE(?, review_reason), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?"),
   stateExact: db.prepare("UPDATE media SET publish_state = ?, review_reason = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?"),
   like: db.prepare('UPDATE media SET likes = likes + 1 WHERE id = ?'),
@@ -1040,7 +1040,7 @@ const media = {
           id, creator_id: null, feed_id: null, source_id: null, source_key: null, post_key: null, position: 0, source_url: null,
           community: null, author: null, title: null, description: null, preview_url: null, thumbnail_url: null, hls_url: null,
           has_audio: 0, width: null, height: null, duration: null, mime_type: null, score: 0, nsfw_level: 'explicit', scope: 'in',
-          publish_state: 'published', review_reason: null, posted_at: nowIso(), phash: null, physique: null, ...row,
+          publish_state: 'published', review_reason: null, posted_at: nowIso(), phash: null, physique: null, attribution_evidence: null, ...row,
         });
       } catch (e) {
         // Duplicate hash / source_key: expected and harmless. Anything else is a real bug.

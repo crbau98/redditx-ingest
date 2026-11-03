@@ -100,7 +100,15 @@ function blockFemaleCreator(item, feed, rule) {
  * A repost (Tumblr reblog, X retweet or quote, Bluesky repost, Reddit crosspost) carries somebody else's post. It belongs
  * to the ORIGINAL poster, not to the account whose feed we read, so the feed's own creator is not used for it.
  */
-const ownedByFeed = (item, feed) => !!feed.creator_id && ['user', 'channel', 'feed', 'page'].includes(feed.kind) && !item.repostOf;
+function telegramAmbiguous(item, feed) {
+  if (feed.platform !== 'telegram') return false;
+  const e = item.attributionEvidence;
+  const text = [item.title, item.text, ...(item.links || [])].filter(Boolean).join(' ');
+  const tagsOther = [...text.matchAll(/(?:^|\s)@([A-Za-z0-9_]{3,32})/g)].some(m => m[1].toLowerCase() !== cleanHandle(feed.target).toLowerCase());
+  const linksOther = extractLinks(text).some(l => l.ingestable && l.kind === 'user' && (l.platform !== 'telegram' || cleanHandle(l.target).toLowerCase() !== cleanHandle(feed.target).toLowerCase()));
+  return !!(item.repostOf || item.forwardFrom || tagsOther || linksOther || paid.findPaidHandles(text).length || !feed.creator_id || feed.origin !== 'admin' || !e || !e.broadcast || e.megagroup || e.sender?.type !== 'channelId' || e.sender.id !== e.channelId);
+}
+const ownedByFeed = (item, feed) => !!feed.creator_id && ['user', 'channel', 'feed', 'page'].includes(feed.kind) && !item.repostOf && !telegramAmbiguous(item, feed);
 
 /**
  * Find an active known creator explicitly tagged or linked in a post's caption/links
@@ -142,7 +150,7 @@ function mentionedKnownCreator(item, feed) {
     const h = (m[1] || m[2] || '').toLowerCase();
     if (!h || h === authorClean || SKIP_AUTHORS.has(h)) continue;
     const plat = m[2] ? 'reddit' : (feed && feed.platform) || 'x';
-    const byAcc = repo.creators.byAccount(plat, h) || repo.creators.byAccount('x', h) || repo.creators.byAccount('reddit', h) || repo.creators.byAccount('redgifs', h);
+    const byAcc = repo.creators.byAccount(plat, h);
     if (byAcc && byAcc.status === 'active' && byAcc.scope !== 'excluded') {
       const hasPaidOrBio = !!(byAcc.bio || (byAcc.links && byAcc.links.length) || byAcc.origin !== 'ingest');
       if (hasPaidOrBio) return byAcc;
@@ -154,6 +162,7 @@ function mentionedKnownCreator(item, feed) {
 
 /** The creator this item belongs to, if one is already known (never creates one). */
 function knownCreator(item, feed) {
+  if (telegramAmbiguous(item, feed)) return null;
   if (ownedByFeed(item, feed)) return repo.creators.get(feed.creator_id);
   if (['rss', 'web', 'linkinbio'].includes(feed.platform)) return mentionedKnownCreator(item, feed);
   const handle = cleanHandle(item.author);
@@ -187,6 +196,7 @@ function hasAdultCreatorLinks(item) {
 
 /** Which creator does this item belong to? May create one. */
 function resolveCreator(item, feed, adapter) {
+  if (telegramAmbiguous(item, feed)) return null;
   // Feeds that belong to a specific creator (their profile, their RSS, their page).
   if (ownedByFeed(item, feed)) {
     const c = repo.creators.get(feed.creator_id);
@@ -472,6 +482,7 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   if (safety.level === 'review') { state = 'review'; reviewReason = `safety:${safety.rule}`; }
   else if (sc.femaleSoft) { state = 'review'; reviewReason = `scope:${sc.rule}`; } // feminine-adjacent wording: a human decides, whatever the feed trust or scope mode
   else if (sc.scope === 'uncertain' && settings.scopeMode === 'strict') { state = 'review'; reviewReason = 'scope:unclear'; }
+  else if (telegramAmbiguous(item, feed)) { state = 'review'; reviewReason = 'attribution:telegram-ambiguous'; }
   const body = physique.live(settings); // the model pass can be slow: judge with the body-filter settings as they are now
   const bodyVerdict = state === 'published' ? physique.stateFor(physiqueScore, body) : null;
   if (bodyVerdict) { state = bodyVerdict.state; reviewReason = bodyVerdict.reason; imagefilter.noteHeavy(); } // kept, hidden: the threshold can move
@@ -507,6 +518,7 @@ async function processItemInner(rawItem, feed, adapter, settings) {
     scope: sc.scope,
     publish_state: state,
     review_reason: reviewReason,
+    attribution_evidence: item.attributionEvidence ? JSON.stringify(item.attributionEvidence) : null,
     posted_at: item.postedAt || new Date().toISOString(),
     phash,
     physique: physiqueScore,

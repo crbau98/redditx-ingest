@@ -759,7 +759,9 @@ function v19(db) {
   db.prepare("UPDATE feeds SET enabled = 0 WHERE platform = 'lemmy'").run();
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19];
+function v20(db) { db.exec('ALTER TABLE media ADD COLUMN attribution_evidence TEXT'); }
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

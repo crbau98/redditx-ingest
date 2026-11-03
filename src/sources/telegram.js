@@ -127,6 +127,7 @@ function toItems(msg, channel, profile) {
     nsfw: 'explicit',
     trusted: true,
     forwardFrom: msg.forwardFrom || null,
+    repostOf: msg.forwardFrom ? { platform: 'telegram', via: channel } : undefined,
   }));
 }
 
@@ -152,6 +153,15 @@ function messageToItem(msg, d, ch) {
   const posterKey = `${base}-t.jpg`;
   const stored = [];
   const text = String(msg.message || '').trim();
+  const peer = p => {
+    if (!p) return null;
+    for (const key of ['userId', 'channelId', 'chatId']) if (p[key] != null && /^\d+$/.test(String(p[key]))) return { type: key, id: String(p[key]) };
+    return null;
+  };
+  const sender = peer(msg.fromId);
+  const forwarded = !!msg.fwdFrom;
+  const attributionEvidence = { sender, channelId: String(ch.id), broadcast: ch.broadcast === true, megagroup: ch.megagroup === true,
+    forward: forwarded ? { from: peer(msg.fwdFrom.fromId), savedFrom: peer(msg.fwdFrom.savedFromPeer), messageId: msg.fwdFrom.channelPost == null ? null : String(msg.fwdFrom.channelPost) } : null };
   aiguard.mark([text, ch.title, ch.about]);
   const item = {
     sourceId: `${ch.username || `id${ch.id}`}/${msg.id}`,
@@ -173,6 +183,8 @@ function messageToItem(msg, d, ch) {
     community: ch.username || ch.title || null,
     hasAudio: d.type === 'video',
     forwardFrom: mtForward(msg),
+    repostOf: forwarded ? { platform: 'telegram', via: ch.username || `c${ch.id}` } : undefined,
+    attributionEvidence,
   };
   // stage(): fetch only the picture the image filter needs (the photo, or a video's thumbnail) and keep it in memory, so a post
   // the filter or the duplicate check rejects never costs an upload, a delete, or (for a video) the video download at all.
@@ -234,6 +246,7 @@ async function fetchChannel(feed, ctx) {
   const entity = await mt.entityOf(target);
   const ch = {
     id: String(entity.id), username: entity.username || null, title: entity.title || feed.label || target, target,
+    broadcast: entity.broadcast === true, megagroup: entity.megagroup === true,
     trusted: !!feed.trusted, about: cur.about || null,
   };
   let profile;

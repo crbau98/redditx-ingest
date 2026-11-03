@@ -247,14 +247,14 @@ describe('joined channels: sync + ingestion', () => {
     // accepted photo: stored (original + 'p/' prefix in the bucket), published, served from the store URL
     imagefilter._setAnalyzer(async () => ({ status: 'ok', faces: [{ gender: 'male', score: 0.9, confidence: 0.9 }] }));
     const ok = await pipeline.processItem(by['gymbros/1'], feed, tg, settings);
-    assert.equal(ok.outcome, 'added', JSON.stringify(ok));
+    assert.equal(ok.outcome, 'review', JSON.stringify(ok));
     assert.equal(await store.has('tg/100/1.jpg'), true);
     const row = repo.db.prepare("SELECT media_url, media_type, source_url, width, height, author FROM media WHERE source_id = 'gymbros/1'").get();
     assert.equal(row.media_url, 'https://media.prism.invalid/tg/100/1.jpg'); assert.equal(row.source_url, 'https://t.me/gymbros/1'); assert.equal(row.width, 1280);
 
     // video: file + poster stored
     const vid = await pipeline.processItem(by['gymbros/3'], feed, tg, settings);
-    assert.equal(vid.outcome, 'added');
+    assert.equal(vid.outcome, 'review');
     assert.equal(await store.has('tg/100/3.mp4'), true); assert.equal(await store.has('tg/100/3-t.jpg'), true);
     const vrow = repo.db.prepare("SELECT media_type, preview_url, duration FROM media WHERE source_id = 'gymbros/3'").get();
     assert.equal(vrow.media_type, 'video'); assert.equal(vrow.preview_url, 'https://media.prism.invalid/tg/100/3-t.jpg'); assert.equal(vrow.duration, 12);
@@ -279,7 +279,7 @@ describe('joined channels: sync + ingestion', () => {
     imagefilter._setAnalyzer(async () => ({ status: 'ok', faces: [{ gender: 'male', score: 0.9, confidence: 0.9 }] }));
     client.downloads.length = 0;
     const p9 = tg.messageToItem(photoMsg(9, 'pump day'), mt.describeMedia(photoMsg(9, 'x')), ch);
-    assert.equal((await pipeline.processItem(p9, feed, tg, settings)).outcome, 'added');
+    assert.equal((await pipeline.processItem(p9, feed, tg, settings)).outcome, 'review');
     assert.deepEqual(client.downloads, [{ id: 9, thumb: false }]);
     assert.equal(await store.has('tg/100/9.jpg'), true);
     imagefilter._reset();
@@ -323,9 +323,9 @@ describe('joined channels: sync + ingestion', () => {
       const got = await tg.fetch(feed, { limit: 40, cursor: {}, aborted: () => false });
       imagefilter._setAnalyzer(async () => ({ status: 'ok', faces: [{ gender: 'male', score: 0.9, confidence: 0.9 }] }));
       const r = await pipeline.processItem(got.items[0], repo.feeds.get(feed.id), tg, settings);
-      assert.equal(r.outcome, 'added', JSON.stringify(r));
+      assert.equal(r.outcome, 'review', JSON.stringify(r));
       const updatedFeed = repo.feeds.get(feed.id);
-      assert.ok(updatedFeed.creator_id, 'channel feed is linked to its creator');
+      assert.equal(updatedFeed.creator_id, null, 'unverified channel is not linked to a creator');
       const bogusUserFeed = repo.feeds.find('telegram', 'user', 'c200');
       assert.equal(bogusUserFeed, null, 'no broken user feed created for private channel c200');
     } finally {
@@ -365,7 +365,7 @@ describe('joined channels: sync + ingestion', () => {
       imagefilter._setAnalyzer(async () => ({ status: 'ok', faces: [{ gender: 'male', score: 0.9, confidence: 0.9 }] }));
       const strictSettings = { probeUnknownHosts: true, hostReachability: true, scopeMode: 'strict', untrustedUnclear: 'drop', imageFilter: false, dedupe: false };
       const res = await pipeline.processItem(fetched.items[0], feed, tg, strictSettings);
-      assert.equal(res.outcome, 'added', JSON.stringify(res));
+      assert.equal(res.outcome, 'review', JSON.stringify(res));
     } finally {
       imagefilter._reset();
       config.baseUrls.telegramWeb = savedWeb;
