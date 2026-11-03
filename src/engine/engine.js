@@ -24,6 +24,8 @@ const { processItem } = require('./pipeline');
 const physique = require('./physique');
 const { applyProfile, autoTrack } = require('./creators');
 const takedowns = require('../lib/takedowns');
+const backfill = require('./backfill');
+const budget = require('../services/budget');
 
 const MAX_DISCOVERED_FEEDS = 3;
 
@@ -308,9 +310,15 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     const zeroWhy = stats.added > 0 ? null
       : stats.fetched === 0 ? `No new items: the source returned nothing${result.via ? ` (via ${result.via})` : ''}`
         : `No new items: fetched ${stats.fetched} · ${stats.dupes} already stored${stats.blocked ? ` · ${stats.blocked} blocked` : ''}${stats.skipped ? ` · ${stats.skipped} filtered${reasonList ? ` (${reasonList})` : ''}` : ''}`;
+    // History left to read (the adapter's cursor says so): come back after a short gap for the next slice, not after the full
+    // poll interval. A flag on the result covers adapters whose cursor cannot say it (Coomer's walk).
+    const prevCur = backfill.parse(feed.cursor);
+    const baseCur = result.cursor || (prevCur.backfillPending ? prevCur : undefined);
+    const cursorOut = result.backfillPending ? { ...(baseCur || {}), backfillPending: true } : (baseCur && baseCur.backfillPending ? { ...baseCur, backfillPending: false } : baseCur);
+    const more = backfill.pending({ cursor: cursorOut });
     repo.feeds.finishRun(feed.id, {
-      status, cursor: result.cursor, addedItems: stats.added, failures: 0,
-      nextRunAt: computeNextRun(feed, 0, 0, tempo(feed, stats.added)),
+      status, cursor: cursorOut, addedItems: stats.added, failures: 0,
+      nextRunAt: more && !ctx.aborted() ? new Date(Date.now() + cfg.backfillGapMin * 60000).toISOString() : computeNextRun(feed, 0, 0, tempo(feed, stats.added)),
       error: (result.notes && result.notes.length) ? `via ${result.via}: ${result.notes[0]}` : null,
     });
     breaker.success(feed.platform);
@@ -351,29 +359,52 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
 }
 
 /* --------------------------------------------------------------- scheduler */
-function platformBusy(platform) {
-  for (const r of state.running.values()) if (r.platform === platform) return true;
-  return false;
+/** Feeds that may run at once per platform. Each adapter's HTTP calls still go through the per-platform limiter
+ * (lib/limiter: spaced requests, 429 cool-downs), so more slots overlap the slow part (probing, image checks, writes) without
+ * hitting a host harder. Override with the `platformSlots` setting. */
+const DEFAULT_SLOTS = { coomer: 2, bluesky: 4, x: 2, telegram: 1, reddit: 2, redgifs: 1, tumblr: 2, gff: 2, mastodon: 3, misskey: 2, lemmy: 2, peertube: 2, rss: 4, web: 3, linkinbio: 3 };
+function slotsFor(platform, cfg = settingsStore.get()) {
+  const custom = budget.parseCaps(cfg.platformSlots)[platform];
+  return Math.max(1, custom !== undefined ? custom : (DEFAULT_SLOTS[platform] || 2));
+}
+function runningOn(platform) {
+  let n = 0;
+  for (const r of state.running.values()) if (r.platform === platform) n++;
+  return n;
+}
+const platformFull = (platform, cfg) => runningOn(platform) >= slotsFor(platform, cfg);
+
+/** Platforms that still have a free slot and an open breaker. */
+function openPlatforms(cfg) {
+  const open = new Set(Object.entries(breaker.snapshot()).filter(([, s]) => s.state === 'open').map(([p]) => p));
+  return { open, free: registry.list().map((a) => a.platform).filter((p) => !open.has(p) && !platformFull(p, cfg)) };
 }
 
 function nextWork(cfg) {
-  // 1. manual queue (works even when the scheduler is paused)
+  // 1. manual queue (lane 0, works even when the scheduler is paused)
   for (let i = 0; i < state.queue.length; i++) {
     const job = state.queue[i];
     if (state.running.has(job.feedId)) { state.queue.splice(i, 1); i--; continue; }
     const feed = repo.feeds.get(job.feedId);
     if (!feed) { state.queue.splice(i, 1); i--; continue; }
-    if (platformBusy(feed.platform) || !breaker.canRun(feed.platform)) continue;
+    if (platformFull(feed.platform, cfg) || !breaker.canRun(feed.platform)) continue;
     state.queue.splice(i, 1);
-    return { feed, trigger: job.trigger, force: job.force, limit: job.limit };
+    return { feed, trigger: job.trigger, force: job.force, limit: job.limit, lane: 0 };
   }
-  // 2. scheduled work
+  // 2. scheduled work, by lane: new / prioritised feeds, then routine refresh, then backfill slices
   if (state.paused || !cfg.schedulerEnabled) return null;
-  const open = Object.entries(breaker.snapshot()).filter(([, s]) => s.state === 'open').map(([p]) => p);
-  for (const feed of repo.feeds.due(200, open)) {
-    if (state.running.has(feed.id) || platformBusy(feed.platform)) continue;
+  const { free } = openPlatforms(cfg);
+  if (!free.length) return null;
+  // Asked per platform: one platform with hundreds of due feeds (Coomer) must not hide every other platform's due feeds
+  // behind a single LIMIT.
+  const candidates = [];
+  for (const platform of free) for (const feed of repo.feeds.due(60, [], [platform])) candidates.push({ feed, lane: backfill.laneOf(feed) });
+  candidates.sort((a, b) => a.lane - b.lane); // stable: the SQL order (priority, overdue) holds inside a lane
+  for (const { feed, lane } of candidates) {
+    if (state.running.has(feed.id) || platformFull(feed.platform, cfg)) continue;
     if (!breaker.canRun(feed.platform)) continue;
-    return { feed, trigger: 'schedule', force: false };
+    if (!budget.allow(feed.platform, lane, cfg)) continue;
+    return { feed, trigger: 'schedule', force: false, lane };
   }
   return null;
 }
@@ -388,7 +419,10 @@ async function tick() {
       const work = nextWork(cfg);
       if (!work) break;
       // fire and forget — runFeed never throws
-      runFeed(work.feed, work.trigger, { force: work.force, limit: work.limit }).catch((e) => events.log('ERR', `engine: ${e.message}`));
+      budget.charge(work.feed.platform, work.lane);
+      runFeed(work.feed, work.trigger, { force: work.force, limit: work.limit })
+        .catch((e) => events.log('ERR', `engine: ${e.message}`))
+        .finally(() => { if (!state.stopRequested && state.timer) setImmediate(tick); }); // a free slot is refilled at once, not at the next 30 s tick
     }
   } finally { state.ticking = false; }
 }
@@ -424,7 +458,9 @@ function status() {
   return {
     schedulerEnabled: cfg.schedulerEnabled, paused: state.paused, stopRequested: state.stopRequested,
     running: [...state.running.values()], queued: state.queue.length, session: state.session,
-    breakers: breaker.snapshot(), sse: events.counts(),
+    breakers: breaker.snapshot(), hostBreakers: breaker.hostSnapshot ? breaker.hostSnapshot() : {}, sse: events.counts(),
+    slots: Object.fromEntries(registry.list().map((a) => [a.platform, { running: runningOn(a.platform), max: slotsFor(a.platform, cfg) }])),
+    budget: budget.status(),
   };
 }
 
@@ -560,4 +596,4 @@ function shutdown() {
   state.timer = null; state.hotTimer = null; state.stopRequested = true;
 }
 
-module.exports = { start, shutdown, tick, runFeed, enqueue, enqueuePlatforms, stopAll, pause, resume, status, seedDefaults, seedCuratedCreators, computeNextRun, tempo, adoptDiscoveredFeeds, _state: state, _waysIn: { noteWaysIn, followWaysIn } };
+module.exports = { _nextWork: nextWork, slotsFor, runningOn, start, shutdown, tick, runFeed, enqueue, enqueuePlatforms, stopAll, pause, resume, status, seedDefaults, seedCuratedCreators, computeNextRun, tempo, adoptDiscoveredFeeds, _state: state, _waysIn: { noteWaysIn, followWaysIn } };

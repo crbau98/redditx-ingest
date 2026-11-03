@@ -736,15 +736,16 @@ const feeds = {
    * own account and half for a feed that has been failing. New and "run now" feeds (no next_run_at) go before all of them.
    * Weighting lateness, not sorting by kind, means nothing waits forever: an open feed late long enough still wins.
    */
-  due(limit = 20, excludePlatforms = []) {
-    const ex = excludePlatforms.length ? `AND platform NOT IN (${excludePlatforms.map(() => '?').join(',')})` : '';
+  due(limit = 20, excludePlatforms = [], onlyPlatforms = []) {
+    const ex = (excludePlatforms.length ? `AND platform NOT IN (${excludePlatforms.map(() => '?').join(',')})` : '')
+      + (onlyPlatforms.length ? ` AND platform IN (${onlyPlatforms.map(() => '?').join(',')})` : '');
     const now = nowIso();
     return db.prepare(`SELECT * FROM feeds WHERE enabled = 1 AND (next_run_at IS NULL OR next_run_at <= ?) ${ex}
                        ORDER BY priority DESC,
                          CASE WHEN next_run_at IS NULL THEN 1e9 ELSE (julianday(?) - julianday(next_run_at))
                            * (CASE WHEN creator_id IS NOT NULL AND kind IN ('user', 'channel', 'page', 'feed') THEN 2.0 ELSE 1.0 END)
                            * (CASE WHEN consecutive_failures > 0 THEN 0.5 ELSE 1.0 END) END DESC,
-                         COALESCE(next_run_at, '') ASC LIMIT ?`).all(now, ...excludePlatforms, now, limit);
+                         COALESCE(next_run_at, '') ASC LIMIT ?`).all(now, ...excludePlatforms, ...onlyPlatforms, now, limit);
   },
 
   finishRun(id, { status, error = null, cursor, nextRunAt, addedItems = 0, failures }) {

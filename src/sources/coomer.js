@@ -196,6 +196,7 @@ module.exports = {
       } catch { /* stay at the front: a full pass is always correct, only slower */ }
     }
 
+    let listEnded = false;
     for (let page = 0; page < pageCap; page++) {
       if (Date.now() > deadline) { notes.push('coomer: stopped at the run time budget'); break; }
       let json = null;
@@ -265,9 +266,9 @@ module.exports = {
       }
       offset += posts.length;
       if (items.length >= itemCap) break;
-      if (posts.length < PAGE) break; // last page: the list ran out
+      if (posts.length < PAGE) { listEnded = true; break; } // last page: the list ran out
       // A keyword feed's query only names the term in some posts: keep paging until the mirror runs dry.
-      if (!fresh && !mine && phase === 'front') break; // fully behind the cursor: no newer content
+      if (!fresh && !mine && phase === 'front') { listEnded = true; break; } // fully behind the cursor: no newer content
     }
     // The walk is kept even at the end of the list: a run with nothing new then costs two requests
     // (is anything new? · resume at the end → empty) instead of re-reading the whole backlog.
@@ -277,6 +278,8 @@ module.exports = {
     if (consumed > 0) cursor.walk = consumed;
     return {
       items,
+      // stopped on the page / item / time cap, not at the end of his list: the scheduler comes back soon for the next slice
+      backfillPending: feed.kind === 'user' && !probe && !listEnded && !ctx.aborted() && consumed > 0,
       cursor: Object.keys(cursor).length ? cursor : undefined,
       profile: feed.kind === 'user' ? {
         displayName: splitTarget(feed.target).handle,

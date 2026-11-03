@@ -9,7 +9,11 @@ const repo = require('./db/repo');
 const SCHEMA = {
   schedulerEnabled: { type: 'bool', default: config.schedulerEnabled, label: 'Run the scheduler automatically' },
   tickSeconds: { type: 'int', default: 30, min: 5, max: 600, label: 'Scheduler tick (seconds)' },
-  maxConcurrentFeeds: { type: 'int', default: 4, min: 1, max: 12, label: 'Feeds synced at once' },
+  maxConcurrentFeeds: { type: 'int', default: 8, min: 1, max: 24, label: 'Feeds synced at once (all platforms together)' },
+  platformSlots: { type: 'text', default: '', label: 'Feeds per platform at once, e.g. "coomer=2, bluesky=4, telegram=1" (empty = built-in defaults; a platform not listed gets 2)' },
+  backfillRunsPerDay: { type: 'int', default: 4000, min: 0, max: 100000, label: 'Backfill runs per platform per day (history reads never take the place of live polling)' },
+  platformDailyRuns: { type: 'text', default: '', label: 'Optional cap of feed runs per platform per day, e.g. "x=300, telegram=600" (empty = no cap)' },
+  backfillGapMin: { type: 'int', default: 8, min: 1, max: 1440, label: 'Minutes before a feed that stopped inside a creator\'s history reads the next slice' },
   itemsPerRun: { type: 'int', default: 100, min: 10, max: 300, label: 'Max items per feed run' },
   scopeMode: { type: 'enum', values: ['strict', 'open'], default: 'strict', label: 'Unclear male-focus items: strict = review queue, open = publish' },
   untrustedUnclear: { type: 'enum', values: ['drop', 'review'], default: 'drop', label: 'Items from open searches/tags with no male wording at all: drop = discard, review = queue for a human' },
