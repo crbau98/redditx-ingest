@@ -24,7 +24,7 @@ before(async () => {
       hits.searx++;
       if (mode.searx === 'empty') return { json: { results: [] } };
       if (mode.searx === 'down') return { status: 500, body: 'down' };
-      return { json: { results: [{ url: 'https://bsky.app/profile/a.bsky.social', title: 'A', content: 'searx' }] } };
+      return { json: { results: [{ url: 'https://bsky.app/profile/a.bsky.social', title: 'Budget surfacing', content: 'budget surfacing results' }] } };
     },
     '/mcp': (req) => {
       hits.keen++;
@@ -151,6 +151,7 @@ describe('websearch fallback/budgets/caching', () => {
 
   test('an empty last provider throws instead of caching emptiness', async () => {
     websearch._clear();
+    repo.settings.set('brave.usage', '{}'); repo.settings.set('keenable.usage', '{}');
     mode.keen = 'empty'; mode.brave = 'empty'; mode.searx = 'empty';
     await assert.rejects(() => websearch.search('all empty q', { fresh: true }), /no results/);
     mode.keen = 'ok'; mode.brave = 'ok'; mode.searx = 'ok';

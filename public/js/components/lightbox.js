@@ -346,7 +346,7 @@ function paintStrip() {
   }
   S.strip.replaceChildren(...thumbs);
   const on = S.strip.querySelector('.on');
-  if (on) requestAnimationFrame(() => { S.strip.scrollTo({ left: on.offsetLeft - S.strip.clientWidth / 2 + on.offsetWidth / 2, behavior: 'smooth' }); });
+  if (on) { const strip = S.strip; requestAnimationFrame(() => { if (strip.isConnected) strip.scrollTo({ left: on.offsetLeft - strip.clientWidth / 2 + on.offsetWidth / 2, behavior: 'smooth' }); }); }
 }
 
 function paintStage(it) {

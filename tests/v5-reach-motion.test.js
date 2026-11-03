@@ -186,10 +186,6 @@ describe('seed version 9 uses real adapter kinds', () => {
     assert.equal(registry.SEED_VERSION, 12);
     const targets = new Set(registry.SEEDS.map((s) => `${s.platform}:${s.kind}:${s.target}`));
     for (const t of [
-      'lemmy:community:gayvideos@lemmynsfw.com',
-      'lemmy:community:gaylockerroom@lemmynsfw.com',
-      'lemmy:community:gayrimming@lemmynsfw.com',
-      'lemmy:community:gayanal@lemmynsfw.com',
       'misskey:tag:gaynsfw',
       'peertube:search:gay hunk',
       'x:search:gay hunk',

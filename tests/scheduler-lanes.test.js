@@ -98,7 +98,7 @@ const aged = (id, { successAgoMin = 600, dueAgoMin = 1, cursor = { newestAt: 'x'
 
 test('fairness: with 7 platforms each holding 100 due feeds, every platform gets a near-equal share of 400 picks', () => {
   const cfg = settingsStore.get();
-  const plats = ['reddit', 'coomer', 'bluesky', 'gff', 'web', 'mastodon', 'lemmy'];
+  const plats = ['reddit', 'coomer', 'bluesky', 'gff', 'web', 'mastodon', 'misskey'];
   for (const p of plats) for (let i = 0; i < 100; i++) aged(mk(p, `${p}${i}`).id, { dueAgoMin: 5 + i });
   const got = {};
   for (let i = 0; i < 400; i++) { const w = engine._nextWork(cfg); assert.ok(w, `pick ${i}`); got[w.feed.platform] = (got[w.feed.platform] || 0) + 1; repo.db.prepare("UPDATE feeds SET next_run_at = datetime('now','+1 day') WHERE id = ?").run(w.feed.id); }

@@ -53,7 +53,7 @@ describe('v4.7 discovery reach', () => {
     const a = repo.creators.create({ handle: 'hang_a' }); const b = repo.creators.create({ handle: 'hang_b' }); const c = repo.creators.create({ handle: 'hang_c' });
     post(a, 'GayBeards'); post(b, 'GayBeards'); post(c, 'GayBeards');
     post(a, 'OnlyMine');                       // a single creator is not a pattern
-    post(a, 'otters@lemmy.test', 'lemmy'); post(b, 'otters@lemmy.test', 'lemmy');
+    post(a, 'otters', 'redgifs'); post(b, 'otters', 'redgifs');
     repo.feeds.upsert({ platform: 'reddit', kind: 'community', target: 'alreadyfollowed', origin: 'admin', runNow: false });
     post(a, 'alreadyfollowed'); post(b, 'alreadyfollowed');
     const r = discovery.creatorHangouts();
@@ -63,7 +63,7 @@ describe('v4.7 discovery reach', () => {
     assert.equal(sub.score, 1.5 * 3 + 2, 'three creators + "gay" in the name');
     assert.equal(repo.candidates.find('reddit', 'community', 'onlymine'), null);
     assert.equal(repo.candidates.find('reddit', 'community', 'alreadyfollowed'), null, 'followed communities are skipped');
-    assert.ok(repo.candidates.find('lemmy', 'community', 'otters@lemmy.test'));
+    assert.ok(repo.candidates.find('redgifs', 'niche', 'otters'));
     assert.ok(r.found >= 2);
   });
   test('Bluesky suggestions: accounts Bluesky rates as similar for followed creators, adult/creator-looking only, refreshed weekly', async () => {
