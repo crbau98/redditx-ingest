@@ -6,8 +6,6 @@ import { mediaCard } from '../components/card.js';
 import { creatorCard } from '../components/creator-card.js';
 import { createFeed } from '../components/feed.js';
 import { openLightbox, surpriseMe } from '../components/ondemand.js';
-import { mountPrismBackground } from '../components/prism-bg.js';
-import { createOrbit } from '../components/orbit.js';
 import { countUp } from '../components/fx.js';
 import { smartSearch } from '../smart.js';
 import { attachSuggest } from '../components/suggest.js';
@@ -180,22 +178,31 @@ export async function home(root) {
     h('div', { class: 'hero-stats' }, stat(s.total, 'items'), stat(s.creators, 'creators'), stat(s.videos, 'videos'), stat(data.platforms.length, 'sources', (v) => String(v))));
   const hero = h('section', { class: 'hero' },
     copy,
-    data.trending.length >= 5 ? orbitHolder : null,
+    prefs.ambientFx && data.trending.length >= 5 ? orbitHolder : null,
     data.tags.length && !(!tastes.ready() && !prefs.introDone) ? h('div', { class: 'hero-chips' }, data.tags.slice(0, 10).map((t) => h('a', { class: 'chip', href: href('/explore', { tag: t.name }) }, `#${t.name}`, h('span', { class: 'n' }, fmt.num(t.count))))) : null);
   let stopPrism = () => {};
   let orbit = null;
   const teardownHero = () => { stopPrism(); if (orbit) orbit.destroy(); };
-  const mountMotion = () => {
-    if (!hero.isConnected) return;
-    if (data.trending.length >= 5) {
-      hero.classList.add('hero-split');
-      orbit = createOrbit(data.trending, { onOpen: openFromOrbit, compact: window.matchMedia('(max-width: 899px)').matches });
-      orbitHolder.replaceChildren(orbit.el, h('div', { class: 'orbit-hint' }, icon('chev-l', 'sm'), 'Drag to spin · tap to open', icon('chev-r', 'sm')));
-    }
-    stopPrism = mountPrismBackground(hero);
+  const mountMotion = async () => {
+    if (!prefs.ambientFx || !hero.isConnected) return;
+    try {
+      const [{ createOrbit }, { mountPrismBackground }] = await Promise.all([
+        import('../components/orbit.js'),
+        import('../components/prism-bg.js'),
+      ]);
+      if (!hero.isConnected) return;
+      if (data.trending.length >= 5) {
+        hero.classList.add('hero-split');
+        orbit = createOrbit(data.trending, { onOpen: openFromOrbit, compact: window.matchMedia('(max-width: 899px)').matches });
+        orbitHolder.replaceChildren(orbit.el, h('div', { class: 'orbit-hint' }, icon('chev-l', 'sm'), 'Drag to spin · tap to open', icon('chev-r', 'sm')));
+      }
+      stopPrism = mountPrismBackground(hero);
+    } catch { /* optional ambient effects */ }
   };
-  if ('requestIdleCallback' in window) requestIdleCallback(mountMotion, { timeout: 1500 });
-  else setTimeout(mountMotion, 300);
+  if (prefs.ambientFx) {
+    if ('requestIdleCallback' in window) requestIdleCallback(mountMotion, { timeout: 1500 });
+    else setTimeout(mountMotion, 300);
+  }
 
   if (!s.total) {
     root.replaceChildren(hero, emptyState({

@@ -1,7 +1,8 @@
 import { h, icon, fmt, debounce, emptyState } from '../dom.js';
 import { get } from '../api.js';
 import { navigate, href } from '../router.js';
-import { platformLabel } from '../store.js';
+import { platformLabel, follows } from '../store.js';
+import { find } from './find.js';
 import { creatorCard } from '../components/creator-card.js';
 
 const SORTS = [['media', 'Most posts'], ['score', 'Top rated'], ['recent', 'Recently active'], ['new', 'Newest'], ['name', 'A–Z']];
@@ -15,6 +16,8 @@ export async function creators(root, { query }) {
     q: query.get('q') || '', sort: query.get('sort') || 'media', platform: query.get('platform') || '',
     paid: query.get('paid') || (query.get('onlyfans') === '1' ? 'onlyfans' : ''),
     fresh: query.get('fresh') || '',
+    following: query.get('following') || '',
+    lookup: query.get('lookup') || '',
   };
   const set = (patch) => {
     const next = { ...f, ...patch };
@@ -26,14 +29,27 @@ export async function creators(root, { query }) {
   const search = h('input', {
     class: 'input sm',
     type: 'search',
-    placeholder: 'Search creators…',
+    placeholder: 'Search creators (Enter for web lookup)…',
     value: f.q,
     style: { maxWidth: '240px' },
     'aria-label': 'Search creators',
   });
-  search.addEventListener('input', debounce(() => set({ q: search.value.trim() }), 350));
+  const lookupHost = h('section', { class: 'creators-lookup-host', hidden: !f.lookup });
+  const runInlineLookup = (qText) => {
+    const qVal = (qText !== undefined ? qText : search.value).trim();
+    lookupHost.hidden = false;
+    const subQuery = new URLSearchParams(qVal ? { q: qVal } : {});
+    find(lookupHost, { query: subQuery });
+  };
+  search.addEventListener('input', debounce(() => set({ q: search.value.trim(), lookup: '' }), 350));
+  search.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && search.value.trim()) {
+      e.preventDefault();
+      runInlineLookup(search.value.trim());
+    }
+  });
 
-  const isAll = !f.q && !f.paid && f.sort === 'media' && !f.platform && !f.fresh;
+  const isAll = !f.q && !f.paid && f.sort === 'media' && !f.platform && !f.fresh && !f.following;
   const allChip = h('button', {
     type: 'button',
     class: `chip${isAll ? ' on' : ''}`,
@@ -41,6 +57,14 @@ export async function creators(root, { query }) {
     title: 'Show all creators',
     onclick: () => { search.value = ''; navigate('/creators', {}, { replace: true }); },
   }, icon('users', 'sm'), 'All');
+
+  const followingChip = h('button', {
+    type: 'button',
+    class: `chip${f.following ? ' on' : ''}`,
+    'aria-pressed': String(!!f.following),
+    title: 'Creators you follow on this device',
+    onclick: () => set({ following: f.following ? '' : '1' }),
+  }, icon('heart', 'sm'), 'Following');
 
   const ofChip = h('button', {
     type: 'button',
@@ -98,7 +122,7 @@ export async function creators(root, { query }) {
 
   const field = (label, el) => h('label', { class: 'filter-field' }, h('span', { class: 'filter-label' }, label), el);
 
-  const filtersActive = Boolean(f.q || f.sort !== 'media' || f.platform || f.paid || f.fresh);
+  const filtersActive = Boolean(f.q || f.sort !== 'media' || f.platform || f.paid || f.fresh || f.following);
   const clearBtn = filtersActive ? h('button', {
     class: 'chip clear-all',
     onclick: () => { search.value = ''; navigate('/creators', {}, { replace: true }); },
@@ -135,18 +159,19 @@ export async function creators(root, { query }) {
         h('h1', null, 'Creators'),
         count,
         h('div', { class: 'sub' },
-          'Explore verified creators and direct OnlyFans linkouts in the library. ',
-          h('a', { class: 'text-link', href: href('/galaxy') }, 'Explore as a 3D galaxy')
+          'Explore verified creators and direct OnlyFans linkouts in the library, or look up any creator across the open web.'
         )
       ),
       h('div', { class: 'row wrap' },
-        h('a', { class: 'btn primary sm', href: href('/find') }, icon('search', 'sm'), 'Find a creator')
+        h('button', { type: 'button', class: 'btn primary sm', onclick: () => runInlineLookup(search.value.trim()) }, icon('search', 'sm'), 'Look up on web'),
+        h('a', { class: 'btn sm ghost', href: href('/find', f.q ? { q: f.q } : {}) }, 'Full lookup')
       )
     ),
     h('div', { class: 'filterbar creator-filters', role: 'toolbar', 'aria-label': 'Creator filters' },
       h('div', { class: 'filter-scroll' },
         search,
         allChip,
+        followingChip,
         ofChip,
         topRatedChip,
         mostPostsChip,
@@ -156,9 +181,11 @@ export async function creators(root, { query }) {
         clearBtn
       )
     ),
+    lookupHost,
     grid,
     more
   );
+  if (f.lookup) runInlineLookup(f.q);
 
   get('/api/platforms').then((list) => {
     for (const p of list) platSel.appendChild(h('option', { value: p.platform, selected: f.platform === p.platform }, platformLabel(p.platform)));
@@ -171,6 +198,16 @@ export async function creators(root, { query }) {
     more.replaceChildren(h('div', { class: 'spinner' }));
     try {
       const params = { ...f, fresh: f.fresh || undefined, page, limit: 36 };
+      delete params.following; delete params.lookup;
+      if (f.following) {
+        const ids = follows.list().map((c) => c.id);
+        if (!ids.length) {
+          total = 0; count.textContent = '0 creators'; done = true;
+          more.replaceChildren(emptyState({ icon: 'heart', title: 'Not following anyone yet', text: 'Follow creators across PRISM and filter to them here.', actions: [h('button', { class: 'btn primary', onclick: () => set({ following: '' }) }, 'Show all creators')] }));
+          return;
+        }
+        params.ids = ids.slice(0, 150).join(',');
+      }
       if (params.paid) params.onlyfans = params.paid === 'onlyfans' ? '1' : undefined;
       const r = await get('/api/creators', params);
       if (destroyed) return;
@@ -178,7 +215,7 @@ export async function creators(root, { query }) {
       grid.append(...r.items.map((c) => creatorCard(c)));
       page++;
       done = grid.children.length >= total;
-      if (!grid.children.length) more.replaceChildren(emptyState({ icon: 'users', title: 'No creators found', text: f.q ? `No creators matched “${f.q}” with current filters. Try searching across the web or resetting filters.` : f.paid ? 'No creators found with that linkout yet. As new accounts are scanned, linkouts update automatically.' : 'Creators appear here once content has been indexed into the library.', actions: [h('a', { class: 'btn primary', href: href('/find', f.q ? { q: f.q } : {}) }, icon('search', 'sm'), f.q ? `Find “${f.q}” across the web` : 'Find a creator'), filtersActive ? h('button', { class: 'btn', onclick: () => navigate('/creators', {}, { replace: true }) }, 'Clear filters') : null].filter(Boolean) }));
+      if (!grid.children.length) more.replaceChildren(emptyState({ icon: 'users', title: 'No creators found', text: f.q ? `No creators matched “${f.q}” with current filters. Try searching across the web or resetting filters.` : f.paid ? 'No creators found with that linkout yet. As new accounts are scanned, linkouts update automatically.' : 'Creators appear here once content has been indexed into the library.', actions: [h('button', { type: 'button', class: 'btn primary', onclick: () => runInlineLookup(f.q) }, icon('search', 'sm'), f.q ? `Find “${f.q}” across the web` : 'Find a creator'), filtersActive ? h('button', { class: 'btn', onclick: () => navigate('/creators', {}, { replace: true }) }, 'Clear filters') : null].filter(Boolean) }));
       else more.replaceChildren(done ? h('span', { class: 'muted' }, 'That’s everyone') : h('button', { class: 'btn', onclick: load }, 'Load more'));
     } catch (e) { more.replaceChildren(h('span', { class: 'muted' }, e.message), h('button', { class: 'btn sm', onclick: load }, 'Retry')); }
     finally { loading = false; }

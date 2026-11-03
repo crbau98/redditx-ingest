@@ -280,6 +280,7 @@ router.get('/creators', (req, res) => {
     freshDays: repo.clampInt(req.query.fresh, 0, 3650, 0) || undefined,
     onlyfans: req.query.onlyfans === '1',
     paidHost: Object.prototype.hasOwnProperty.call(PAID, req.query.paid || '') ? PAID[req.query.paid].host : undefined,
+    ids: typeof req.query.ids === 'string' && req.query.ids ? req.query.ids.split(',').map((x) => x.trim()).filter(Boolean).slice(0, 200) : undefined,
   });
   res.json({ ...r, items: r.items.map(publicCreator) });
 });
@@ -287,7 +288,16 @@ router.get('/creators', (req, res) => {
 router.get('/creators/:id', (req, res) => {
   const c = repo.creators.detail(req.params.id);
   if (!c || c.status !== 'active' || c.scope === 'excluded') return res.status(404).json({ error: 'Not found' });
-  res.json({ ...publicCreator(c), accounts: publicAccounts(c.id), topTags: c.topTags, aliases: otherNames(c) });
+  let webMatches = [];
+  try { webMatches = require('../lib/face-match').listWebMatches({ creatorId: c.id, status: 'confirmed', limit: 16 }); } catch { /* optional */ }
+  res.json({ ...publicCreator(c), accounts: publicAccounts(c.id), topTags: c.topTags, aliases: otherNames(c), webMatches, lastMonitoredAt: c.last_monitored_at || null });
+});
+
+router.get('/creators/:id/web-matches', (req, res) => {
+  const c = repo.creators.get(req.params.id);
+  if (!c || c.status !== 'active' || c.scope === 'excluded') return res.status(404).json({ error: 'Not found' });
+  const items = require('../lib/face-match').listWebMatches({ creatorId: c.id, status: 'confirmed', limit: repo.clampInt(req.query.limit, 1, 50, 20) });
+  res.json({ items });
 });
 
 /** Names he goes by elsewhere, for "Also goes by": plain strings, minus the name and handle already on the page.

@@ -436,6 +436,7 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   const wantBody = physique.enabled(physique.live(settings));
   let phash = null;
   let physiqueScore = null;
+  let faceList = null;
   if (wantFaces || wantHash || wantBody) {
     const ir = await imagefilter.checkItem(item, { threshold: (settings.imageFilterThreshold || 50) / 100, faces: wantFaces, hash: wantHash, body: wantBody });
     if (ir.female) {
@@ -446,6 +447,7 @@ async function processItemInner(rawItem, feed, adapter, settings) {
     }
     phash = wantHash ? ir.phash : null;
     physiqueScore = ir.physique;
+    faceList = ir.faceList || null;
   }
 
   // ---- 6c. perceptual duplicates -----------------------------------------------------
@@ -528,6 +530,9 @@ async function processItemInner(rawItem, feed, adapter, settings) {
     return { outcome: 'dupe' };
   }
   if (phash && (state === 'published' || state === 'review' || bodyVerdict)) dedupe.remember(mediaId, phash, { mediaType: item.mediaType, width: item.width, height: item.height });
+  if (faceList && faceList.length && state === 'published' && settings.faceMatch) {
+    try { require('../lib/face-match').saveMediaFaces(mediaId, faceList); } catch { /* best effort */ }
+  }
 
   if (physiqueScore != null && creator) physique.reviewCreator(creator.id, body); // consistently heavy creators drop out too
 

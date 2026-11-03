@@ -1,38 +1,32 @@
 'use strict';
 /**
- * Image match: find a creator's own content wherever it appears on the web, by the SAME PICTURE.
+ * Cross-web content & identity discovery (Phase 2 & 3).
  *
- * Every followed creator already has his pictures in the library with a perceptual hash (pHash, the same one the duplicate
- * filter uses). This pass turns a web image search into leads:
- *
- *   1. reference   his most recent pictures (pHash), rebuilt per creator
- *   2. search      image search for his name / handle / paid-page slug (Brave, or the keyless
- *                  Bing image feed - lib/brave.js `bingImages`)
- *   3. match       each result picture is hashed once (same on-device pass as ingestion):
- *                    pHash within the dedupe distance -> the very same picture (a repost or a copy of his file)
- *                  Nothing else counts. A picture that merely LOOKS like his (same build, setting, framing) is not his:
- *                  there is no visual-similarity path here and none may be added (tests/no-lookalike-attribution.test.js).
- *   4. act         a same-picture match records the "also posted on ..." source on the picture it belongs to. The page is
- *                  registered as a web feed owned by the creator only if it ALSO names him (his name, handle or paid-page
- *                  slug in its title, description or address), so a gallery that happens to host one of his files does not
- *                  become his. Registered feeds run through the usual safety / takedown / male-scope / picture gates.
- *
- * No face, body or identity model: matching is over hashes of pictures he published.
+ * 1. Same-picture matching (pHash within dedupeDistance): finds where a creator's published photos or
+ *    video keyframes appear across the public web; adds alt-sources and registers pages that name him.
+ * 2. Opt-in local face matching (settings.faceMatch, off by default): uses local FaceRes descriptors
+ *    via lib/face-match. High face confidence + page names him -> registers source; face match without
+ *    text proof -> queued in creator_web_matches ('review') for Admin triage, never auto-attributed.
+ * 3. Seeded public web crawling (settings.creatorSeedCrawl): crawls public profile links, link hubs,
+ *    and search hits for the creator's handle + paid slug + tags within feed caps and safety gates.
  */
 const repo = require('../db/repo');
-const events = require('./events');
 const settingsStore = require('../settings');
 const brave = require('../lib/brave');
 const imagefilter = require('../lib/imagefilter');
 const phash = require('../lib/phash');
 const takedowns = require('../lib/takedowns');
+const events = require('./events');
+const faceMatch = require('../lib/face-match');
 const { hostBlocked } = require('../lib/mediaurl');
-const { parseProfile } = require('../lib/links');
+const { parseProfile, extractLinks } = require('../lib/links');
+const { checkText } = require('../lib/safety');
+const { femaleCheck } = require('../lib/scope');
 
 const db = repo.db;
-const REF_PICTURES = 8;   // his own pictures used as reference
-const HITS_PER_QUERY = 16; // candidate images read per query
-const PAGES_PER_CREATOR = 4; // web pages registered per creator per pass
+const REF_PICTURES = 8;
+const HITS_PER_QUERY = 16;
+const PAGES_PER_CREATOR = 4;
 const STALE_DAYS = 14;
 
 /** His reference pictures: recent published ones with a hash. */
@@ -58,36 +52,98 @@ function scoreHit(hit, refs, { distance }) {
 /** Does the result page itself name him? (required before a page becomes his feed) */
 function namesCreator(hit, creator, ...handles) {
   const blob = `${hit.title || ''} ${hit.description || ''} ${(hit.url || '').replace(/[-_/]+/g, ' ')}`;
-  const texts = [creator.display_name, creator.handle, ...handles].filter(Boolean);
+  const aliases = Array.isArray(creator.aliases) ? creator.aliases.map((a) => (typeof a === 'string' ? a : a && a.alias)) : [];
+  const texts = [creator.display_name, creator.handle, ...aliases, ...handles].filter(Boolean);
   if (texts.some((t) => t && blob.toLowerCase().includes(String(t).toLowerCase()))) return true;
   return false;
 }
 
+/** Build richer query set for a creator: name + handle + paid slug + top style tags. */
+function buildQueries(creator, { service = null, paidHandle = null } = {}) {
+  const name = creator.display_name || creator.handle;
+  const queries = [`"${name}" onlyfans`];
+  if (paidHandle && paidHandle !== name) queries.push(`"${paidHandle}" ${service || 'onlyfans'}`);
+  if (creator.handle && creator.handle !== name) queries.push(`"${creator.handle}" onlyfans`);
+  if (creator.handle && creator.display_name && creator.handle.toLowerCase() !== creator.display_name.toLowerCase()) {
+    queries.push(`"${creator.display_name}" "${creator.handle}"`);
+  }
+  try {
+    const tagRows = db.prepare(`SELECT t.name FROM media_tags mt JOIN tags t ON t.id = mt.tag_id JOIN media m ON m.id = mt.media_id
+      WHERE m.creator_id = ? AND m.publish_state = 'published'
+      GROUP BY t.id ORDER BY COUNT(*) DESC LIMIT 4`).all(creator.id);
+    const style = tagRows.map((r) => r.name).filter((t) => !['gay', 'nsfw', 'reddit', 'bluesky', 'x', 'telegram', 'redgifs', 'web'].includes(t));
+    if (style.length) queries.push(`"${name}" ${style.slice(0, 2).join(' ')}`);
+  } catch { /* optional tag enrichment */ }
+  return [...new Set(queries)];
+}
+
+/** Seeded crawl from a creator's stored public links and bios to discover new public pages/accounts. */
+async function seedCrawlCreator(creator, { maxPages = 2 } = {}) {
+  const out = { crawled: 0, discovered: 0 };
+  if (!creator || !creator.id) return out;
+  let links = [];
+  try { links = Array.isArray(creator.links) ? creator.links : JSON.parse(creator.links || '[]'); } catch { links = []; }
+  if (creator.bio) {
+    try { links.push(...extractLinks(creator.bio)); } catch { /* ignore */ }
+  }
+  const existing = new Set(repo.feeds.list({ creatorId: creator.id, limit: 500 }).items.map((f) => String(f.target).toLowerCase()));
+  for (const l of links.slice(0, 8)) {
+    if (out.discovered >= maxPages) break;
+    const url = l && (l.url || (typeof l === 'string' ? l : null));
+    if (!url || !/^https?:\/\//i.test(url)) continue;
+    if (takedowns.checkUrl(url)) continue;
+    let host;
+    try { host = new URL(url).hostname; } catch { continue; }
+    if (hostBlocked(host)) continue;
+    const spec = parseProfile(url);
+    if (!spec || spec.external || !spec.ingestable) continue;
+    if (existing.has(String(spec.target).toLowerCase())) continue;
+    if (checkText(url, spec.target, spec.label).level === 'block') continue;
+    if (femaleCheck(spec.target, spec.label).female) continue;
+    if (spec.platform === 'web') {
+      try { if (!(await require('../sources/web').robotsAllows(url))) continue; } catch { continue; }
+    }
+    out.crawled++;
+    const r = require('../services/targets').addSpec(spec, { creatorId: creator.id, origin: 'discovered', trusted: true });
+    if (r && r.status === 'created') {
+      out.discovered++;
+      existing.add(String(spec.target).toLowerCase());
+      faceMatch.recordWebMatch({
+        creatorId: creator.id,
+        pageUrl: url,
+        title: spec.label || host,
+        platform: spec.platform,
+        matchKind: 'seed_crawl',
+        evidence: `linked from @${creator.handle}'s profile/bio`,
+        status: 'confirmed',
+      });
+    }
+  }
+  return out;
+}
+
 /**
- * One creator: search, read the candidate pictures, register the pages his content appears on.
+ * One creator: search, read the candidate pictures (and video keyframes), register the pages his content appears on.
  * @returns {Promise<{checked:number, matched:number, pages:number, pictures:number}>}
  */
 async function matchCreator(creator, { budget = 40, aborted = () => false, service = null, paidHandle = null } = {}) {
   const out = { checked: 0, matched: 0, pages: 0, pictures: 0 };
   const refs = reference(creator.id);
-  if (!refs.length) return out; // nothing of his to match against yet
-
   const s = settingsStore.get();
+  const useFaces = !!s.faceMatch;
+  const faceRefs = useFaces ? faceMatch.creatorReferenceFaces(creator.id) : [];
+  if (!refs.length && !faceRefs.length) return out;
+
   const distance = s.dedupeDistance == null ? 6 : s.dedupeDistance;
-  const name = creator.display_name || creator.handle;
-  const queries = [`"${name}" onlyfans`];
-  if (paidHandle && paidHandle !== name) queries.push(`"${paidHandle}" ${service || 'onlyfans'}`);
-  if (creator.handle && creator.handle !== name) queries.push(`"${creator.handle}" onlyfans`);
+  const queries = buildQueries(creator, { service, paidHandle });
 
   const existing = new Set(repo.feeds.list({ platform: 'web', creatorId: creator.id, limit: 500 }).items.map((f) => String(f.target).toLowerCase()));
   const seenPages = new Set();
 
-  for (const q of [...new Set(queries)].slice(0, 3)) {
+  for (const q of queries.slice(0, 4)) {
     if (aborted() || out.pages >= PAGES_PER_CREATOR) break;
     let hits = [];
     try {
-      // Image match is a secondary pass: free feeds first, so the shared daily Brave budget is
-      // left for identity matching and topic search.
       hits = await brave.images(q, { count: HITS_PER_QUERY, budget, preferKeyless: true });
     } catch (e) {
       if (e && (e.skip || e.budget)) break;
@@ -97,49 +153,115 @@ async function matchCreator(creator, { budget = 40, aborted = () => false, servi
     for (const hit of hits) {
       if (aborted() || out.checked >= HITS_PER_QUERY || out.pages >= PAGES_PER_CREATOR) break;
       const pageUrl = hit.pageUrl || hit.url;
-      const img = hit.imageUrl || (hit.mediaUrl && /\.(jpe?g|png|gif|webp|avif)(\?|#|$)/i.test(hit.mediaUrl) ? hit.mediaUrl : null);
+      const isVid = hit.mediaType === 'video' || hit.type === 'video' || /\.(mp4|webm|mov|m3u8)(\?|#|$)/i.test(hit.mediaUrl || '');
+      const img = hit.imageUrl
+        || (hit.mediaUrl && /\.(jpe?g|png|gif|webp|avif)(\?|#|$)/i.test(hit.mediaUrl) ? hit.mediaUrl : null)
+        || hit.thumbnailUrl
+        || (isVid ? imagefilter.deriveVideoPosterUrl(hit.mediaUrl || pageUrl) : null);
       if (!img || !pageUrl) continue;
       if (takedowns.checkUrl(pageUrl) || takedowns.checkUrl(img)) continue;
-      if (hostBlocked(new URL(pageUrl).hostname)) continue;
+      let parsedUrl;
+      try { parsedUrl = new URL(pageUrl); } catch { continue; }
+      if (hostBlocked(parsedUrl.hostname)) continue;
+      if (checkText(hit.title, hit.description, pageUrl).level === 'block') continue;
+      if (femaleCheck(hit.title, hit.description).female) continue;
       const key = String(pageUrl).toLowerCase();
       if (seenPages.has(key) || existing.has(key)) continue;
       seenPages.add(key);
       out.checked++;
 
-      const res = await imagefilter.analyze(img, { faces: false, hash: true, timeout: 10000 });
-      if (!res || res.status !== 'ok' || !res.phash) continue;
-      const verdict = scoreHit({ phash: res.phash }, refs, { distance });
-      if (!verdict.same) continue; // not the same picture: whatever it looks like, it is not his
-      const named = namesCreator(hit, creator, paidHandle);
+      const res = await imagefilter.analyze(img, { faces: useFaces, hash: true, timeout: 10000 });
+      if (!res || res.status !== 'ok') continue;
+      if (useFaces && Array.isArray(res.faces) && imagefilter.judge(res).female) continue;
 
-      // Same picture elsewhere: remember it on the picture it belongs to.
-      if (verdict.mediaId) {
-        try { repo.media.addAltSource(verdict.mediaId, { platform: 'web', source_url: pageUrl, author: creator.handle || null }); out.pictures++; } catch { /* best effort */ }
+      const named = namesCreator(hit, creator, paidHandle);
+      const verdict = res.phash && refs.length ? scoreHit({ phash: res.phash }, refs, { distance }) : { same: false };
+
+      if (verdict.same) {
+        if (verdict.mediaId) {
+          try { repo.media.addAltSource(verdict.mediaId, { platform: 'web', source_url: pageUrl, author: creator.handle || null }); out.pictures++; } catch { /* best effort */ }
+        }
+        faceMatch.recordWebMatch({
+          creatorId: creator.id,
+          mediaId: verdict.mediaId,
+          pageUrl,
+          imageUrl: img,
+          title: hit.title || parsedUrl.host,
+          platform: 'web',
+          matchKind: isVid ? 'video_keyframe' : 'phash',
+          phashDistance: verdict.distance,
+          evidence: named
+            ? `same ${isVid ? 'video keyframe' : 'picture'} (${verdict.distance} bits), page names him`
+            : `same ${isVid ? 'video keyframe' : 'picture'} (${verdict.distance} bits) reposted`,
+          status: named ? 'confirmed' : 'review',
+        });
+        if (!named) continue;
+        const spec = parseProfile(pageUrl) || { platform: 'web', kind: 'page', target: pageUrl, ingestable: true, label: parsedUrl.host };
+        if (spec.external) continue;
+        if (spec.platform === 'web') {
+          try { if (!(await require('../sources/web').robotsAllows(pageUrl))) continue; } catch { continue; }
+        }
+        const r = require('../services/targets').addSpec(spec, { creatorId: creator.id, origin: 'discovered', trusted: true });
+        if (r.status === 'created') {
+          out.pages++;
+          repo.logAction('creator', creator.id, 'image-match',
+            `same picture (${verdict.distance} bits), page names him → ${pageUrl}`, 'discovery');
+        }
+        out.matched++;
+        continue;
       }
-      if (!named) continue; // a page that merely hosts one of his files is not thereby his
-      const spec = parseProfile(pageUrl) || { platform: 'web', kind: 'page', target: pageUrl, ingestable: true, label: new URL(pageUrl).host };
-      if (spec.external) continue;
-      // Respect robots.txt before registering: a page that refuses crawlers would only produce a
-      // skipped feed on the next run (Pinterest, X and friends).
-      if (spec.platform === 'web') {
-        try { if (!(await require('../sources/web').robotsAllows(pageUrl))) continue; } catch { continue; }
+
+      // Opt-in local face matching when pHash did not match
+      if (useFaces && faceRefs.length && Array.isArray(res.faces) && res.faces.length) {
+        const fv = faceMatch.evaluateCreatorFaceMatch(res.faces, creator.id, { named, refs: faceRefs });
+        if (fv.verdict === 'confirmed') {
+          const spec = parseProfile(pageUrl) || { platform: 'web', kind: 'page', target: pageUrl, ingestable: true, label: parsedUrl.host };
+          if (spec.external) continue;
+          if (spec.platform === 'web') {
+            try { if (!(await require('../sources/web').robotsAllows(pageUrl))) continue; } catch { continue; }
+          }
+          faceMatch.recordWebMatch({
+            creatorId: creator.id,
+            mediaId: fv.refMediaId,
+            pageUrl,
+            imageUrl: img,
+            title: hit.title || parsedUrl.host,
+            platform: spec.platform || 'web',
+            matchKind: 'face+text',
+            score: fv.score,
+            evidence: fv.reason,
+            status: 'confirmed',
+          });
+          const r = require('../services/targets').addSpec(spec, { creatorId: creator.id, origin: 'discovered', trusted: true });
+          if (r.status === 'created') {
+            out.pages++;
+            repo.logAction('creator', creator.id, 'face-match', `${fv.reason} → ${pageUrl}`, 'discovery');
+          }
+          out.matched++;
+        } else if (fv.verdict === 'review') {
+          faceMatch.recordWebMatch({
+            creatorId: creator.id,
+            mediaId: fv.refMediaId,
+            pageUrl,
+            imageUrl: img,
+            title: hit.title || parsedUrl.host,
+            platform: 'web',
+            matchKind: 'face_review',
+            score: fv.score,
+            evidence: fv.reason,
+            status: 'review',
+          });
+        }
       }
-      const r = require('../services/targets').addSpec(spec, { creatorId: creator.id, origin: 'discovered', trusted: true });
-      if (r.status === 'created') {
-        out.pages++;
-        repo.logAction('creator', creator.id, 'image-match',
-          `same picture (${verdict.distance} bits), page names him → ${pageUrl}`, 'discovery');
-      }
-      out.matched++;
     }
   }
+  try {
+    db.prepare("UPDATE creators SET last_monitored_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(creator.id);
+  } catch { /* ignore if column not migrated yet */ }
   return out;
 }
 
-/** Creators whose pictures exist and who have not been matched recently (newest first).
- * A creator with a traced paid page or stored links has a searchable identity — his content exists
- * elsewhere on the web — so those come first; plain ingest handles (bot-style Reddit names) rarely
- * resolve to anything a search engine knows. */
+/** Creators whose pictures exist and who have not been matched recently (newest first). */
 function pickCreators(limit) {
   const stale = new Date(Date.now() - STALE_DAYS * 86400000).toISOString();
   return db.prepare(`SELECT c.id FROM creators c
@@ -176,6 +298,7 @@ async function run({ limit, aborted = () => false, budget = 40 } = {}) {
       if (p) { service = p.service; paidHandle = p.handle; }
     }
     try {
+      if (s.creatorSeedCrawl) await seedCrawlCreator(creator, { maxPages: 2 });
       const r = await matchCreator(creator, { budget, aborted, service, paidHandle });
       out.creators++;
       out.matched += r.matched;
@@ -190,4 +313,4 @@ async function run({ limit, aborted = () => false, budget = 40 } = {}) {
   return out;
 }
 
-module.exports = { run, matchCreator, reference, scoreHit, namesCreator, pickCreators };
+module.exports = { run, matchCreator, reference, scoreHit, namesCreator, pickCreators, buildQueries, seedCrawlCreator };

@@ -244,10 +244,37 @@ function judge(result, threshold = 0.5) {
   return { female: females.length > 0, faces: faces.length, females: females.length, males: males.length, decided: faces.length > 0, status: 'ok' };
 }
 
-/** Which picture represents an item? A photo is itself; a video is judged by its poster frame. */
+/** Derive a poster/keyframe image URL from common video URLs when no explicit previewUrl is set. */
+function deriveVideoPosterUrl(videoUrl) {
+  if (typeof videoUrl !== 'string' || !/^https?:\/\//i.test(videoUrl)) return null;
+  try {
+    const u = new URL(videoUrl);
+    const host = u.hostname.toLowerCase();
+    if (host.includes('redgifs.com') && /\.(mp4|webm)$/i.test(u.pathname)) {
+      return videoUrl.replace(/(?:-mobile|-hd)?\.(mp4|webm)(\?.*)?$/i, '-poster.jpg');
+    }
+    if (host === 'youtu.be' && u.pathname.length > 1) {
+      return `https://i.ytimg.com/vi/${u.pathname.slice(1).split('/')[0]}/hqdefault.jpg`;
+    }
+    if (host.endsWith('youtube.com')) {
+      const vid = u.searchParams.get('v') || (u.pathname.match(/\/(?:shorts|embed)\/([A-Za-z0-9_-]{6,})/) || [])[1];
+      if (vid) return `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`;
+    }
+    if (host === 'video.bsky.app' && u.pathname.endsWith('/playlist.m3u8')) {
+      return `${u.origin}${u.pathname.replace(/\/playlist\.m3u8$/, '/thumbnail.jpg')}`;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+/** Which picture represents an item? A photo is itself; a video is judged by its poster/keyframe. */
 function imageUrlOf(item) {
-  const isImage = item.mediaType === 'image';
-  const cands = isImage ? [item.previewUrl, item.thumbnailUrl, item.mediaUrl] : [item.previewUrl, item.thumbnailUrl];
+  if (!item) return null;
+  const isImage = item.mediaType === 'image' || item.media_type === 'image';
+  const mUrl = item.mediaUrl || item.media_url;
+  const pUrl = item.previewUrl || item.preview_url || item.keyframeUrl;
+  const tUrl = item.thumbnailUrl || item.thumbnail_url;
+  const cands = isImage ? [pUrl, tUrl, mUrl] : [pUrl, tUrl, deriveVideoPosterUrl(mUrl || item.hlsUrl || item.hls_url)];
   const url = cands.find((u) => typeof u === 'string' && /^https?:\/\//i.test(u) && !/\.(m3u8|mp4|webm|mov)(\?|#|$)/i.test(u));
   return url || null;
 }
@@ -289,7 +316,8 @@ async function checkItemNow(item, { threshold = 0.5, faces = true, hash = false,
   const verdict = femalePolicy ? judge(res, threshold) : { female: false, faces: 0, females: 0, males: 0, decided: false, status: res.status, reason: res.reason };
   if (verdict.female) counters.female++;
   const b = body && res.status === 'ok' ? res.body : null;
-  return { ...verdict, url, phash: res.phash || null, physique: b && b.decided ? b.score : null, physiqueReason: b && !b.decided ? b.reason : undefined };
+  const faceList = res && Array.isArray(res.faces) ? res.faces.filter((f) => f && f.confidence >= MIN_FACE_CONFIDENCE) : [];
+  return { ...verdict, faceList, url, phash: res.phash || null, physique: b && b.decided ? b.score : null, physiqueReason: b && !b.decided ? b.reason : undefined };
 }
 
 // Every path that holds a downloaded picture in memory goes through the same gate: the pipeline's check, a direct analyze, an embedding.
@@ -325,4 +353,4 @@ function _setAnalyzer(fn) { analyzer = fn; }
 function _setEmbedder(fn) { embedder = fn; }
 function _reset() { cache.clear(); analyzer = null; embedder = null; }
 
-module.exports = { analyze, judge, checkItem, gate, imageUrlOf, embedUrl, available, status, readBuffer, init, shutdown, recycle, noteHeavy, _setAnalyzer, _setEmbedder, _reset };
+module.exports = { analyze, judge, checkItem, gate, imageUrlOf, deriveVideoPosterUrl, embedUrl, available, status, readBuffer, init, shutdown, recycle, noteHeavy, _setAnalyzer, _setEmbedder, _reset };

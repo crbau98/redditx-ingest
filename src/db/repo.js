@@ -232,9 +232,10 @@ const creators = {
 
   refreshStats(id) { if (id) creatorQ.stats.run({ id }); },
 
-  list({ page = 0, limit = 48, q: query, sort = 'media', platform, admin = false, minMedia, onlyfans: ofOnly = false, paidHost, freshDays } = {}) {
+  list({ page = 0, limit = 48, q: query, sort = 'media', platform, admin = false, minMedia, onlyfans: ofOnly = false, paidHost, freshDays, ids } = {}) {
     const where = []; const params = [];
     if (ofOnly) where.push("c.links GLOB '*onlyfans.com/[A-Za-z0-9]*'");
+    if (Array.isArray(ids) && ids.length) { where.push('c.id IN (SELECT value FROM json_each(?))'); params.push(JSON.stringify(ids.slice(0, 200))); }
     // "posted in the last N days": who is actually publishing right now.
     const fresh = freshDays ? Math.min(Math.max(parseInt(freshDays, 10) || 0, 0), 3650) : 0;
     if (fresh) { where.push('c.last_media_at >= ?'); params.push(new Date(Date.now() - fresh * 86400000).toISOString()); }
@@ -1701,6 +1702,10 @@ const takedowns = {
             blocklist.add('creator', `${f.platform}:${String(f.target).toLowerCase()}`, why);
           }
           db.prepare("UPDATE creators SET status = 'blocked', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(cid);
+          try {
+            db.prepare('DELETE FROM media_faces WHERE media_id IN (SELECT id FROM media WHERE creator_id = ?)').run(cid);
+            db.prepare('DELETE FROM creator_web_matches WHERE creator_id = ?').run(cid);
+          } catch { /* ignore */ }
           blocklist.add('creator', cid, why);
           blockedCreators++;
           affectedCreators.add(cid);
@@ -1746,6 +1751,10 @@ const takedowns = {
         if (!matchedByRule) continue;
 
         db.prepare("UPDATE media SET publish_state = 'removed', review_reason = 'takedown', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(m.id);
+        try {
+          db.prepare('DELETE FROM media_faces WHERE media_id = ?').run(m.id);
+          db.prepare('DELETE FROM creator_web_matches WHERE media_id = ?').run(m.id);
+        } catch { /* ignore */ }
         if (m.hash) blocklist.add('hash', m.hash, why);
         if (m.source_key) blocklist.add('source_key', m.source_key, why);
         if (m.phash) {

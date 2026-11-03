@@ -1,3 +1,4 @@
+import { prefs, bus } from '../store.js';
 // Small, cheap effects that make the UI feel physical. Everything here respects
 // prefers-reduced-motion and only runs on devices where it makes sense.
 
@@ -43,7 +44,7 @@ const finePointer = window.matchMedia('(hover: hover) and (pointer: fine)').matc
  * leans toward it and a soft glare follows. Values go through CSS custom
  * properties, written at most once per frame. */
 export function initTilt() {
-  if (!finePointer || reduced()) return;
+  if (!finePointer || reduced() || !prefs.ambientFx) return;
   let active = null; let raf = 0; let px = 0; let py = 0;
   const SEL = '.card, .creator-card, .coll-card, .browse-tile, .orbit-card';
   const apply = () => {

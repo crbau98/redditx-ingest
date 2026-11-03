@@ -321,7 +321,27 @@ router.get('/discovery', (req, res) => {
   res.json({
     ...discovery.status(),
     candidates: repo.candidates.list({ status, ...page(req, 200), q: typeof req.query.q === 'string' ? req.query.q.slice(0, 60) : undefined, platform: /^[a-z]{1,20}$/.test(req.query.platform || '') ? req.query.platform : undefined, sort: ['score', 'recent', 'new'].includes(req.query.sort) ? req.query.sort : 'score' }),
+    webMatches: (() => {
+      try {
+        const fm = require('../lib/face-match');
+        return { review: fm.listWebMatches({ status: 'review', limit: 30 }), confirmed: fm.listWebMatches({ status: 'confirmed', limit: 15 }) };
+      } catch { return { review: [], confirmed: [] }; }
+    })(),
   });
+});
+router.post('/discovery/web-matches/:id', (req, res) => {
+  const action = req.body && req.body.action;
+  if (!['confirm', 'reject'].includes(action)) return bad(res, 'action must be confirm or reject');
+  const updated = require('../lib/face-match').decideWebMatch(req.params.id, action, 'admin');
+  if (!updated) return bad(res, 'Match not found', 404);
+  res.json({ ok: true, match: updated });
+});
+router.post('/discovery/face-purge', (req, res) => {
+  const { creatorId, mediaId } = req.body || {};
+  const fm = require('../lib/face-match');
+  if (creatorId) fm.purgeForCreator(String(creatorId));
+  if (mediaId) fm.purgeForMedia(String(mediaId));
+  res.json({ ok: true });
 });
 router.post('/discovery/run', (req, res) => {
   const st = discovery.status();

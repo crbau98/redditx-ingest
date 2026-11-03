@@ -148,6 +148,9 @@ export async function render(root) {
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Trace OnlyFans creators'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'OnlyFans pages your creators promote lead to the same men’s free accounts on RedGIFs, Bluesky, X, Telegram and link pages. Paid pages named by creators are read like any other public page')), toggle(v.discoveryOnlyFans, (on) => save({ discoveryOnlyFans: on }))),
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Image match (same picture)'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'After a creator is found, search the web for his pictures and note where the very same picture (a repost or copy of his file) appears. A page becomes his feed only if it also names him; a look-alike is never a match')), toggle(v.imageMatch, (on) => save({ imageMatch: on }))),
       h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Image match: creators per run'), num('imageMatchPerRun', 0, 30, 'Image match: creators per run')),
+      h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Seeded creator web crawl'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Follow public profile links, link hubs, and bios for active creators within feed caps and safety gates')), toggle(v.creatorSeedCrawl, (on) => save({ creatorSeedCrawl: on }))),
+      h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Local face matching (opt-in, local-only)'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Compares male face descriptors locally in SQLite (TF.js WASM worker pool; never sent externally). High confidence + text/handle proof attributes the source; uncorroborated face hits go to the review queue below. All face vectors are deleted on takedown.')), toggle(v.faceMatch, (on) => save({ faceMatch: on }))),
+      h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Face match threshold (%)'), num('faceMatchThreshold', 55, 98, 'Face match threshold (%)')),
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Auto-follow strong communities'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Only male-focused ones; every post from them is still checked on its own')), toggle(v.discoveryAutoCommunities, (on) => save({ discoveryAutoCommunities: on }))),
       h('div', { class: 'setting' }, h('div', null, h('div', { class: 'l' }, 'Auto-follow at score'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'same name = 6 · each creator who mentions them = 3 · Bluesky suggestion (per creator) = 2 · each who follows them = 1.5 · each creator posting there = 1.5 · each search hit = 2 · audience up to +3 · male-focused bio = +2')), num('discoveryAutoFollowScore', 3, 60, 'Auto-follow at score')),
       h('div', { class: 'setting' }, h('div', { class: 'l' }, 'Max follows per run'), num('discoveryMaxFollowsPerRun', 0, 100, 'Max follows per run')),
@@ -204,11 +207,37 @@ export async function render(root) {
       ], r.items, { empty: 'No OnlyFans pages seen yet. They are picked up from posts and bios as feeds sync, or paste some above.' })));
   }
 
+  function paintWebMatches(d) {
+    const wm = (d && d.webMatches) || { review: [], confirmed: [] };
+    const rev = wm.review || [];
+    const conf = wm.confirmed || [];
+    if (!rev.length && !conf.length) { wmHost.replaceChildren(); return; }
+    const decideWm = (row, action) => (e) => act(e.currentTarget, async () => {
+      await adminPost(`/discovery/web-matches/${row.id}`, { action });
+      toast(action === 'confirm' ? 'Match confirmed & source registered' : 'Match rejected', 'ok');
+      await load();
+    });
+    wmHost.replaceChildren(h('details', { class: 'panel', open: rev.length > 0 ? true : null, style: { marginTop: '14px' } },
+      h('summary', null, h('b', null, 'Visual & Face Match Queue'), h('span', { class: 'muted', style: { marginLeft: '10px', fontSize: '13px' } },
+        `${rev.length} awaiting review · ${conf.length} recent confirmed matches`)),
+      h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Matches found via perceptual hash, video keyframes, seeded link crawl, or opt-in local face similarity. Face matches without corroborating handle/text on the page wait here for human review.'),
+      table([
+        { label: 'Creator', render: (m) => h('a', { href: `#/creator/${m.creator_id}`, style: { fontWeight: 600 } }, m.creator_name || `@${m.creator_handle}`) },
+        { label: 'Web page', render: (m) => h('a', { href: m.page_url, target: '_blank', rel: 'noopener noreferrer nofollow', class: 'truncate', style: { maxWidth: '280px', display: 'inline-block' } }, m.title || m.page_url) },
+        { label: 'Evidence', render: (m) => h('div', { class: 'cell-stack' },
+          h('span', { class: `badge ${m.status === 'confirmed' ? 'good' : 'warn'}` }, m.match_kind),
+          m.evidence ? h('span', { class: 'sub', style: { maxWidth: '300px' } }, m.evidence) : null) },
+        { label: '', render: (m) => m.status === 'review' ? h('div', { class: 'actions' },
+          h('button', { class: 'btn sm primary', onclick: decideWm(m, 'confirm') }, 'Confirm'),
+          h('button', { class: 'btn sm', onclick: decideWm(m, 'reject') }, 'Reject')) : h('span', { class: 'badge good' }, 'confirmed') },
+      ], [...rev, ...conf], { empty: 'No visual or face matches queued.' })));
+  }
+
   async function load() {
     const [d, settings] = await Promise.all([adminGet('/discovery', { status: f.status, q: f.q, platform: f.platform || undefined, sort: f.sort, page: f.page, limit: 40 }), data ? Promise.resolve(null) : adminGet('/settings')]);
     data = d;
     if (settings) seedsText = settings.values.creatorSeeds || '';
-    paintKpis(d); paintRun(d);
+    paintKpis(d); paintRun(d); paintWebMatches(d);
     if (settings) paintTune(d, settings);
     const r = d.candidates;
     tableHost.replaceChildren(
@@ -232,7 +261,7 @@ export async function render(root) {
       pager({ page: r.page, limit: r.limit, total: r.total, onPage: (p) => set({ page: p }) }));
   }
 
-  root.append(head, kpis, runLine, tune, ofHost, bar, tableHost);
+  root.append(head, kpis, runLine, tune, wmHost, ofHost, bar, tableHost);
   await load();
   loadOnlyFans().catch(() => {});
   const timer = setInterval(() => { if (root.isConnected && data && data.running) load().catch(() => {}); }, 5000);

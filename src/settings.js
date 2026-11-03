@@ -92,6 +92,9 @@ const SCHEMA = {
   gffDirectoryPages: { type: 'int', default: 8, min: 1, max: 20, label: 'GayForFans: directory pages walked per discovery run (75 pages total; higher = the whole directory is covered sooner)', group: 'discovery' },
   imageMatch: { type: 'bool', default: true, label: 'Image match: after a creator is found, search the web for his pictures and note where the SAME picture (a repost or copy of his file, by perceptual hash) appears; a page becomes his feed only if it also names him. Never by look-alike', group: 'discovery' },
   imageMatchPerRun: { type: 'int', default: 4, min: 0, max: 30, label: 'Image match: creators matched per discovery run', group: 'discovery' },
+  faceMatch: { type: 'bool', default: false, label: 'Local face matching (opt-in): compare detected male face embeddings locally in SQLite to attribute web media when corroborated by handle/text evidence, or queue lower-confidence matches for review. Local-only; purged on takedown', group: 'discovery' },
+  faceMatchThreshold: { type: 'int', default: 78, min: 55, max: 98, label: 'Face match: cosine similarity threshold (55–98%) required to attribute when corroborated by name/handle evidence (lower matches down to threshold−8% enter the review queue)', group: 'discovery' },
+  creatorSeedCrawl: { type: 'bool', default: true, label: 'Seeded creator crawl: crawl public link hubs, bios, search result pages, and aggregator/repost links for active creators within feed caps', group: 'discovery' },
   discoveryExpand: { type: 'bool', default: true, label: 'Find creators Bluesky suggests (its "similar accounts", from the follow graph) and search Bluesky and RedGIFs for new people', group: 'discovery' },
   discoveryAutoCommunities: { type: 'bool', default: true, label: 'Auto-follow strong communities and feeds (their posts are still checked one by one)', group: 'discovery' },
   // --- sources and playback (v5) ---

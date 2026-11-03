@@ -24,10 +24,10 @@ import { wireFollowBadges, followNewContent } from './following.js';
 
 const routes = [
   { pattern: '/', view: home, nav: 'home' },
-  { pattern: '/following', view: following, nav: 'following' },
+  { pattern: '/following', view: following, nav: 'creators' },
   { pattern: '/explore', view: explore, nav: 'explore' },
   { pattern: '/reels', view: reels, nav: 'reels' },
-  { pattern: '/browse', view: browse, nav: 'browse' },
+  { pattern: '/browse', view: browse, nav: 'explore' },
   { pattern: '/creators', view: creators, nav: 'creators' },
   { pattern: '/find', view: find, nav: 'creators' },
   // loaded on first visit: the 3D map is the heaviest view and most sessions never open it
@@ -68,7 +68,7 @@ onAgeRequired(ensureAgeGate);
 
 /* ------------------------------------------------------------------ shell */
 // 5th field: desktop-only (the phone tab bar keeps five entries)
-const NAV = [['home', '/', 'Home', 'home'], ['following', '/following', 'Following', 'rss', true], ['explore', '/explore', 'Explore', 'compass'], ['reels', '/reels', 'Reels', 'film'], ['browse', '/browse', 'Browse', 'layers', true], ['creators', '/creators', 'Creators', 'users'], ['saved', '/saved', 'Saved', 'heart']];
+const NAV = [['home', '/', 'Home', 'home'], ['explore', '/explore', 'Explore', 'compass'], ['reels', '/reels', 'Reels', 'film'], ['creators', '/creators', 'Creators', 'users'], ['saved', '/saved', 'Saved', 'heart']];
 
 /* --------------------------------------------------------- global shortcuts */
 function showShortcuts() {

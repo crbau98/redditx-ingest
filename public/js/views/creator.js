@@ -52,6 +52,45 @@ function activityPanel(a) {
 
 const counted = new Set(); // creators whose stats already counted up this visit
 
+
+function matchKindLabel(k) {
+  switch (k) {
+    case 'face+text': return ['good', 'Verified face + handle'];
+    case 'video_keyframe': return ['info', 'Video keyframe match'];
+    case 'seed_crawl': return ['info', 'Linked from bio'];
+    default: return ['', 'Same picture (pHash)'];
+  }
+}
+
+function alsoOnWebSection(c) {
+  const list = Array.isArray(c.webMatches) ? c.webMatches : [];
+  if (!list.length) return null;
+  return h('section', { class: 'section also-web', style: { marginTop: '20px' } },
+    h('div', { class: 'section-head' },
+      h('div', null,
+        h('h2', null, icon('compass'), 'Also on the web'),
+        h('div', { class: 'sub' }, 'Confirmed public pages where their work or linked accounts appear, with provenance evidence'))),
+    h('div', { class: 'row wrap', style: { gap: '10px' } }, list.slice(0, 12).map((wm) => {
+      let host = wm.platform || 'web';
+      try { host = new URL(wm.page_url).hostname.replace(/^www\./, ''); } catch { /* ignore */ }
+      const [tone, badgeText] = matchKindLabel(wm.match_kind);
+      return h('a', {
+        class: 'card also-web-card',
+        href: wm.page_url,
+        target: '_blank',
+        rel: 'noopener noreferrer nofollow',
+        style: { padding: '10px 14px', minWidth: '220px', maxWidth: '340px', textDecoration: 'none' },
+      },
+        h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
+          h('span', { class: `badge ${tone}` }, badgeText),
+          h('span', { class: 'muted sm truncate' }, host),
+          h('span', { class: 'grow' }),
+          icon('external', 'sm')),
+        h('div', { class: 'truncate', style: { fontWeight: 600, marginTop: '6px' } }, wm.title || host),
+        wm.evidence ? h('div', { class: 'muted sm truncate', style: { marginTop: '4px' }, title: wm.evidence }, wm.evidence) : null);
+    })));
+}
+
 export async function creator(root, { params, query }) {
   root.replaceChildren(h('div', { class: 'skeleton', style: { height: '260px' } }));
   let c;
@@ -132,6 +171,7 @@ export async function creator(root, { params, query }) {
     ext.length ? h('div', { class: 'linkrow' }, ext) : null,
     c.topTags && c.topTags.length ? h('div', { class: 'row wrap', style: { marginTop: '14px', gap: '6px' } }, c.topTags.slice(0, 10).map((t) => h('a', { class: 'tag', href: href('/explore', { tag: t.name }) }, `#${t.name}`))) : null,
     h('div', { style: { height: '22px' } }),
+    alsoOnWebSection(c),
     platformSwitcher(c, { value: platform, onChange: (p) => setQ({ platform: p }) }), // pills per platform, plus his paid-page cards
     h('div', { class: 'row wrap', style: { alignItems: 'flex-end', gap: '8px' } }, h('div', { class: 'grow' }, tabs), searchPost, sortSel),
     feed.el);

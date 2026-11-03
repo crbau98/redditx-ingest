@@ -761,7 +761,46 @@ function v19(db) {
 
 function v20(db) { db.exec('ALTER TABLE media ADD COLUMN attribution_evidence TEXT'); }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20];
+function v21(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS media_faces (
+      media_id TEXT NOT NULL REFERENCES media(id) ON DELETE CASCADE,
+      face_idx INTEGER NOT NULL DEFAULT 0,
+      gender TEXT,
+      confidence REAL,
+      box TEXT,
+      vec BLOB NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      PRIMARY KEY (media_id, face_idx)
+    );
+    CREATE INDEX IF NOT EXISTS idx_media_faces_media ON media_faces(media_id);
+
+    CREATE TABLE IF NOT EXISTS creator_web_matches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      creator_id TEXT NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
+      media_id TEXT REFERENCES media(id) ON DELETE SET NULL,
+      page_url TEXT NOT NULL,
+      image_url TEXT,
+      title TEXT,
+      platform TEXT NOT NULL DEFAULT 'web',
+      match_kind TEXT NOT NULL DEFAULT 'phash',
+      similarity REAL,
+      phash_distance INTEGER,
+      evidence TEXT,
+      status TEXT NOT NULL DEFAULT 'confirmed',
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      UNIQUE(creator_id, page_url)
+    );
+    CREATE INDEX IF NOT EXISTS idx_creator_web_matches_creator ON creator_web_matches(creator_id, status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_creator_web_matches_status ON creator_web_matches(status, created_at DESC);
+  `);
+  const cols = new Set(db.pragma('table_info(creators)').map((c) => c.name));
+  if (!cols.has('last_monitored_at')) {
+    db.exec('ALTER TABLE creators ADD COLUMN last_monitored_at TEXT');
+  }
+}
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

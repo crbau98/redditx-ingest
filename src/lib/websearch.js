@@ -421,4 +421,25 @@ async function search(q, { count = 20, budget = 40, fresh = false, site, preferK
 
 function _clear() { cache.clear(); ddgCooldownUntil = 0; ddgLiteCooldownUntil = 0; bingCooldownUntil = 0; bingFails = 0; for (const h of Object.values(health)) Object.assign(h, { ok: 0, empty: 0, failed: 0, lastAt: null, lastError: null, lastResults: null, engines: [] }); }
 
-module.exports = { search, configured, status, PROVIDERS, parseDdg, parseBing, coherent, _clear, _anotherDoorOpen: anotherDoorOpen, _cooldown: () => ({ until: ddgCooldownUntil, lite: ddgLiteCooldownUntil, bing: bingCooldownUntil, active: Date.now() < ddgCooldownUntil || Date.now() < ddgLiteCooldownUntil || Date.now() < bingCooldownUntil }), _setCooldown: (ms, which = 'ddg') => { const until = ms ? Date.now() + ms : 0; if (which === 'lite') ddgLiteCooldownUntil = until; else if (which === 'bing') bingCooldownUntil = until; else ddgCooldownUntil = until; } };
+/** Query SearXNG's JSON API for image and video results when SEARXNG_URL is configured. */
+async function searxngImages(q, { count = 20 } = {}) {
+  const base = searxngUrl();
+  if (!base || !q) return [];
+  const engines = process.env.SEARXNG_IMAGE_ENGINES ? `&engines=${encodeURIComponent(process.env.SEARXNG_IMAGE_ENGINES)}` : '';
+  const data = await http.json(`${base}/search?q=${encodeURIComponent(q)}&format=json&categories=images,videos&safesearch=0${engines}`, { timeout: 10000, retries: 0 });
+  return ((data && data.results) || []).map((r) => ({
+    url: r.url,
+    pageUrl: r.url,
+    title: strip(r.title),
+    description: strip(r.content),
+    source: r.engine || 'searxng',
+    imageUrl: r.img_src || r.thumbnail_src || null,
+    mediaUrl: r.img_src || r.iframe_src || r.url || null,
+    thumbnailUrl: r.thumbnail_src || r.img_src || null,
+    type: r.category === 'videos' ? 'video' : 'image',
+    mediaType: r.category === 'videos' ? 'video' : 'image',
+  })).filter((r) => r.url && (r.imageUrl || r.thumbnailUrl));
+}
+
+module.exports = {
+  searxngImages, search, configured, status, PROVIDERS, parseDdg, parseBing, coherent, _clear, _anotherDoorOpen: anotherDoorOpen, _cooldown: () => ({ until: ddgCooldownUntil, lite: ddgLiteCooldownUntil, bing: bingCooldownUntil, active: Date.now() < ddgCooldownUntil || Date.now() < ddgLiteCooldownUntil || Date.now() < bingCooldownUntil }), _setCooldown: (ms, which = 'ddg') => { const until = ms ? Date.now() + ms : 0; if (which === 'lite') ddgLiteCooldownUntil = until; else if (which === 'bing') bingCooldownUntil = until; else ddgCooldownUntil = until; } };

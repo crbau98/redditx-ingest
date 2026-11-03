@@ -301,6 +301,12 @@ async function images(q, { count = 20, budget = 40, preferKeyless = false } = {}
       try {
         const bingHits = await bingImages(q, { count });
         if (bingHits.length) return bingHits;
+      } catch { /* fall back to SearXNG / DDG */ }
+    }
+    if (config.searxngUrl) {
+      try {
+        const sxHits = await require('./websearch').searxngImages(q, { count });
+        if (sxHits.length) return sxHits;
       } catch { /* fall back to DDG */ }
     }
     try {

@@ -9,7 +9,17 @@ const fs = require('fs');
 const path = require('path');
 const physique = require('./physique');
 
-const MAX_SIDE = 896; // faces in group shots are small: do not shrink more than this
+const MAX_SIDE = 896;
+function normalizeFaceVec(arr) {
+  if (!arr || !arr.length) return null;
+  let ss = 0;
+  for (let i = 0; i < arr.length; i++) ss += (Number(arr[i]) || 0) ** 2;
+  const n = Math.sqrt(ss);
+  if (!n || !Number.isFinite(n)) return null;
+  const out = new Array(arr.length);
+  for (let i = 0; i < arr.length; i++) out[i] = Math.round(((Number(arr[i]) || 0) / n) * 1e5) / 1e5;
+  return out;
+} // faces in group shots are small: do not shrink more than this
 const SELFIE_MODEL = path.join(__dirname, '..', '..', 'models', 'selfie.json');
 
 function resolveAssets() {
@@ -95,7 +105,12 @@ async function createModel() {
       // Human merges per-call config into its own: always say both, so one call's choice never leaks into the next.
       const result = await human.detect(tensor, { body: { enabled: wantBody } });
       const faces = (result.face || []).map((f) => ({
-        gender: f.gender || 'unknown', score: Number(f.genderScore) || 0, confidence: Number(f.score) || 0, age: Number.isFinite(f.age) ? Math.round(f.age) : null,
+        gender: f.gender || 'unknown',
+        score: Number(f.genderScore) || 0,
+        confidence: Number(f.score) || 0,
+        age: Number.isFinite(f.age) ? Math.round(f.age) : null,
+        box: Array.isArray(f.box) ? f.box.slice(0, 4).map((x) => Math.round(Number(x) || 0)) : null,
+        embedding: normalizeFaceVec(f.embedding),
       }));
       let measured = null;
       if (wantBody) {

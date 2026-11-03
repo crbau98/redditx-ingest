@@ -18,7 +18,7 @@ Visitor mode: **Operate** (find, follow, watch). Admin mode: **Operate** (curate
 
 - No paywall scraping or proxying. No leak/tube-rip/file-locker ingestion of paid content. Every public host (paid pages, mirror sites, personal pages) is now an allowed extraction target; the gates that decide what gets stored are safety, male-only scope and takedowns.
 - No unofficial Instagram/TikTok/Threads media APIs. Those stay external chips that seed handle guesses.
-- No biometric face-match identity. Merges use only self-published evidence (bio links, same paid page, same link page + shared name).
+- Local-only opt-in face & visual matching (`faceMatch`, off by default): face embeddings run locally in the existing TF.js WASM image worker pool and are stored only in local SQLite (`media_faces`). High-confidence face similarity combined with corroborating text/handle evidence attributes web media and registers sources; lower-confidence face hits without text evidence go to the Admin review queue (never auto-merged on face alone). All face embeddings and hashes for a creator or item are permanently deleted on takedown.
 - No whole-web enumeration. Coverage grows in layers: Find + seeds + mentions + graphs + web search + paid-lead traces, inside feed caps and safety gates.
 
 ## Key flows
