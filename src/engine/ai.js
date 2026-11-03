@@ -314,26 +314,76 @@ const OWNERSHIP = [
   /\bi (?:also )?(?:post|share|upload)\b/g,
   /\b(?:also on|also at|back-?up|back up|alt account|other account|new account|old account|main account|official|goes by|a\.?k\.?a\.?)(?=\W|$)/g,
 ];
+// "not me", "Not my account", "isn't me": the line says the account is NOT his. Together with the Telegram ownership check's
+// NEGATION (not affiliated, unofficial, fake, fan page, parody, tribute, no relation, ...), reused as it is.
+const NEGATION_SELF = /\b(?:not|never|isn'?t|aren'?t)\s+(?:(?:really|actually|even)\s+)?(?:me|my|mine|his|him)\b/i;
+const negated = (text) => NEGATION_SELF.test(text) || require('../services/telegram-public').NEGATION.test(text);
 const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// A platform label opens a profile line of his own: "IG: @x", "X: @x", "OnlyFans: x", "📸 IG @x", "TikTok | @x". It counts only at
+// the START of its segment (only emoji or punctuation before it), so "photographer: IG @x" or "video by IG @x" do not. The bare
+// words "of" and "x" are also ordinary English ("fan of @x", "x @y"), so they need a colon or an emoji after them.
+const LABEL_WORD = '(?:ig|insta(?:gram)?|twitter|onlyfans|fansly|bluesky|bsky|telegram|tg|tiktok|redgifs|tumblr|reddit|snap(?:chat)?|youtube|yt|threads|mastodon|vero|discord|twitch|kik|facebook|fb|linkedin|pinterest|clapper|fanvue|loyalfans|justforfans|jff)';
+// A run of labels is fine too ("Bluesky⚣Snap⚣Telegram⚣Reddit: @x"): every word before the handle must itself be a platform.
+const SEP = '[^\\p{L}\\p{N}\\n]{0,8}';
+// ("Twitter/X: @x" and "X/Twitter: @x": a bare x is fine beside a real platform label in the same run)
+const LABEL_AT_START = new RegExp(`(?:^|[|•·,.!?\\n])[^\\p{L}\\p{N}]*(?:x${SEP})?(?:${LABEL_WORD}${SEP})+(?:x${SEP})?$`, 'u');
+const BARE_LABEL_AT_START = /(?:^|[|•·,.!?\n])[^\p{L}\p{N}]*(?:of|x)([^\p{L}\p{N}\n]{0,8})$/u;
+const SEGMENT_BREAK = /[|•·,.!?\n]+/g;
+// Someone else's account: a partner, family, friend, fan, manager, photographer, collaborator, sponsor, a credit ("video by") or a
+// thank-you. Checked in the segment the value sits in, so "IG: @x | shout out @y" costs x nothing.
+// A relationship word marks someone ELSE's account wherever it sits next to the label: "bf | IG @x", "my husband IG @x".
+const RELATION = '(?:ex|ex-\\w+|bf|gf|boyfriend|girlfriend|husband|wife|partner|fianc[eé]e?|dad|daddy|father|mom|mum|mother|son|brother|sister|bro|friends?|bestie|buddy|roommate|crush|fans?)';
+// A role word marks it in the same segment ("Photographer: IG @x", "Managed by"), but not in the one before: "Photographer. IG: @x"
+// is usually the photographer's own account.
+const OCCUPATION = '(?:photographers?|manager|mgmt|management|booking|agent|editor|model\\w*)';
+const ROLE = `(?:${RELATION}|${OCCUPATION})`;
+const THIRD_RELATION = new RegExp(`\\b${RELATION}(?:'s)?(?=\\W|$)`, 'i');
+const THIRD = new RegExp(
+  `\\b${ROLE}(?:'s)?(?=\\W|$)(?<!\\bmodel)` // a role word anywhere in the segment ("boyfriend's IG", "Photographer: IG", "Fan of")
+  + `|\\b(?:shout ?-?outs?|check out|go follow|follow my|collab(?:s|bing)?|feat|ft|featuring|thx|thanks|credit|married|engaged|sponsored|proud of|photos? of)\\b`
+  + `|\\b(?:video|videos|edit|edits|photo|photos|pic|pics|art|artwork|design|designed|shot|filmed|photography|cover|music|sponsored|brought) by\\b`
+  + `|\\b(?:w/|with) (?:\\w+ ){0,2}model\\b`
+  + `|\\bmy (?!${MY}${THING}\\b)\\w+`, // "my ex", "my boy": my <anything but a platform or account word>
+  'i');
 
 /**
  * A claim counts only when (1) its quote is really in his text, (2) the claimed value is a whole word in the quote (not
- * a fragment: "ed" in "fred", "jake_fit" in "jake_fit2"), and (3) an ownership phrase sits right next to it, in the same
- * sentence. "my ex is jake_fit" has no such phrase, so it does not make jake_fit his.
+ * a fragment: "ed" in "fred", "jake_fit" in "jake_fit2"), and (3) it is his own: the quote is an entry of his own links
+ * list (unless its label names someone else), or a platform label opens the segment right before the handle ("IG: @x"), or
+ * a first-person phrase sits right next to it ("my OnlyFans: x", "I'm x", "follow me at x", "backup: @x"). A third-person
+ * mention ("my ex is jake_fit", "shout out @x", "photo by @x", "boyfriend's IG: @x") is never his, whatever label it carries, and
+ * neither is a line that says so ("not me", "Not my account", "unofficial", "fan page", "parody").
+ * @param {Array<{label?: string, url?: string}>} [links] the creator's own links list
  */
-function grounded(haystack, quote, value) {
+function grounded(haystack, quote, value, links = []) {
   const qn = lc(quote); const v = lc(value).replace(/^@/, '').replace(/^r\//, '');
   if (!(qn.length >= 3 && qn.length <= 200 && v.length >= 2 && haystack.includes(qn))) return false;
   const at = new RegExp(`(?<![a-z0-9_.-])${esc(v)}(?![a-z0-9_-]|\\.[a-z0-9])`).exec(qn);
   if (!at) return false;
   const vStart = at.index; const vEnd = at.index + v.length;
+  // his own links list: whatever he published there is his, unless its label names someone else ("Collab with Bob")
+  if ((links || []).some((l) => l && lc(`${l.label || ''} ${l.url || ''}`).includes(qn) && !THIRD.test(lc(l.label || '')))) return true;
+  // the segment the value sits in (separators inside the value, like the dots of a handle, do not split it; the full stop of
+  // an abbreviation like "feat." does not end a segment either)
+  const qseg = qn.replace(/\b(feat|ft|vs|mr|mrs|dr|jr|sr)\./g, (m0, w) => `${w}\u0001`);
+  let from = 0; let to = qseg.length;
+  for (const m of qseg.matchAll(SEGMENT_BREAK)) { if (m.index + m[0].length <= vStart) from = m.index + m[0].length; else if (m.index >= vEnd) { to = m.index; break; } }
+  if (THIRD.test(qseg.slice(from, to)) || negated(qseg.slice(from, to))) return false;
+  // a platform label that opens its segment sits right before the handle ("IG: @x", "TikTok | @x"); the segment it opens must be his too
+  const before = qseg.slice(0, vStart).replace(/@$/, '').replace(/\b(?:r|u|user)\/$/, ''); // "r/x", "Reddit: u/x"
+  // a relationship word in the segment right before the label ("bf | IG @x") makes it theirs; an occupation does not
+  const afterRelation = (idx) => !THIRD_RELATION.test(before.slice(0, idx).split(/[|•·,.!?\n]+/).pop());
+  const lab = LABEL_AT_START.exec(before);
+  if (lab && !THIRD.test(before.slice(lab.index)) && afterRelation(lab.index)) return true;
+  const bare = BARE_LABEL_AT_START.exec(before);
+  if (bare && /[:]|[^\x00-\x7f]/.test(bare[1]) && !THIRD.test(before.slice(bare.index)) && afterRelation(bare.index)) return true; // "OF: x", "X: x", "OF 👉 x"
   for (const re of OWNERSHIP) {
     re.lastIndex = 0;
     let m;
     while ((m = re.exec(qn))) {
       const s0 = m.index; const e0 = s0 + m[0].length;
       const gap = e0 <= vStart ? qn.slice(e0, vStart) : s0 >= vEnd ? qn.slice(vEnd, s0) : '';
-      if (gap.length <= 25 && !/[.!?\n]/.test(gap)) return true;
+      if (gap.length <= 25 && !/[.?\n]/.test(gap)) return true; // "follow me! @x" is one thought; a full stop or question mark ends it
     }
   }
   return false;
@@ -391,14 +441,14 @@ async function readProfiles({ limit = 8 } = {}) {
     if (name) {
       const norm = normAlias(name);
       const known = [c.handle, c.display_name].some((x) => x && normAlias(x) === norm);
-      if (!known && usableAlias(norm) && name.length <= 40 && name.split(' ').length <= 4 && !/https?:|www\./i.test(name) && grounded(hay, p.stage_name_quote, name)) {
+      if (!known && usableAlias(norm) && name.length <= 40 && name.split(' ').length <= 4 && !/https?:|www\./i.test(name) && grounded(hay, p.stage_name_quote, name, links)) {
         if (identity.addAlias(c.id, name, { kind: 'name', source: 'bio', signal: 'self-declared-name', evidenceUrl: evidenceUrl(c, links, p.stage_name_quote) })) out.names++;
       } else if (!known) out.dropped++;
     }
 
     for (const x of (p.accounts || []).slice(0, 6)) {
       const handle = String(x.handle || '').trim().replace(/^@/, '');
-      if (!HANDLE_RE.test(handle) || !PROFILE_PLATFORMS.includes(x.platform) || !grounded(hay, x.quote, handle)) { out.dropped++; continue; }
+      if (!HANDLE_RE.test(handle) || !PROFILE_PLATFORMS.includes(x.platform) || !grounded(hay, x.quote, handle, links)) { out.dropped++; continue; }
       const url = evidenceUrl(c, links, x.quote);
       identity.addAlias(c.id, handle, { kind: 'handle', platform: x.platform, source: 'bio', signal: 'bio-line', evidenceUrl: url });
       const owner = repo.creators.byAccount(x.platform, handle);
@@ -413,7 +463,7 @@ async function readProfiles({ limit = 8 } = {}) {
     for (const x of (p.communities || []).slice(0, 4)) {
       const name2 = String(x.name || '').trim().replace(/^\/?r\//i, '');
       const okName = x.platform === 'reddit' ? SUB_RE.test(name2) : LEMMY_RE.test(name2);
-      if (!okName || !grounded(hay, x.quote, name2)) { out.dropped++; continue; }
+      if (!okName || !grounded(hay, x.quote, name2, links)) { out.dropped++; continue; }
       const cand = discovery.consider({ platform: x.platform, kind: 'community', target: name2, label: x.platform === 'reddit' ? `r/${name2}` : name2, ingestable: true }, 'ai', via);
       if (cand && cand.status === 'pending') out.proposed++;
     }

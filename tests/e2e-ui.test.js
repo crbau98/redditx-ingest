@@ -46,8 +46,8 @@ before(async () => {
 after(async () => { if (browser) await browser.close(); engine.shutdown(); await new Promise((r) => server.close(r)); await anthropic.close(); });
 
 /** A fresh visitor: console errors and failed same-origin requests are collected for the end-of-test check. */
-async function visit(t, { viewport = { width: 1440, height: 900 }, colorScheme = 'light', enterAge = true } = {}) {
-  const ctx = await browser.newContext({ viewport, colorScheme });
+async function visit(t, { viewport = { width: 1440, height: 900 }, colorScheme = 'light', enterAge = true, serviceWorkers = 'allow' } = {}) {
+  const ctx = await browser.newContext({ viewport, colorScheme, serviceWorkers }); // 'block' when a test stubs requests with page.route: it cannot see fetches a service worker answers
   const page = await ctx.newPage();
   const problems = [];
   page.on('console', (m) => { if (m.type() === 'error' && !/401 \(Unauthorized\)/.test(m.text())) problems.push(`console: ${m.text()}`); });
@@ -90,6 +90,60 @@ describe('PRISM in a real browser', { timeout: 300000 }, () => {
     await assert.doesNotReject(page.getByText('Understood as').waitFor());
     await shot('smart-search');
     noProblems(problems);
+  });
+
+  test('Find a creator: accounts are "found", grouped as one person only on evidence, and name matches are followed one by one', async (t) => {
+    // The shape of a real "Christian Hogue" lookup: six accounts that share a name, two of which link to each other.
+    const acct = (platform, target, extra = {}) => ({ platform, kind: 'user', target, label: target, url: `https://example.test/${platform}/${target}`, displayName: 'Christian Hogue', bio: null, avatarUrl: null, followers: 10, sampleCount: 0, samples: [], sample: null, evidence: ['Bluesky people search'], male: true, confidence: 0.5, tier: 'likely', status: 'new', feedId: null, creatorId: null, found: true, groupId: null, sameAs: [], externalLinks: [], ...extra });
+    const linked = [
+      acct('bluesky', 'christianhogue9.bsky.social', { groupId: 'g1', confidence: 0.8, tier: 'strong' }),
+      acct('telegram', 'christian_hogue', { groupId: 'g1', confidence: 0.7, evidence: ['handle “christian_hogue” on Telegram'] }),
+    ];
+    const names = [acct('bluesky', 'hogueblog.bsky.social'), acct('bluesky', 'hogue38.bsky.social'), acct('bluesky', 'christianhogue912.bsky.social'),
+      acct('redgifs', 'alphabottom', { displayName: 'Christian', externalLinks: [{ service: 'OnlyFans', label: 'OnlyFans', url: 'https://onlyfans.com/alphabottom', handle: 'alphabottom' }] })];
+    const lookupBody = { query: 'Christian Hogue', name: 'Christian Hogue', handles: [], candidates: [...linked, ...names], accounts: [...linked, ...names], lookupId: 'lk-e2e', queryLinks: [], externalLinks: [], mediaHits: [], webLinks: [], hidden: { safety: 0, notMale: 0, unverified: 0 }, notes: [], searched: [], ms: 5,
+      groups: [{ id: 'g1', members: ['bluesky:user:christianhogue9.bsky.social', 'telegram:user:christian_hogue'], evidence: [{ type: 'profile-link', detail: 'christianhogue9.bsky.social links to christian_hogue', a: 'bluesky:user:christianhogue9.bsky.social', b: 'telegram:user:christian_hogue' }] }] };
+    const { page, problems, shot } = await visit(t, { serviceWorkers: 'block' });
+    const follows = [];
+    await page.route('**/api/lookup', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(lookupBody) }));
+    await page.route('**/api/lookup/follow', (route) => { follows.push(JSON.parse(route.request().postData())); return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'stub: not followed' }) }); });
+    await page.evaluate(() => { location.hash = '#/find?q=Christian%20Hogue'; });
+    await page.getByText('6 accounts found').waitFor();
+    const main = page.locator('main');
+    // "found" says the account exists; nothing here claims "verified" or "same person" for a name match
+    assert.equal(await main.getByText('Account found', { exact: true }).count(), 6);
+    assert.doesNotMatch(await main.innerText(), /\bverified\b/i);
+    assert.equal(await main.getByText('Follow all as one creator').count(), 0);
+    // one evidence group: the two accounts that link to each other, with the evidence shown
+    const group = main.locator('.find-group');
+    assert.equal(await group.count(), 1);
+    const groupText = await group.innerText();
+    assert.match(groupText, /2 linked accounts/);
+    assert.match(groupText, /christianhogue9\.bsky\.social/);
+    assert.match(groupText, /christian_hogue/);
+    assert.match(groupText, /christianhogue9\.bsky\.social links to christian_hogue/);
+    assert.doesNotMatch(groupText, /hogue38|hogueblog|alphabottom/);
+    // everything else is a separate possible match, followed one by one
+    await main.getByText('Other accounts: possible matches').waitFor();
+    const cards = main.locator('.find-cand');
+    assert.equal(await cards.count(), 4);
+    assert.equal(await main.getByText('Name match only', { exact: false }).count(), 4);
+    assert.equal(await main.getByRole('button', { name: 'Follow this account' }).count(), 4);
+    assert.equal(await main.getByRole('button', { name: /Follow these 2 as one creator/ }).count(), 1);
+    await shot('find-grouping');
+    // following a name match sends ONE account, with the lookup it came from
+    await cards.filter({ hasText: 'hogue38.bsky.social' }).getByRole('button', { name: 'Follow this account' }).click();
+    await page.waitForFunction(() => document.body.innerText.includes('stub: not followed'));
+    assert.equal(follows.length, 1);
+    assert.deepEqual(follows[0].selections, [{ platform: 'bluesky', kind: 'user', target: 'hogue38.bsky.social' }]);
+    assert.equal(follows[0].lookupId, 'lk-e2e');
+    // following the group sends exactly its two accounts
+    await main.getByRole('button', { name: /Follow these 2 as one creator/ }).click();
+    await page.waitForFunction(() => document.querySelectorAll('.notice.warn').length > 0);
+    await page.waitForTimeout(100);
+    assert.equal(follows.length, 2);
+    assert.deepEqual(follows[1].selections.map((x) => `${x.platform}:${x.target}`).sort(), ['bluesky:christianhogue9.bsky.social', 'telegram:christian_hogue']);
+    noProblems(problems.filter((p) => !/status of 400|400 \(Bad Request\)/.test(p)));
   });
 
   test('words the rules cannot place are read by Claude, and Explore says so', async (t) => {

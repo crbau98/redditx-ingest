@@ -179,6 +179,45 @@ describe('grounded(): whole words and an ownership phrase', () => {
   });
 });
 
+describe('grounded(): real bio shapes', () => {
+  const g = (text, value, links) => ai.grounded(text.toLowerCase().replace(/\s+/g, ' '), text, value, links);
+  test('a platform label plus a handle in his own bio is self-declared: IG, X, Twitter, OnlyFans, OF, Bluesky, Telegram, TikTok', () => {
+    for (const [bio, value] of [
+      ['IG: @jake_fit', 'jake_fit'], ['\ud83d\udcf8 IG @jake_fit', 'jake_fit'], ['Instagram - jake_fit', 'jake_fit'], ['X: @jake_fit', 'jake_fit'],
+      ['Twitter: @jake_fit', 'jake_fit'], ['OnlyFans: jake_fit', 'jake_fit'], ['OF: jake_fit', 'jake_fit'], ['\ud83d\udd25 OnlyFans \ud83d\udc49 jake_fit', 'jake_fit'],
+      ['Bluesky: jake.bsky.social', 'jake.bsky.social'], ['TG: @jake_fit', 'jake_fit'], ['TikTok | @jake_fit', 'jake_fit'], ['Reddit: r/malefitness', 'malefitness'],
+      ['gym rat. coffee. IG: @jake_fit | OF: jake_fit_vip', 'jake_fit_vip'],
+    ]) assert.equal(g(bio, value), true, bio);
+  });
+  test('an entry in his own links list is his: a profile URL, or a label with a handle', () => {
+    const links = [{ label: 'Instagram', url: 'https://instagram.com/jake_fit' }, { label: 'My page', url: 'https://onlyfans.com/jake_fit_vip' }, { label: 'Jake Kessler', url: 'https://linktr.ee/jakek' }];
+    const text = links.map((l) => `${l.label} ${l.url}`).join('\n');
+    assert.equal(ai.grounded(text.toLowerCase(), 'https://instagram.com/jake_fit', 'jake_fit', links), true);
+    assert.equal(ai.grounded(text.toLowerCase(), 'https://onlyfans.com/jake_fit_vip', 'jake_fit_vip', links), true);
+    assert.equal(ai.grounded(text.toLowerCase(), 'Jake Kessler https://linktr.ee/jakek', 'Jake Kessler', links), true);
+  });
+  test('the links shortcut still needs the quote to be in a links entry and the value to be a whole word', () => {
+    const links = [{ label: 'Instagram', url: 'https://instagram.com/jake_fit2' }];
+    const text = 'a bio that says shout out @jake_fit\ninstagram https://instagram.com/jake_fit2';
+    assert.equal(ai.grounded(text.toLowerCase(), 'https://instagram.com/jake_fit2', 'jake_fit', links), false, 'jake_fit2 is not jake_fit');
+    assert.equal(ai.grounded(text.toLowerCase(), 'shout out @jake_fit', 'jake_fit', links), false, 'a bio line is not a links entry');
+  });
+  test('third-person mentions and shout-outs stay rejected, label or not', () => {
+    for (const bio of [
+      'my ex is jake_fit', 'follow my friend @jake_fit', 'shout out @jake_fit', 'shoutout to @jake_fit', 'thanks @jake_fit for the pic', 'Photo by @jake_fit',
+      'collab with @jake_fit', 'my bf IG: @jake_fit', 'check out X: @jake_fit', 'IG: @jake_fit is my ex',
+    ]) assert.equal(g(bio, 'jake_fit'), false, bio);
+  });
+  test('a shout-out next to his own account does not take his account down, or promote the shout-out', () => {
+    const bio = 'IG: @jake_fit | shout out @bob_lifts';
+    assert.equal(g(bio, 'jake_fit'), true);
+    assert.equal(g(bio, 'bob_lifts'), false);
+  });
+  test('a label is not enough for a fragment: IG: @jake_fit2 does not ground jake_fit', () => {
+    assert.equal(g('IG: @jake_fit2', 'jake_fit'), false);
+  });
+});
+
 describe('secrets in upstream error text', () => {
   test('redact(): Bearer tokens, sk- keys, key=value pairs and the configured keys are masked; ordinary text is kept', () => {
     const out = redact(`bad key ${SECRET}; Authorization: Bearer abcdef0123456789.token_value; api_key="zzzzzzzzzzzz1234"; own ${config.creds.openaiKey}; req_0123abc failed at 12:00`);
