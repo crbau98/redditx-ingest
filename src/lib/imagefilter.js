@@ -257,7 +257,18 @@ function imageUrlOf(item) {
  * `body: true` also measures the build: `physique` is the 0..100 heaviness score, or null when the body could not be measured.
  * @returns {Promise<{female: boolean, decided: boolean, status: string, faces: number, females: number, url?: string, physique: number|null, physiqueReason?: string}>}
  */
-async function checkItem(item, { threshold = 0.5, faces = true, hash = false, body = false } = {}) {
+/** Pictures checked at once, whatever the number of feed slots: each in-flight check holds a downloaded picture (up to 4 MB) and its
+ * decoded pixels, so memory follows THIS number, not the feed concurrency. `imageFilterConcurrency` setting, default 4. */
+let active = 0; const waiting = [];
+const limit = () => { try { return Math.max(1, require('../settings').get().imageFilterConcurrency || 4); } catch { return 4; } };
+async function checkItem(item, opts = {}) {
+  if (active >= limit()) await new Promise((r) => waiting.push(r));
+  active++;
+  try { return await checkItemNow(item, opts); } finally { active--; const next = waiting.shift(); if (next) next(); }
+}
+const gate = () => ({ active, waiting: waiting.length, limit: limit() });
+
+async function checkItemNow(item, { threshold = 0.5, faces = true, hash = false, body = false } = {}) {
   const femalePolicy = faces;
   if (body) faces = true; // one model pass reads both
   // A source may hand over the picture itself (item.localImage, e.g. a Telegram photo not uploaded yet): no fetch needed.
@@ -309,4 +320,4 @@ function _setAnalyzer(fn) { analyzer = fn; }
 function _setEmbedder(fn) { embedder = fn; }
 function _reset() { cache.clear(); analyzer = null; embedder = null; }
 
-module.exports = { analyze, judge, checkItem, imageUrlOf, embedUrl, available, status, readBuffer, init, shutdown, recycle, noteHeavy, _setAnalyzer, _setEmbedder, _reset };
+module.exports = { analyze, judge, checkItem, gate, imageUrlOf, embedUrl, available, status, readBuffer, init, shutdown, recycle, noteHeavy, _setAnalyzer, _setEmbedder, _reset };

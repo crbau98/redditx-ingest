@@ -85,6 +85,8 @@ function adoptDiscoveredFeeds(result, feed, cfg = settingsStore.get()) {
 }
 
 const state = {
+  served: new Map(),    // platform -> sequence number of its last pick (least recently served goes first)
+  serveSeq: 0,
   running: new Map(),   // feedId -> live entry
   queue: [],            // manual/priority work: {feedId, force, trigger}
   paused: false,
@@ -391,20 +393,28 @@ function nextWork(cfg) {
     state.queue.splice(i, 1);
     return { feed, trigger: job.trigger, force: job.force, limit: job.limit, lane: 0 };
   }
-  // 2. scheduled work, by lane: new / prioritised feeds, then routine refresh, then backfill slices
+  // 2. scheduled work. Lanes are global (every lane-0 feed of any platform beats every lane-1 feed, which beats every lane-2
+  //    feed); inside a lane the platform served LEAST RECENTLY goes first, so registry order never decides who runs.
   if (state.paused || !cfg.schedulerEnabled) return null;
   const { free } = openPlatforms(cfg);
   if (!free.length) return null;
-  // Asked per platform: one platform with hundreds of due feeds (Coomer) must not hide every other platform's due feeds
-  // behind a single LIMIT.
-  const candidates = [];
-  for (const platform of free) for (const feed of repo.feeds.due(60, [], [platform])) candidates.push({ feed, lane: backfill.laneOf(feed) });
-  candidates.sort((a, b) => a.lane - b.lane); // stable: the SQL order (priority, overdue) holds inside a lane
-  for (const { feed, lane } of candidates) {
-    if (state.running.has(feed.id) || platformFull(feed.platform, cfg)) continue;
-    if (!breaker.canRun(feed.platform)) continue;
-    if (!budget.allow(feed.platform, lane, cfg)) continue;
-    return { feed, trigger: 'schedule', force: false, lane };
+  // Asked per platform AND per kind (refresh vs backfill): a long backlog of overdue backfill feeds cannot push a refresh feed out
+  // of the page, and one platform with hundreds of due feeds cannot hide the others behind a single LIMIT.
+  const byPlatform = new Map();
+  for (const platform of free) {
+    const rows = [...repo.feeds.due(40, [], [platform], { backfill: false }), ...repo.feeds.due(40, [], [platform], { backfill: true })]
+      .map((feed) => ({ feed, lane: backfill.laneOf(feed, cfg) }));
+    rows.sort((x, y) => x.lane - y.lane);
+    byPlatform.set(platform, rows);
+  }
+  for (const lane of [0, 1, 2]) {
+    const order = free.filter((p) => (byPlatform.get(p) || []).some((c) => c.lane === lane))
+      .sort((p, q) => (state.served.get(p) || 0) - (state.served.get(q) || 0));
+    for (const platform of order) {
+      if (platformFull(platform, cfg) || !breaker.canRun(platform)) continue;
+      const pick = byPlatform.get(platform).find((c) => c.lane === lane && !state.running.has(c.feed.id) && budget.allow(platform, lane, cfg));
+      if (pick) { state.served.set(platform, ++state.serveSeq); return { feed: pick.feed, trigger: 'schedule', force: false, lane }; }
+    }
   }
   return null;
 }
