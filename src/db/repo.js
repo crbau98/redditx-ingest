@@ -711,7 +711,7 @@ const feeds = {
   },
 
   update(id, patch) {
-    const cols = { label: 'label', enabled: 'enabled', trusted: 'trusted', interval_min: 'intervalMin', priority: 'priority', creator_id: 'creatorId' };
+    const cols = { target: 'target', label: 'label', enabled: 'enabled', trusted: 'trusted', interval_min: 'intervalMin', priority: 'priority', creator_id: 'creatorId' };
     const sets = []; const params = { id };
     for (const [col, key] of Object.entries(cols)) {
       let v = patch[key] !== undefined ? patch[key] : patch[col];

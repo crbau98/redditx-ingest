@@ -30,14 +30,15 @@ const { robotsAllows } = require('./web');
 const { cleanDisplayName } = require('../lib/links');
 
 const PAGE_VIDEOS = 14;   // video pages read per run (each is one full page fetch)
+const FIRST_VIDEOS = 50;
 const PROBE_VIDEOS = 2;   // a lookup probe asks "does this performer page exist?" — read only two
 const SEEN_KEEP = 400;    // remembered video slugs in the feed cursor
 
 // The two directories that share the gff.network infrastructure: GayForFans (gayforfans.com) and
 // JustTheGays (justthegays.tv). Both serve performer pages, both have a /search?q= endpoint.
 const SITES = [
-  { host: 'gayforfans.com', label: 'GayForFans' },
   { host: 'justthegays.tv', label: 'JustTheGays' },
+  { host: 'gayforfans.com', label: 'GayForFans' },
 ];
 /** Performer-page URL for a slug on either directory. */
 const performerUrl = (host, slug) => `https://${host}/performer/${slug}`;
@@ -262,22 +263,35 @@ module.exports = {
     const items = [];
     if (!(await robotsAllows(feed.target))) return { items: [], notes: ['robots.txt disallows this page'], via: 'gff' };
 
-    let html;
-    try {
-      html = await http.text(feed.target, { maxBytes: 3_000_000, retries: 1, headers: { accept: 'text/html' } });
-    } catch (e) {
-      // A site-wide block or a systemic failure must reach the circuit breaker, not hide in notes:
-      // before, every gff run "finished empty" while the site was 403ing us, so nothing ever backed off.
-      if (isBlockedStatus(e.status) || isChallengeText(e.body)) throw challengeError();
-      throw e;
+    const original = this.parse(feed.target);
+    let target = feed.target;
+    const read = async (url) => {
+      if (!(await robotsAllows(url))) return null;
+      try {
+        const html = await http.text(url, { maxBytes: 3_000_000, retries: 1, headers: { accept: 'text/html' } });
+        if (isChallengeText(html)) throw challengeError();
+        return performerPage(String(html));
+      } catch (e) {
+        if (isBlockedStatus(e.status) || isChallengeText(e.body)) throw challengeError();
+        if (e.status === 404) return null;
+        throw e;
+      }
+    };
+    let page = await read(target);
+    let resolvedTarget;
+    if ((!page || !page.videos.length) && original && target.includes('gayforfans.com/performer/')) {
+      const alternate = performerUrl('justthegays.tv', original.label);
+      const candidate = await read(alternate);
+      if (candidate && candidate.name && candidate.videos.length) {
+        page = candidate;
+        target = alternate;
+        resolvedTarget = alternate;
+      }
     }
-    if (isChallengeText(html)) throw challengeError();
-    const page = performerPage(String(html));
+    if (!page) return { items: [], notes: ['performer page unavailable'], via: 'gff' };
     const seen = new Set((ctx.cursor && ctx.cursor.seen) || []);
-    // A small explicit limit is the lookup probe ("does this performer exist?"): two video pages
-    // answer it, where reading fourteen cost ~8 s of the 18 s probe budget.
     const asked = Number(ctx.limit) || 0;
-    const cap = asked > 0 && asked < 50 ? Math.min(PROBE_VIDEOS, asked) : PAGE_VIDEOS;
+    const cap = ctx.probe ? Math.min(PROBE_VIDEOS, asked || PROBE_VIDEOS) : (!seen.size ? FIRST_VIDEOS : PAGE_VIDEOS);
     const fresh = page.videos.filter((v) => !seen.has(v.slug)).slice(0, cap);
     if (!fresh.length && page.videos.length) notes.push('gayforfans: no new videos since the last run');
 
@@ -322,8 +336,9 @@ module.exports = {
     const kept = [...seen].slice(-SEEN_KEEP);
     return {
       items,
+      resolvedTarget,
       cursor: { seen: kept },
-      profile: page.name ? { displayName: page.name, avatarUrl: page.avatar, bannerUrl: page.banner, bio: null, links: [{ platform: 'external', service: 'GayForFans', label: `GayForFans · ${page.name}`, url: feed.target, handle: page.name }] } : null,
+      profile: page.name ? { displayName: page.name, avatarUrl: page.avatar, bannerUrl: page.banner, bio: null, links: [{ platform: 'external', service: 'GayForFans', label: `GayForFans · ${page.name}`, url: target, handle: page.name }] } : null,
       notes,
       via: 'gff-html',
     };

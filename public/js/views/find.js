@@ -1,4 +1,4 @@
-import { h, icon, avatar, emptyState } from '../dom.js';
+import { h, icon, avatar, emptyState, proxied } from '../dom.js';
 import { post } from '../api.js';
 import { navigate, href } from '../router.js';
 import { platformLabel, platformColor } from '../store.js';
@@ -120,7 +120,7 @@ export async function find(root, { query }) {
     if (!sample) return null;
     const thumb = sample.thumb || sample.preview;
     return h('a', { class: 'find-sample', href: sample.url || c.url || '#', target: '_blank', rel: 'noopener noreferrer nofollow' },
-      thumb ? h('span', { class: 'find-sample-thumb', style: { backgroundImage: `url("${thumb}")` } }) : null,
+      thumb ? h('span', { class: 'find-sample-thumb', style: { backgroundImage: `url("${proxied(thumb)}")` } }) : null,
       h('span', { class: 'find-sample-txt' }, h('b', null, 'Latest post'), h('small', { class: 'muted' }, String(sample.title || sample.url || c.url || '').slice(0, 90))));
   }
 

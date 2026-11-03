@@ -195,7 +195,7 @@ async function verify(c, deadline) {
   if (conf && conf.ok === false) { c.note = conf.note || 'not configured'; return false; }
   try {
     const feed = { id: 'lookup', platform: c.platform, kind: c.kind, target: c.target, trusted: 1, label: c.label };
-    const res = await withTimeout(adapter.fetch(feed, { cursor: {}, limit: 8, force: true, needProfile: true, aborted: () => false }), budget, `${c.platform} read`);
+    const res = await withTimeout(adapter.fetch(feed, { cursor: {}, limit: 8, force: true, probe: true, needProfile: true, aborted: () => false }), budget, `${c.platform} read`);
     const items = res.items || [];
     const p = res.profile || {};
     c.sampleCount = items.length;

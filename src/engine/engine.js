@@ -236,6 +236,10 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     };
     if (opts.lane !== undefined) budget.charge(feed.platform, opts.lane); // only a run that really goes to the source uses the budget
     const result = await withTimeout(adapter.fetch(feed, ctx), RUN_TIMEOUT_MS, tag);
+    if (feed.platform === 'gff' && result.resolvedTarget && !repo.feeds.find(feed.platform, feed.kind, result.resolvedTarget)) {
+      repo.feeds.update(feed.id, { target: result.resolvedTarget });
+      feed.target = result.resolvedTarget;
+    }
     // Passes overlap (e.g. top + hot): process each post/position once per run.
     const seenKeys = new Set();
     const items = (result.items || []).filter((it) => {
