@@ -34,3 +34,29 @@ test('Sentry sends only a fixed event and ignores expected errors', () => {
   assert.equal(options.environment, 'staging');
   assert.equal(options.release, 'abc');
 });
+
+test('real SDK envelope contains no supplied private data', async () => {
+  const path = require.resolve('../src/lib/sentry');
+  delete require.cache[path];
+  const sentry = require(path);
+  const sdk = require('@sentry/node');
+  const envelopes = [];
+  sentry.init({ SENTRY_DSN: 'https://public@example.invalid/1', RAILWAY_ENVIRONMENT_NAME: 'test', RAILWAY_GIT_COMMIT_SHA: 'abc' }, {
+    init(options) {
+      sdk.init({ ...options, sampleRate: 1, transport: () => ({
+        send(envelope) { envelopes.push(envelope); return Promise.resolve({ statusCode: 200 }); },
+        flush() { return Promise.resolve(true); },
+      }) });
+    },
+    captureMessage: sdk.captureMessage,
+  });
+  sentry.captureHttpError(new Error('PRIVATE_MEDIA_SENTINEL'), { headers: { authorization: 'PRIVATE_AUTH_SENTINEL' }, url: '/?token=PRIVATE_TOKEN_SENTINEL' });
+  assert.equal(await sdk.flush(2000), true);
+  assert.equal(envelopes.length, 1);
+  const output = JSON.stringify(envelopes[0]);
+  assert.doesNotMatch(output, /PRIVATE_(MEDIA|AUTH|TOKEN)_SENTINEL/);
+  assert.match(output, /Unhandled HTTP server error/);
+  assert.match(output, /"release":"abc"/);
+  assert.match(output, /"environment":"test"/);
+  await sdk.close(2000);
+});
