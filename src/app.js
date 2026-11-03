@@ -102,6 +102,7 @@ function createApp() {
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => {
     if (err && err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Invalid JSON body' });
+    require('./lib/sentry').captureHttpError(err, req);
     if (!config.isTest) console.error('[ERROR]', req.method, req.path, err && err.stack ? err.stack.split('\n').slice(0, 3).join(' | ') : err);
     res.status((err && err.status) || 500).json({ error: config.isProd ? 'Internal server error' : String((err && err.message) || err) });
   });
