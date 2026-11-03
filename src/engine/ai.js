@@ -295,7 +295,7 @@ const PROFILE_SYSTEM = [
 ].join('\n');
 
 const REREAD_DAYS = 30;
-const lc = (x) => String(x || '').toLowerCase().replace(/\s+/g, ' ').trim();
+const lc = (x) => String(x || '').toLowerCase().replace(/[’‘]/g, "'").replace(/\s+/g, ' ').trim();
 
 /** The text a creator published about himself: bio plus the labels and URLs of his links. */
 function ownText(c) {
@@ -303,10 +303,40 @@ function ownText(c) {
   return { text: [c.bio || '', ...links.map((l) => `${l.label || ''} ${l.url || ''}`.trim())].filter(Boolean).join('\n'), links };
 }
 
-/** A claim counts only when its quote is really in his text and the claimed value is really in the quote. */
+// Words that say the next thing is HIS: "I'm Zed", "my OnlyFans: x", "follow me at x", "backup: @x", "also on X: @x", "I post on r/x".
+// A shout-out ("go follow my bf @x") or a mention ("my ex is x") has none of them.
+const MY = '(?:own |other |new |old |main |backup |back-up |alt(?:ernate)? |second |private |nsfw |sfw )*';
+const THING = '(?:onlyfans|fansly|of|insta(?:gram)?|ig|twitter|x|bluesky|bsky|telegram|tg|tiktok|redgifs|tumblr|reddit|snap(?:chat)?|account|acct|acc|page|profile|handle|name|username|sub(?:reddit)?|community|links?|site|website)';
+const OWNERSHIP = [
+  /\bi(?:'m| am)\b/g,
+  new RegExp(`\\bmy ${MY}${THING}\\b`, 'g'),
+  /\b(?:follow|find|dm|message|catch|add|reach|call) me\b/g,
+  /\bi (?:also )?(?:post|share|upload)\b/g,
+  /\b(?:also on|also at|back-?up|back up|alt account|other account|new account|old account|main account|official|goes by|a\.?k\.?a\.?)(?=\W|$)/g,
+];
+const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * A claim counts only when (1) its quote is really in his text, (2) the claimed value is a whole word in the quote (not
+ * a fragment: "ed" in "fred", "jake_fit" in "jake_fit2"), and (3) an ownership phrase sits right next to it, in the same
+ * sentence. "my ex is jake_fit" has no such phrase, so it does not make jake_fit his.
+ */
 function grounded(haystack, quote, value) {
   const qn = lc(quote); const v = lc(value).replace(/^@/, '').replace(/^r\//, '');
-  return qn.length >= 3 && qn.length <= 200 && v.length >= 2 && haystack.includes(qn) && qn.includes(v);
+  if (!(qn.length >= 3 && qn.length <= 200 && v.length >= 2 && haystack.includes(qn))) return false;
+  const at = new RegExp(`(?<![a-z0-9_.-])${esc(v)}(?![a-z0-9_-]|\\.[a-z0-9])`).exec(qn);
+  if (!at) return false;
+  const vStart = at.index; const vEnd = at.index + v.length;
+  for (const re of OWNERSHIP) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(qn))) {
+      const s0 = m.index; const e0 = s0 + m[0].length;
+      const gap = e0 <= vStart ? qn.slice(e0, vStart) : s0 >= vEnd ? qn.slice(vEnd, s0) : '';
+      if (gap.length <= 25 && !/[.!?\n]/.test(gap)) return true;
+    }
+  }
+  return false;
 }
 
 /** The public page that shows a claim: the link it sits in, else his own profile on the platform he was found on. */

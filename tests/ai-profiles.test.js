@@ -126,9 +126,9 @@ describe('proposals go through the normal pipeline', () => {
   });
 
   test('communities he says he posts in become candidates; malformed names are dropped', async () => {
-    creator('pip_posts', { bio: 'posts on r/malefitness and r/bad name!' });
+    creator('pip_posts', { bio: 'I post on r/malefitness and r/bad name!' });
     answer({ ...empty(1), communities: [
-      { platform: 'reddit', name: 'r/malefitness', quote: 'posts on r/malefitness' },
+      { platform: 'reddit', name: 'r/malefitness', quote: 'I post on r/malefitness' },
       { platform: 'reddit', name: 'bad name!', quote: 'r/bad name!' },
     ] });
     const r = await ai.readProfiles({ limit: 1 });

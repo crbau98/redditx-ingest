@@ -25,9 +25,32 @@ function record(inTok, outTok, { refusal = false } = {}) {
     total: { calls: u.total.calls + 1, input: u.total.input + inTok, output: u.total.output + outTok },
   }));
 }
+// Requests that have been started but not yet counted. They count against the budget at once, so N calls started
+// together cannot all pass a check that only sees finished ones.
+let inflight = 0;
 function budgetLeft() {
   const s = require('../settings').get();
-  return Math.max(0, s.aiDailyBudget - usage().calls);
+  return Math.max(0, s.aiDailyBudget - usage().calls - inflight);
+}
+/** Take one request's worth of budget before sending it. Returns the release function (call it when the request ends, success or not). */
+function reserve() {
+  if (budgetLeft() <= 0) throw budgetErr('AI daily budget reached (setting aiDailyBudget)');
+  inflight++;
+  let released = false;
+  return () => { if (!released) { released = true; inflight = Math.max(0, inflight - 1); } };
+}
+
+/* ------------------------------------------------------ rate limits (429) */
+const cooling = new Map(); // provider -> timestamp until which no request is sent
+const RATE_LOG_EVERY_MS = 10 * 60 * 1000;
+let lastRateLog = 0;
+const coolDown = (provider, ms) => { if (ms > 0) cooling.set(provider, Math.max(cooling.get(provider) || 0, Date.now() + ms)); };
+const coolRemaining = (provider) => Math.max(0, (cooling.get(provider) || 0) - Date.now());
+/** One "AI rate-limited" event per window, however many calls are throttled. */
+function noteRateLimited(label, retryAfterMs) {
+  if (Date.now() - lastRateLog < RATE_LOG_EVERY_MS) return;
+  lastRateLog = Date.now();
+  require('../engine/events').log('WARN', `AI rate-limited: ${label} answered 429${retryAfterMs ? `; holding off ${Math.ceil(retryAfterMs / 1000)}s` : ''}. AI requests are skipped or retried until it clears.`);
 }
 
 /* ------------------------------------------------------------------- cache */
@@ -48,4 +71,6 @@ function remember(key, value) {
 const skipErr = (msg, extra = {}) => Object.assign(new Error(msg), { skip: true, ...extra });
 const budgetErr = (msg, extra = {}) => Object.assign(new Error(msg), { budget: true, ...extra });
 
-module.exports = { usage, record, budgetLeft, cached, remember, keyOf, skipErr, budgetErr, cacheSize: () => cache.size, clearCache: () => cache.clear() };
+function reset() { cache.clear(); cooling.clear(); lastRateLog = 0; inflight = 0; }
+
+module.exports = { usage, record, budgetLeft, reserve, coolDown, coolRemaining, noteRateLimited, cached, remember, keyOf, skipErr, budgetErr, cacheSize: () => cache.size, clearCache: () => cache.clear(), reset };

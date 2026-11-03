@@ -121,6 +121,7 @@ module.exports = {
     model: String(env.OPENAI_MODEL || 'gpt-6.1-sol').trim(),
     timeoutMs: int(env.OPENAI_TIMEOUT_MS, 90000),
     retryMs: int(env.OPENAI_RETRY_MS, 400), // base wait before a retry of a 429 / 5xx / network error (two retries)
+    retryAfterCapMs: int(env.OPENAI_RETRY_AFTER_CAP_MS, 15000), // longest Retry-After waited for; a longer one is not retried into, the provider cools down for this long
   },
   // Claude (Anthropic API), selectable with AI_PROVIDER=anthropic and always the web-search provider when its key is set.
   anthropic: {

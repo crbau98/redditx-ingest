@@ -222,6 +222,8 @@ module.exports = {
 };
 
 const BACKFILL_PAGES = 3; // extra pages of older posts per run
+const FIRST_RUN_PAGES = 4; // pages a creator's very first run reads from the top (see maxPages below)
+const BACKFILL_MISSES = 3; // backfill cursors rejected in a row before backfill is given up for a creator
 
 async function fetchFeed(feed, ctx) {
   const cursor = ctx.cursor || {};
@@ -266,18 +268,43 @@ async function fetchFeed(feed, ctx) {
   // run after run instead of ending at his newest 200 posts.
   let bfNext = cursor.bfNext || (!cursor.newestAt && next) || null;
   let bfDone = !!cursor.bfDone || (!cursor.newestAt && !next);
-  if (feed.kind === 'user' && cursor.newestAt && bfNext && !bfDone && !ctx.aborted() && !(ctx.limit && ctx.limit < 20)) {
-    let at = bfNext;
-    for (let page = 0; page < BACKFILL_PAGES && at; page++) {
-      if (ctx.aborted()) break;
-      const json = await http.json(`${base}/xrpc/app.bsky.feed.getAuthorFeed?actor=${encodeURIComponent(String(feed.target).replace(/^@/, ''))}&filter=posts_with_media&limit=50&includePins=false&cursor=${encodeURIComponent(at)}`);
-      for (const entry of json.feed || []) for (const it of parsePostView(entry)) items.push({ ...it, query: null });
-      at = json.cursor || null;
+  let bfFail = cursor.bfFail || 0;
+  // A cursor from before backfill existed ({newestAt}, no bfNext) has nothing to resume from: walk past the top the first
+  // run already read (FIRST_RUN_PAGES) to find where its history stops, then backfill from there. One-off cost, then bfNext is stored.
+  const legacy = feed.kind === 'user' && !!cursor.newestAt && !cursor.bfNext && !bfDone;
+  if (feed.kind === 'user' && cursor.newestAt && (bfNext || legacy) && !bfDone && !ctx.aborted() && !(ctx.limit && ctx.limit < 20)) {
+    const url = (at) => `${base}/xrpc/app.bsky.feed.getAuthorFeed?actor=${encodeURIComponent(String(feed.target).replace(/^@/, ''))}&filter=posts_with_media&limit=50&includePins=false${at ? `&cursor=${encodeURIComponent(at)}` : ''}`;
+    const older = [];
+    try {
+      let at = bfNext;
+      if (legacy) {
+        at = null;
+        for (let page = 0; page < FIRST_RUN_PAGES && !ctx.aborted(); page++) {
+          const json = await http.json(url(at));
+          at = json.cursor || null;
+          if (!at) break;
+        }
+        if (!at) bfDone = true; // the whole account fits in what the first run read
+      }
+      for (let page = 0; page < BACKFILL_PAGES && at && !bfDone && !ctx.aborted(); page++) {
+        const json = await http.json(url(at));
+        for (const entry of json.feed || []) for (const it of parsePostView(entry)) older.push({ ...it, query: null });
+        at = json.cursor || null;
+      }
+      if (!bfDone) { bfNext = at; bfDone = !at; }
+      bfFail = 0;
+      items.push(...older);
+    } catch (e) {
+      // History is a bonus: a cursor the AppView now rejects (expired, 400) must not cost the run its fresh posts or count as a
+      // failure of the feed. Drop the cursor so the next run starts backfill over; after three misses in a row, stop trying.
+      if (ctx.aborted()) throw e;
+      items.push(...older);
+      bfNext = null; bfFail += 1;
+      if (bfFail >= BACKFILL_MISSES) { bfDone = true; bfFail = 0; }
     }
-    bfNext = at; bfDone = !at;
   }
   let profile;
   if (feed.kind === 'user' && (ctx.needProfile || !cursor.newestAt)) profile = await fetchProfile(feed.target);
-  const nextCursor = newest ? { newestAt: newest, ...(feed.kind === 'user' && bfNext && !bfDone ? { bfNext } : {}), ...(feed.kind === 'user' && bfDone ? { bfDone: true } : {}) } : undefined;
+  const nextCursor = newest ? { newestAt: newest, ...(feed.kind === 'user' && bfNext && !bfDone ? { bfNext } : {}), ...(feed.kind === 'user' && bfDone ? { bfDone: true } : {}), ...(feed.kind === 'user' && bfFail && !bfDone ? { bfFail } : {}) } : undefined;
   return { items, cursor: nextCursor, profile, via: feed.kind === 'search' ? 'search' : feed.kind === 'user' ? 'appview' : `appview-${feed.kind}` };
 }

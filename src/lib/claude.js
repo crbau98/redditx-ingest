@@ -15,6 +15,7 @@
  * is an error the caller treats like "no answer" - it is never retried in another wording. Inert without ANTHROPIC_API_KEY.
  */
 const config = require('../config');
+const redact = require('./redact');
 
 let Anthropic = null;
 try { Anthropic = require('@anthropic-ai/sdk'); Anthropic = Anthropic.default || Anthropic; } catch { Anthropic = null; }
@@ -48,28 +49,30 @@ const { skipErr } = usageStore;
 function failure(e) {
   if (!Anthropic || !(e instanceof Anthropic.APIError)) return e;
   if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) return skipErr(`Anthropic rejected the API key (HTTP ${e.status}); check ANTHROPIC_API_KEY`, { status: e.status });
-  if (e instanceof Anthropic.RateLimitError) return Object.assign(new Error('Anthropic rate limit hit (HTTP 429)'), { budget: true, status: 429 });
-  if (e instanceof Anthropic.BadRequestError) return Object.assign(new Error(`Anthropic refused the request (HTTP 400): ${String(e.message).slice(0, 200)}`), { status: 400 });
-  return Object.assign(new Error(`Anthropic API error${e.status ? ` (HTTP ${e.status})` : ''}: ${String(e.message).slice(0, 200)}`), { status: e.status || 502 });
+  if (e instanceof Anthropic.RateLimitError) { usageStore.noteRateLimited('Anthropic', 0); return Object.assign(new Error('Anthropic rate limit hit (HTTP 429)'), { budget: true, status: 429 }); }
+  if (e instanceof Anthropic.BadRequestError) return Object.assign(new Error(`Anthropic refused the request (HTTP 400): ${redact(String(e.message)).slice(0, 200)}`), { status: 400 });
+  return Object.assign(new Error(`Anthropic API error${e.status ? ` (HTTP ${e.status})` : ''}: ${redact(String(e.message)).slice(0, 200)}`), { status: e.status || 502 });
 }
 
 /** One Messages API request, with budget, refusal fallback and usage accounting. */
 async function call(params, { timeoutMs } = {}) {
   if (!configured()) throw skipErr('Claude is not configured: set ANTHROPIC_API_KEY');
-  if (budgetLeft() <= 0) throw Object.assign(new Error('Claude daily budget reached (setting aiDailyBudget)'), { budget: true });
   if (!params.output_config || !EFFORTS.has(params.output_config.effort)) throw new TypeError('Claude request without an explicit output_config.effort');
-  const model = config.anthropic.model;
-  const body = { model, ...params };
-  if (config.anthropic.fallbacks && FALLBACK_MODELS.has(model)) { body.betas = [FALLBACK_BETA]; body.fallbacks = 'default'; }
-  let res;
-  try { res = await getClient().beta.messages.create(body, timeoutMs ? { timeout: timeoutMs, maxRetries: 0 } : undefined); } catch (e) { throw failure(e); }
-  if (res.stop_reason === 'refusal') {
-    record(res, { refusal: true });
-    const cat = res.stop_details && res.stop_details.category;
-    throw Object.assign(new Error(`Claude declined this request${cat ? ` (${cat})` : ''}`), { refusal: true, skip: true });
-  }
-  record(res);
-  return res;
+  const release = usageStore.reserve(); // in-flight calls count against the daily budget until they finish
+  try {
+    const model = config.anthropic.model;
+    const body = { model, ...params };
+    if (config.anthropic.fallbacks && FALLBACK_MODELS.has(model)) { body.betas = [FALLBACK_BETA]; body.fallbacks = 'default'; }
+    let res;
+    try { res = await getClient().beta.messages.create(body, timeoutMs ? { timeout: timeoutMs, maxRetries: 0 } : undefined); } catch (e) { throw failure(e); }
+    if (res.stop_reason === 'refusal') {
+      record(res, { refusal: true });
+      const cat = res.stop_details && res.stop_details.category;
+      throw Object.assign(new Error(`Claude declined this request${cat ? ` (${cat})` : ''}`), { refusal: true, skip: true });
+    }
+    record(res);
+    return res;
+  } finally { release(); }
 }
 
 /** Count one Messages API response against today's usage. */
@@ -163,6 +166,6 @@ function status() {
   return { configured: configured(), sdk: !!Anthropic, model: config.anthropic.model, budget: s.aiDailyBudget, usage: usage(), cached: usageStore.cacheSize() };
 }
 
-function _reset() { usageStore.clearCache(); client = null; clientKey = ''; }
+function _reset() { usageStore.reset(); client = null; clientKey = ''; }
 
 module.exports = { configured, json, webSearch, usage, budgetLeft, status, _reset, FALLBACK_MODELS };

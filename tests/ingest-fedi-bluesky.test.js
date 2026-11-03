@@ -97,10 +97,11 @@ test('author feed: follows the cursor, keeps originals, drops reposts, labels fr
   assert.equal(rows.find((m) => /3kinv/.test(m.source_id)).source_url, 'https://bsky.app/profile/did:plc:zed/post/3kinv', 'handle.invalid falls back to the DID');
 });
 
+// (a cursor with bfDone is a feed whose history is fully read; one without bfNext/bfDone starts backfill: see bluesky-backfill-cursor.test.js)
 test('a second run stops at the newest known post instead of paging on', async () => {
   const feed = repo.feeds.upsert({ platform: 'bluesky', kind: 'user', target: 'zed.bsky.social', trusted: 1, origin: 'admin' }).feed;
   hits.author.length = 0;
-  const out = await bsky.fetch(feed, ctx({ cursor: { newestAt: '2026-10-03T10:00:00.000Z' } }));
+  const out = await bsky.fetch(feed, ctx({ cursor: { newestAt: '2026-10-03T10:00:00.000Z', bfDone: true } }));
   assert.equal(out.items.length, 0);
   assert.equal(hits.author.length, 1);
 });

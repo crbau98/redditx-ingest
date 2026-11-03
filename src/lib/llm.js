@@ -28,5 +28,5 @@ module.exports = {
   json: (purpose, opts) => impl().json(purpose, opts),
   usage: () => impl().usage(),
   budgetLeft: () => impl().budgetLeft(),
-  _reset: () => { claude._reset(); },
+  _reset: () => { claude._reset(); openai._reset(); },
 };
