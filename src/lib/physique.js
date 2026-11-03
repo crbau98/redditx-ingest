@@ -22,8 +22,8 @@ const MIN_TORSO_PX = 40;   // shoulder-to-hip length (in analysed pixels) below 
 const MIN_FRONTAL = 0.5;   // shoulder span / torso length: below this the body is turned sideways and the width means little
 const MAX_FRONTAL = 1.5;   // ... and above this the keypoints do not describe one upright torso (a garbled pose; a real one sits at 0.55..1.1)
 const MAX_SKEW_DEG = 30;   // angle between the shoulder line and the hip line: a twisted or mis-assigned pose is not measurable
-const MAX_WS = 1.5;        // belly width / shoulder span, torso length: past these the silhouette is not one torso
-const MAX_WL = 1.3;        //   (a partner, a bed, a crowded frame merged into it), not a very large body: no verdict instead of 100
+const MAX_WS = 1.4;        // belly width / shoulder span, torso length: the 100 anchors are 1.05 / 0.74, so past these the silhouette is
+const MAX_WL = 1.1;        //   not a larger body but legs, arms, a partner or a bed merged into it: no verdict instead of 100
 const BELLY = [0.45, 0.8];  // where along the shoulder -> hip line the belly is measured (fractions of the torso length)
 const ROWS = 13;
 const MIN_ROWS = 4;
@@ -60,6 +60,10 @@ function measure(keypoints, mask, w, h) {
   const ls = P('leftShoulder', MIN_KEYPOINT); const rs = P('rightShoulder', MIN_KEYPOINT);
   const lh = P('leftHip', MIN_KEYPOINT); const rh = P('rightHip', MIN_KEYPOINT);
   if (!ls || !rs || !lh || !rh) return { decided: false, reason: 'torso not in view' };
+  // MoveNet labels the subject's own left and right: a front view has the left shoulder and hip on the image's right. Both on
+  // the image's left = the person faces away: the belly is not in view and the silhouette is lats, hips and thighs. All nine
+  // back views in a 189-picture sample of Coomer / Bluesky thumbnails (five of them scored 45-100) were caught this way.
+  if (ls.x < rs.x && lh.x < rh.x) return { decided: false, reason: 'facing away' };
   const sm = mid(ls, rs); const hm = mid(lh, rh);
   const L = dist(sm, hm); const S = dist(ls, rs);
   if (L < MIN_TORSO_PX) return { decided: false, reason: 'body too small' };
@@ -127,6 +131,11 @@ function measure(keypoints, mask, w, h) {
   // Either ratio clearly heavy is enough: a plain average let a belly as wide as the shoulders pass whenever the torso looked
   // long (camera below, a stretched pose). The other ratio still pulls a borderline reading down a little.
   const a = clamp01((ws - WS[0]) / (WS[1] - WS[0])); const b = clamp01((wl - WL[0]) / (WL[1] - WL[0]));
+  // The shoulder ratio says lean, the torso-length ratio says heavy: the torso is foreshortened (seated, crouched, shot from
+  // above), so its keypoint length is short while the shoulders are not. Sampled thumbnails with this split were all seated
+  // or lean standing men scored 55-75. (The reverse, a belly as wide as the shoulders on a long torso, is the case the max
+  // below exists for and still counts.)
+  if (a === 0 && b > 0.5) return { decided: false, reason: 'torso foreshortened (width ratios disagree)' };
   const score = Math.round(100 * (0.75 * Math.max(a, b) + 0.25 * Math.min(a, b)));
   return { decided: true, score, ws: Math.round(ws * 100) / 100, wl: Math.round(wl * 100) / 100, rows: widths.length };
 }

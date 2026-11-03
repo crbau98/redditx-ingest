@@ -67,6 +67,24 @@ describe('measuring a body (pure geometry)', () => {
     const stretched = kp.map((k) => (k.part === 'leftShoulder' ? { ...k, position: [k.position[0] + 140, k.position[1]] } : k)); // shoulder span 2x the torso length
     assert.equal(measure(stretched, mask, w, h).decided, false);
   });
+  test('a short (foreshortened) torso with shoulders wider than the belly is not read as heavy', () => {
+    // belly 36 / chest 44 / hips 25: ws 0.9 but the torso keypoints are squeezed together (a seated or high-angle shot): wl is far over its line
+    const [kp, mask, w, h] = body({ belly: 28, chest: 44 });
+    const squeezed = kp.map((k) => (/Hip$/.test(k.part) ? { ...k, position: [k.position[0], 50 + (k.position[1] - 50) * 0.55] } : k)); // torso length 120 -> 66, shoulders unchanged
+    const r = measure(squeezed, mask, w, h);
+    assert.equal(r.decided, false, JSON.stringify(r));
+    // a long torso with a belly as wide as the shoulders (ws heavy, wl not) is still heavy
+    const long = measure(...body({ belly: 44, chest: 44 }));
+    assert.equal(long.decided, true, JSON.stringify(long)); assert.ok(long.score >= 45, JSON.stringify(long));
+  });
+  test('a person facing away (left shoulder and hip on the image\'s left) is not measured: the belly is not in view', () => {
+    const [kp, mask, w, h] = body({ belly: 56, chest: 52 }); // the wide silhouette that scores 100 from the front
+    assert.equal(measure(kp, mask, w, h).score, 100);
+    const flip = { leftShoulder: 'rightShoulder', rightShoulder: 'leftShoulder', leftHip: 'rightHip', rightHip: 'leftHip' };
+    const fromBehind = kp.map((k) => (flip[k.part] ? { ...k, part: flip[k.part] } : k));
+    const r = measure(fromBehind, mask, w, h);
+    assert.equal(r.decided, false, JSON.stringify(r)); assert.equal(r.reason, 'facing away');
+  });
   test('no verdict without a frontal torso in view', () => {
     assert.equal(measure(...body({ sideways: true })).decided, false);
     assert.equal(measure(...body({ noHips: true })).decided, false);
