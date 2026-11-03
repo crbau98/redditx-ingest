@@ -242,13 +242,16 @@ describe('iter13: creator profiles carry every paid page, not just OnlyFans', ()
 });
 
 describe('iter14: Find keeps the paid pages it surfaced when following', () => {
-  test('the public follow route stores paid link-outs like the Find view now sends', async () => {
+  // The Find view no longer sends paid pages: the server attaches the ones its own lookup found on the chosen accounts
+  // (tests/lookup-grouping.test.js, "only its own paid pages come with it"). Whatever a client sends is ignored, because it
+  // would be stored on the new creator and shown to every visitor (tests/follow-hardening.test.js).
+  test('the public follow route ignores paid links sent by the client when it does not know the lookup', async () => {
     const r = await (await fetch(`${base}/api/lookup/follow`, { method: 'POST', headers: { ...AGE, 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'Findflow Guy', selections: [{ platform: 'redgifs', kind: 'user', target: 'findflowguy' }],
         externalLinks: [{ service: 'Fansly', label: 'Fansly', url: 'https://fansly.com/FindflowGuy' }] }) })).json();
     assert.ok(r.ok, JSON.stringify(r));
     const links = repo.creators.get(r.creator.id).links;
-    assert.ok(links.some((l) => l.url === 'https://fansly.com/findflowguy' && l.handle === 'findflowguy'), JSON.stringify(links));
+    assert.ok(!links.some((l) => /fansly\.com/.test(l.url || '')), JSON.stringify(links));
   });
 });
 

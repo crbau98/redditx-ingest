@@ -151,6 +151,40 @@ function addCreator({ name, inputs, bio }) {
   return { creator: repo.creators.detail(creator.id), feeds, conflicts, skipped, links };
 }
 
+/**
+ * Follow accounts that were already parsed one by one (Find's picks) as ONE creator: the creator that already owns one of
+ * them, else a new one. Unlike addCreator it never joins the accounts into a string to be parsed again (one hostile
+ * "handle\nother\nthird" must stay one account), and it never reuses an existing creator because the NAME matches: a shared
+ * name is not proof of one person.
+ * @param {{name: string, bio?: string, specs: object[]}} o
+ */
+function addAccounts({ name, bio, specs }) {
+  const ingestable = (specs || []).filter((s) => s && !s.external);
+  if (!ingestable.length) return { error: 'Nothing to follow' };
+  let creator = null;
+  for (const s of ingestable) {
+    if (s.kind !== 'user' && !(s.kind === 'channel' && s.platform === 'youtube')) continue;
+    const owner = repo.creators.byAccount(s.platform, s.target);
+    if (owner) { creator = owner; break; }
+  }
+  if (creator && creator.status === 'blocked') return { error: `${creator.display_name || creator.handle} is blocked. Restore them first if you want to follow them again.` };
+  if (!creator) {
+    const first = ingestable.find((s) => s.kind === 'user') || ingestable[0];
+    const handle = name || String(first.label || first.target).replace(/^[@/]?(?:u\/)?/, '') || 'creator';
+    if (checkText(handle, name, bio).level === 'block') return { error: 'Rejected by the safety gate' };
+    const g = femaleCheck(handle, name, bio);
+    if (g.level === 'hard') return { error: `Not male-focused (${g.rule}) — PRISM only follows male creators` };
+    creator = repo.creators.create({ handle, displayName: name || handle, bio, origin: 'admin' });
+  }
+  const feeds = []; const conflicts = [];
+  for (const s of ingestable) {
+    const r = addSpec(s, { creatorId: creator.id });
+    if (r.status === 'conflict') conflicts.push({ input: s.label || s.target, reason: r.reason, creatorId: r.creator.id });
+    else if (r.feed) feeds.push(r.feed);
+  }
+  return { creator: repo.creators.detail(creator.id), feeds, conflicts, skipped: [], links: [] };
+}
+
 const decodeXml = (s) => String(s).replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n))).replace(/&amp;/g, '&');
 
 /**
@@ -220,4 +254,4 @@ function moderate(id, action, reason, actor = 'admin') {
   return repo.media.get(id);
 }
 
-module.exports = { addSpec, addCreator, importTargets, parseOpml, publicAccounts, moderate, tokens };
+module.exports = { addSpec, addCreator, addAccounts, importTargets, parseOpml, publicAccounts, moderate, tokens };

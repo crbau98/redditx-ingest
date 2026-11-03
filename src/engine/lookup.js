@@ -688,11 +688,18 @@ async function lookup(input, { imageCheck = true } = {}) {
 // "Found" means an account exists on its platform and has content. It does NOT mean two found accounts are one man: a shared
 // name proves nothing (hogueblog, hogue38, christianhogue9, a Telegram "christian_hogue" and an OnlyFans "Christian" are five
 // different people). Accounts are grouped as ONE person only on evidence the accounts themselves publish, or that PRISM already
-// holds: one profile links to the other, both sit on the same link-in-bio page, both promote the same paid page, or an
-// identity_links / shared-creator row exists. Everything else stays a separate "possible match".
+// holds, and only when it is STRONG. The thresholds are identity.js's (WEIGHTS / AUTO_STRENGTH), applied to each PAIR:
+//   - a mutual link (each profile links to the other), or
+//   - two independent kinds of evidence (a link, a link-in-bio page, a paid page, an identity record), or
+//   - evidence of weight >= AUTO_STRENGTH (the same link page, the same paid page) plus a shared name, or
+//   - PRISM already holds them as one creator, or an admin merged them.
+// Weak evidence never groups, alone or by chaining: a ONE-WAY profile link (a partner, a shout-out), a link page that lists
+// three or more accounts (agency, studio, "creators I like"), or the same paid page promoted by its owner and by a friend.
 const linkKey = (l) => (l && l.platform && l.target ? `${l.platform}:${l.kind || 'user'}:${String(l.target).toLowerCase()}` : null);
 const accountKey = (c) => `${c.platform}:${c.kind}:${String(c.target).toLowerCase()}`;
-const EVIDENCE_ORDER = ['same-creator', 'identity-link', 'profile-link', 'link-page', 'same-paid-page']; // strongest first
+const FAMILY = { 'profile-link': 'link', mutual: 'link', 'same-linkpage': 'page', 'same-paid': 'paid', 'same-creator': 'identity', 'identity-merged': 'identity', 'identity-link': 'identity' };
+const OUT_TYPE = { 'profile-link': 'profile-link', mutual: 'profile-link', 'same-linkpage': 'link-page', 'same-paid': 'same-paid-page', 'same-creator': 'same-creator', 'identity-merged': 'identity-link', 'identity-link': 'identity-link' };
+const MAX_HUB_LISTED = 2; // a link page that lists more accounts than this is an agency / studio / favourites page, not one man's
 
 function identityStatus(creatorA, creatorB) {
   if (!creatorA || !creatorB || creatorA === creatorB) return null;
@@ -701,41 +708,57 @@ function identityStatus(creatorA, creatorB) {
   return r ? r.status : null;
 }
 
+/** Do two shown accounts go by the same usable name (display name or handle, compared like identity.js compares aliases)? */
+function sharedName(A, B) {
+  const { normAlias, usableAlias } = require('../lib/alias');
+  const names = (c) => [c.displayName, String(c.target || '').split('@')[0].replace(/\.bsky\.social$/i, '')].map((x) => normAlias(x)).filter(usableAlias);
+  const a = new Set(names(A));
+  return names(B).some((n) => a.has(n));
+}
+
 /**
  * @param {object[]} poolList every candidate the lookup read (including link-in-bio pages)
  * @param {object[]} visible  the accounts that will be shown (found, passed every gate)
  * @returns {{groups: Array<{id, members: string[], evidence: object[]}>, groupOf: Map<string,string>, edges: object[]}}
+ *   edges: the pairs that passed the strict rule (one per kind of evidence), never the weak ones
  */
 function groupAccounts(poolList, visible) {
+  const { WEIGHTS, AUTO_STRENGTH } = require('./identity');
   const accts = new Map(visible.map((c) => [accountKey(c), c]));
   const label = (k) => { const c = accts.get(k); return c ? (c.label || c.target) : k; };
-  const edges = []; const seen = new Set();
-  const add = (a, b, type, detail) => {
-    if (a === b || !accts.has(a) || !accts.has(b)) return;
-    const id = `${type}|${[a, b].sort().join('|')}|${detail}`;
-    if (seen.has(id)) return;
-    seen.add(id);
-    edges.push({ type, a, b, detail });
-  };
   const byKey = new Map(poolList.map((c) => [accountKey(c), c]));
+  const pairs = new Map(); // "a|b" (sorted) -> {a, b, types: Map(type -> detail)}
+  const note = (x, y, type, detail) => {
+    if (x === y || !accts.has(x) || !accts.has(y)) return;
+    const [a, b] = x < y ? [x, y] : [y, x];
+    const id = `${a}|${b}`;
+    if (!pairs.has(id)) pairs.set(id, { a, b, types: new Map() });
+    if (!pairs.get(id).types.has(type)) pairs.get(id).types.set(type, detail);
+  };
 
-  // a profile that links to another found account
+  // a profile that links to another found account: one-way is weak, mutual is strong
+  const directed = new Set();
   for (const [k] of accts) {
     const c = byKey.get(k);
-    for (const l of (c && c.links) || []) {
-      const t = linkKey(l);
-      if (t && t !== k) add(k, t, 'profile-link', `${label(k)} links to ${label(t)}`);
-    }
+    for (const l of (c && c.links) || []) { const t = linkKey(l); if (t && t !== k && accts.has(t)) directed.add(`${k}>${t}`); }
   }
-  // accounts on the same link-in-bio page (listed there, or linking to it)
+  for (const d of directed) {
+    const [x, y] = d.split('>');
+    if (directed.has(`${y}>${x}`)) { if (x < y) { note(x, y, 'profile-link', `${label(x)} and ${label(y)} link to each other`); note(x, y, 'mutual', 'mutual'); } }
+    else note(x, y, 'profile-link', `${label(x)} links to ${label(y)}`);
+  }
+  // accounts on the same link-in-bio page (listed there, or linking to it); a page listing too many is not one man's
   for (const hub of poolList.filter((c) => c.platform === 'linkinbio' && c.verified)) {
     const hk = accountKey(hub);
-    const members = new Set();
-    for (const l of hub.links || []) { const t = linkKey(l); if (t && accts.has(t)) members.add(t); }
+    const listed = new Set();
+    for (const l of hub.links || []) { const t = linkKey(l); if (t && accts.has(t)) listed.add(t); }
+    if (listed.size > MAX_HUB_LISTED) continue;
+    const members = new Set(listed);
     for (const [k] of accts) { const c = byKey.get(k); if (c && (c.links || []).some((l) => linkKey(l) === hk)) members.add(k); }
     const list = [...members];
+    if (list.length < 2 || list.length > 6) continue;
     const name = hub.label || hub.url || hub.target;
-    for (let i = 1; i < list.length; i++) add(list[0], list[i], 'link-page', `both on the link page ${name}`);
+    for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) note(list[i], list[j], 'same-linkpage', `both on the link page ${name}`);
   }
   // the same paid page promoted from two accounts
   const byPaid = new Map();
@@ -743,33 +766,52 @@ function groupAccounts(poolList, visible) {
     const c = byKey.get(k);
     for (const l of (c ? externalLinksOf(c) : [])) if (l.handle) { const pk = `${l.service || 'OnlyFans'}:${l.handle}`; if (!byPaid.has(pk)) byPaid.set(pk, new Set()); byPaid.get(pk).add(k); }
   }
-  for (const [pk, set] of byPaid) { const list = [...set]; for (let i = 1; i < list.length; i++) add(list[0], list[i], 'same-paid-page', `both promote ${pk.replace(':', ' ')}`); }
-  // what PRISM already knows: the same creator, or an identity link (pending or merged) between their creators
+  for (const [pk, set] of byPaid) {
+    const list = [...set];
+    if (list.length > 4) continue;
+    for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) note(list[i], list[j], 'same-paid', `both promote ${pk.replace(':', ' ')}`);
+  }
+  // what PRISM already knows: the same creator, or an identity link between their creators
   const rejected = new Set();
-  const list = [...accts.keys()];
-  for (let i = 0; i < list.length; i++) {
-    for (let j = i + 1; j < list.length; j++) {
-      const A = accts.get(list[i]); const B = accts.get(list[j]);
-      if (A.creatorId && B.creatorId && A.creatorId === B.creatorId) add(list[i], list[j], 'same-creator', `${label(list[i])} and ${label(list[j])} are already one creator here`);
-      else if (A.creatorId && B.creatorId) {
+  const keys = [...accts.keys()];
+  for (let i = 0; i < keys.length; i++) {
+    for (let j = i + 1; j < keys.length; j++) {
+      const A = accts.get(keys[i]); const B = accts.get(keys[j]);
+      if (!A.creatorId || !B.creatorId) continue;
+      if (A.creatorId === B.creatorId) note(keys[i], keys[j], 'same-creator', `${label(keys[i])} and ${label(keys[j])} are already one creator here`);
+      else {
         const st = identityStatus(A.creatorId, B.creatorId);
-        if (st === 'rejected') rejected.add([list[i], list[j]].sort().join('|'));
-        else if (st) add(list[i], list[j], 'identity-link', `already linked as possibly the same man (${st})`);
+        if (st === 'rejected') rejected.add([keys[i], keys[j]].sort().join('|'));
+        else if (st === 'merged') note(keys[i], keys[j], 'identity-merged', 'already merged as the same man');
+        else if (st) note(keys[i], keys[j], 'identity-link', 'already linked as possibly the same man, awaiting review');
       }
     }
   }
-  // union by evidence, strongest first; an admin's "different people" verdict is never overridden by weaker evidence
-  const parent = new Map(list.map((k) => [k, [k]]));
-  const setOf = new Map(list.map((k) => [k, parent.get(k)]));
+
+  // the strict rule, per pair
+  const strong = [];
+  for (const pr of pairs.values()) {
+    if (rejected.has(`${pr.a}|${pr.b}`)) continue;
+    const types = [...pr.types.keys()];
+    const strength = types.reduce((sum, t) => sum + (t === 'same-creator' || t === 'identity-merged' ? WEIGHTS.admin : t === 'same-linkpage' ? WEIGHTS['same-linkpage'] : t === 'same-paid' ? WEIGHTS['same-paid'] : t === 'mutual' ? WEIGHTS.mutual : WEIGHTS['bio-link']), 0);
+    const families = new Set(types.map((t) => FAMILY[t]));
+    const ok = pr.types.has('mutual') || pr.types.has('same-creator') || pr.types.has('identity-merged')
+      || families.size >= 2 || (strength >= AUTO_STRENGTH && sharedName(accts.get(pr.a), accts.get(pr.b)));
+    if (ok) strong.push(pr);
+  }
+
+  // union over strong pairs only (so a one-way link or a weak hint never chains two accounts together)
+  const setOf = new Map(keys.map((k) => [k, [k]]));
   const blocked = (X, Y) => X.some((x) => Y.some((y) => rejected.has([x, y].sort().join('|'))));
   const used = [];
-  for (const e of [...edges].sort((p, q) => EVIDENCE_ORDER.indexOf(p.type) - EVIDENCE_ORDER.indexOf(q.type))) {
-    const X = setOf.get(e.a); const Y = setOf.get(e.b);
-    if (X === Y) { used.push(e); continue; }
-    if (blocked(X, Y)) continue;
-    const merged = X.concat(Y);
-    for (const k of merged) setOf.set(k, merged);
-    used.push(e);
+  for (const pr of strong) {
+    const X = setOf.get(pr.a); const Y = setOf.get(pr.b);
+    if (X !== Y) {
+      if (blocked(X, Y)) continue;
+      const merged = X.concat(Y);
+      for (const k of merged) setOf.set(k, merged);
+    }
+    for (const [t, detail] of pr.types) if (t !== 'mutual') used.push({ type: OUT_TYPE[t], a: pr.a, b: pr.b, detail });
   }
   const sets = [...new Set(setOf.values())].filter((m) => m.length > 1);
   const conf = (k) => (accts.get(k) || {}).confidence || 0;
@@ -781,7 +823,7 @@ function groupAccounts(poolList, visible) {
     for (const k of members) groupOf.set(k, id);
     return { id, members, evidence: used.filter((e) => groupOf.get(e.a) === id) };
   });
-  return { groups, groupOf, edges: used };
+  return { groups, groupOf, edges: used.filter((e) => groupOf.has(e.a)) };
 }
 
 // The last lookups, so a follow can be checked against what the lookup actually found (never against what a client claims).
@@ -801,6 +843,7 @@ function remember(result) {
  * @returns {{ok: true, externalLinks: object[]} | {error: string, status: number}}
  */
 function checkSelections(lookupId, selections) {
+  if ((selections || []).some((s) => s && s.target !== undefined && !validTarget(s.target))) return { error: 'Each pick must be one account', status: 400 };
   const picks = [...new Map((selections || []).filter((s) => s && s.platform && s.target).map((s) => [accountKey({ platform: s.platform, kind: s.kind || 'user', target: s.target }), s])).keys()];
   const hit = lookupId ? recent.get(String(lookupId)) : null;
   if (hit && Date.now() - hit.at > RECENT_TTL_MS) recent.delete(String(lookupId));
@@ -815,6 +858,9 @@ function checkSelections(lookupId, selections) {
 }
 
 /* ---------------------------------------------------------------------- follow */
+/** A handle, a URL or a page key: never several of them. */
+const validTarget = (t) => typeof t === 'string' && t.length > 0 && t.length <= 300 && !/[\s,;]/.test(t);
+
 const tokenFor = (c) => {
   switch (c.platform) {
     case 'reddit': return `u/${c.target}`;
@@ -836,6 +882,9 @@ function follow({ name, selections, externalLinks = [], bio, creatorId = null } 
   const accepted = []; const rejected = [];
   for (const s of (selections || []).slice(0, 30)) {
     if (!s || !s.platform || !s.target) continue;
+    // One selection is ONE account: a target holding whitespace, a comma, a semicolon or a newline is several accounts (or an
+    // attempt to smuggle them past the group check), never a handle.
+    if (!validTarget(s.target) || !/^[a-z0-9_-]{1,20}$/i.test(String(s.platform)) || (s.kind && !/^[a-z0-9_-]{1,20}$/i.test(String(s.kind)))) { rejected.push({ ...s, reason: 'invalid account' }); continue; }
     const adapter = registry.get(s.platform);
     const kind = s.kind || 'user';
     if (!adapter || !adapter.kinds.includes(kind) || (!['user', 'page'].includes(kind) && !(kind === 'channel' && s.platform === 'youtube'))) { rejected.push({ ...s, reason: 'unsupported' }); continue; } // a person's accounts, not communities
@@ -863,7 +912,9 @@ function follow({ name, selections, externalLinks = [], bio, creatorId = null } 
     if (!feeds.length && !conflicts.length) return { error: 'Nothing to follow', rejected };
     res = { creator: repo.creators.detail(existing.id), feeds, conflicts };
   } else {
-    res = targets.addCreator({ name: cleanName, bio, inputs: accepted.map(tokenFor).join('\n') });
+    // Each pick is parsed on its own; nothing is joined into one string and parsed again, and no existing creator is reused
+    // because the name matches (a shared name is not proof of one person).
+    res = targets.addAccounts({ name: cleanName, bio, specs: accepted.map((a) => registry.parseInput(tokenFor(a)) || { platform: a.platform, kind: a.kind, target: a.target, label: a.label, ingestable: true }) });
   }
   if (res.error) return { ...res, rejected };
   const paid = require('../lib/paid');
@@ -884,8 +935,9 @@ function follow({ name, selections, externalLinks = [], bio, creatorId = null } 
 }
 
 /**
- * One call: look the person up and follow the best match. If it is tied to other accounts by evidence (see groupAccounts) the
- * whole group is followed as one creator; accounts that merely share a name are never added.
+ * One call: look the person up and follow the best match, plus the accounts tied to it directly by strong evidence (see
+ * groupAccounts). Accounts that merely share a name, or are tied only weakly or through a chain, are never added: following
+ * a whole group stays a click on the group's own button.
  */
 async function findAndFollow(input, { minConfidence = 0.7 } = {}) {
   const found = await lookup(input);
@@ -893,7 +945,11 @@ async function findAndFollow(input, { minConfidence = 0.7 } = {}) {
   const isUser = (c) => c.kind === 'user' || (c.kind === 'channel' && c.platform === 'youtube');
   const top = found.candidates.find((c) => c.status === 'new' && c.confidence >= minConfidence && isUser(c));
   if (!top) return { ...found, followed: null, note: 'No strong new match to follow automatically — review the candidates and pick the right accounts.' };
-  const picks = top.groupId ? found.candidates.filter((c) => c.groupId === top.groupId && c.status === 'new' && isUser(c)) : [top];
+  // the best account, plus the accounts tied to IT directly by the strict rule (never a whole chain, never a name match)
+  const topKey = `${top.platform}:${top.kind}:${String(top.target).toLowerCase()}`;
+  const g = (found.groups || []).find((x) => x.members.includes(topKey));
+  const partners = new Set(g ? g.evidence.filter((e) => e.a === topKey || e.b === topKey).map((e) => (e.a === topKey ? e.b : e.a)) : []);
+  const picks = [top, ...found.candidates.filter((c) => partners.has(`${c.platform}:${c.kind}:${String(c.target).toLowerCase()}`) && c.status === 'new' && isUser(c))];
   const followed = follow({ name: found.name || input, selections: picks, externalLinks: picks.flatMap((c) => c.externalLinks || []) });
   return { ...found, followed };
 }

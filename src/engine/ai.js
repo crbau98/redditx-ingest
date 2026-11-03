@@ -320,12 +320,20 @@ const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // words "of" and "x" are also ordinary English ("fan of @x", "x @y"), so they need a colon or an emoji after them.
 const LABEL_WORD = '(?:ig|insta(?:gram)?|twitter|onlyfans|fansly|bluesky|bsky|telegram|tg|tiktok|redgifs|tumblr|reddit|snap(?:chat)?|youtube|yt|threads|mastodon|vero|discord|twitch|kik|facebook|fb|linkedin|pinterest|clapper|fanvue|loyalfans|justforfans|jff)';
 // A run of labels is fine too ("Bluesky⚣Snap⚣Telegram⚣Reddit: @x"): every word before the handle must itself be a platform.
-const LABEL_AT_START = new RegExp(`(?:^|[|•·,.!?\\n])[^\\p{L}\\p{N}]*(?:${LABEL_WORD}[^\\p{L}\\p{N}\\n]{0,8})+$`, 'u');
+const SEP = '[^\\p{L}\\p{N}\\n]{0,8}';
+// ("Twitter/X: @x" and "X/Twitter: @x": a bare x is fine beside a real platform label in the same run)
+const LABEL_AT_START = new RegExp(`(?:^|[|•·,.!?\\n])[^\\p{L}\\p{N}]*(?:x${SEP})?(?:${LABEL_WORD}${SEP})+(?:x${SEP})?$`, 'u');
 const BARE_LABEL_AT_START = /(?:^|[|•·,.!?\n])[^\p{L}\p{N}]*(?:of|x)([^\p{L}\p{N}\n]{0,8})$/u;
 const SEGMENT_BREAK = /[|•·,.!?\n]+/g;
 // Someone else's account: a partner, family, friend, fan, manager, photographer, collaborator, sponsor, a credit ("video by") or a
 // thank-you. Checked in the segment the value sits in, so "IG: @x | shout out @y" costs x nothing.
-const ROLE = '(?:ex|ex-\\w+|bf|gf|boyfriend|girlfriend|husband|wife|partner|fianc[eé]e?|dad|daddy|father|mom|mum|mother|son|brother|sister|bro|friends?|bestie|buddy|roommate|crush|fans?|photographers?|manager|mgmt|management|booking|agent|editor|model\\w*)';
+// A relationship word marks someone ELSE's account wherever it sits next to the label: "bf | IG @x", "my husband IG @x".
+const RELATION = '(?:ex|ex-\\w+|bf|gf|boyfriend|girlfriend|husband|wife|partner|fianc[eé]e?|dad|daddy|father|mom|mum|mother|son|brother|sister|bro|friends?|bestie|buddy|roommate|crush|fans?)';
+// A role word marks it in the same segment ("Photographer: IG @x", "Managed by"), but not in the one before: "Photographer. IG: @x"
+// is usually the photographer's own account.
+const OCCUPATION = '(?:photographers?|manager|mgmt|management|booking|agent|editor|model\\w*)';
+const ROLE = `(?:${RELATION}|${OCCUPATION})`;
+const THIRD_RELATION = new RegExp(`\\b${RELATION}(?:'s)?(?=\\W|$)`, 'i');
 const THIRD = new RegExp(
   `\\b${ROLE}(?:'s)?(?=\\W|$)(?<!\\bmodel)` // a role word anywhere in the segment ("boyfriend's IG", "Photographer: IG", "Fan of")
   + `|\\b(?:shout ?-?outs?|check out|go follow|follow my|collab(?:s|bing)?|feat|ft|featuring|thx|thanks|credit|married|engaged|sponsored|proud of|photos? of)\\b`
@@ -357,11 +365,13 @@ function grounded(haystack, quote, value, links = []) {
   for (const m of qseg.matchAll(SEGMENT_BREAK)) { if (m.index + m[0].length <= vStart) from = m.index + m[0].length; else if (m.index >= vEnd) { to = m.index; break; } }
   if (THIRD.test(qseg.slice(from, to))) return false;
   // a platform label that opens its segment sits right before the handle ("IG: @x", "TikTok | @x"); the segment it opens must be his too
-  const before = qseg.slice(0, vStart).replace(/@$/, '').replace(/\br\/$/, '');
+  const before = qseg.slice(0, vStart).replace(/@$/, '').replace(/\b(?:r|u|user)\/$/, ''); // "r/x", "Reddit: u/x"
+  // a relationship word in the segment right before the label ("bf | IG @x") makes it theirs; an occupation does not
+  const afterRelation = (idx) => !THIRD_RELATION.test(before.slice(0, idx).split(/[|•·,.!?\n]+/).pop());
   const lab = LABEL_AT_START.exec(before);
-  if (lab && !THIRD.test(before.slice(lab.index))) return true;
+  if (lab && !THIRD.test(before.slice(lab.index)) && afterRelation(lab.index)) return true;
   const bare = BARE_LABEL_AT_START.exec(before);
-  if (bare && /[:]|[^\x00-\x7f]/.test(bare[1]) && !THIRD.test(before.slice(bare.index))) return true; // "OF: x", "X: x", "OF 👉 x"
+  if (bare && /[:]|[^\x00-\x7f]/.test(bare[1]) && !THIRD.test(before.slice(bare.index)) && afterRelation(bare.index)) return true; // "OF: x", "X: x", "OF 👉 x"
   for (const re of OWNERSHIP) {
     re.lastIndex = 0;
     let m;

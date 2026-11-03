@@ -463,14 +463,15 @@ router.post('/lookup/follow', lookupFollowLimiter, (req, res) => {
     const lookup = require('../engine/lookup');
     const selections = Array.isArray(b.selections) ? b.selections.slice(0, 20) : [];
     // Several accounts become one creator only when the lookup they came from found evidence tying them together; a shared
-    // name is not evidence. A known lookup also decides which paid pages go with them (each account's own, never a namesake's).
+    // name is not evidence. Paid pages and links are the SERVER's to attach, from that lookup, and only for the chosen
+    // accounts: whatever a visitor sends as externalLinks or bio is ignored, because it would be shown to every visitor
+    // on the new creator's page. A forged, missing or expired lookupId therefore attaches nothing.
     const chk = lookup.checkSelections(b.lookupId, selections);
     if (chk.error) return res.status(chk.status || 409).json({ error: chk.error });
     const out = lookup.follow({
       name: typeof b.name === 'string' ? b.name.slice(0, 200) : '',
       selections,
-      externalLinks: chk.known ? chk.externalLinks : (Array.isArray(b.externalLinks) ? b.externalLinks.slice(0, 20) : []),
-      bio: typeof b.bio === 'string' ? b.bio.slice(0, 2000) : undefined,
+      externalLinks: chk.known ? chk.externalLinks : [],
     });
     if (!out.error) repo.logAction('creator', out.creator && out.creator.id, 'lookup-follow', `${(out.feeds || []).length} accounts`, 'visitor');
     res.status(out.error ? 400 : 200).json(out);

@@ -23,6 +23,8 @@ const OWN = [
   ['gym rat, coffee, IG: @jake_fit, OF: jake_vip', 'jake_vip'], ['Fitness model. IG: @jake_fit', 'jake_fit'], ['🔥 OnlyFans 👉 jake_fit', 'jake_fit'],
   ['Photographer. IG: @lensman', 'lensman'], // he is the photographer: the account after the full stop is his
   ['Bluesky⚣Snap⚣Telegram⚣Vero⚣Discord⚣Reddit: @ShyNudistGuy', 'ShyNudistGuy'], ['IG / TikTok: @zed', 'zed'],
+  ['Twitter/X: @zedlifts', 'zedlifts'], ['X/Twitter: @zedlifts', 'zedlifts'], ['Reddit: u/zedred', 'zedred'], ['reddit - u/zedred', 'zedred'],
+  ['Photographer | IG: @lensman', 'lensman'], // an occupation in the segment before is not a third party
 ];
 const THIRD = [
   ['my ex is jake_fit', 'jake_fit'], ['photo by IG: @pixguy', 'pixguy'], ['shout out @bro', 'bro'], ['collab with IG: @bro', 'bro'],
@@ -33,6 +35,7 @@ const THIRD = [
   ['shoot w/ model IG @modelx', 'modelx'], ['feat. IG: @featx', 'featx'], ['thx IG @helper', 'helper'], ['roommate IG @roomie', 'roomie'],
   ['my boy IG @homie', 'homie'], ['Ex-boyfriend X @exguy', 'exguy'], ['my friend IG: @pal', 'pal'], ['manager: X: @mgr', 'mgr'],
   ['x @notalabel', 'notalabel'], ['top fan of @star', 'star'], ['Photographer ⚣ Reddit: @lensman2', 'lensman2'], ['Taking care of @pig', 'pig'],
+  ['bf | IG @bfhandle', 'bfhandle'], ['bf. IG: @bfhandle', 'bfhandle'], ['husband | IG: @hubby', 'hubby'], ['my boyfriend • X: @bfx', 'bfx'], // a relationship word right before the label
 ];
 
 describe('platform labels at the start of a segment are his own account', () => {

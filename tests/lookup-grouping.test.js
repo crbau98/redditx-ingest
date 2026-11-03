@@ -3,9 +3,11 @@
  * Find-a-creator, name collisions. A name match is not proof that two accounts are one man. The case this file is built on
  * (a real "Christian Hogue" lookup): hogueblog.bsky.social, hogue38.bsky.social, christianhogue9.bsky.social and
  * christianhogue912.bsky.social on Bluesky, Telegram "christian_hogue", and a RedGIFs/OnlyFans "alphabottom" whose display
- * name is just "Christian". "Found" only says an account exists. Accounts are grouped as ONE person only on evidence (one
- * profile links to the other, a shared link-in-bio page, the same paid page, an existing creator/identity link); everything
- * else is a separate possible match, and "follow as one creator" accepts an evidence group, never a crowd that shares a name.
+ * name is just "Christian". "Found" only says an account exists. Accounts are grouped as ONE person only on STRONG evidence
+ * (identity.js's thresholds, per pair: a mutual link, two independent kinds of evidence, or weight >= 4 plus a shared name, or
+ * already one creator); weak evidence (a one-way link, a link page listing 3+ accounts, a paid page promoted by a friend) never
+ * groups, alone or by chaining. Everything else is a separate possible match, and "follow as one creator" accepts an evidence
+ * group, never a crowd that shares a name.
  */
 const { test, before, after, describe } = require('node:test');
 const assert = require('node:assert/strict');
@@ -19,10 +21,11 @@ const who = (displayName, bio = '', links = [], id = 'x') => ({ profile: { displ
 const WORLD = {
   'bluesky:user:hogueblog.bsky.social': who('Christian Hogue', 'blog about lifting', [], 'b1'),
   'bluesky:user:hogue38.bsky.social': who('Christian Hogue', 'gym. coffee.', [], 'b2'),
-  // christianhogue9 says where else he is: his Telegram. That is a profile link, so these two are tied together by evidence.
+  // christianhogue9 says where else he is: his Telegram.
   'bluesky:user:christianhogue9.bsky.social': who('Christian Hogue', 'lifting. telegram below', [{ platform: 'telegram', kind: 'user', target: 'christian_hogue', ingestable: true }], 'b3'),
   'bluesky:user:christianhogue912.bsky.social': who('Christian Hogue', 'another one', [], 'b4'),
-  'telegram:user:christian_hogue': who('Christian Hogue', '', [], 't1'),
+  // ...and his Telegram links back: a MUTUAL link is what ties the pair together (one-way would be weak)
+  'telegram:user:christian_hogue': who('Christian Hogue', 'lifting. bluesky: christianhogue9', [{ platform: 'bluesky', kind: 'user', target: 'christianhogue9.bsky.social', ingestable: true }], 't1'),
   // a different man whose page just says "Christian"
   'redgifs:user:alphabottom': who('Christian', 'bottom', [{ platform: 'external', service: 'OnlyFans', label: 'OnlyFans', url: 'https://onlyfans.com/alphabottom', handle: 'alphabottom', external: true, ingestable: false }], 'g1'),
 };
@@ -69,7 +72,7 @@ describe('"Christian Hogue": found is not the same person', () => {
     assert.equal(r.groups.length, 1, 'exactly one evidence group');
     const members = r.groups[0].members.sort();
     assert.deepEqual(members, ['bluesky:user:christianhogue9.bsky.social', 'telegram:user:christian_hogue']);
-    assert.ok(r.groups[0].evidence.some((e) => e.type === 'profile-link' && /links to/.test(e.detail)), JSON.stringify(r.groups[0].evidence));
+    assert.ok(r.groups[0].evidence.some((e) => e.type === 'profile-link' && /link to each other/.test(e.detail)), JSON.stringify(r.groups[0].evidence));
     // everyone else is a separate possible match: no group, nothing "same person" about them
     for (const k of ['bluesky:hogueblog.bsky.social', 'bluesky:hogue38.bsky.social', 'bluesky:christianhogue912.bsky.social', 'redgifs:alphabottom']) {
       assert.equal(by[k].groupId, null, `${k} is not grouped`);
@@ -108,58 +111,93 @@ describe('"Christian Hogue": found is not the same person', () => {
   });
 });
 
-describe('groupAccounts: what counts as evidence', () => {
+describe('groupAccounts: what counts as strong evidence', () => {
   const acct = (platform, target, extra = {}) => ({ platform, kind: 'user', target, label: target, confidence: 0.5, ...extra });
   const poolOf = (c, extra = {}) => ({ platform: c.platform, kind: c.kind, target: c.target, label: c.label, links: [], bio: '', verified: true, ...extra });
   const groupKeys = (g) => g.groups.map((x) => x.members.slice().sort());
+  const L = (platform, target, kind = 'user') => ({ platform, kind, target, ingestable: true });
+  const of = (h) => [{ platform: 'external', service: 'OnlyFans', label: 'OnlyFans', url: `https://onlyfans.com/${h}`, handle: h, external: true }];
+  const hub = (links, target = 'https://linktr.ee/a') => ({ platform: 'linkinbio', kind: 'page', target, label: target.replace('https://', ''), verified: true, bio: '', links });
 
   test('five accounts that only share a name are five separate possible matches', () => {
-    const v = ['hogueblog', 'hogue38', 'christianhogue9', 'christianhogue912'].map((h) => acct('bluesky', `${h}.bsky.social`)).concat(acct('telegram', 'christian_hogue'), acct('redgifs', 'alphabottom'));
+    const v = ['hogueblog', 'hogue38', 'christianhogue9', 'christianhogue912'].map((h) => acct('bluesky', `${h}.bsky.social`, { displayName: 'Christian Hogue' })).concat(acct('telegram', 'christian_hogue', { displayName: 'Christian Hogue' }), acct('redgifs', 'alphabottom', { displayName: 'Christian' }));
     assert.deepEqual(lookup.groupAccounts(v.map((c) => poolOf(c)), v).groups, []);
   });
 
-  test('one profile linking to the other groups them (either direction)', () => {
-    const a = acct('bluesky', 'a.bsky.social'); const b = acct('telegram', 'a_tg'); const c = acct('x', 'stranger');
-    const pool = [poolOf(a), poolOf(b, { links: [{ platform: 'bluesky', kind: 'user', target: 'a.bsky.social' }] }), poolOf(c)];
-    assert.deepEqual(groupKeys(lookup.groupAccounts(pool, [a, b, c])), [['bluesky:user:a.bsky.social', 'telegram:user:a_tg']]);
+  test('a MUTUAL profile link groups two accounts; a one-way link does not, even with the same name', () => {
+    const a = acct('bluesky', 'a.bsky.social', { displayName: 'Zed Calloway' }); const b = acct('telegram', 'a_tg', { displayName: 'Zed Calloway' }); const c = acct('x', 'stranger');
+    const oneWay = [poolOf(a, { links: [L('telegram', 'a_tg')] }), poolOf(b), poolOf(c)];
+    assert.deepEqual(lookup.groupAccounts(oneWay, [a, b, c]).groups, [], 'A -> B only (a partner, a shout-out)');
+    const mutual = [poolOf(a, { links: [L('telegram', 'a_tg')] }), poolOf(b, { links: [L('bluesky', 'a.bsky.social')] }), poolOf(c)];
+    const g = lookup.groupAccounts(mutual, [a, b, c]);
+    assert.deepEqual(groupKeys(g), [['bluesky:user:a.bsky.social', 'telegram:user:a_tg']]);
+    assert.ok(g.groups[0].evidence.every((e) => e.type === 'profile-link' && /link to each other/.test(e.detail)));
   });
 
-  test('two accounts on the same link-in-bio page are grouped, and so are accounts that link to it', () => {
-    const a = acct('x', 'ax'); const b = acct('telegram', 'a_tg'); const c = acct('bluesky', 'a.bsky.social'); const d = acct('x', 'someone_else');
-    const hub = { platform: 'linkinbio', kind: 'page', target: 'https://linktr.ee/a', label: 'linktr.ee/a', verified: true, bio: '', links: [{ platform: 'x', kind: 'user', target: 'ax' }, { platform: 'telegram', kind: 'user', target: 'a_tg' }] };
-    const pool = [poolOf(a), poolOf(b), poolOf(c, { links: [{ platform: 'linkinbio', kind: 'page', target: 'https://linktr.ee/a' }] }), poolOf(d), hub];
-    const g = lookup.groupAccounts(pool, [a, b, c, d]);
-    assert.deepEqual(groupKeys(g), [['bluesky:user:a.bsky.social', 'telegram:user:a_tg', 'x:user:ax']]);
-    assert.ok(g.groups[0].evidence.every((e) => e.type === 'link-page' && /linktr\.ee\/a/.test(e.detail)));
+  test('a one-way link plus a second kind of evidence (the same link page) groups; one of them alone does not', () => {
+    const a = acct('x', 'ax'); const b = acct('telegram', 'bx'); // no shared name: only the evidence counts
+    const pool = (extra) => [poolOf(a, { links: [L('telegram', 'bx'), ...(extra ? [L('linkinbio', 'https://linktr.ee/a', 'page')] : [])] }), poolOf(b), ...(extra ? [hub([L('telegram', 'bx')])] : [])];
+    assert.deepEqual(lookup.groupAccounts(pool(false), [a, b]).groups, [], 'a one-way link alone');
+    assert.deepEqual(groupKeys(lookup.groupAccounts(pool(true), [a, b])), [['telegram:user:bx', 'x:user:ax']], 'a one-way link and a shared link page');
   });
 
-  test('the same paid page promoted from two accounts groups them; different pages do not', () => {
-    const of = (h) => [{ platform: 'external', service: 'OnlyFans', label: 'OnlyFans', url: `https://onlyfans.com/${h}`, handle: h, external: true }];
-    const a = acct('x', 'ax'); const b = acct('telegram', 'bx'); const c = acct('bluesky', 'cx');
-    const g = lookup.groupAccounts([poolOf(a, { links: of('zed') }), poolOf(b, { links: of('zed') }), poolOf(c, { links: of('someone') })], [a, b, c]);
-    assert.deepEqual(groupKeys(g), [['telegram:user:bx', 'x:user:ax']]);
+  test('a link-in-bio page that lists two accounts needs a shared name; one that lists three or more never groups', () => {
+    const named = (t, p) => acct(p, t, { displayName: 'Zed Calloway' });
+    const a = named('ax', 'x'); const b = named('a_tg', 'telegram'); const c = named('a.bsky.social', 'bluesky'); const d = acct('x', 'someone_else', { displayName: 'Someone Else' });
+    const two = lookup.groupAccounts([poolOf(a), poolOf(b), poolOf(d), hub([L('x', 'ax'), L('telegram', 'a_tg')])], [a, b, d]);
+    assert.deepEqual(groupKeys(two), [['telegram:user:a_tg', 'x:user:ax']]);
+    assert.ok(two.groups[0].evidence.every((e) => e.type === 'link-page' && /linktr\.ee\/a/.test(e.detail)));
+    const x = acct('x', 'ax'); const y = acct('telegram', 'a_tg'); // different names: weight 4 alone is not enough
+    assert.deepEqual(lookup.groupAccounts([poolOf(x), poolOf(y), hub([L('x', 'ax'), L('telegram', 'a_tg')])], [x, y]).groups, []);
+    const three = lookup.groupAccounts([poolOf(a), poolOf(b), poolOf(c), hub([L('x', 'ax'), L('telegram', 'a_tg'), L('bluesky', 'a.bsky.social')])], [a, b, c]);
+    assert.deepEqual(three.groups, [], 'a page listing three accounts is an agency / studio / favourites page, even with one shared name');
+  });
+
+  test('the same paid page promoted by two accounts: not alone (owner and a friend), yes with a shared name or a second kind of evidence', () => {
+    const friend = [acct('bluesky', 'owner.bsky.social', { displayName: 'Owen Owner' }), acct('bluesky', 'friend.bsky.social', { displayName: 'Fred Friend' })];
+    assert.deepEqual(lookup.groupAccounts([poolOf(friend[0], { links: of('ownerof') }), poolOf(friend[1], { links: of('ownerof') })], friend).groups, [], 'a friend\'s shout-out of the owner\'s page');
+    const same = [acct('x', 'zed_x', { displayName: 'Zed Calloway' }), acct('telegram', 'zed_tg', { displayName: 'Zed Calloway' })];
+    const g = lookup.groupAccounts([poolOf(same[0], { links: of('zed') }), poolOf(same[1], { links: of('zed') })], same);
+    assert.deepEqual(groupKeys(g), [['telegram:user:zed_tg', 'x:user:zed_x']]);
     assert.equal(g.groups[0].evidence[0].type, 'same-paid-page');
+    const other = lookup.groupAccounts([poolOf(same[0], { links: of('zed') }), poolOf(same[1], { links: of('someone') })], same);
+    assert.deepEqual(other.groups, [], 'different pages');
   });
 
-  test('accounts PRISM already holds as one creator, or links as possibly the same man, are grouped', () => {
+  test('no chaining on weak evidence: A -> B one-way, B and C on a two-account page: only B and C are tied', () => {
+    const a = acct('bluesky', 'a.bsky.social', { displayName: 'Zed Calloway' }); const b = acct('bluesky', 'b.bsky.social', { displayName: 'Zed Calloway' }); const c = acct('bluesky', 'c.bsky.social', { displayName: 'Zed Calloway' });
+    const g = lookup.groupAccounts([poolOf(a, { links: [L('bluesky', 'b.bsky.social')] }), poolOf(b), poolOf(c), hub([L('bluesky', 'b.bsky.social'), L('bluesky', 'c.bsky.social')], 'https://linktr.ee/bc')], [a, b, c]);
+    assert.deepEqual(groupKeys(g), [['bluesky:user:b.bsky.social', 'bluesky:user:c.bsky.social']]);
+  });
+
+  test('accounts PRISM already holds as one creator are grouped; an identity link awaiting review is only weak; a merged one is strong', () => {
     const c1 = repo.creators.create({ handle: 'gp_one', origin: 'admin' });
     const c2 = repo.creators.create({ handle: 'gp_two', origin: 'admin' });
     const c3 = repo.creators.create({ handle: 'gp_three', origin: 'admin' });
-    identity.noteLink(c1.id, c2.id, { type: 'bio-link', from: c1.id, detail: 'x' }, { autoMerge: false });
+    const c4 = repo.creators.create({ handle: 'gp_four', origin: 'admin' });
+    identity.noteLink(c1.id, c2.id, { type: 'bio-link', from: c1.id, detail: 'x' }, { autoMerge: false }); // pending
     const a = acct('x', 'gp1', { creatorId: c1.id }); const b = acct('telegram', 'gp2', { creatorId: c2.id }); const c = acct('bluesky', 'gp3.bsky.social', { creatorId: c3.id });
     const e = acct('reddit', 'gp1_alt', { creatorId: c1.id });
     const g = lookup.groupAccounts([a, b, c, e].map((x) => poolOf(x)), [a, b, c, e]);
-    assert.deepEqual(groupKeys(g), [['reddit:user:gp1_alt', 'telegram:user:gp2', 'x:user:gp1']]);
-    assert.ok(g.groups[0].evidence.some((x) => x.type === 'same-creator') && g.groups[0].evidence.some((x) => x.type === 'identity-link'));
+    assert.deepEqual(groupKeys(g), [['reddit:user:gp1_alt', 'x:user:gp1']], 'same creator groups; a pending identity link alone does not');
+    assert.ok(g.groups[0].evidence.every((x) => x.type === 'same-creator'));
+    // pending + a one-way link = two kinds of evidence
+    const both = lookup.groupAccounts([poolOf(a, { links: [L('telegram', 'gp2')] }), poolOf(b)], [a, b]);
+    assert.deepEqual(groupKeys(both), [['telegram:user:gp2', 'x:user:gp1']]);
+    // merged by an admin: strong alone
+    const link = identity.noteLink(c3.id, c4.id, { type: 'bio-link', from: c3.id, detail: 'y' }, { autoMerge: false });
+    require('../src/db/repo').db.prepare("UPDATE identity_links SET status = 'merged' WHERE id = ?").run(link.id);
+    const d = acct('x', 'gp4', { creatorId: c4.id });
+    assert.deepEqual(groupKeys(lookup.groupAccounts([poolOf(c), poolOf(d)], [c, d])), [['bluesky:user:gp3.bsky.social', 'x:user:gp4']]);
   });
 
-  test('an admin\'s "different people" verdict wins over a profile link', () => {
+  test('an admin\'s "different people" verdict wins even over a mutual link', () => {
     const c1 = repo.creators.create({ handle: 'dp_one', origin: 'admin' });
     const c2 = repo.creators.create({ handle: 'dp_two', origin: 'admin' });
     const link = identity.noteLink(c1.id, c2.id, { type: 'bio-link', from: c1.id, detail: 'x' }, { autoMerge: false });
     assert.ok(identity.reject(link.id));
     const a = acct('x', 'dp1', { creatorId: c1.id }); const b = acct('telegram', 'dp2', { creatorId: c2.id });
-    const pool = [poolOf(a, { links: [{ platform: 'telegram', kind: 'user', target: 'dp2' }] }), poolOf(b)];
+    const pool = [poolOf(a, { links: [L('telegram', 'dp2')] }), poolOf(b, { links: [L('x', 'dp1')] })];
     assert.deepEqual(lookup.groupAccounts(pool, [a, b]).groups, []);
   });
 });
