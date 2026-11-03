@@ -87,7 +87,11 @@ function status() {
 
 function start() {
   if (timer || !config.telegram.syncHours) return;
-  const run = () => { if (mt.configured().ok) sync().catch((e) => events.log('WARN', `Telegram sync: ${e.message}`)); };
+  const run = () => {
+    if (!mt.configured().ok) return;
+    // at most one join per run, only from the approved list (services/telegram-public), then follow whatever is joined
+    require('./telegram-public').joinApproved().catch((e) => events.log('WARN', `Telegram join: ${e.message}`)).finally(() => { sync().catch((e) => events.log('WARN', `Telegram sync: ${e.message}`)); });
+  };
   setTimeout(run, 20 * 1000).unref();
   timer = setInterval(run, config.telegram.syncHours * 3600 * 1000);
   timer.unref();

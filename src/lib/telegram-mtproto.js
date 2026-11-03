@@ -13,6 +13,8 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('../config');
+const limiter = require('./limiter');
+const aiguard = require('./aiguard');
 
 const SESSION_FILE = () => path.join(config.dataDir, 'telegram.session');
 let factory = null;          // test hook: async () => fake client
@@ -126,6 +128,9 @@ async function entityOf(target) {
  * `exhausted`: nothing more lies beyond this page in the direction read.
  */
 async function messages(target, { minId = 0, offsetId = 0, reverse = false, limit = 50 } = {}) {
+  return paced('telegram-mt-read', READ_GAP_MS, () => messagesNow(target, { minId, offsetId, reverse, limit }));
+}
+async function messagesNow(target, { minId = 0, offsetId = 0, reverse = false, limit = 50 } = {}) {
   try {
     const c = await client();
     const entity = await entityOf(target);
@@ -226,13 +231,80 @@ async function profile(target, { avatar = true } = {}) {
   } catch (e) { throw wrap(e); }
 }
 
+
+/* ------------------------------------------------------------------ pacing, search, join
+ * The account is a person's account: keep every kind of call slow enough that it is not flagged. Reads are spaced 1.2 s apart;
+ * searches and joins, which Telegram watches much more closely, 30 s and 2 h. Nothing in this module posts, sends or edits
+ * anything (the guard test greps for it): it reads, searches, and joins channels from an approved list.
+ */
+const READ_GAP_MS = 1200; const SEARCH_GAP_MS = 30 * 1000; const JOIN_GAP_MS = 2 * 3600 * 1000;
+const paced = (key, gap, fn) => (factory ? fn() : limiter.schedule(key, gap, fn));
+
+/** Public channels whose username or title matches `q` (contacts.Search, free): [{id, username, title, members, kind}]. */
+async function searchChannels(q, { limit = 8 } = {}) {
+  return paced('telegram-mt-search', SEARCH_GAP_MS, async () => {
+    try {
+      const c = await client();
+      if (factory && c.searchChannels) return c.searchChannels(q, limit);
+      const { Api } = require('telegram');
+      const r = await c.invoke(new Api.contacts.Search({ q: String(q).slice(0, 64), limit }));
+      const out = [];
+      for (const e of r.chats || []) {
+        if (clsOf(e) !== 'Channel' || !e.username) continue;
+        entities.set(String(e.username).toLowerCase(), e);
+        aiguard.mark([e.title]);
+        out.push({ id: str(e.id), username: e.username, title: e.title || e.username, members: num(e.participantsCount), kind: e.broadcast ? 'channel' : 'group' });
+      }
+      return out;
+    } catch (e) { throw wrap(e); }
+  });
+}
+
+/** Posts carrying a hashtag, across public channels the account has not joined (channels.SearchPosts): distinct channels with a hit. */
+async function searchPosts(hashtag, { limit = 30 } = {}) {
+  return paced('telegram-mt-search', SEARCH_GAP_MS, async () => {
+    try {
+      const c = await client();
+      if (factory && c.searchPosts) return c.searchPosts(hashtag, limit);
+      const { Api } = require('telegram');
+      const r = await c.invoke(new Api.channels.SearchPosts({ hashtag: String(hashtag).replace(/^#/, ''), offsetRate: 0, offsetPeer: new Api.InputPeerEmpty(), offsetId: 0, limit }));
+      const byId = new Map();
+      for (const e of r.chats || []) if (clsOf(e) === 'Channel') byId.set(str(e.id), e);
+      const seen = new Map();
+      for (const m of r.messages || []) {
+        const e = byId.get(str(m.peerId && (m.peerId.channelId || m.peerId.chatId)));
+        if (!e || !e.username) continue;
+        aiguard.mark([m.message, e.title]);
+        if (!seen.has(e.username.toLowerCase())) { entities.set(e.username.toLowerCase(), e); seen.set(e.username.toLowerCase(), { id: str(e.id), username: e.username, title: e.title || e.username, members: num(e.participantsCount), hits: 0 }); }
+        seen.get(e.username.toLowerCase()).hits++;
+      }
+      return [...seen.values()];
+    } catch (e) { throw wrap(e); }
+  });
+}
+
+/** Join ONE public channel / group by username. Callers keep the approved list and the daily cap (services/telegram-public). */
+async function joinChannel(username) {
+  return paced('telegram-mt-join', JOIN_GAP_MS, async () => {
+    try {
+      const c = await client();
+      const entity = await entityOf(username);
+      if (factory && c.joinChannel) return c.joinChannel(username);
+      const { Api } = require('telegram');
+      await c.invoke(new Api.channels.JoinChannel({ channel: entity }));
+      warmed = false; // the dialog list changed
+      return { id: str(entity.id), username: entity.username || String(username), title: entity.title || null };
+    } catch (e) { throw wrap(e); }
+  });
+}
+
 async function shutdown() {
   const p = clientPromise; clientPromise = null; warmed = false; entities.clear();
   if (p) { try { const c = await p; if (c && c.disconnect) await c.disconnect(); if (c && c.destroy) await c.destroy(); } catch { /* ignore */ } }
 }
 
 module.exports = {
-  configured, dialogs, messages, describeMedia, download, profile, entityOf, shutdown, wrap,
+  configured, dialogs, messages, describeMedia, download, profile, entityOf, shutdown, wrap, searchChannels, searchPosts, joinChannel,
   sessionString, saveSession, SESSION_FILE, MIME_FOR_EXT,
   _setFactory(fn) { factory = fn; clientPromise = null; warmed = false; entities.clear(); },
 };

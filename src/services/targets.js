@@ -49,6 +49,7 @@ function addSpec(spec, { creatorId = null, origin = 'admin', trusted, hint, body
   if (typeof spec === 'string') spec = registry.parseInput(spec, hint);
   if (!spec) return { status: 'invalid', reason: 'Not a recognised handle, community or link' };
   if (spec.external) return { status: 'external', spec };
+  spec = require('./telegram-public').upgradeSpec(spec); // adult Telegram channels have no web preview: read them by username over MTProto when that works
   if (repo.blocklist.has('creator', `${spec.platform}:${String(spec.target).toLowerCase()}`)) {
     return { status: 'invalid', reason: 'This account is on the blocklist' };
   }
@@ -80,7 +81,7 @@ function addSpec(spec, { creatorId = null, origin = 'admin', trusted, hint, body
   }
   const res = repo.feeds.upsert({
     platform: spec.platform, kind: spec.kind, target: spec.target, label: spec.label,
-    creatorId: creator ? creator.id : (['feed', 'page'].includes(spec.kind) ? creatorId : null),
+    creatorId: creator ? creator.id : (['feed', 'page'].includes(spec.kind) || spec.platform === 'telegram' ? creatorId : null),
     trusted: trusted !== undefined ? trusted : (['search', 'tag'].includes(spec.kind) ? 0 : 1),
     origin, intervalMin: defaultInterval(spec),
   });
@@ -90,6 +91,8 @@ function addSpec(spec, { creatorId = null, origin = 'admin', trusted, hint, body
       repo.feeds.update(res.feed.id, { enabled: true, runNow: true, ...(origin === 'admin' ? { resetErrors: true } : {}) });
     }
   }
+  // A creator someone asked for (lookup / admin follow): look his handles up on Telegram too (slow, budgeted, fire and forget).
+  if (origin === 'admin' && creator && spec.kind === 'user' && spec.platform !== 'telegram') require('./telegram-public').queueLookup(creator.id);
   return { status: res.created ? 'created' : 'exists', feed: repo.feeds.get(res.feed.id), creator };
 }
 

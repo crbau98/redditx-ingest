@@ -20,6 +20,7 @@ const bot = require('../lib/telegram-bot');
 const mt = require('../lib/telegram-mtproto');
 const store = require('../lib/objectstore');
 const config = require('../config');
+const aiguard = require('../lib/aiguard');
 
 const bg = (style) => { const m = String(style || '').match(/url\((['"]?)(.*?)\1\)/); return m ? m[2] : null; };
 const absUrl = (u) => (u && u.startsWith('//') ? `https:${u}` : u || null);
@@ -92,6 +93,7 @@ function parsePage(html, channel) {
     });
   });
   const desc = $('.tgme_channel_info_description').first().text().trim();
+  aiguard.mark([desc, $('.tgme_channel_info_header_title').first().text().trim()]);
   const hrefs = $('.tgme_channel_info_description a[href]').map((_, a) => $(a).attr('href')).get().join(' ');
   const profile = {
     displayName: $('.tgme_channel_info_header_title').first().text().trim() || null,
@@ -104,6 +106,7 @@ function parsePage(html, channel) {
 }
 
 function toItems(msg, channel, profile) {
+  aiguard.mark([msg.text, profile && profile.displayName, profile && profile.bio]);
   return msg.media.map((m, i) => ({
     sourceId: `${channel}/${msg.id}`,
     position: i,
@@ -148,6 +151,7 @@ function messageToItem(msg, d, ch) {
   const posterKey = `${base}-t.jpg`;
   const stored = [];
   const text = String(msg.message || '').trim();
+  aiguard.mark([text, ch.title, ch.about]);
   const item = {
     sourceId: `${ch.username || `id${ch.id}`}/${msg.id}`,
     position: 0,
@@ -231,6 +235,7 @@ async function fetchChannel(feed, ctx) {
     try {
       const p = await mt.profile(target);
       ch.about = p.about || ch.about;
+      aiguard.mark([p.title, p.about]);
       let avatarUrl = null;
       if (p.avatar) { try { const k = `tg/${ch.id}/avatar.jpg`; await store.put(k, p.avatar, 'image/jpeg'); avatarUrl = store.urlFor(k); } catch { /* no avatar */ } }
       profile = { displayName: p.title, bio: p.about, avatarUrl, links: extractLinks(p.about || '') };

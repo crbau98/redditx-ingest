@@ -9,6 +9,7 @@
  * reach logs, the admin UI or the database.
  */
 const config = require('../config');
+const aiguard = require('./aiguard');
 const http = require('../sources/http').forPlatform('telegram-bot', 350);
 
 const token = () => config.creds.telegramBot;
@@ -42,6 +43,7 @@ async function channelInfo(username) {
     const chat = await call('getChat', { chat_id: `@${name}` });
     let members = null;
     try { members = await call('getChatMemberCount', { chat_id: `@${name}` }); } catch { /* optional */ }
+    aiguard.mark([chat.title, chat.description, chat.bio]);
     return { id: chat.id, type: chat.type, title: chat.title || null, username: chat.username || name, description: chat.description || chat.bio || null, members };
   } catch (e) {
     if (e.status === 400 || /not found|chat not found/i.test(e.message)) return null;

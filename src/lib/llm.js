@@ -11,6 +11,7 @@
 const config = require('../config');
 const claude = require('./claude');
 const openai = require('./openai');
+const aiguard = require('./aiguard');
 
 const impl = () => (config.ai.provider === 'anthropic' ? claude : openai);
 const provider = () => config.ai.provider;
@@ -25,7 +26,8 @@ function status() {
 module.exports = {
   provider, label, model, keyName, status,
   configured: () => impl().configured(),
-  json: (purpose, opts) => impl().json(purpose, opts),
+  // Telegram text never goes to a model (lib/aiguard): Telegram-derived elements are dropped, or the request is refused.
+  json: async (purpose, opts) => impl().json(purpose, { ...opts, input: aiguard.scrub(opts && opts.input, purpose) }),
   usage: () => impl().usage(),
   budgetLeft: () => impl().budgetLeft(),
   _reset: () => { claude._reset(); openai._reset(); },

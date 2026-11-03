@@ -122,6 +122,7 @@ const SEARCH_SYSTEM = [
  * tool's own result blocks (a URL the model wrote but the tool never returned is dropped).
  */
 async function webSearch(q, { count = 10, site } = {}) {
+  if (require('./aiguard').tainted(q)) throw require('./aiguard').refuse('web search');
   const query = site ? `${q} site:${site}` : q;
   const key = keyOf('websearch', config.anthropic.model, query, count);
   const hit = cached(key, 10 * 60 * 1000);
