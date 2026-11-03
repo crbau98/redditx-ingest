@@ -95,8 +95,11 @@ function assertRoom(bytes = 0) {
 function status() {
   refresh();
   const s = state.snap;
+  // "known": the volume reports its size. Unknown means the guard cannot protect it (reported as degraded, never as a silent ok);
+  // tests read no real volume and count as known.
+  const known = !!s || (config.isTest && !overridden);
   return {
-    level: state.level, since: new Date(state.since).toISOString(),
+    known, level: state.level, since: new Date(state.since).toISOString(),
     usedPct: s ? Math.round(s.usedPct * 10) / 10 : null,
     freeGb: s ? Math.round((s.free / GB) * 10) / 10 : null,
     totalGb: s ? Math.round((s.total / GB) * 10) / 10 : null,

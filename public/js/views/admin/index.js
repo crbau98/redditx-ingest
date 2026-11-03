@@ -97,6 +97,15 @@ export async function admin(root, { params }) {
 
   if (overview.adminOpen) main.appendChild(h('div', { class: 'panel', style: { borderColor: 'var(--warn)' } }, h('b', null, 'Admin is open. '), 'No ADMIN_KEY is set, so anyone who can reach this server can use this console. Fine for local development; set ADMIN_KEY before deploying.'));
 
+  // The data volume: a full disk takes the database down (2026-11-03), so a warning, a pause or an unknown size is shown on every tab.
+  const dk = overview.disk;
+  if (dk && (!dk.known || dk.level !== 'ok')) {
+    const text = !dk.known ? 'The data volume does not report its size, so the disk watchdog cannot protect it. Check the volume by hand (Railway → volume metrics).'
+      : dk.level === 'paused' ? `Ingestion is paused: the data volume is ${dk.usedPct}% full (${dk.freeGb} GB free). It resumes by itself under ${dk.resumeAtPct}%.`
+        : `The data volume is ${dk.usedPct}% full (${dk.freeGb} GB free). Ingestion pauses at ${dk.pauseAtPct}%.`;
+    main.appendChild(h('div', { class: 'panel', role: 'alert', style: { borderColor: dk.level === 'paused' || !dk.known ? 'var(--bad, #c0392b)' : 'var(--warn)' } }, h('b', null, !dk.known ? 'Disk size unknown. ' : dk.level === 'paused' ? 'Disk almost full. ' : 'Disk filling up. '), text));
+  }
+
   let cleanup = () => {};
   try {
     const mod = await tab[3]();

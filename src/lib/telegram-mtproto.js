@@ -171,9 +171,14 @@ function describeMedia(msg, { maxBytes = config.telegram.maxMb * 1024 * 1024 } =
   if (m.ttlSeconds) return { skip: 'self-destructing' };
   if (cls === 'MessageMediaPhoto') {
     if (!m.photo || clsOf(m.photo) === 'PhotoEmpty') return null;
-    let w = 0; let h = 0;
-    for (const s of m.photo.sizes || []) if ((s.w || 0) * (s.h || 0) > w * h) { w = s.w; h = s.h; }
-    return { type: 'image', ext: 'jpg', mime: 'image/jpeg', size: 0, width: w || null, height: h || null, duration: null, thumb: false };
+    let w = 0; let h = 0; let bytes = 0;
+    for (const s of m.photo.sizes || []) {
+      if ((s.w || 0) * (s.h || 0) > w * h) {
+        w = s.w; h = s.h;
+        bytes = num(s.size) || (Array.isArray(s.sizes) ? Math.max(0, ...s.sizes.map(num)) : 0); // PhotoSize.size, or the largest step of a progressive JPEG
+      }
+    }
+    return { type: 'image', ext: 'jpg', mime: 'image/jpeg', size: bytes, width: w || null, height: h || null, duration: null, thumb: false };
   }
   if (cls === 'MessageMediaDocument') {
     const d = m.document;

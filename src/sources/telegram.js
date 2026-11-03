@@ -182,12 +182,13 @@ function messageToItem(msg, d, ch) {
     staged = true;
     if (d.type === 'image') {
       photo = await mt.download(msg);
+      if (photo && photo.length) budget.chargeBytes('telegram', photo.length); // charged when downloaded: a post the gates reject still cost the bytes
       if (!photo || !photo.length) throw new Error('empty download');
       it.localImage = photo;
     } else if (d.thumb) {
       // A failed thumbnail fetch leaves `thumb` undefined (not null) so materialize()
       // retries it later instead of silently dropping the poster frame forever.
-      try { const t = await mt.download(msg, { thumb: true }); thumb = Buffer.isBuffer(t) && t.length ? t : undefined; } catch { thumb = undefined; }
+      try { const t = await mt.download(msg, { thumb: true }); thumb = Buffer.isBuffer(t) && t.length ? t : undefined; if (thumb) budget.chargeBytes('telegram', thumb.length); } catch { thumb = undefined; }
       it.localImage = thumb;
     }
     return true;
@@ -195,9 +196,11 @@ function messageToItem(msg, d, ch) {
   item.materialize = async (it) => {
     if (staged || !(await store.has(key))) {
       if (d.type === 'image') {
+        const fresh = !photo;
         const buf = photo || await mt.download(msg);
+        if (buf && buf.length && fresh) budget.chargeBytes('telegram', buf.length);
         if (!buf || !buf.length) throw new Error('empty download');
-        { const put = await store.put(key, buf, d.mime); stored.push(key); budget.chargeBytes('telegram', put.bytes); }
+        await store.put(key, buf, d.mime); stored.push(key);
         const sh = sharp();
         if (sh) {
           try { const t = await sh(buf).rotate().resize({ width: 800, height: 800, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 78 }).toBuffer(); await store.put(posterKey, t, 'image/jpeg'); stored.push(posterKey); it.previewUrl = store.urlFor(posterKey); } catch { /* the original is used */ }
@@ -206,11 +209,13 @@ function messageToItem(msg, d, ch) {
         const tmp = path.join(os.tmpdir(), `prism-tg-${process.pid}-${ch.id}-${msg.id}.${d.ext}`);
         try {
           await mt.download(msg, { file: tmp });
-          if (!fs.existsSync(tmp) || fs.statSync(tmp).size === 0) throw new Error('empty download');
-          { const put = await store.put(key, tmp, d.mime); stored.push(key); budget.chargeBytes('telegram', put.bytes); }
+          const got = fs.existsSync(tmp) ? fs.statSync(tmp).size : 0;
+          if (got) budget.chargeBytes('telegram', got); // charged even if the upload or a later gate fails
+          if (!got) throw new Error('empty download');
+          await store.put(key, tmp, d.mime); stored.push(key);
         } finally { try { fs.unlinkSync(tmp); } catch { /* gone */ } }
         if (d.thumb) {
-          try { const t = (thumb && thumb.length ? thumb : await mt.download(msg, { thumb: true })); if (Buffer.isBuffer(t) && t.length) { await store.put(posterKey, t, 'image/jpeg'); stored.push(posterKey); it.previewUrl = store.urlFor(posterKey); } } catch { /* no poster */ }
+          try { const reuse = !!(thumb && thumb.length); const t = (reuse ? thumb : await mt.download(msg, { thumb: true })); if (!reuse && Buffer.isBuffer(t) && t.length) budget.chargeBytes('telegram', t.length); if (Buffer.isBuffer(t) && t.length) { await store.put(posterKey, t, 'image/jpeg'); stored.push(posterKey); it.previewUrl = store.urlFor(posterKey); } } catch { /* no poster */ }
         }
       }
     } else if (await store.has(posterKey)) it.previewUrl = store.urlFor(posterKey);
@@ -238,6 +243,7 @@ async function fetchChannel(feed, ctx) {
       ch.about = p.about || ch.about;
       aiguard.mark([p.title, p.about]);
       let avatarUrl = null;
+      if (p.avatar && p.avatar.length) budget.chargeBytes('telegram', p.avatar.length);
       if (p.avatar) { try { const k = `tg/${ch.id}/avatar.jpg`; await store.put(k, p.avatar, 'image/jpeg'); avatarUrl = store.urlFor(k); } catch { /* no avatar */ } }
       profile = { displayName: p.title, bio: p.about, avatarUrl, links: extractLinks(p.about || '') };
     } catch (e) { if (e.skip || e.status) throw e; }
@@ -255,8 +261,8 @@ async function fetchChannel(feed, ctx) {
     const out = [];
     for (const m of list) {
       const d = mt.describeMedia(m);
-      // a photo's size is not declared in the message: assume 1.5 MB (the charge after the download uses the real size)
-      const size = d && !d.skip ? (d.type === 'image' ? Math.max(Number(d.size) || 0, 1.5 * 1048576) : Number(d.size) || 0) : 0;
+      // The largest rendition's byte size comes with the message; 1.5 MB is assumed only when Telegram does not report one.
+      const size = d && !d.skip ? (Number(d.size) || (d.type === 'image' ? 1.5 * 1048576 : 0)) : 0;
       if (out.length && size > room.left) break;
       if (!out.length && room.left <= 0) break;
       room.left -= size; out.push(m);

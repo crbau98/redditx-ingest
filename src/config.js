@@ -23,6 +23,8 @@ const list = (v, d = []) =>
 const root = path.resolve(__dirname, '..');
 const isProd = env.NODE_ENV === 'production';
 const isTest = env.NODE_ENV === 'test';
+// Running on a hosting platform (Railway sets these) counts as production for safety defaults even when NODE_ENV was forgotten.
+const isHosted = !isTest && !!(env.RAILWAY_ENVIRONMENT || env.RAILWAY_ENVIRONMENT_NAME || env.RAILWAY_PROJECT_ID || env.RAILWAY_SERVICE_ID);
 const dbPath = env.DB_PATH || path.join(root, 'data', 'prism.db');
 
 /** Read a secret from a file OUTSIDE the workspace (e.g. the OpenBot key vault). The value never
@@ -39,6 +41,7 @@ module.exports = {
   root,
   isProd,
   isTest,
+  isHosted,
   version: require('../package.json').version,
   port: int(env.PORT, 3141),
 

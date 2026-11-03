@@ -172,7 +172,13 @@ router.get('/health', (req, res) => {
   const mb = (n) => Math.round(n / 1048576);
   const loop = { p99Ms: Math.round(loopDelay.percentile(99) / 1e6), maxMs: Math.round(loopDelay.max / 1e6) };
   loopDelay.reset();
-  res.status(dbOk ? 200 : 503).json({ status: dbOk ? 'ok' : 'degraded', version: config.version, uptime: Math.round(process.uptime()), db: dbOk, disk: require('../lib/diskguard').status(), memMb: { rss: mb(mem.rss), heap: mb(mem.heapUsed), heapTotal: mb(mem.heapTotal), external: mb(mem.external), arrayBuffers: mb(mem.arrayBuffers) }, loop, timestamp: new Date().toISOString() });
+  const disk = require('../lib/diskguard').status();
+  const warnings = [];
+  if (!disk.known) warnings.push('disk size unknown: the volume watchdog cannot protect the data volume');
+  else if (disk.level === 'paused') warnings.push(`data volume ${disk.usedPct}% full: ingestion is paused`);
+  else if (disk.level === 'warn') warnings.push(`data volume ${disk.usedPct}% full`);
+  // Still HTTP 200 while the database answers (the platform's health check must not restart a working site over a warning).
+  res.status(dbOk ? 200 : 503).json({ status: dbOk && disk.known ? 'ok' : 'degraded', warnings, version: config.version, uptime: Math.round(process.uptime()), db: dbOk, disk, memMb: { rss: mb(mem.rss), heap: mb(mem.heapUsed), heapTotal: mb(mem.heapTotal), external: mb(mem.external), arrayBuffers: mb(mem.arrayBuffers) }, loop, timestamp: new Date().toISOString() });
 });
 
 router.get('/meta', (req, res) => {

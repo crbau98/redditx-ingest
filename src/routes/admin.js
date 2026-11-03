@@ -30,7 +30,7 @@ const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
 
 /* ---------------------------------------------------------------- overview */
 router.get('/overview', (req, res) => {
-  res.json({ ...repo.adminOverview(), engine: engine.status(), health: require('../engine/health').stats(), imageFilter: { enabled: settingsStore.get().imageFilter, ...imagefilter.status(), sweep: maintenance.imageSweepProgress(), dedupe: maintenance.hashSweepProgress() }, physique: { ...physique.stats(settingsStore.get()), sweep: maintenance.physiqueSweepProgress() }, identity: identity.counts(), version: config.version, adminOpen: !config.adminKey });
+  res.json({ ...repo.adminOverview(), disk: require('../lib/diskguard').status(), engine: engine.status(), health: require('../engine/health').stats(), imageFilter: { enabled: settingsStore.get().imageFilter, ...imagefilter.status(), sweep: maintenance.imageSweepProgress(), dedupe: maintenance.hashSweepProgress() }, physique: { ...physique.stats(settingsStore.get()), sweep: maintenance.physiqueSweepProgress() }, identity: identity.counts(), version: config.version, adminOpen: !config.adminKey });
 });
 
 router.get('/stream', (req, res) => {

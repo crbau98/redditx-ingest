@@ -52,3 +52,52 @@ test('five 10 MB videos with 25 MB left: two now, none while the budget is spent
     assert.equal(c.cursor.done, true); assert.equal(c.cursor.oldestId, 1);
   } finally { budget.bytesLeft = realLeft; }
 });
+
+/* ---- 7. every downloaded byte is charged, and photo batches are sized from the real sizes ---- */
+const photo = (id, bytes) => ({ id, message: `pic ${id}`, date: 1700000000 + id, views: 1, media: { className: 'MessageMediaPhoto', photo: { className: 'Photo', sizes: [{ className: 'PhotoSize', w: 320, h: 240, size: 9000 }, { className: 'PhotoSize', w: 1280, h: 960, size: bytes }] } } });
+
+function counting(messages) {
+  const c = client(messages);
+  c.downloadProfilePhoto = async () => Buffer.alloc(3000, 5);
+  c.downloadMedia = async (msg, o = {}) => {
+    if (o.thumb !== undefined) return Buffer.alloc(700, 9); // GramJS: the thumb option is an index, 0 is valid
+    if (o.outputFile) { require('fs').writeFileSync(o.outputFile, Buffer.alloc(20000, 7)); return o.outputFile; }
+    return Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(4996, 3)]);
+  };
+  return c;
+}
+
+test('describeMedia reports the real byte size of the largest photo rendition (also a progressive JPEG\'s largest step)', () => {
+  assert.equal(mt.describeMedia(photo(1, 400000)).size, 400000);
+  const prog = { id: 2, media: { className: 'MessageMediaPhoto', photo: { className: 'Photo', sizes: [{ className: 'PhotoSizeProgressive', w: 1280, h: 960, sizes: [1000, 5000, 250000] }] } } };
+  assert.equal(mt.describeMedia(prog).size, 250000);
+});
+
+test('a photo batch is cut by the real sizes: three 400 KB photos with 1 MB left give two, not a count based on an assumed 1.5 MB', async () => {
+  mt._setFactory(async () => counting([1, 2, 3].map((i) => photo(i, 400 * 1024))));
+  const realLeft = budget.bytesLeft; budget.bytesLeft = () => 1048576;
+  try {
+    const r = await tg.fetchChannel({ target: 'gymbros', trusted: 1, label: 'Gym Bros' }, { cursor: {}, aborted: () => false, limit: 40, needProfile: false });
+    assert.equal(r.items.length, 2);
+  } finally { budget.bytesLeft = realLeft; }
+});
+
+test('downloaded bytes are charged when they are downloaded: a rejected photo, a video and its poster, and the channel avatar', async () => {
+  require('../src/db/repo').settings.set('budget_runs', ''); budget._reset(); // the day's counter is persisted: start clean
+  const fs = require('fs');
+  mt._setFactory(async () => counting([photo(1, 5000), { ...video(2, 20000) }]));
+  const r = await tg.fetchChannel({ target: 'gymbros', trusted: 1, label: 'Gym Bros' }, { cursor: {}, aborted: () => false, limit: 40, needProfile: true });
+  const charged = () => (budget.status().bytes || {}).telegram || 0;
+  assert.equal(charged(), 3000, 'the avatar');
+  const [img, vid] = [r.items.find((i) => i.mediaType === 'image'), r.items.find((i) => i.mediaType === 'video')];
+  await img.stage(img);                      // the picture the gates look at
+  assert.equal(charged(), 3000 + 5000);
+  await img.discard();                       // ... and the gates reject it: the bytes were still downloaded
+  assert.equal(charged(), 3000 + 5000, 'a rejected item stays charged');
+  await vid.stage(vid);                      // a video's poster frame
+  assert.equal(charged(), 3000 + 5000 + 700);
+  await vid.materialize(vid);                // the video file itself; the poster is reused, not charged twice
+  assert.equal(charged(), 3000 + 5000 + 700 + 20000);
+  assert.equal(fs.readdirSync(require('os').tmpdir()).filter((f) => f.startsWith(`prism-tg-${process.pid}`)).length, 0, 'no temp file is left behind');
+  require('../src/db/repo').settings.set('budget_runs', ''); budget._reset();
+});
