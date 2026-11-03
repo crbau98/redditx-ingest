@@ -23,17 +23,30 @@ const validKey = (key) => KEY_RE.test(key) && !key.split('/').some((p) => p === 
 
 const prefix = () => config.store.prefix || '';
 const s3Ready = () => !!(config.store.endpoint && config.store.bucket && config.store.accessKeyId && config.store.secretAccessKey);
-/** 's3' | 'disk' | null (null: explicit s3 requested but incomplete). */
+/**
+ * 's3' | 'disk' | null.
+ *   MEDIA_STORE=disk   the data volume, on purpose.
+ *   MEDIA_STORE=s3     the bucket, or null while it is incomplete.
+ *   unset              the bucket when complete; otherwise the data volume in development and tests only. In production a
+ *                      missing or half-set bucket is null (media features report "not configured"): it must never fall back
+ *                      to the volume that holds the database. On 2026-11-03 that fallback wrote ~50 GB of Telegram media to
+ *                      /data/store in five hours and the database could no longer open its WAL.
+ */
 function kind() {
   const k = config.store.kind;
   if (k === 'disk') return 'disk';
   if (k === 's3') return s3Ready() ? 's3' : null;
-  return s3Ready() ? 's3' : 'disk';
+  if (s3Ready()) return 's3';
+  return config.isProd ? null : 'disk';
 }
+const anyStoreVar = () => !!(config.store.endpoint || config.store.bucket || config.store.accessKeyId || config.store.secretAccessKey);
 const describe = () => {
   const k = kind();
-  return k === 's3' ? { kind: 's3', where: `${new URL(config.store.endpoint).host}/${config.store.bucket}`, prefix: prefix() }
-    : k === 'disk' ? { kind: 'disk', where: path.join(config.dataDir, 'store') } : { kind: null, error: 'MEDIA_STORE=s3 but endpoint, bucket and keys are not all set' };
+  if (k === 's3') return { kind: 's3', where: `${new URL(config.store.endpoint).host}/${config.store.bucket}`, prefix: prefix() };
+  if (k === 'disk') return { kind: 'disk', where: path.join(config.dataDir, 'store') };
+  return { kind: null, error: config.store.kind === 's3' || anyStoreVar()
+    ? 'MEDIA_STORE_* is set but incomplete or unusable (need endpoint, bucket, access key id and secret): refusing to use the data volume instead'
+    : 'No media store configured: set MEDIA_STORE_ENDPOINT, MEDIA_STORE_BUCKET, MEDIA_STORE_ACCESS_KEY_ID and MEDIA_STORE_SECRET_ACCESS_KEY (or MEDIA_STORE=disk to use the data volume on purpose)' };
 };
 
 const urlFor = (key) => `https://${STORE_HOST}/${key.split('/').map(encodeURIComponent).join('/')}`;
@@ -73,6 +86,26 @@ async function s3Fail(res, what) {
 const diskPath = (key) => path.join(config.dataDir, 'store', ...key.split('/'));
 
 /* -------------------------------------------------------------------------------- api */
+/** Upload to the bucket, whatever `kind()` says (also used by the disk -> bucket migration). */
+async function putS3(key, source, contentType) {
+  if (!s3Ready()) throw new Error('the bucket is not configured');
+  const type = contentType || typeOfKey(key);
+  const isFile = typeof source === 'string';
+  const bytes = isFile ? fs.statSync(source).size : source.length;
+  const { res } = await s3Request('PUT', key, { headers: { 'content-type': type }, body: isFile ? fs.createReadStream(source) : source, contentLength: bytes });
+  if (res.statusCode >= 300) throw await s3Fail(res, 'upload');
+  await drain(res);
+  return { key, url: urlFor(key), bytes };
+}
+
+/** Size of an object in the bucket: { exists, size }. */
+async function headS3(key) {
+  if (!validKey(key) || !s3Ready()) return { exists: false, size: 0 };
+  const { res } = await s3Request('HEAD', key);
+  await drain(res);
+  return res.statusCode < 300 ? { exists: true, size: Number(res.headers['content-length'] || 0) } : { exists: false, size: 0 };
+}
+
 /**
  * Store an object. `source` is a Buffer or the path of a local file (streamed, so a 1 GB video never sits in memory).
  * @returns {Promise<{key: string, url: string, bytes: number}>}
@@ -81,20 +114,20 @@ async function put(key, source, contentType) {
   if (!validKey(key)) throw new Error(`invalid object key: ${key}`);
   const k = kind();
   if (!k) throw new Error(describe().error);
-  const type = contentType || typeOfKey(key);
   const isFile = typeof source === 'string';
   const bytes = isFile ? fs.statSync(source).size : source.length;
   if (k === 'disk') {
+    require('./diskguard').assertRoom(bytes); // never fill the volume that holds the database
     const file = diskPath(key);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     if (isFile) fs.copyFileSync(source, file); else fs.writeFileSync(file, source);
     return { key, url: urlFor(key), bytes };
   }
-  const { res } = await s3Request('PUT', key, { headers: { 'content-type': type }, body: isFile ? fs.createReadStream(source) : source, contentLength: bytes });
-  if (res.statusCode >= 300) throw await s3Fail(res, 'upload');
-  await drain(res);
-  return { key, url: urlFor(key), bytes };
+  return putS3(key, source, contentType);
 }
+
+/** In bucket mode, objects written to the data volume before the bucket was set up are still read from there until they are moved. */
+const legacyFile = (key) => { try { const f = diskPath(key); return fs.statSync(f).isFile() ? f : null; } catch { return null; } };
 
 async function has(key) {
   if (!validKey(key)) return false;
@@ -103,7 +136,7 @@ async function has(key) {
   if (k !== 's3') return false;
   const { res } = await s3Request('HEAD', key);
   await drain(res);
-  return res.statusCode < 300;
+  return res.statusCode < 300 || !!legacyFile(key);
 }
 
 async function remove(key) {
@@ -116,18 +149,7 @@ async function remove(key) {
   return res.statusCode < 300;
 }
 
-/** What net.open returns for a store URL: `{res, req}` shaped like a Node HTTP exchange (status, headers, body stream). */
-async function open(url, { method = 'GET', headers = {} } = {}) {
-  const key = keyOf(url);
-  if (!key) throw Object.assign(new Error('Invalid store URL'), { code: 'EBLOCKED' });
-  const k = kind();
-  if (k === 's3') {
-    const range = headers.range || headers.Range;
-    const out = await s3Request(method === 'HEAD' ? 'HEAD' : 'GET', key, { headers: range ? { range } : {} });
-    out.res.finalUrl = url;
-    return out;
-  }
-  if (k !== 'disk') throw new Error(describe().error);
+function openDisk(key, url, method, headers) {
   const file = diskPath(key);
   let st;
   try { st = fs.statSync(file); } catch { st = null; }
@@ -149,4 +171,35 @@ async function open(url, { method = 'GET', headers = {} } = {}) {
   return mk(200, { ...base, 'content-length': String(st.size) }, method === 'HEAD' ? null : fs.createReadStream(file));
 }
 
-module.exports = { kind, describe, put, has, remove, open, urlFor, keyOf, isStoreUrl, validKey, typeOfKey };
+/** What net.open returns for a store URL: `{res, req}` shaped like a Node HTTP exchange (status, headers, body stream). */
+async function open(url, { method = 'GET', headers = {} } = {}) {
+  const key = keyOf(url);
+  if (!key) throw Object.assign(new Error('Invalid store URL'), { code: 'EBLOCKED' });
+  const k = kind();
+  if (k === 's3') {
+    const range = headers.range || headers.Range;
+    const out = await s3Request(method === 'HEAD' ? 'HEAD' : 'GET', key, { headers: range ? { range } : {} });
+    if (out.res.statusCode === 404 && legacyFile(key)) { await drain(out.res); return openDisk(key, url, method, headers); } // not moved yet
+    out.res.finalUrl = url;
+    return out;
+  }
+  if (k !== 'disk') throw new Error(describe().error);
+  return openDisk(key, url, method, headers);
+}
+
+/** Every file under the local store folder as { key, file, size }, in a stable order (used by the migration). */
+function* localObjects() {
+  const root = path.join(config.dataDir, 'store');
+  function* walk(dir, rel) {
+    let names; try { names = fs.readdirSync(dir).sort(); } catch { return; }
+    for (const name of names) {
+      const full = path.join(dir, name); const key = rel ? `${rel}/${name}` : name;
+      let st; try { st = fs.lstatSync(full); } catch { continue; }
+      if (st.isDirectory()) yield* walk(full, key);
+      else if (st.isFile()) yield { key, file: full, size: st.size, mtimeMs: st.mtimeMs };
+    }
+  }
+  yield* walk(root, '');
+}
+
+module.exports = { kind, describe, put, putS3, headS3, s3Ready, localObjects, has, remove, open, urlFor, keyOf, isStoreUrl, validKey, typeOfKey };

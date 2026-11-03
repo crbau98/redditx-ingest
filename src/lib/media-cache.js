@@ -37,6 +37,7 @@ function get(url) {
 
 function put(url, buffer, type) {
   if (!enabled || !buffer || buffer.length > MAX_FILE || buffer.length < 200) return;
+  if (require('./diskguard').paused()) return; // the volume is nearly full: do not cache
   const file = filePath(keyOf(url));
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });

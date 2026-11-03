@@ -31,6 +31,7 @@ function prune(keep) {
 
 function run() {
   if (!enabled()) throw new Error('Backups are unavailable for an in-memory database');
+  if (require('../lib/diskguard').paused()) throw new Error('Backup skipped: the data volume is nearly full');
   fs.mkdirSync(dir(), { recursive: true });
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*/, '').replace('T', '-');
   const name = `prism-${stamp}.db`;

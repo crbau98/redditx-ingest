@@ -51,6 +51,7 @@ function wanted(item, platform, settings = {}) {
   if (!/^https?:\/\//i.test(url || '') || store.isStoreUrl(url) || /\.m3u8(\?|$)/i.test(url)) return false;
   if (REFRESHABLE.has(platform) || item.resolve === 'redgifs' || /redgifs\.com|twimg\.com/i.test(url)) return false;
   if (!store.kind()) return false;
+  if (store.kind() === 'disk' && require('./diskguard').paused()) return false;
   return mode === 'all' || expiring(url);
 }
 

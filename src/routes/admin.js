@@ -443,6 +443,29 @@ router.post('/telegram/sync', async (req, res) => {
   try { res.json({ ok: true, ...(await require('../services/telegram-sync').sync()) }); }
   catch (e) { res.status(e.status || (e.skip ? 400 : 500)).json({ error: e.message }); }
 });
+/* ---------------------------------------------------------------- data volume + media store */
+router.get('/disk', (req, res) => res.json({ disk: require('../lib/diskguard').status(), store: require('../lib/objectstore').describe() }));
+/**
+ * Move /data/store into the bucket (services/storemigrate). GET = progress. POST {mode:'dry-run'} reports counts and bytes and changes
+ * nothing; {mode:'copy'} uploads and verifies; deleting verified local copies is a separate switch that must be asked for twice:
+ * {mode:'copy', delete:true, confirmDelete:'delete-verified-local-copies'}.
+ */
+router.get('/maintenance/store-migrate', (req, res) => {
+  res.json({ ...require('../services/storemigrate').status(), disk: require('../lib/diskguard').status(), store: require('../lib/objectstore').describe() });
+});
+router.post('/maintenance/store-migrate', async (req, res) => {
+  const mig = require('../services/storemigrate');
+  const { mode = 'dry-run', check = 0, confirmDelete } = req.body || {};
+  const del = req.body && req.body.delete === true;
+  try {
+    if (mode === 'dry-run') return res.json({ ok: true, report: await mig.dryRun({ check: Math.min(500, Math.max(0, Number(check) || 0)) }) });
+    if (mode !== 'copy') return res.status(400).json({ error: 'mode must be "dry-run" or "copy"' });
+    if (del && confirmDelete !== 'delete-verified-local-copies') return res.status(400).json({ error: 'deleting local copies needs confirmDelete: "delete-verified-local-copies"' });
+    events.log('WARN', `Admin started the store migration${del ? ' WITH deletion of verified local copies' : ' (copy only)'}`);
+    res.status(202).json({ ok: true, ...mig.start({ deleteLocal: del }) });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+router.post('/maintenance/store-migrate/stop', (req, res) => res.json({ ok: true, stopped: require('../services/storemigrate').stop() }));
 router.post('/maintenance/recompute', (req, res) => res.json({ ok: true, updated: repo.media.recomputeHot() }));
 
 /* ------------------------------------------------- audit / duplicates / backups / portability */

@@ -12,6 +12,7 @@ const SCHEMA = {
   maxConcurrentFeeds: { type: 'int', default: 8, min: 1, max: 24, label: 'Feeds synced at once (all platforms together)' },
   platformSlots: { type: 'text', default: '', label: 'Feeds per platform at once, e.g. "coomer=2, bluesky=4, telegram=1" (empty = built-in defaults; a platform not listed gets 2)' },
   backfillRunsPerDay: { type: 'int', default: 4000, min: 0, max: 100000, label: 'Backfill runs per platform per day (history reads never take the place of live polling)' },
+  platformDailyMb: { type: 'text', default: 'telegram=5000', label: 'Cap of media downloaded into the store per platform per UTC day, in MB, e.g. "telegram=5000" (empty = no cap). Telegram files are copied into the bucket, so this is also the daily storage growth' },
   platformDailyRuns: { type: 'text', default: '', label: 'Optional cap of feed runs per platform per day, e.g. "x=300, telegram=600" (empty = no cap)' },
   telegramPublic: { type: 'bool', default: true, label: 'Telegram: read public channels by username with the logged-in account (media is copied to the object store); off = joined channels only', group: 'telegram' },
   telegramSearchesPerDay: { type: 'int', default: 12, min: 0, max: 100, label: 'Telegram: most searches (channel name / hashtag) per day, 30 s apart', group: 'telegram' },

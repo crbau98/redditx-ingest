@@ -32,7 +32,8 @@ async function sync({ autoFollow = config.telegram.autoFollow } = {}) {
   busy = true;
   try {
     const list = await mt.dialogs();
-    const res = { channels: list.length, created: 0, switchedOff: 0, skippedFemale: [], skippedBody: [], at: new Date().toISOString() };
+    const res = { channels: list.length, created: 0, deferred: 0, switchedOff: 0, skippedFemale: [], skippedBody: [], at: new Date().toISOString() };
+    const followMax = config.telegram.followMax || 0; // 541 joined channels followed at once were the start of the 2026-11-03 disk fill
     const bodyFilter = settingsStore.get().physiqueFilter === true;
     const wantTrusted = config.telegram.trustJoined ? 1 : 0;
     const joined = new Set();
@@ -55,6 +56,7 @@ async function sync({ autoFollow = config.telegram.autoFollow } = {}) {
       }
       if (!autoFollow) continue;
       if (repo.blocklist.has('creator', `telegram:${target.toLowerCase()}`)) continue;
+      if (followMax && res.created >= followMax && !repo.feeds.find('telegram', 'channel', target)) { res.deferred++; continue; } // the rest follow on the next sync
       const { feed, created } = repo.feeds.upsert({
         platform: 'telegram', kind: 'channel', target, label: d.title, trusted: wantTrusted,
         origin: 'telegram-sync', intervalMin: 120,
@@ -74,7 +76,7 @@ async function sync({ autoFollow = config.telegram.autoFollow } = {}) {
       if (!joined.has(String(f.target).toLowerCase())) { repo.feeds.update(f.id, { enabled: false }); res.switchedOff++; }
     }
     repo.settings.set(KEY, JSON.stringify({ ...res, skippedFemale: res.skippedFemale.slice(0, 50), skippedBody: res.skippedBody.slice(0, 50) }));
-    events.log(res.created ? 'OK' : 'INFO', `Telegram sync: ${res.channels} joined channel(s), ${res.created} new feed(s)${res.switchedOff ? `, ${res.switchedOff} left` : ''}${res.skippedFemale.length ? `, ${res.skippedFemale.length} skipped (male-only)` : ''}${res.skippedBody.length ? `, ${res.skippedBody.length} skipped (body filter)` : ''}`);
+    events.log(res.created ? 'OK' : 'INFO', `Telegram sync: ${res.channels} joined channel(s), ${res.created} new feed(s)${res.deferred ? `, ${res.deferred} deferred to the next sync` : ''}${res.switchedOff ? `, ${res.switchedOff} left` : ''}${res.skippedFemale.length ? `, ${res.skippedFemale.length} skipped (male-only)` : ''}${res.skippedBody.length ? `, ${res.skippedBody.length} skipped (body filter)` : ''}`);
     return res;
   } finally { busy = false; }
 }

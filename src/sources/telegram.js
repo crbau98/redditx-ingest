@@ -19,6 +19,7 @@ const { extractLinks } = require('../lib/links');
 const bot = require('../lib/telegram-bot');
 const mt = require('../lib/telegram-mtproto');
 const store = require('../lib/objectstore');
+const budget = require('../services/budget');
 const config = require('../config');
 const aiguard = require('../lib/aiguard');
 
@@ -196,7 +197,7 @@ function messageToItem(msg, d, ch) {
       if (d.type === 'image') {
         const buf = photo || await mt.download(msg);
         if (!buf || !buf.length) throw new Error('empty download');
-        await store.put(key, buf, d.mime); stored.push(key);
+        { const put = await store.put(key, buf, d.mime); stored.push(key); budget.chargeBytes('telegram', put.bytes); }
         const sh = sharp();
         if (sh) {
           try { const t = await sh(buf).rotate().resize({ width: 800, height: 800, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 78 }).toBuffer(); await store.put(posterKey, t, 'image/jpeg'); stored.push(posterKey); it.previewUrl = store.urlFor(posterKey); } catch { /* the original is used */ }
@@ -206,7 +207,7 @@ function messageToItem(msg, d, ch) {
         try {
           await mt.download(msg, { file: tmp });
           if (!fs.existsSync(tmp) || fs.statSync(tmp).size === 0) throw new Error('empty download');
-          await store.put(key, tmp, d.mime); stored.push(key);
+          { const put = await store.put(key, tmp, d.mime); stored.push(key); budget.chargeBytes('telegram', put.bytes); }
         } finally { try { fs.unlinkSync(tmp); } catch { /* gone */ } }
         if (d.thumb) {
           try { const t = (thumb && thumb.length ? thumb : await mt.download(msg, { thumb: true })); if (Buffer.isBuffer(t) && t.length) { await store.put(posterKey, t, 'image/jpeg'); stored.push(posterKey); it.previewUrl = store.urlFor(posterKey); } } catch { /* no poster */ }
@@ -244,21 +245,42 @@ async function fetchChannel(feed, ctx) {
 
   let newestId = cur.newestId || 0; let oldestId = cur.oldestId || 0; let done = !!cur.done; let backfilled = cur.backfilled || 0;
   const msgs = [];
+  // The day's download budget (settings platformDailyMb). A batch is cut to what is left and the cursors stop at the last message
+  // kept, so the rest is read on a later day instead of being skipped. Nothing is even listed once the budget is spent.
+  const room = { left: budget.bytesLeft('telegram') };
+  if (room.left <= 0) {
+    return { items: [], profile, via: 'mtproto', cursor: { ...cur, profiled: true, ...(ch.about ? { about: String(ch.about).slice(0, 500) } : {}) }, notes: ['Telegram daily download budget reached: resumes tomorrow (Admin → Settings → platformDailyMb)'], skipped: {} };
+  }
+  const fit = (list) => {
+    const out = [];
+    for (const m of list) {
+      const d = mt.describeMedia(m);
+      // a photo's size is not declared in the message: assume 1.5 MB (the charge after the download uses the real size)
+      const size = d && !d.skip ? (d.type === 'image' ? Math.max(Number(d.size) || 0, 1.5 * 1048576) : Number(d.size) || 0) : 0;
+      if (out.length && size > room.left) break;
+      if (!out.length && room.left <= 0) break;
+      room.left -= size; out.push(m);
+    }
+    return out;
+  };
   if (!newestId) {
     const r = await mt.messages(target, { limit: perRun });
-    msgs.push(...r.list);
-    if (r.list.length) { newestId = r.list[0].id; oldestId = r.list[r.list.length - 1].id; }
-    done = r.exhausted;
-    backfilled = r.list.length;
+    const list = fit(r.list);
+    msgs.push(...list);
+    if (list.length) { newestId = list[0].id; oldestId = list[list.length - 1].id; }
+    done = r.exhausted && list.length === r.list.length;
+    backfilled = list.length;
   } else {
     const r = await mt.messages(target, { reverse: true, minId: newestId, limit: perRun });
-    msgs.push(...r.list);
-    if (r.list.length) newestId = r.list[r.list.length - 1].id;
-    if (!done && !ctx.aborted() && backfilled < maxBackfill) {
+    const list = fit(r.list);
+    msgs.push(...list);
+    if (list.length) newestId = list[list.length - 1].id;
+    if (!done && !ctx.aborted() && backfilled < maxBackfill && list.length === r.list.length && room.left > 0) {
       const o = await mt.messages(target, { offsetId: oldestId, limit: Math.min(perRun, maxBackfill - backfilled) });
-      msgs.push(...o.list);
-      if (o.list.length) { oldestId = o.list[o.list.length - 1].id; backfilled += o.list.length; }
-      done = o.exhausted;
+      const older = fit(o.list);
+      msgs.push(...older);
+      if (older.length) { oldestId = older[older.length - 1].id; backfilled += older.length; }
+      done = o.exhausted && older.length === o.list.length;
     }
   }
   if (backfilled >= maxBackfill) done = true;

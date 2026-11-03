@@ -232,14 +232,16 @@ module.exports = {
     apiId: int(String(env.TELEGRAM_API_ID || '').replace(/[<>]/g, ''), 0),
     apiHash: String(env.TELEGRAM_API_HASH || '').trim().replace(/^[<"']|[>"']$/g, ''),
     session: String(env.TELEGRAM_SESSION || '').trim(),
-    maxMb: int(env.TELEGRAM_MAX_MB, 200),            // larger videos are skipped
+    maxMb: int(env.TELEGRAM_MAX_MB, 50),             // larger videos are skipped (was 200: 541 joined channels filled a 50 GB volume in five hours)
     syncHours: int(env.TELEGRAM_SYNC_HOURS, 12),     // how often the joined-channel list is re-read
     autoFollow: bool(env.TELEGRAM_AUTO_FOLLOW, true), // new joined channels become feeds automatically
     trustJoined: bool(env.TELEGRAM_TRUST_JOINED, true), // joined channels are curated by you: unlabeled posts are accepted (the picture filter still applies)
-    backfillMax: int(env.TELEGRAM_BACKFILL_MAX, 1000), // older media read per channel beyond the newest posts (0 = only new posts)
+    backfillMax: int(env.TELEGRAM_BACKFILL_MAX, 200), // older media read per channel beyond the newest posts (0 = only new posts)
+    followMax: int(env.TELEGRAM_FOLLOW_MAX, 50),     // new channels followed per sync (0 = no limit); the rest wait for the next sync
   },
   // --- object store for media PRISM must keep itself (Telegram files cannot be hotlinked). S3-compatible: Cloudflare R2,
-  // Backblaze B2, MinIO, AWS. Without these it falls back to a folder in the data volume (MEDIA_STORE=disk).
+  // Backblaze B2, MinIO, AWS. Without these, development and tests use a folder in the data volume; production never does
+  // unless MEDIA_STORE=disk says so on purpose (a missing bucket used to turn the database volume into a media store).
   store: {
     kind: String(env.MEDIA_STORE || '').toLowerCase(),   // '' = auto (s3 when endpoint+bucket+keys are set, else disk), 's3' or 'disk'
     endpoint: String(env.MEDIA_STORE_ENDPOINT || '').trim().replace(/\/+$/, ''),
@@ -252,4 +254,15 @@ module.exports = {
 
   // --- media cache for proxied images --------------------------------
   mediaCacheMb: int(env.MEDIA_CACHE_MB, 512),
+
+  // --- data volume watchdog (lib/diskguard) -----------------------------------------------------------------------------
+  // At pauseAtPct (or when less than minFreeMb is free) everything that writes bulk data to the volume stops; it resumes under
+  // resumeAtPct. DISK_BUDGET_GB caps what PRISM may use below the volume's real size (0 = the whole volume).
+  disk: {
+    warnAtPct: int(env.DISK_WARN_PCT, 70),
+    pauseAtPct: int(env.DISK_PAUSE_PCT, 80),
+    resumeAtPct: int(env.DISK_RESUME_PCT, 75),
+    minFreeMb: int(env.DISK_MIN_FREE_MB, 3072),
+    budgetGb: int(env.DISK_BUDGET_GB, 0),
+  },
 };

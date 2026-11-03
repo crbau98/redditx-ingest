@@ -26,6 +26,7 @@ const { applyProfile, autoTrack } = require('./creators');
 const takedowns = require('../lib/takedowns');
 const backfill = require('./backfill');
 const budget = require('../services/budget');
+const diskguard = require('../lib/diskguard');
 
 const MAX_DISCOVERED_FEEDS = 3;
 
@@ -395,6 +396,8 @@ function openPlatforms(cfg) {
 }
 
 function nextWork(cfg) {
+  // The data volume is nearly full (lib/diskguard): start nothing, not even a manual run, until it has room again.
+  if (diskguard.paused()) return null;
   // 1. manual queue (lane 0, works even when the scheduler is paused)
   for (let i = 0; i < state.queue.length; i++) {
     const job = state.queue[i];
@@ -481,7 +484,7 @@ function status() {
     running: [...state.running.values()], queued: state.queue.length, session: state.session,
     breakers: breaker.snapshot(), hostBreakers: breaker.hostSnapshot ? breaker.hostSnapshot() : {}, sse: events.counts(),
     slots: Object.fromEntries(registry.list().map((a) => [a.platform, { running: runningOn(a.platform), max: slotsFor(a.platform, cfg) }])),
-    budget: budget.status(),
+    budget: budget.status(), disk: diskguard.status(),
   };
 }
 
