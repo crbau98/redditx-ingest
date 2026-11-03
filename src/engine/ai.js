@@ -315,18 +315,34 @@ const OWNERSHIP = [
   /\b(?:also on|also at|back-?up|back up|alt account|other account|new account|old account|main account|official|goes by|a\.?k\.?a\.?)(?=\W|$)/g,
 ];
 const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// "IG: @x", "X: @x", "OnlyFans: x", "📸 IG @x", "OF 👉 x": a platform label right before the handle is a profile line of his own.
+const LABEL = /(?<![a-z0-9])(?:ig|insta(?:gram)?|x|twitter|onlyfans|of|fansly|bluesky|bsky|telegram|tg|tiktok|redgifs|tumblr|reddit|snap(?:chat)?|youtube|yt|threads|mastodon)[^\w\n]{0,8}$/;
+// Someone else's account: a partner, friend, shout-out, credit or collab. Checked in the same segment (between | . ! ? • ·) as the value.
+const THIRD = /\b(?:my (?:ex|bf|gf|boyfriend|girlfriend|friends?|husband|wife|partner|buddy|bro|brother|roommate|mate|crush)|shout ?-?outs?|check out|go follow|follow my|collab(?:s|bing)? (?:with|w\/)|thanks (?:to )?|photo(?:s|graphy)? (?:by|credit)|pic by|credit)\b/;
 
 /**
  * A claim counts only when (1) its quote is really in his text, (2) the claimed value is a whole word in the quote (not
- * a fragment: "ed" in "fred", "jake_fit" in "jake_fit2"), and (3) an ownership phrase sits right next to it, in the same
- * sentence. "my ex is jake_fit" has no such phrase, so it does not make jake_fit his.
+ * a fragment: "ed" in "fred", "jake_fit" in "jake_fit2"), and (3) it is his own: the quote is an entry of his own links
+ * list, or a platform label sits right before the handle ("IG: @x"), or a first-person phrase sits right next to it in the
+ * same sentence ("my OnlyFans: x", "I'm x", "follow me at x", "backup: @x"). A third-person mention ("my ex is jake_fit",
+ * "shout out @x", "photo by @x") is never his, whatever label it carries.
+ * @param {Array<{label?: string, url?: string}>} [links] the creator's own links list
  */
-function grounded(haystack, quote, value) {
+function grounded(haystack, quote, value, links = []) {
   const qn = lc(quote); const v = lc(value).replace(/^@/, '').replace(/^r\//, '');
   if (!(qn.length >= 3 && qn.length <= 200 && v.length >= 2 && haystack.includes(qn))) return false;
   const at = new RegExp(`(?<![a-z0-9_.-])${esc(v)}(?![a-z0-9_-]|\\.[a-z0-9])`).exec(qn);
   if (!at) return false;
   const vStart = at.index; const vEnd = at.index + v.length;
+  // his own links list: whatever he published there is his
+  if ((links || []).some((l) => l && lc(`${l.label || ''} ${l.url || ''}`).includes(qn))) return true;
+  // the segment of the quote the value is in
+  let from = 0; let to = qn.length;
+  for (const m of qn.matchAll(/[|.!?\n•·]+/g)) { if (m.index < vStart) from = m.index + m[0].length; else if (m.index >= vEnd) { to = m.index; break; } }
+  const segment = qn.slice(from, to);
+  if (THIRD.test(segment)) return false;
+  const before = qn.slice(0, vStart).replace(/@$/, '').replace(/\br\/$/, ''); // not just the segment: "TikTok | @x" puts a | between label and handle
+  if (LABEL.test(before)) return true;
   for (const re of OWNERSHIP) {
     re.lastIndex = 0;
     let m;
@@ -391,14 +407,14 @@ async function readProfiles({ limit = 8 } = {}) {
     if (name) {
       const norm = normAlias(name);
       const known = [c.handle, c.display_name].some((x) => x && normAlias(x) === norm);
-      if (!known && usableAlias(norm) && name.length <= 40 && name.split(' ').length <= 4 && !/https?:|www\./i.test(name) && grounded(hay, p.stage_name_quote, name)) {
+      if (!known && usableAlias(norm) && name.length <= 40 && name.split(' ').length <= 4 && !/https?:|www\./i.test(name) && grounded(hay, p.stage_name_quote, name, links)) {
         if (identity.addAlias(c.id, name, { kind: 'name', source: 'bio', signal: 'self-declared-name', evidenceUrl: evidenceUrl(c, links, p.stage_name_quote) })) out.names++;
       } else if (!known) out.dropped++;
     }
 
     for (const x of (p.accounts || []).slice(0, 6)) {
       const handle = String(x.handle || '').trim().replace(/^@/, '');
-      if (!HANDLE_RE.test(handle) || !PROFILE_PLATFORMS.includes(x.platform) || !grounded(hay, x.quote, handle)) { out.dropped++; continue; }
+      if (!HANDLE_RE.test(handle) || !PROFILE_PLATFORMS.includes(x.platform) || !grounded(hay, x.quote, handle, links)) { out.dropped++; continue; }
       const url = evidenceUrl(c, links, x.quote);
       identity.addAlias(c.id, handle, { kind: 'handle', platform: x.platform, source: 'bio', signal: 'bio-line', evidenceUrl: url });
       const owner = repo.creators.byAccount(x.platform, handle);
@@ -413,7 +429,7 @@ async function readProfiles({ limit = 8 } = {}) {
     for (const x of (p.communities || []).slice(0, 4)) {
       const name2 = String(x.name || '').trim().replace(/^\/?r\//i, '');
       const okName = x.platform === 'reddit' ? SUB_RE.test(name2) : LEMMY_RE.test(name2);
-      if (!okName || !grounded(hay, x.quote, name2)) { out.dropped++; continue; }
+      if (!okName || !grounded(hay, x.quote, name2, links)) { out.dropped++; continue; }
       const cand = discovery.consider({ platform: x.platform, kind: 'community', target: name2, label: x.platform === 'reddit' ? `r/${name2}` : name2, ingestable: true }, 'ai', via);
       if (cand && cand.status === 'pending') out.proposed++;
     }

@@ -275,6 +275,7 @@ async function fetchFeed(feed, ctx) {
   if (feed.kind === 'user' && cursor.newestAt && (bfNext || legacy) && !bfDone && !ctx.aborted() && !(ctx.limit && ctx.limit < 20)) {
     const url = (at) => `${base}/xrpc/app.bsky.feed.getAuthorFeed?actor=${encodeURIComponent(String(feed.target).replace(/^@/, ''))}&filter=posts_with_media&limit=50&includePins=false${at ? `&cursor=${encodeURIComponent(at)}` : ''}`;
     const older = [];
+    let progress = bfNext; // the cursor to resume from: advances with every page that was read
     try {
       let at = bfNext;
       if (legacy) {
@@ -285,22 +286,30 @@ async function fetchFeed(feed, ctx) {
           if (!at) break;
         }
         if (!at) bfDone = true; // the whole account fits in what the first run read
+        progress = at;
       }
       for (let page = 0; page < BACKFILL_PAGES && at && !bfDone && !ctx.aborted(); page++) {
         const json = await http.json(url(at));
         for (const entry of json.feed || []) for (const it of parsePostView(entry)) older.push({ ...it, query: null });
         at = json.cursor || null;
+        progress = at;
       }
       if (!bfDone) { bfNext = at; bfDone = !at; }
       bfFail = 0;
       items.push(...older);
     } catch (e) {
-      // History is a bonus: a cursor the AppView now rejects (expired, 400) must not cost the run its fresh posts or count as a
-      // failure of the feed. Drop the cursor so the next run starts backfill over; after three misses in a row, stop trying.
+      // History is a bonus: an error here must not cost the run its fresh posts or count as a failure of the feed.
       if (ctx.aborted()) throw e;
       items.push(...older);
-      bfNext = null; bfFail += 1;
-      if (bfFail >= BACKFILL_MISSES) { bfDone = true; bfFail = 0; }
+      if (e && (e.status === 400 || e.status === 404 || e.status === 410)) {
+        // Permanent: the AppView rejects this cursor (expired, gone). Drop it so the next run starts backfill over, and after
+        // three such misses in a row stop trying for this creator.
+        bfNext = null; bfFail += 1;
+        if (bfFail >= BACKFILL_MISSES) { bfDone = true; bfFail = 0; }
+      } else {
+        // Transient (5xx, 429, network): keep the cursor at the last page that was read, count nothing, try again on a later run.
+        bfNext = progress || null;
+      }
     }
   }
   let profile;
