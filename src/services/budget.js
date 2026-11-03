@@ -17,7 +17,8 @@ function load() {
   if (mem && mem.day === day()) return mem;
   let stored = null;
   try { stored = JSON.parse(repo.settings.get(KEY) || 'null'); } catch { stored = null; }
-  mem = stored && stored.day === day() ? stored : { day: day(), runs: {}, backfill: {} };
+  const ok = stored && typeof stored === 'object' && stored.day === day() && stored.runs && typeof stored.runs === 'object' && stored.backfill && typeof stored.backfill === 'object';
+  mem = ok ? stored : { day: day(), runs: {}, backfill: {} }; // a malformed stored value starts the day over instead of stalling every tick
   return mem;
 }
 function save() { try { repo.settings.set(KEY, JSON.stringify(mem)); } catch { /* best effort */ } }
@@ -34,7 +35,7 @@ function parseCaps(text) {
 /** May a run of this lane start on this platform now? */
 function allow(platform, lane, cfg = settingsStore.get()) {
   if (lane === 0) return true;
-  const b = load();
+  let b; try { b = load(); } catch { return true; } // a broken counter never stops the scheduler
   const cap = parseCaps(cfg.platformDailyRuns)[platform];
   if (cap !== undefined && (b.runs[platform] || 0) >= cap) return false;
   if (lane === 2 && (b.backfill[platform] || 0) >= (cfg.backfillRunsPerDay || 0)) return false;

@@ -26,17 +26,19 @@ function pending(feed) {
 const PENDING_SQL = `(cursor IS NOT NULL AND (cursor LIKE '%"backfillPending":true%' OR (cursor LIKE '%"bfNext"%' AND cursor NOT LIKE '%"bfDone":true%') OR (cursor LIKE '%"bfPage"%' AND cursor NOT LIKE '%"bfDone":true%') OR cursor LIKE '%"done":false%'))`;
 
 /**
- * lane 0: someone is waiting. An admin gave it priority, or it was added in the last `newFeedHours` and has not failed
- *         `newFeedAttempts` times in a row. A feed that was never read but is old, or keeps failing, is NOT lane 0 (hundreds of
- *         dead feeds must not outrank everything and skip the budget).
+ * lane 0: someone is waiting. An admin gave it priority, or it is new: never run at all, or added in the last `newFeedHours` and
+ *         not failing (zero consecutive failures). A feed that was run, never succeeded and keeps failing is NOT lane 0 (hundreds
+ *         of dead feeds must not outrank everything and skip the budget).
  * lane 1: routine refresh.   lane 2: backfill.
  */
 function laneOf(feed, cfg = {}) {
   if (Number(feed.priority) > 0) return 0;
   if (!feed.last_success_at) {
-    const hours = cfg.newFeedHours || 24; const attempts = cfg.newFeedAttempts || 3;
-    const added = Date.parse(String(feed.created_at || '').replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(String(feed.created_at || '')) ? '' : 'Z'));
-    if (Number.isFinite(added) && Date.now() - added <= hours * 3600000 && (feed.consecutive_failures || 0) < attempts) return 0;
+    if (!feed.last_run_at) return 0;
+    const hours = cfg.newFeedHours || 24;
+    const raw = String(feed.created_at || '');
+    const added = Date.parse(raw.replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(raw) ? '' : 'Z'));
+    if (Number.isFinite(added) && Date.now() - added <= hours * 3600000 && !(feed.consecutive_failures > 0)) return 0;
     return 1;
   }
   return pending(feed) ? 2 : 1;

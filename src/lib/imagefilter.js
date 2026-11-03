@@ -185,7 +185,7 @@ async function readBuffer(buffer, { faces = true, hash = true, body = false } = 
  * collapse). `faces:false` / `hash:false` skip a part. A failed model never costs the hash.
  * @returns {Promise<{status:'ok'|'unavailable'|'error', faces?: object[], body?: object|null, phash?: string|null, reason?: string, cached?: boolean, ms?: number}>}
  */
-function analyze(url, { referer, timeout = 12000, faces = true, hash = true, body = false } = {}) {
+function analyzeNow(url, { referer, timeout = 12000, faces = true, hash = true, body = false } = {}) {
   if (body) faces = true; // one model pass reads both
   if (analyzer) return analyzer(url, { faces, hash, body });
   const hit = cache.get(url);
@@ -220,7 +220,7 @@ function analyze(url, { referer, timeout = 12000, faces = true, hash = true, bod
  * run in a slow background backfill, so they do not take room in the analysis cache. Never throws.
  * @returns {Promise<{status: 'ok'|'error'|'unavailable', vec?: Buffer, reason?: string}>}
  */
-async function embedUrl(url, { referer, timeout = 12000 } = {}) {
+async function embedUrlNow(url, { referer, timeout = 12000 } = {}) {
   if (embedder) return embedder(url);
   try { await init(); } catch (e) { return { status: 'unavailable', reason: e.message }; }
   let got;
@@ -261,10 +261,10 @@ function imageUrlOf(item) {
  * decoded pixels, so memory follows THIS number, not the feed concurrency. `imageFilterConcurrency` setting, default 4. */
 let active = 0; const waiting = [];
 const limit = () => { try { return Math.max(1, require('../settings').get().imageFilterConcurrency || 4); } catch { return 4; } };
-async function checkItem(item, opts = {}) {
-  if (active >= limit()) await new Promise((r) => waiting.push(r));
+async function gated(fn) {
+  while (active >= limit()) await new Promise((r) => waiting.push(r));
   active++;
-  try { return await checkItemNow(item, opts); } finally { active--; const next = waiting.shift(); if (next) next(); }
+  try { return await fn(); } finally { active--; const next = waiting.shift(); if (next) next(); }
 }
 const gate = () => ({ active, waiting: waiting.length, limit: limit() });
 
@@ -284,13 +284,18 @@ async function checkItemNow(item, { threshold = 0.5, faces = true, hash = false,
   } else {
     let referer;
     try { referer = `${new URL(url).origin}/`; } catch { /* none */ }
-    res = await analyze(url, { referer, faces, hash, body });
+    res = await analyzeNow(url, { referer, faces, hash, body });
   }
   const verdict = femalePolicy ? judge(res, threshold) : { female: false, faces: 0, females: 0, males: 0, decided: false, status: res.status, reason: res.reason };
   if (verdict.female) counters.female++;
   const b = body && res.status === 'ok' ? res.body : null;
   return { ...verdict, url, phash: res.phash || null, physique: b && b.decided ? b.score : null, physiqueReason: b && !b.decided ? b.reason : undefined };
 }
+
+// Every path that holds a downloaded picture in memory goes through the same gate: the pipeline's check, a direct analyze, an embedding.
+const checkItem = (item, opts) => gated(() => checkItemNow(item, opts));
+const analyze = (url, opts) => gated(() => analyzeNow(url, opts));
+const embedUrl = (url, opts) => gated(() => embedUrlNow(url, opts));
 
 /** Count a picture the physique policy hid (for the admin status line). */
 function noteHeavy() { counters.heavy++; }

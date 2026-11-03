@@ -113,18 +113,36 @@ test('a refresh feed due 30 s ago beats a backlog of 80 older backfill feeds on 
   assert.equal(w.feed.id, fresh.id); assert.equal(w.lane, 1);
 });
 
-test('lane 0 is user-priority or genuinely new: 541 old never-succeeded feeds and feeds that keep failing do not get it', () => {
+test('lane 0 is user-priority, never run, or new and not failing: 541 run-and-failed never-succeeded feeds do not get it', () => {
   const cfg = settingsStore.get();
-  const old = mk('telegram', 'old'); repo.db.prepare("UPDATE feeds SET created_at = datetime('now','-10 days') WHERE id = ?").run(old.id);
-  const failing = mk('telegram', 'failing'); repo.db.prepare("UPDATE feeds SET consecutive_failures = 3 WHERE id = ?").run(failing.id);
-  const fresh = mk('telegram', 'fresh');
-  const prio = mk('telegram', 'prio', { priority: 3 });
-  const f = (x) => backfill.laneOf(repo.feeds.get(x.id), cfg);
-  assert.equal(f(old), 1); assert.equal(f(failing), 1); assert.equal(f(fresh), 0); assert.equal(f(prio), 0);
+  const run = (id, sql) => repo.db.prepare(`UPDATE feeds SET ${sql} WHERE id = ?`).run(id);
+  const neverRun = mk('telegram', 'neverrun'); run(neverRun.id, "created_at = datetime('now','-10 days'), last_run_at = NULL");
+  const failedOld = mk('telegram', 'failedold'); run(failedOld.id, "last_run_at = datetime('now','-1 hours'), consecutive_failures = 4, created_at = datetime('now','-10 days')");
+  const failedNew = mk('telegram', 'failednew'); run(failedNew.id, "last_run_at = datetime('now','-1 minutes'), consecutive_failures = 1");
+  const newOk = mk('telegram', 'newok'); run(newOk.id, "last_run_at = datetime('now','-1 minutes'), consecutive_failures = 0");
+  const prio = mk('telegram', 'prio', { priority: 3 }); run(prio.id, "last_run_at = datetime('now','-1 minutes'), consecutive_failures = 9");
+  const lane = (x) => backfill.laneOf(repo.feeds.get(x.id), cfg);
+  assert.equal(lane(neverRun), 0); assert.equal(lane(newOk), 0); assert.equal(lane(prio), 0);
+  assert.equal(lane(failedOld), 1); assert.equal(lane(failedNew), 1);
   budget._reset();
   const cap = { ...cfg, platformDailyRuns: 'telegram=1' };
   budget.charge('telegram', 1);
-  assert.equal(budget.allow('telegram', backfill.laneOf(repo.feeds.get(old.id), cap), cap), false, 'an old unread feed is subject to the budget');
+  assert.equal(budget.allow('telegram', lane(failedOld), cap), false, 'a run-and-failed feed is subject to the budget');
+});
+
+test('budget: a malformed stored counter never stalls the scheduler, and only real fetches are charged', async () => {
+  repo.settings.set('budget_runs', JSON.stringify({ day: new Date().toISOString().slice(0, 10), runs: 5 }));
+  budget._reset();
+  assert.equal(budget.allow('x', 1, { ...settingsStore.get(), platformDailyRuns: 'x=1' }), true);
+  repo.settings.set('budget_runs', '{not json'); budget._reset();
+  assert.equal(budget.allow('x', 2, settingsStore.get()), true);
+  budget._reset(); repo.settings.set('budget_runs', JSON.stringify({ day: new Date().toISOString().slice(0, 10), runs: {}, backfill: {} })); budget._reset();
+  const f = mk('lemmy', 'gone@skip.example');
+  const breaker = require('../src/engine/breaker');
+  breaker.hostFailure('skip.example', Object.assign(new Error('bad gateway'), { status: 502 })); breaker.hostFailure('skip.example', Object.assign(new Error('bad gateway'), { status: 502 }));
+  await engine.runFeed(f.id, 'schedule', { lane: 1 });
+  assert.equal(budget.status().runs.lemmy || 0, 0, 'a run skipped before any fetch is free');
+  breaker.reset();
 });
 
 test('image-filter concurrency has its own cap, whatever the number of feed slots', async () => {

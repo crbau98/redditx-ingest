@@ -233,6 +233,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
       needProfile: !!feed.creator_id && (!feed.last_success_at || trigger === 'manual'),
       aborted: () => state.stopRequested || !!opts.aborted,
     };
+    if (opts.lane !== undefined) budget.charge(feed.platform, opts.lane); // only a run that really goes to the source uses the budget
     const result = await withTimeout(adapter.fetch(feed, ctx), RUN_TIMEOUT_MS, tag);
     // Passes overlap (e.g. top + hot): process each post/position once per run.
     const seenKeys = new Set();
@@ -440,8 +441,7 @@ async function tick() {
       const work = nextWork(cfg);
       if (!work) break;
       // fire and forget — runFeed never throws
-      budget.charge(work.feed.platform, work.lane);
-      runFeed(work.feed, work.trigger, { force: work.force, limit: work.limit })
+      runFeed(work.feed, work.trigger, { force: work.force, limit: work.limit, lane: work.lane })
         .catch((e) => events.log('ERR', `engine: ${e.message}`))
         .finally(() => { if (!state.stopRequested && state.timer) setImmediate(tick); }); // a free slot is refilled at once, not at the next 30 s tick
     }
