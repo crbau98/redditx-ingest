@@ -460,10 +460,16 @@ router.post('/lookup', lookupLimiter, async (req, res) => {
 router.post('/lookup/follow', lookupFollowLimiter, (req, res) => {
   try {
     const b = req.body || {};
-    const out = require('../engine/lookup').follow({
+    const lookup = require('../engine/lookup');
+    const selections = Array.isArray(b.selections) ? b.selections.slice(0, 20) : [];
+    // Several accounts become one creator only when the lookup they came from found evidence tying them together; a shared
+    // name is not evidence. A known lookup also decides which paid pages go with them (each account's own, never a namesake's).
+    const chk = lookup.checkSelections(b.lookupId, selections);
+    if (chk.error) return res.status(chk.status || 409).json({ error: chk.error });
+    const out = lookup.follow({
       name: typeof b.name === 'string' ? b.name.slice(0, 200) : '',
-      selections: Array.isArray(b.selections) ? b.selections.slice(0, 20) : [],
-      externalLinks: Array.isArray(b.externalLinks) ? b.externalLinks.slice(0, 20) : [],
+      selections,
+      externalLinks: chk.known ? chk.externalLinks : (Array.isArray(b.externalLinks) ? b.externalLinks.slice(0, 20) : []),
       bio: typeof b.bio === 'string' ? b.bio.slice(0, 2000) : undefined,
     });
     if (!out.error) repo.logAction('creator', out.creator && out.creator.id, 'lookup-follow', `${(out.feeds || []).length} accounts`, 'visitor');

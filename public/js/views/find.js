@@ -15,7 +15,7 @@ const paidKind = (l) => {
   return ['', l.service || 'Paid'];
 };
 
-/** Public Find-a-creator: name, handle or any public link → verified accounts → follow as one creator. */
+/** Public Find-a-creator: name, handle or any public link → accounts found → grouped as one person only on evidence → follow. */
 export async function find(root, { query }) {
   document.title = 'Find a creator — PRISM';
   const initial = query.get('q') || '';
@@ -65,15 +65,18 @@ export async function find(root, { query }) {
     paint();
   }
 
-  async function followSelected(cands, btnEl) {
+  /**
+   * Follow accounts as ONE creator. The server only accepts several at once when this lookup found evidence tying them
+   * together (a group); a name match alone is followed account by account. Paid pages are the server's to attach: only the
+   * ones found on the chosen accounts themselves.
+   */
+  async function followSelected(cands, name) {
     if (state.following) return;
     state.following = true;
     paint();
     try {
       const selections = cands.map((c) => ({ platform: c.platform, kind: c.kind, target: c.target }));
-      // Paid pages the lookup surfaced ride along, so the new profile links out to them from the start.
-      const externalLinks = (state.result && state.result.externalLinks) || [];
-      const r = await post('/api/lookup/follow', { name: input.value.trim(), selections, externalLinks });
+      const r = await post('/api/lookup/follow', { name: String(name || input.value).trim(), selections, lookupId: state.result && state.result.lookupId });
       state.following = false;
       state.followed = true;
       paint();
@@ -81,11 +84,11 @@ export async function find(root, { query }) {
     } catch (e) { state.following = false; paint(); out.prepend(h('div', { class: 'notice warn', role: 'alert' }, e.message)); }
   }
 
-  /** One evidence string → a chip: verified check, ≤40 chars, links out when it carries a URL. */
+  /** One evidence string → a chip (where the account turned up), ≤40 chars, links out when it carries a URL. */
   function evidenceChip(text, { link = null } = {}) {
     const label = String(text || '').replace(/\s+/g, ' ').trim();
     const short = label.length > 40 ? `${label.slice(0, 39)}…` : label;
-    const inner = [icon('check', 'sm'), h('span', null, short)];
+    const inner = [icon('search', 'sm'), h('span', null, short)];
     return link
       ? h('a', { class: 'evidence-chip', href: link, target: '_blank', rel: 'noopener noreferrer nofollow', title: label }, ...inner)
       : h('span', { class: 'evidence-chip', title: label }, ...inner);
@@ -99,38 +102,71 @@ export async function find(root, { query }) {
     return h('div', { class: 'evidence-row' }, chips);
   }
 
-  /** The best match, promoted: bigger, named, verified — the answer to what the user typed. */
-  function answerCard(c) {
-    const sample = c.sample || (c.samples && c.samples[0]);
-    return h('div', { class: 'find-answer' },
-      h('div', { class: 'row', style: { gap: '14px', alignItems: 'center' } },
-        avatar({ avatar_url: c.avatarUrl, display_name: c.displayName || c.target }, 56),
-        h('div', { style: { minWidth: 0, flex: '1' } },
-          h('div', { class: 'find-answer-name' }, c.displayName || c.target),
-          h('div', { class: 'find-answer-sub muted sm truncate' }, `@${c.target}`),
-          evidenceChips(c)),
-        h('button', { class: 'btn primary', onclick: (e) => followSelected((state.result && state.result.candidates) || [c], e.currentTarget) }, icon('plus', 'sm'), 'Follow as one creator')),
-      c.bio ? h('p', { class: 'muted sm find-cand-bio' }, String(c.bio).slice(0, 220)) : null,
-      sample ? h('a', { class: 'find-sample', href: (sample && sample.url) || c.url || '#', target: '_blank', rel: 'noopener noreferrer nofollow' },
-        sample.thumb || sample.preview ? h('span', { class: 'find-sample-thumb', style: { backgroundImage: `url("${sample.thumb || sample.preview}")` } }) : null,
-        h('span', { class: 'find-sample-txt' }, h('b', null, 'Latest post'), h('small', { class: 'muted' }, String(sample.title || sample.url || '').slice(0, 90)))) : null);
+  /** "Found" is all a platform lookup proves: the account exists and has content. It says nothing about who it belongs to. */
+  const foundBadge = () => h('span', { class: 'badge', title: 'This account exists on its platform and has content. That does not by itself mean it belongs to the same person as any other account in the results.' }, icon('check', 'sm'), 'Account found');
+
+  function paidChips(c) {
+    const links = c.externalLinks || [];
+    if (!links.length) return null;
+    return h('div', { class: 'row wrap', style: { gap: '6px', marginTop: '6px' } }, links.map((l) => {
+      const [tone, tag] = paidKind(l);
+      return h('a', { class: `linkchip ext${tone ? ` paid-pill ${tone}` : ''}`, href: l.url, target: '_blank', rel: 'noopener noreferrer nofollow' },
+        tone ? h('span', { class: `badge ${tone}${l.free ? ' free' : ''}` }, l.free ? `${tag} · Free` : tag) : null, icon('external', 'sm'), String(l.label || l.url).slice(0, 40));
+    }));
   }
 
-  function evidenceCard(c) {
+  function sampleLink(c) {
     const sample = c.sample || (c.samples && c.samples[0]);
-    const sampleUrl = (sample && sample.url) || c.url || '#';
-    const thumb = sample && (sample.thumb || sample.preview);
-    return h('div', { class: 'card find-cand' },
+    if (!sample) return null;
+    const thumb = sample.thumb || sample.preview;
+    return h('a', { class: 'find-sample', href: sample.url || c.url || '#', target: '_blank', rel: 'noopener noreferrer nofollow' },
+      thumb ? h('span', { class: 'find-sample-thumb', style: { backgroundImage: `url("${thumb}")` } }) : null,
+      h('span', { class: 'find-sample-txt' }, h('b', null, 'Latest post'), h('small', { class: 'muted' }, String(sample.title || sample.url || c.url || '').slice(0, 90))));
+  }
+
+  /** One account inside a linked group. */
+  function memberRow(c) {
+    return h('div', { class: 'find-member', 'data-account': `${c.platform}:${c.target}` },
+      h('div', { class: 'row', style: { gap: '10px', alignItems: 'center' } },
+        avatar({ avatar_url: c.avatarUrl, display_name: c.displayName || c.target }, 36),
+        h('div', { style: { minWidth: 0, flex: '1' } },
+          h('div', { class: 'find-cand-name' }, c.displayName || c.target, ' ', foundBadge()),
+          h('div', { class: 'find-cand-sub' }, h('span', { class: 'muted sm truncate' }, `@${c.target}`, ' · ', platformLabel(c.platform)))),
+        h('a', { class: 'btn sm ghost', href: c.url || '#', target: '_blank', rel: 'noopener noreferrer nofollow' }, icon('external', 'sm'), 'Open')),
+      paidChips(c));
+  }
+
+  /** Accounts tied together by evidence: the only thing that may be followed as one creator. */
+  function groupCard(g, byKey) {
+    const members = g.members.map((k) => byKey.get(k)).filter(Boolean);
+    if (members.length < 2) return null;
+    const best = members[0];
+    return h('div', { class: 'card find-group', 'data-group': g.id, style: { borderLeft: '3px solid var(--accent, #7c5cff)', padding: '14px 16px' } },
+      h('div', { class: 'row wrap', style: { alignItems: 'center', gap: '10px' } },
+        h('strong', null, `${members.length} linked accounts`),
+        h('span', { class: 'muted sm' }, 'one person, tied together by what the accounts themselves publish'),
+        h('span', { style: { flex: '1' } }),
+        h('button', { class: 'btn primary', onclick: () => followSelected(members, best.displayName || best.target) }, icon('plus', 'sm'), `Follow these ${members.length} as one creator`)),
+      h('div', { class: 'stack', style: { marginTop: '10px', gap: '10px' } }, members.map(memberRow)),
+      h('ul', { class: 'muted sm find-why', style: { margin: '10px 0 0 18px' } }, g.evidence.map((e) => h('li', { 'data-evidence': e.type }, e.detail))));
+  }
+
+  /** A name or search match with nothing tying it to the other accounts. Followed on its own, never merged. */
+  function possibleCard(c) {
+    return h('div', { class: 'card find-cand', 'data-account': `${c.platform}:${c.target}` },
       h('div', { class: 'row', style: { gap: '10px', alignItems: 'center' } },
         avatar({ avatar_url: c.avatarUrl, display_name: c.displayName || c.target }, 40),
         h('div', { style: { minWidth: 0, flex: '1' } },
-          h('div', { class: 'find-cand-name' }, c.displayName || c.target, ' ', h('span', { class: 'badge good' }, icon('check', 'sm'), 'Verified')),
-          h('div', { class: 'find-cand-sub' }, h('span', { class: 'muted sm truncate' }, c.target)))),
+          h('div', { class: 'find-cand-name' }, c.displayName || c.target, ' ', foundBadge()),
+          h('div', { class: 'find-cand-sub' }, h('span', { class: 'muted sm truncate' }, `@${c.target}`, ' · ', platformLabel(c.platform))))),
       c.bio ? h('p', { class: 'muted sm find-cand-bio' }, String(c.bio).slice(0, 160)) : null,
       evidenceChips(c),
-      sample ? h('a', { class: 'find-sample', href: sampleUrl, target: '_blank', rel: 'noopener noreferrer nofollow' },
-        thumb ? h('span', { class: 'find-sample-thumb', style: { backgroundImage: `url("${thumb}")` } }) : null,
-        h('span', { class: 'find-sample-txt' }, h('b', null, 'Latest post'), h('small', { class: 'muted' }, String(sample.title || sample.url || c.url || '').slice(0, 90)))) : null);
+      paidChips(c),
+      sampleLink(c),
+      h('div', { class: 'muted sm', style: { marginTop: '8px' } }, 'Name match only. Nothing shows this is the same person as the other accounts.'),
+      c.status === 'following'
+        ? h('div', { class: 'muted sm', style: { marginTop: '6px' } }, 'Already following')
+        : h('button', { class: 'btn', style: { marginTop: '8px' }, onclick: () => followSelected([c], c.displayName || c.target) }, icon('plus', 'sm'), 'Follow this account'));
   }
 
   function paint() {
@@ -140,13 +176,13 @@ export async function find(root, { query }) {
     out.replaceChildren();
     if (state.loading) {
       out.append(
-        h('div', { class: 'find-loading', 'aria-label': 'Searching verified accounts' },
+        h('div', { class: 'find-loading', 'aria-label': 'Searching for accounts' },
           h('div', { class: 'spinner', 'aria-hidden': 'true' }),
           h('p', { class: 'muted' }, 'Checking every public platform and the web — usually about half a minute…')),
         h('div', { class: 'creator-grid', 'aria-hidden': 'true' }, [0, 1, 2].map(() => h('div', { class: 'card find-cand' }, h('div', { class: 'skeleton', style: { height: '86px' } }), h('div', { class: 'skeleton', style: { height: '14px', marginTop: '10px' } })))),
       );
     } else if (state.following) {
-      out.append(h('div', { class: 'find-loading' }, h('div', { class: 'spinner', 'aria-hidden': 'true' }), h('p', { class: 'muted' }, 'Following him. Merging verified accounts…')));
+      out.append(h('div', { class: 'find-loading' }, h('div', { class: 'spinner', 'aria-hidden': 'true' }), h('p', { class: 'muted' }, 'Following…')));
     } else if (state.followed) {
       out.append(h('div', { class: 'notice ok', role: 'status' }, icon('check', 'sm'), ' Following. Opening profile…'));
     } else if (state.error) {
@@ -164,26 +200,29 @@ export async function find(root, { query }) {
       if (!cands.length) {
         out.append(emptyState({
           icon: 'users',
-          title: `No verified accounts for “${input.value.trim() || 'that'}”`,
+          title: `No accounts found for “${input.value.trim() || 'that'}”`,
           text: 'Try the @handle, or paste a direct profile link. Only accounts that exist and have content are shown — never a plausible-looking URL.',
           actions: [h('a', { class: 'btn', href: href('/creators') }, 'Browse creators instead')],
         }));
       } else {
-        const [best, ...rest] = cands;
+        const byKey = new Map(cands.map((c) => [`${c.platform}:${c.kind}:${String(c.target).toLowerCase()}`, c]));
+        const groups = (state.result.groups || []).map((g) => groupCard(g, byKey)).filter(Boolean);
+        const possible = cands.filter((c) => !c.groupId);
         out.append(
           h('div', { class: 'row wrap find-result-head', style: { alignItems: 'center' } },
-            h('strong', null, `${cands.length} verified account${cands.length === 1 ? '' : 's'}`),
-            h('span', { class: 'muted' }, 'checked against the real platform — never just a plausible URL'),
-            h('span', { style: { flex: '1' } }),
-            cands.length > 1 ? h('button', { class: 'btn primary', onclick: (e) => followSelected(cands, e.currentTarget) }, icon('plus', 'sm'), 'Follow all as one creator') : null),
-          answerCard(best),
-          rest.length ? h('div', { class: 'creator-grid find-rest' }, rest.map(evidenceCard)) : null,
+            h('strong', null, `${cands.length} account${cands.length === 1 ? '' : 's'} found`),
+            h('span', { class: 'muted' }, 'found = it exists on its platform and has content. Accounts count as one person only when they link to each other.')),
+          ...groups,
+          possible.length ? h('h2', { class: 'find-possible-head', style: { fontSize: '16px', margin: '14px 0 0' } }, groups.length ? 'Other accounts: possible matches' : 'Possible matches') : null,
+          possible.length ? h('div', { class: 'muted sm' }, 'Same name or search hit, but nothing shows they are the same man. Each one is followed on its own.') : null,
+          possible.length ? h('div', { class: 'creator-grid find-rest' }, possible.map(possibleCard)) : null,
         );
       }
-      const ext = state.result.externalLinks || [];
+      // Paid pages are shown on the account they were found on. Only a page named in the search itself is listed here.
+      const ext = state.result.queryLinks || [];
       if (ext.length) {
         out.append(h('section', { class: 'find-paid', 'aria-label': 'Paid pages' },
-          h('div', { class: 'muted sm' }, 'Paid pages open on the creator’s own site — what they cost is between him and his fans:'),
+          h('div', { class: 'muted sm' }, 'Paid page named in your search (opens on the creator’s own site):'),
           h('div', { class: 'row wrap', style: { gap: '8px', marginTop: '8px' } }, ext.map((l) => {
             const [tone, tag] = paidKind(l);
             return h('a', { class: `linkchip ext${tone ? ` paid-pill ${tone}` : ''}`, href: l.url, target: '_blank', rel: 'noopener noreferrer nofollow' },
@@ -193,7 +232,7 @@ export async function find(root, { query }) {
       }
     } else {
       out.append(
-        h('p', { class: 'muted find-lede' }, 'Pull any creator’s public work in from across the open web — one identity, every public account. Paid pages are kept as link-outs.'),
+        h('p', { class: 'muted find-lede' }, 'Look a creator up by name, handle or link. Accounts that exist are listed as found; they are grouped as one person only when they link to each other, never because they share a name. Paid pages are kept as link-outs.'),
         h('div', { class: 'find-examples' },
           h('span', { class: 'muted sm find-try' }, 'Try:'),
           h('div', { class: 'row wrap', style: { gap: '8px' } }, EXAMPLES.map((ex) => h('button', { class: 'chip', type: 'button', title: `Look up ${ex}`, onclick: () => { input.value = ex; run(); } }, ex)))),
@@ -202,7 +241,7 @@ export async function find(root, { query }) {
   }
 
   root.replaceChildren(
-    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Find a creator'), h('div', { class: 'sub' }, 'One box: a name, @handle or profile link. Local matches appear as you type; Enter verifies him across the open web. Only verified accounts are followed — paid pages stay link-outs.'))),
+    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Find a creator'), h('div', { class: 'sub' }, 'One box: a name, @handle or profile link. Local matches appear as you type; Enter looks the name up across the open web. An account is “found” when it exists and has content. Several accounts are followed together only when the lookup shows they link to each other; name matches are followed one at a time. Paid pages stay link-outs.'))),
     form,
     out,
   );

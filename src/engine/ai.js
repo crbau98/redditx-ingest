@@ -315,17 +315,31 @@ const OWNERSHIP = [
   /\b(?:also on|also at|back-?up|back up|alt account|other account|new account|old account|main account|official|goes by|a\.?k\.?a\.?)(?=\W|$)/g,
 ];
 const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-// "IG: @x", "X: @x", "OnlyFans: x", "📸 IG @x", "OF 👉 x": a platform label right before the handle is a profile line of his own.
-const LABEL = /(?<![a-z0-9])(?:ig|insta(?:gram)?|x|twitter|onlyfans|of|fansly|bluesky|bsky|telegram|tg|tiktok|redgifs|tumblr|reddit|snap(?:chat)?|youtube|yt|threads|mastodon)[^\w\n]{0,8}$/;
-// Someone else's account: a partner, friend, shout-out, credit or collab. Checked in the same segment (between | . ! ? • ·) as the value.
-const THIRD = /\b(?:my (?:ex|bf|gf|boyfriend|girlfriend|friends?|husband|wife|partner|buddy|bro|brother|roommate|mate|crush)|shout ?-?outs?|check out|go follow|follow my|collab(?:s|bing)? (?:with|w\/)|thanks (?:to )?|photo(?:s|graphy)? (?:by|credit)|pic by|credit)\b/;
+// A platform label opens a profile line of his own: "IG: @x", "X: @x", "OnlyFans: x", "📸 IG @x", "TikTok | @x". It counts only at
+// the START of its segment (only emoji or punctuation before it), so "photographer: IG @x" or "video by IG @x" do not. The bare
+// words "of" and "x" are also ordinary English ("fan of @x", "x @y"), so they need a colon or an emoji after them.
+const LABEL_WORD = '(?:ig|insta(?:gram)?|twitter|onlyfans|fansly|bluesky|bsky|telegram|tg|tiktok|redgifs|tumblr|reddit|snap(?:chat)?|youtube|yt|threads|mastodon|vero|discord|twitch|kik|facebook|fb|linkedin|pinterest|clapper|fanvue|loyalfans|justforfans|jff)';
+// A run of labels is fine too ("Bluesky⚣Snap⚣Telegram⚣Reddit: @x"): every word before the handle must itself be a platform.
+const LABEL_AT_START = new RegExp(`(?:^|[|•·,.!?\\n])[^\\p{L}\\p{N}]*(?:${LABEL_WORD}[^\\p{L}\\p{N}\\n]{0,8})+$`, 'u');
+const BARE_LABEL_AT_START = /(?:^|[|•·,.!?\n])[^\p{L}\p{N}]*(?:of|x)([^\p{L}\p{N}\n]{0,8})$/u;
+const SEGMENT_BREAK = /[|•·,.!?\n]+/g;
+// Someone else's account: a partner, family, friend, fan, manager, photographer, collaborator, sponsor, a credit ("video by") or a
+// thank-you. Checked in the segment the value sits in, so "IG: @x | shout out @y" costs x nothing.
+const ROLE = '(?:ex|ex-\\w+|bf|gf|boyfriend|girlfriend|husband|wife|partner|fianc[eé]e?|dad|daddy|father|mom|mum|mother|son|brother|sister|bro|friends?|bestie|buddy|roommate|crush|fans?|photographers?|manager|mgmt|management|booking|agent|editor|model\\w*)';
+const THIRD = new RegExp(
+  `\\b${ROLE}(?:'s)?(?=\\W|$)(?<!\\bmodel)` // a role word anywhere in the segment ("boyfriend's IG", "Photographer: IG", "Fan of")
+  + `|\\b(?:shout ?-?outs?|check out|go follow|follow my|collab(?:s|bing)?|feat|ft|featuring|thx|thanks|credit|married|engaged|sponsored|proud of|photos? of)\\b`
+  + `|\\b(?:video|videos|edit|edits|photo|photos|pic|pics|art|artwork|design|designed|shot|filmed|photography|cover|music|sponsored|brought) by\\b`
+  + `|\\b(?:w/|with) (?:\\w+ ){0,2}model\\b`
+  + `|\\bmy (?!${MY}${THING}\\b)\\w+`, // "my ex", "my boy": my <anything but a platform or account word>
+  'i');
 
 /**
  * A claim counts only when (1) its quote is really in his text, (2) the claimed value is a whole word in the quote (not
  * a fragment: "ed" in "fred", "jake_fit" in "jake_fit2"), and (3) it is his own: the quote is an entry of his own links
- * list, or a platform label sits right before the handle ("IG: @x"), or a first-person phrase sits right next to it in the
- * same sentence ("my OnlyFans: x", "I'm x", "follow me at x", "backup: @x"). A third-person mention ("my ex is jake_fit",
- * "shout out @x", "photo by @x") is never his, whatever label it carries.
+ * list (unless its label names someone else), or a platform label opens the segment right before the handle ("IG: @x"), or
+ * a first-person phrase sits right next to it ("my OnlyFans: x", "I'm x", "follow me at x", "backup: @x"). A third-person
+ * mention ("my ex is jake_fit", "shout out @x", "photo by @x", "boyfriend's IG: @x") is never his, whatever label it carries.
  * @param {Array<{label?: string, url?: string}>} [links] the creator's own links list
  */
 function grounded(haystack, quote, value, links = []) {
@@ -334,22 +348,27 @@ function grounded(haystack, quote, value, links = []) {
   const at = new RegExp(`(?<![a-z0-9_.-])${esc(v)}(?![a-z0-9_-]|\\.[a-z0-9])`).exec(qn);
   if (!at) return false;
   const vStart = at.index; const vEnd = at.index + v.length;
-  // his own links list: whatever he published there is his
-  if ((links || []).some((l) => l && lc(`${l.label || ''} ${l.url || ''}`).includes(qn))) return true;
-  // the segment of the quote the value is in
-  let from = 0; let to = qn.length;
-  for (const m of qn.matchAll(/[|.!?\n•·]+/g)) { if (m.index < vStart) from = m.index + m[0].length; else if (m.index >= vEnd) { to = m.index; break; } }
-  const segment = qn.slice(from, to);
-  if (THIRD.test(segment)) return false;
-  const before = qn.slice(0, vStart).replace(/@$/, '').replace(/\br\/$/, ''); // not just the segment: "TikTok | @x" puts a | between label and handle
-  if (LABEL.test(before)) return true;
+  // his own links list: whatever he published there is his, unless its label names someone else ("Collab with Bob")
+  if ((links || []).some((l) => l && lc(`${l.label || ''} ${l.url || ''}`).includes(qn) && !THIRD.test(lc(l.label || '')))) return true;
+  // the segment the value sits in (separators inside the value, like the dots of a handle, do not split it; the full stop of
+  // an abbreviation like "feat." does not end a segment either)
+  const qseg = qn.replace(/\b(feat|ft|vs|mr|mrs|dr|jr|sr)\./g, (m0, w) => `${w}\u0001`);
+  let from = 0; let to = qseg.length;
+  for (const m of qseg.matchAll(SEGMENT_BREAK)) { if (m.index + m[0].length <= vStart) from = m.index + m[0].length; else if (m.index >= vEnd) { to = m.index; break; } }
+  if (THIRD.test(qseg.slice(from, to))) return false;
+  // a platform label that opens its segment sits right before the handle ("IG: @x", "TikTok | @x"); the segment it opens must be his too
+  const before = qseg.slice(0, vStart).replace(/@$/, '').replace(/\br\/$/, '');
+  const lab = LABEL_AT_START.exec(before);
+  if (lab && !THIRD.test(before.slice(lab.index))) return true;
+  const bare = BARE_LABEL_AT_START.exec(before);
+  if (bare && /[:]|[^\x00-\x7f]/.test(bare[1]) && !THIRD.test(before.slice(bare.index))) return true; // "OF: x", "X: x", "OF 👉 x"
   for (const re of OWNERSHIP) {
     re.lastIndex = 0;
     let m;
     while ((m = re.exec(qn))) {
       const s0 = m.index; const e0 = s0 + m[0].length;
       const gap = e0 <= vStart ? qn.slice(e0, vStart) : s0 >= vEnd ? qn.slice(vEnd, s0) : '';
-      if (gap.length <= 25 && !/[.!?\n]/.test(gap)) return true;
+      if (gap.length <= 25 && !/[.?\n]/.test(gap)) return true; // "follow me! @x" is one thought; a full stop or question mark ends it
     }
   }
   return false;

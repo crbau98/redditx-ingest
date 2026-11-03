@@ -600,7 +600,8 @@ async function lookup(input, { imageCheck = true } = {}) {
       }
     }
   }
-  const out = [];
+  const queryLinks = externals.slice(); // paid pages named in the query itself, before any account's own pages are added
+  const out = []; const poolOf = new Map(); // shown account -> the pool candidate it came from
   for (const c of pl.list()) {
     const cExt = paidByCandidate.get(c) || [];
     if (c.platform === 'linkinbio') { externals.push(...cExt); continue; }
@@ -628,13 +629,14 @@ async function lookup(input, { imageCheck = true } = {}) {
     conf = Math.max(0.05, Math.min(0.99, conf));
     const existing = repo.feeds.find(c.platform, c.kind, c.target);
     const blocked = repo.blocklist.has('creator', `${c.platform}:${String(c.target).toLowerCase()}`);
-    out.push({
+    const entry = {
       platform: c.platform, kind: c.kind, target: c.target, label: c.label, url: c.url,
       displayName: c.displayName, bio: c.bio ? String(c.bio).slice(0, 240) : null, avatarUrl: c.avatarUrl, followers: c.followers,
       sampleCount: c.sampleCount, samples: c.samples, sample: c.samples[0] || null, evidence: c.evidence.slice(0, 5), male: sc.male,
       confidence: Math.round(conf * 100) / 100, tier: conf >= 0.7 ? 'strong' : conf >= 0.45 ? 'likely' : 'weak',
       status: blocked ? 'blocked' : existing ? 'following' : 'new', feedId: existing ? existing.id : null, creatorId: existing ? existing.creator_id : null,
-    });
+    };
+    out.push(entry); poolOf.set(entry, c);
   }
   out.sort((a, b) => b.confidence - a.confidence || b.sampleCount - a.sampleCount);
 
@@ -647,6 +649,15 @@ async function lookup(input, { imageCheck = true } = {}) {
     }
   }
   const visible = out.filter((c) => !c.excluded);
+  // Group by evidence; everything else is a separate possible match. Each account also carries only its OWN paid pages.
+  const grouping = groupAccounts(pl.list(), visible);
+  for (const c of visible) {
+    const k = accountKey(c);
+    c.found = true; // exists on its platform and has content: says nothing about who it belongs to
+    c.groupId = grouping.groupOf.get(k) || null;
+    c.sameAs = grouping.edges.filter((e) => e.a === k || e.b === k).map((e) => ({ type: e.type, detail: e.detail, with: e.a === k ? e.b : e.a }));
+    c.externalLinks = (paidByCandidate.get(poolOf.get(c)) || []).slice(0, 6);
+  }
 
   const seenExt = new Set();
   const externalLinks = externals.filter((l) => { const k = l.url; if (seenExt.has(k)) return false; seenExt.add(k); return true; }).slice(0, 12);
@@ -657,7 +668,9 @@ async function lookup(input, { imageCheck = true } = {}) {
     handles: q.handles,
     candidates: visible,
     accounts: visible,
+    groups: grouping.groups.map((g) => ({ id: g.id, members: g.members, evidence: g.evidence.map((e) => ({ type: e.type, detail: e.detail, a: e.a, b: e.b })) })),
     externalLinks,
+    queryLinks: queryLinks.slice(0, 4),
     mediaHits: mediaHits.slice(0, 24),
     webLinks: webLinks.slice(0, 24),
     hidden,
@@ -666,8 +679,139 @@ async function lookup(input, { imageCheck = true } = {}) {
     webSearch: q.provider || null,
     ms: Date.now() - started,
   };
+  result.lookupId = remember(result);
   events.log('INFO', `Lookup "${q.raw}": ${visible.length} account(s) (${visible.filter((c) => c.tier === 'strong').length} strong) in ${result.ms} ms`);
   return result;
+}
+
+/* ------------------------------------------------------------------ grouping */
+// "Found" means an account exists on its platform and has content. It does NOT mean two found accounts are one man: a shared
+// name proves nothing (hogueblog, hogue38, christianhogue9, a Telegram "christian_hogue" and an OnlyFans "Christian" are five
+// different people). Accounts are grouped as ONE person only on evidence the accounts themselves publish, or that PRISM already
+// holds: one profile links to the other, both sit on the same link-in-bio page, both promote the same paid page, or an
+// identity_links / shared-creator row exists. Everything else stays a separate "possible match".
+const linkKey = (l) => (l && l.platform && l.target ? `${l.platform}:${l.kind || 'user'}:${String(l.target).toLowerCase()}` : null);
+const accountKey = (c) => `${c.platform}:${c.kind}:${String(c.target).toLowerCase()}`;
+const EVIDENCE_ORDER = ['same-creator', 'identity-link', 'profile-link', 'link-page', 'same-paid-page']; // strongest first
+
+function identityStatus(creatorA, creatorB) {
+  if (!creatorA || !creatorB || creatorA === creatorB) return null;
+  const [a, b] = creatorA < creatorB ? [creatorA, creatorB] : [creatorB, creatorA];
+  const r = repo.db.prepare('SELECT status FROM identity_links WHERE a_id = ? AND b_id = ?').get(a, b);
+  return r ? r.status : null;
+}
+
+/**
+ * @param {object[]} poolList every candidate the lookup read (including link-in-bio pages)
+ * @param {object[]} visible  the accounts that will be shown (found, passed every gate)
+ * @returns {{groups: Array<{id, members: string[], evidence: object[]}>, groupOf: Map<string,string>, edges: object[]}}
+ */
+function groupAccounts(poolList, visible) {
+  const accts = new Map(visible.map((c) => [accountKey(c), c]));
+  const label = (k) => { const c = accts.get(k); return c ? (c.label || c.target) : k; };
+  const edges = []; const seen = new Set();
+  const add = (a, b, type, detail) => {
+    if (a === b || !accts.has(a) || !accts.has(b)) return;
+    const id = `${type}|${[a, b].sort().join('|')}|${detail}`;
+    if (seen.has(id)) return;
+    seen.add(id);
+    edges.push({ type, a, b, detail });
+  };
+  const byKey = new Map(poolList.map((c) => [accountKey(c), c]));
+
+  // a profile that links to another found account
+  for (const [k] of accts) {
+    const c = byKey.get(k);
+    for (const l of (c && c.links) || []) {
+      const t = linkKey(l);
+      if (t && t !== k) add(k, t, 'profile-link', `${label(k)} links to ${label(t)}`);
+    }
+  }
+  // accounts on the same link-in-bio page (listed there, or linking to it)
+  for (const hub of poolList.filter((c) => c.platform === 'linkinbio' && c.verified)) {
+    const hk = accountKey(hub);
+    const members = new Set();
+    for (const l of hub.links || []) { const t = linkKey(l); if (t && accts.has(t)) members.add(t); }
+    for (const [k] of accts) { const c = byKey.get(k); if (c && (c.links || []).some((l) => linkKey(l) === hk)) members.add(k); }
+    const list = [...members];
+    const name = hub.label || hub.url || hub.target;
+    for (let i = 1; i < list.length; i++) add(list[0], list[i], 'link-page', `both on the link page ${name}`);
+  }
+  // the same paid page promoted from two accounts
+  const byPaid = new Map();
+  for (const [k] of accts) {
+    const c = byKey.get(k);
+    for (const l of (c ? externalLinksOf(c) : [])) if (l.handle) { const pk = `${l.service || 'OnlyFans'}:${l.handle}`; if (!byPaid.has(pk)) byPaid.set(pk, new Set()); byPaid.get(pk).add(k); }
+  }
+  for (const [pk, set] of byPaid) { const list = [...set]; for (let i = 1; i < list.length; i++) add(list[0], list[i], 'same-paid-page', `both promote ${pk.replace(':', ' ')}`); }
+  // what PRISM already knows: the same creator, or an identity link (pending or merged) between their creators
+  const rejected = new Set();
+  const list = [...accts.keys()];
+  for (let i = 0; i < list.length; i++) {
+    for (let j = i + 1; j < list.length; j++) {
+      const A = accts.get(list[i]); const B = accts.get(list[j]);
+      if (A.creatorId && B.creatorId && A.creatorId === B.creatorId) add(list[i], list[j], 'same-creator', `${label(list[i])} and ${label(list[j])} are already one creator here`);
+      else if (A.creatorId && B.creatorId) {
+        const st = identityStatus(A.creatorId, B.creatorId);
+        if (st === 'rejected') rejected.add([list[i], list[j]].sort().join('|'));
+        else if (st) add(list[i], list[j], 'identity-link', `already linked as possibly the same man (${st})`);
+      }
+    }
+  }
+  // union by evidence, strongest first; an admin's "different people" verdict is never overridden by weaker evidence
+  const parent = new Map(list.map((k) => [k, [k]]));
+  const setOf = new Map(list.map((k) => [k, parent.get(k)]));
+  const blocked = (X, Y) => X.some((x) => Y.some((y) => rejected.has([x, y].sort().join('|'))));
+  const used = [];
+  for (const e of [...edges].sort((p, q) => EVIDENCE_ORDER.indexOf(p.type) - EVIDENCE_ORDER.indexOf(q.type))) {
+    const X = setOf.get(e.a); const Y = setOf.get(e.b);
+    if (X === Y) { used.push(e); continue; }
+    if (blocked(X, Y)) continue;
+    const merged = X.concat(Y);
+    for (const k of merged) setOf.set(k, merged);
+    used.push(e);
+  }
+  const sets = [...new Set(setOf.values())].filter((m) => m.length > 1);
+  const conf = (k) => (accts.get(k) || {}).confidence || 0;
+  sets.sort((p, q) => Math.max(...q.map(conf)) - Math.max(...p.map(conf)));
+  const groupOf = new Map();
+  const groups = sets.map((members, i) => {
+    const id = `g${i + 1}`;
+    members.sort((p, q) => conf(q) - conf(p));
+    for (const k of members) groupOf.set(k, id);
+    return { id, members, evidence: used.filter((e) => groupOf.get(e.a) === id) };
+  });
+  return { groups, groupOf, edges: used };
+}
+
+// The last lookups, so a follow can be checked against what the lookup actually found (never against what a client claims).
+const recent = new Map(); // lookupId -> { at, accounts: Map<key, {groupId, externalLinks}> }
+const RECENT_MAX = 100; const RECENT_TTL_MS = 30 * 60 * 1000;
+function remember(result) {
+  const id = require('crypto').randomBytes(9).toString('base64url');
+  const accounts = new Map(result.candidates.map((c) => [accountKey(c), { groupId: c.groupId || null, externalLinks: c.externalLinks || [] }]));
+  recent.set(id, { at: Date.now(), accounts });
+  while (recent.size > RECENT_MAX) recent.delete(recent.keys().next().value);
+  return id;
+}
+
+/**
+ * Is this set of accounts allowed to be followed as ONE creator? One account always is. Several only when the lookup they came
+ * from found evidence tying them together (same group); a shared name is not evidence.
+ * @returns {{ok: true, externalLinks: object[]} | {error: string, status: number}}
+ */
+function checkSelections(lookupId, selections) {
+  const picks = [...new Map((selections || []).filter((s) => s && s.platform && s.target).map((s) => [accountKey({ platform: s.platform, kind: s.kind || 'user', target: s.target }), s])).keys()];
+  const hit = lookupId ? recent.get(String(lookupId)) : null;
+  if (hit && Date.now() - hit.at > RECENT_TTL_MS) recent.delete(String(lookupId));
+  const live = hit && Date.now() - hit.at <= RECENT_TTL_MS ? hit : null;
+  const links = [];
+  if (live) for (const k of picks) { const a = live.accounts.get(k); if (a) links.push(...a.externalLinks); }
+  if (picks.length <= 1) return { ok: true, known: !!live, externalLinks: links };
+  if (!live) return { error: 'Search again before following several accounts together', status: 409 };
+  const groups = new Set(picks.map((k) => (live.accounts.get(k) || {}).groupId || null));
+  if (groups.size !== 1 || groups.has(null)) return { error: 'Those accounts are not linked by evidence, so they cannot be followed as one creator. Follow each one on its own.', status: 409 };
+  return { ok: true, known: true, externalLinks: links };
 }
 
 /* ---------------------------------------------------------------------- follow */
@@ -739,14 +883,19 @@ function follow({ name, selections, externalLinks = [], bio, creatorId = null } 
   return { ok: true, creator: res.creator, feeds: res.feeds, conflicts: res.conflicts, rejected, queued: typeof queued === 'number' ? queued : feedIds.length };
 }
 
-/** One call: look the person up and follow every strong, new, verified match. */
+/**
+ * One call: look the person up and follow the best match. If it is tied to other accounts by evidence (see groupAccounts) the
+ * whole group is followed as one creator; accounts that merely share a name are never added.
+ */
 async function findAndFollow(input, { minConfidence = 0.7 } = {}) {
   const found = await lookup(input);
   if (found.error) return found;
-  const picks = found.candidates.filter((c) => c.status === 'new' && c.confidence >= minConfidence && (c.kind === 'user' || (c.kind === 'channel' && c.platform === 'youtube')));
-  if (!picks.length) return { ...found, followed: null, note: 'No strong new match to follow automatically — review the candidates and pick the right accounts.' };
-  const followed = follow({ name: found.name || input, selections: picks, externalLinks: found.externalLinks });
+  const isUser = (c) => c.kind === 'user' || (c.kind === 'channel' && c.platform === 'youtube');
+  const top = found.candidates.find((c) => c.status === 'new' && c.confidence >= minConfidence && isUser(c));
+  if (!top) return { ...found, followed: null, note: 'No strong new match to follow automatically — review the candidates and pick the right accounts.' };
+  const picks = top.groupId ? found.candidates.filter((c) => c.groupId === top.groupId && c.status === 'new' && isUser(c)) : [top];
+  const followed = follow({ name: found.name || input, selections: picks, externalLinks: picks.flatMap((c) => c.externalLinks || []) });
   return { ...found, followed };
 }
 
-module.exports = { lookup, run: lookup, follow, findAndFollow, searchWeb, parseQuery, nameSimilarity, directSpecs, dice, isNamesake };
+module.exports = { lookup, run: lookup, follow, findAndFollow, checkSelections, groupAccounts, searchWeb, parseQuery, nameSimilarity, directSpecs, dice, isNamesake };
