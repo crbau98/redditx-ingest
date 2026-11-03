@@ -64,6 +64,7 @@ process.on('SIGINT', () => shutdown('SIGINT'));
  */
 const crashLog = require('path').join(config.dataDir, 'crash.log');
 function noteCrash(kind, e) {
+  require('./src/lib/sentry').capture(kind === 'uncaughtException' ? 'uncaught' : 'rejection', e);
   const stack = e && e.stack ? e.stack : String(e);
   console.error(`[${kind}]`, stack);
   try {

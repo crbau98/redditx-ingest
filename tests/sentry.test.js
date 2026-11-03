@@ -24,9 +24,15 @@ test('Sentry sends only a fixed event and ignores expected errors', () => {
   for (const [err, req] of [[{ status: 404 }, {}], [{ code: 'ECONNRESET' }, {}], [{ name: 'AbortError' }, {}], [{}, { aborted: true }]]) sentry.captureHttpError(err, req);
   assert.equal(messages.length, 0);
   sentry.captureHttpError(new Error('private media token'), { headers: { authorization: 'secret' }, url: '/foo?token=secret' });
-  assert.deepEqual(messages, [['Unhandled HTTP server error', 'error']]);
+  assert.deepEqual(messages, [['PRISM http Error other', 'error']]);
   const event = options.beforeSend({ event_id: 'id', timestamp: 123, request: { data: 'private' }, exception: { values: [{ value: 'secret' }] }, breadcrumbs: ['secret'] });
-  assert.deepEqual(event, { event_id: 'id', timestamp: 123, level: 'error', platform: 'node', environment: 'staging', release: 'abc', message: 'Unhandled HTTP server error' });
+  assert.deepEqual(event, { event_id: 'id', timestamp: 123, level: 'error', platform: 'node', environment: 'staging', release: 'abc', message: 'PRISM error' });
+  const err = new TypeError('PRIVATE_MEDIA_SENTINEL');
+  err.stack = 'TypeError: PRIVATE_MEDIA_SENTINEL\n    at /app/src/engine/private-token.js:1:2';
+  sentry.capture('uncaught', err);
+  sentry.capture('rejection', err);
+  sentry.capture('PRIVATE_TOKEN_SENTINEL', err);
+  assert.deepEqual(messages.slice(1), [['PRISM uncaught TypeError engine', 'error'], ['PRISM rejection TypeError engine', 'error']]);
   assert.equal(options.sendDefaultPii, false);
   assert.equal(options.defaultIntegrations, false);
   assert.equal(options.tracesSampleRate, 0);
@@ -55,7 +61,7 @@ test('real SDK envelope contains no supplied private data', async () => {
   assert.equal(envelopes.length, 1);
   const output = JSON.stringify(envelopes[0]);
   assert.doesNotMatch(output, /PRIVATE_(MEDIA|AUTH|TOKEN)_SENTINEL/);
-  assert.match(output, /Unhandled HTTP server error/);
+  assert.match(output, /PRISM http Error other/);
   assert.match(output, /"release":"abc"/);
   assert.match(output, /"environment":"test"/);
   await sdk.close(2000);
