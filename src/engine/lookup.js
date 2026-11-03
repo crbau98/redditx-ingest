@@ -260,10 +260,7 @@ function directSpecs(q) {
       for (const inst of (config.peertubeInstances || []).slice(0, 2)) {
         specs.push({ platform: 'peertube', kind: 'user', target: `${handle.toLowerCase()}@${inst}`, label: `${handle}@${inst} (PeerTube)`, ingestable: true });
       }
-      const lemmyInst = (config.lemmyInstances || [])[0];
-      if (lemmyInst && /^[A-Za-z0-9_]{3,30}$/.test(handle)) {
-        specs.push({ platform: 'lemmy', kind: 'user', target: `${handle}@${lemmyInst}`, label: `${handle}@${lemmyInst} (Lemmy)`, ingestable: true });
-      }
+
     }
   }
   const seen = new Set();

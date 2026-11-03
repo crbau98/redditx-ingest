@@ -102,7 +102,7 @@ function describeSignals(sig) {
 function usable(spec) {
   if (!spec || spec.external || !spec.ingestable) return false;
   if (spec.platform === 'web' || spec.platform === 'rss') return false; // arbitrary sites are too noisy to auto-follow
-  if (spec.kind === 'community' && (spec.platform === 'reddit' || spec.platform === 'lemmy')) return true;
+  if (spec.kind === 'community' && spec.platform === 'reddit') return true;
   if (spec.kind === 'niche' && spec.platform === 'redgifs') return true;
   if (spec.platform === 'bluesky' && (spec.kind === 'feedgen' || spec.kind === 'list')) return true;
   if (!FOLLOWABLE_KINDS.has(spec.kind)) return false;
@@ -389,8 +389,8 @@ const keywordList = () => String(settingsStore.get().discoveryKeywords || '').sp
  */
 async function communityDiscovery({ keywords = 2, aborted = () => false } = {}) {
   const list = keywordList();
-  const out = { searched: 0, found: 0, reddit: 0, bluesky: 0, lemmy: 0 };
-  const reddit = registry.get('reddit'); const bluesky = registry.get('bluesky'); const lemmy = registry.get('lemmy');
+  const out = { searched: 0, found: 0, reddit: 0, bluesky: 0 };
+  const reddit = registry.get('reddit'); const bluesky = registry.get('bluesky');
   let idx = parseInt(repo.discoveryState.get('community.index', '0'), 10) || 0;
   for (let i = 0; i < Math.min(keywords, list.length); i++) {
     if (aborted()) break;
@@ -421,23 +421,6 @@ async function communityDiscovery({ keywords = 2, aborted = () => false } = {}) 
     }
   }
   if (list.length) repo.discoveryState.set('community.index', String(idx % list.length));
-  if (lemmy && lemmy.listCommunities) {
-    for (const host of config.lemmyInstances || []) {
-      if (aborted()) break;
-      const key = `lemmy.list.${host}`;
-      const last = new Date(repo.discoveryState.get(key, '') || 0).getTime();
-      if (Date.now() - last < 24 * 3600 * 1000) continue;
-      try {
-        out.searched++;
-        for (const lc of await lemmy.listCommunities(host, 50)) {
-          if (!lc.nsfw || borderline(lc.name, lc.title, lc.description)) continue;
-          const c = consider(parseProfile(`https://${lc.host}/c/${lc.name}`), 'search', `lemmy:${host}`, { displayName: lc.title, bio: lc.description, popularity: lc.subscribers });
-          if (c && c.status === 'pending' && c.scope !== 'excluded') { out.found++; out.lemmy++; }
-        }
-        repo.discoveryState.set(key, new Date().toISOString()); // only a successful read counts as today's
-      } catch (e) { events.log('WARN', `Discovery: Lemmy communities on ${host} — ${e.message}`); }
-    }
-  }
   return out;
 }
 
@@ -463,7 +446,6 @@ function creatorHangouts({ minCreators = 2 } = {}) {
   for (const h of repo.communityHangouts({ minCreators })) {
     let spec = null;
     if (h.platform === 'reddit') spec = parseProfile(`r/${h.community}`);
-    else if (h.platform === 'lemmy' && h.community.includes('@')) { const [name, host] = h.community.split('@'); spec = parseProfile(`https://${host}/c/${name}`); }
     // the RedGIFs niches followed creators post in (an untrusted feed: every item still needs a male signal)
     else if (h.platform === 'redgifs' && /^[a-z0-9-]{2,60}$/i.test(h.community)) spec = { platform: 'redgifs', kind: 'niche', target: h.community.toLowerCase(), label: h.community, ingestable: true };
     if (!spec) continue;

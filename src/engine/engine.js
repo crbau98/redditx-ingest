@@ -197,7 +197,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
   events.admin('run:start', entry);
   const runId = repo.runs.start(feed.id, trigger);
   const tag = `${feed.platform}/${feed.kind}:${feed.target}`;
-  const host = ['lemmy', 'mastodon', 'misskey', 'peertube'].includes(feed.platform) ? breaker.feedHost(feed) : null;
+  const host = ['mastodon', 'misskey', 'peertube'].includes(feed.platform) ? breaker.feedHost(feed) : null;
 
   const finish = (status, extra = {}) => {
     repo.runs.finish(runId, { status, ...stats, via: extra.via, error: extra.error, durationMs: Date.now() - started });
@@ -377,7 +377,7 @@ function noteBioSource(feed, profile) {
 /** Feeds that may run at once per platform. Each adapter's HTTP calls still go through the per-platform limiter
  * (lib/limiter: spaced requests, 429 cool-downs), so more slots overlap the slow part (probing, image checks, writes) without
  * hitting a host harder. Override with the `platformSlots` setting. */
-const DEFAULT_SLOTS = { coomer: 2, bluesky: 4, x: 2, telegram: 1, reddit: 2, redgifs: 1, tumblr: 2, gff: 2, mastodon: 3, misskey: 2, lemmy: 2, peertube: 2, rss: 4, web: 3, linkinbio: 3 };
+const DEFAULT_SLOTS = { coomer: 2, bluesky: 4, x: 2, telegram: 1, reddit: 2, redgifs: 1, tumblr: 2, gff: 2, mastodon: 3, misskey: 2, peertube: 2, rss: 4, web: 3, linkinbio: 3 };
 function slotsFor(platform, cfg = settingsStore.get()) {
   const custom = budget.parseCaps(cfg.platformSlots)[platform];
   return Math.max(1, custom !== undefined ? custom : (DEFAULT_SLOTS[platform] || 2));

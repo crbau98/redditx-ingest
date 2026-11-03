@@ -288,7 +288,7 @@ describe('schema: v17 is the Telegram migration, v18 is the look-alike retractio
     schema.MIGRATIONS[16](db); schema.MIGRATIONS[16](db); // twice: idempotent
     assert.ok(db.prepare('PRAGMA table_info(creators)').all().some((c) => c.name === 'bio_source'));
     assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'telegram_text'").get());
-    assert.equal(schema.MIGRATIONS.length, 18);
+    assert.equal(schema.MIGRATIONS.length, 19);
     db.close();
   });
 });
@@ -339,7 +339,6 @@ describe('Reddit: switched off by default, reversible, never a failure', () => {
     const stub = (obj, key, fn) => { restore.push([obj, key, obj[key]]); obj[key] = fn; };
     try {
       stub(registry.get('bluesky'), 'searchFeeds', async () => []);
-      stub(registry.get('lemmy'), 'listCommunities', async () => []);
       stub(registry.get('bluesky'), 'searchActors', async () => []);
       stub(registry.get('redgifs'), 'searchCreators', async () => []);
       stub(require('../src/lib/websearch'), 'search', async () => { const r = []; Object.defineProperty(r, 'provider', { value: 'fake' }); return r; });

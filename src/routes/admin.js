@@ -298,7 +298,7 @@ router.get('/settings', (req, res) => {
       reddit: !!(c.redditClientId && c.redditClientSecret), x: !!c.xBearer, bluesky: !!(c.bskyIdentifier && c.bskyPassword), mastodon: !!c.mastodonToken,
       brave: !!c.braveKey, telegram: !!c.telegramBot, telegramValid: require('../lib/telegram-bot').configured(),
     },
-    instances: { mastodon: config.mastodonInstances, lemmy: config.lemmyInstances },
+    instances: { mastodon: config.mastodonInstances },
     security: { adminKeySet: !!config.adminKey, ageGateEnforced: config.ageGateEnforce },
   });
 });

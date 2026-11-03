@@ -185,9 +185,6 @@ module.exports = {
     'mastodon.social', 'pawoo.net', 'mstdn.jp', 'fedibird.com', 'mastodon.online', 'mas.to', 'mastodon.world',
     'pixelfed.social', 'pixelfed.de',
   ]),
-  lemmyInstances: list(env.LEMMY_INSTANCES, [
-    'lemmynsfw.com', 'lemmy.world', 'sh.itjust.works', 'lemmy.ml', 'lemm.ee', 'lemmy.dbzer0.com', 'reddthat.com',
-  ]),
   misskeyInstances: list(env.MISSKEY_INSTANCES, [
     'misskey.io', 'misskey.design', 'nijimiss.moe', 'sushi.ski', 'submarin.online',
   ]),
