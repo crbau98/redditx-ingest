@@ -186,7 +186,7 @@ async function searchActors(q, limit = 25) {
   return (json.actors || []).map(actorOut).filter((a) => a.handle);
 }
 
-/** Bluesky's own "similar accounts" for an actor (discovery lookalikes). Public AppView endpoint. */
+/** Bluesky's own "similar accounts" for an actor (discovery suggestions). Public AppView endpoint. */
 async function suggestedFor(actor) {
   const json = await http.json(`${base}/xrpc/app.bsky.graph.getSuggestedFollowsByActor?actor=${encodeURIComponent(actor)}`);
   return (json.suggestions || []).map(actorOut).filter((a) => a.handle);

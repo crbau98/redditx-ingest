@@ -19,6 +19,7 @@ before(async () => {
   });
   prepareEnv({ REDDIT_BASE_URL: mock.url, REDGIFS_BASE_URL: mock.url });
   repo = require('../src/db/repo');
+  require('../src/settings').update({ redditEnabled: true }); // Reddit is off by default: these tests exercise it
   engine = require('../src/engine/engine');
   feed = repo.feeds.upsert({ platform: 'reddit', kind: 'community', target: 'gaybrosgonewild', trusted: 1, origin: 'admin' }).feed;
 });

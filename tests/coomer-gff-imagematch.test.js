@@ -77,34 +77,15 @@ describe('keyless Bing search', () => {
 });
 
 describe('AI image match', () => {
-  test('cosine similarity is symmetric and self-similarity is 1', () => {
-    const { cos, packed } = imagematch._test;
-    const buf = Buffer.alloc(4 + 256);
-    buf.writeFloatLE(1, 0);
-    for (let i = 0; i < 256; i++) buf.writeInt8(((i * 7) % 100) - 50, 4 + i);
-    const a = packed(buf);
-    assert.ok(a);
-    assert.ok(Math.abs(cos(a, a) - 1) < 1e-6);
-    assert.equal(cos(a, null), 0);
-  });
-
   test('a hit within the dedupe distance is "same picture" and maps to that stored media', () => {
-    const refs = [{ mediaId: 'm1', phash: 'ffffffffffffffffffffffffffffffff', vec: null },
-      { mediaId: 'm2', phash: '00000000000000000000000000000000', vec: null }];
-    const same = imagematch.scoreHit({ phash: 'fffffffffffffffffffffffffffffffe' }, refs, { distance: 6, similarity: 0.62 });
+    const refs = [{ mediaId: 'm1', phash: 'ffffffffffffffffffffffffffffffff' },
+      { mediaId: 'm2', phash: '00000000000000000000000000000000' }];
+    const same = imagematch.scoreHit({ phash: 'fffffffffffffffffffffffffffffffe' }, refs, { distance: 6 });
     assert.equal(same.same, true);
     assert.equal(same.mediaId, 'm1');
     assert.ok(same.distance <= 6);
-    const far = imagematch.scoreHit({ phash: '000000000000000000000000000000ff' }, refs, { distance: 6, similarity: 0.62 });
+    const far = imagematch.scoreHit({ phash: '000000000000000000000000000000ff' }, refs, { distance: 6 });
     assert.equal(far.same, false, '8 bits apart is beyond the dedupe distance of 6');
-  });
-
-  test('a look-alike alone is never a match: cosine below threshold stays unmatched', () => {
-    const packed = (scale, vals) => ({ scale, q: Int8Array.from(vals) });
-    const refs = [{ mediaId: 'm1', phash: null, vec: packed(1, [100, 100, 100, 0]) }];
-    const verdict = imagematch.scoreHit({ phash: null, vec: packed(1, [100, 0, 0, 100]) }, refs, { distance: 6, similarity: 0.62 });
-    assert.equal(verdict.same, false);
-    assert.ok(verdict.cosine < 0.62, `cosine ${verdict.cosine} must stay under the threshold`);
   });
 
   test('creators are only picked when they have pictures to match against', () => {

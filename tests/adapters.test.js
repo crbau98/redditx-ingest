@@ -34,6 +34,7 @@ before(async () => {
     '/r/banned/top.json': () => ({ status: 404, json: {} }), '/r/banned/hot.json': () => ({ status: 404, json: {} }),
   });
   prepareEnv({ REDDIT_BASE_URL: mock.url, REDDIT_ARCHIVE_URL: mock.url });
+  require('../src/settings').update({ redditEnabled: true }); // Reddit is off by default: these tests exercise the adapter
 });
 after(async () => { await mock.close(); });
 

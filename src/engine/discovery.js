@@ -476,7 +476,7 @@ function creatorHangouts({ minCreators = 2 } = {}) {
 }
 
 /** Bluesky's own "accounts like this one" for followed creators (refreshed weekly per creator). */
-async function blueskyLookalikes({ creators = 4, aborted = () => false } = {}) {
+async function blueskySuggested({ creators = 4, aborted = () => false } = {}) {
   const bsky = registry.get('bluesky');
   if (!bsky || !bsky.suggestedFor) return { checked: 0, found: 0 };
   const targets = repo.discoveryTargets({ platform: 'bluesky', prefix: 'bsky.similar.', staleDays: 7, limit: creators });
@@ -495,7 +495,7 @@ async function blueskyLookalikes({ creators = 4, aborted = () => false } = {}) {
         if (c && c.status === 'pending') found++;
       }
       checked++;
-    } catch (e) { events.log('WARN', `Discovery: Bluesky lookalikes of ${t.target} — ${e.message}`); }
+    } catch (e) { events.log('WARN', `Discovery: Bluesky suggestions for ${t.target} — ${e.message}`); }
     repo.discoveryState.set(`bsky.similar.${t.id}`, new Date().toISOString());
   }
   return { checked, found };
@@ -1677,7 +1677,7 @@ async function run({ trigger = 'schedule' } = {}) {
     if (s.discoveryCommunities) report.communities = await communityDiscovery({ aborted });
     if (s.discoveryCommunities) report.hangouts = creatorHangouts();
     if (s.discoveryExpand) {
-      report.lookalikes = await blueskyLookalikes({ aborted });
+      report.suggested = await blueskySuggested({ aborted });
       report.people = await peopleSearch({ aborted });
       report.creatorMentions = await discoverCreatorMentions({ budget: s.braveDailyBudget, aborted });
     }
@@ -1688,7 +1688,7 @@ async function run({ trigger = 'schedule' } = {}) {
     report.aiProfiles = await require('./ai').readProfiles();
     report.promote = s.autoDiscover || trigger === 'manual' ? promote(s) : { followed: 0, linked: 0 };
     report.pruned = repo.candidates.prune();
-    events.log('INFO', `Discovery ${trigger === 'manual' ? '(manual) ' : ''}finished: ${report.mentions.found} mention leads, ${report.graph ? report.graph.found : 0} graph leads, ${report.topics ? report.topics.found : 0} search leads, ${report.communities ? report.communities.found : 0} community/feed leads, ${report.hangouts ? report.hangouts.found : 0} hangouts, ${report.lookalikes ? report.lookalikes.found : 0} lookalikes, ${report.people ? report.people.found : 0} people-search leads, ${report.identity ? report.identity.linked : 0} identity matches, ${report.seeds ? report.seeds.followed : 0} named creators found, ${report.onlyfans ? report.onlyfans.found : 0} OnlyFans creators traced (${report.onlyfans ? report.onlyfans.linked : 0} accounts linked), ${report.identities.links} same-creator links (${report.identities.merged} merged), ${report.harvest ? report.harvest.read : 0} directory pages harvested (${report.harvest ? report.harvest.leads : 0} paid leads, ${report.harvest ? report.harvest.candidates : 0} profile links), ${report.gff ? report.gff.followed : 0} performer-directory follows, ${report.coomerIndex ? report.coomerIndex.feeds : 0} creators followed from coomer's creator index (${report.coomerIndex && report.coomerIndex.indexed ? report.coomerIndex.matched : 0} matched of ${report.coomerIndex ? report.coomerIndex.checked : 0} paid handles), ${report.coomerNames ? report.coomerNames.feeds : 0} creators matched on coomer by name, ${report.coomer ? report.coomer.verified : 0} coomer pages verified male (${report.coomer ? report.coomer.deferred : 0} deferred), ${report.imageMatch ? report.imageMatch.pages : 0} image-matched pages; followed ${report.promote.followed}, linked ${report.promote.linked}`);
+    events.log('INFO', `Discovery ${trigger === 'manual' ? '(manual) ' : ''}finished: ${report.mentions.found} mention leads, ${report.graph ? report.graph.found : 0} graph leads, ${report.topics ? report.topics.found : 0} search leads, ${report.communities ? report.communities.found : 0} community/feed leads, ${report.hangouts ? report.hangouts.found : 0} hangouts, ${report.suggested ? report.suggested.found : 0} Bluesky suggestions, ${report.people ? report.people.found : 0} people-search leads, ${report.identity ? report.identity.linked : 0} identity matches, ${report.seeds ? report.seeds.followed : 0} named creators found, ${report.onlyfans ? report.onlyfans.found : 0} OnlyFans creators traced (${report.onlyfans ? report.onlyfans.linked : 0} accounts linked), ${report.identities.links} same-creator links (${report.identities.merged} merged), ${report.harvest ? report.harvest.read : 0} directory pages harvested (${report.harvest ? report.harvest.leads : 0} paid leads, ${report.harvest ? report.harvest.candidates : 0} profile links), ${report.gff ? report.gff.followed : 0} performer-directory follows, ${report.coomerIndex ? report.coomerIndex.feeds : 0} creators followed from coomer's creator index (${report.coomerIndex && report.coomerIndex.indexed ? report.coomerIndex.matched : 0} matched of ${report.coomerIndex ? report.coomerIndex.checked : 0} paid handles), ${report.coomerNames ? report.coomerNames.feeds : 0} creators matched on coomer by name, ${report.coomer ? report.coomer.verified : 0} coomer pages verified male (${report.coomer ? report.coomer.deferred : 0} deferred), ${report.imageMatch ? report.imageMatch.pages : 0} image-matched pages; followed ${report.promote.followed}, linked ${report.promote.linked}`);
   } catch (e) {
     report.error = e.message;
     events.log('ERR', `Discovery failed: ${e.message}`);
@@ -1750,4 +1750,4 @@ function start() {
 }
 function stop() { stopFlag = true; clearInterval(timer); timer = null; }
 
-module.exports = { seedCreators, seedStatus, onlyfansDiscovery, coomerDiscovery, coomerIndexDiscovery, coomerNameDiscovery, gffDiscovery, gffNextPage, directoryHarvest, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskyLookalikes, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };
+module.exports = { seedCreators, seedStatus, onlyfansDiscovery, coomerDiscovery, coomerIndexDiscovery, coomerNameDiscovery, gffDiscovery, gffNextPage, directoryHarvest, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskySuggested, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };

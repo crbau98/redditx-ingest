@@ -66,19 +66,19 @@ describe('v4.7 discovery reach', () => {
     assert.ok(repo.candidates.find('lemmy', 'community', 'otters@lemmy.test'));
     assert.ok(r.found >= 2);
   });
-  test('Bluesky lookalikes: suggestions for followed creators, adult/creator-looking only, refreshed weekly', async () => {
+  test('Bluesky suggestions: accounts Bluesky rates as similar for followed creators, adult/creator-looking only, refreshed weekly', async () => {
     const c = repo.creators.create({ handle: 'bsky_src' });
     repo.feeds.upsert({ platform: 'bluesky', kind: 'user', target: 'source.bsky.social', creatorId: c.id, origin: 'admin', runNow: false });
     post(c, null, 'bluesky');
     repo.creators.refreshStats(c.id);
-    const r = await discovery.blueskyLookalikes();
+    const r = await discovery.blueskySuggested();
     assert.ok(r.checked >= 1);
     const lead = repo.candidates.find('bluesky', 'user', 'lookalike.bsky.social');
     assert.ok(lead); assert.deepEqual(lead.signals.similar, [c.id]); assert.equal(lead.signals.popularity, 4200);
     assert.equal(repo.candidates.find('bluesky', 'user', 'newsbot.bsky.social'), null, 'non-creator accounts are skipped');
     assert.equal(repo.candidates.find('bluesky', 'user', 'locked.bsky.social'), null, 'logged-out-hidden accounts are skipped');
     const calls = state.suggested;
-    await discovery.blueskyLookalikes();
+    await discovery.blueskySuggested();
     assert.equal(state.suggested, calls, 'not asked again within the week');
   });
   test('people search: Bluesky accounts and RedGIFs creators for a rotating keyword, through the safety gate', async () => {
@@ -104,7 +104,7 @@ describe('v4.7 discovery reach', () => {
     assert.equal(state.actorSearch.length, before);
     settings.update({ discoveryExpand: true });
     const rep2 = await discovery.run({ trigger: 'manual' });
-    assert.ok(rep2.people && rep2.lookalikes);
+    assert.ok(rep2.people && rep2.suggested);
     assert.equal(discovery.status().expand, true);
   });
   test('signal yield: followed leads are credited to their strongest signal, with how many now post', () => {

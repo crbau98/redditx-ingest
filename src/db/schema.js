@@ -683,7 +683,79 @@ function v17(db) {
   if (!cols.includes('bio_source')) db.exec('ALTER TABLE creators ADD COLUMN bio_source TEXT');
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17];
+/**
+ * v18 (Phase 0): no look-alike attribution. Until now image match could register a web page as a creator's feed because a
+ * picture on it LOOKED like his (visual-embedding similarity; the audit log says "look-alike (NN%) -> <page>"). That path is
+ * gone, and what it produced is retracted here: each such feed is disabled and the items it brought in are hidden (not
+ * deleted, so an admin can restore any of them), with one audit entry per feed ("imagematch-retract").
+ *
+ * What is NOT retracted ("imagematch-keep", audited): a feed the creator names himself. The look-alike path could land on an
+ * account that really is his; when his own links list or bio names it, an alias he claimed (source bio / admin) matches it, or
+ * an identity link that is not "different people" mentions it, it stays. A bio is not counted when `creators.bio_source` says it
+ * was read from this feed's own platform (it may have been filled from this very feed's profile).
+ *
+ * Re-running it changes nothing: a creator + page that already has a retract or keep entry is skipped, so a feed an admin
+ * re-enabled is never disabled again. A feed that was already disabled for another reason still has its look-alike items hidden
+ * (unless self-declared). Same-picture (pHash) matches are untouched.
+ */
+function v18(db) {
+  const { parseProfile } = require('../lib/links');
+  const { normAlias } = require('../lib/alias');
+  const hasBioSource = db.prepare('PRAGMA table_info(creators)').all().some((c) => c.name === 'bio_source');
+  const rows = db.prepare("SELECT target_id AS creator_id, reason FROM moderation_actions WHERE action = 'image-match' AND target_type = 'creator' AND reason LIKE 'look-alike%'").all();
+  const find = db.prepare("SELECT id, platform, kind, target FROM feeds WHERE creator_id = ? AND platform = ? AND kind = ? AND lower(target) = lower(?) AND origin = 'discovered'");
+  const handled = db.prepare("SELECT 1 FROM moderation_actions WHERE target_type = 'creator' AND target_id = ? AND action IN ('imagematch-retract', 'imagematch-keep') AND instr(reason, ?) > 0");
+  const creatorOf = db.prepare(`SELECT bio, links${hasBioSource ? ', bio_source' : ''} FROM creators WHERE id = ?`);
+  const alias = db.prepare("SELECT 1 FROM creator_aliases WHERE creator_id = ? AND norm = ? AND source IN ('bio', 'admin')");
+  const ident = db.prepare("SELECT evidence FROM identity_links WHERE (a_id = ? OR b_id = ?) AND status != 'rejected'");
+  const off = db.prepare('UPDATE feeds SET enabled = 0 WHERE id = ?');
+  const hide = db.prepare("UPDATE media SET publish_state = 'hidden', review_reason = 'look-alike attribution retracted' WHERE feed_id = ? AND publish_state IN ('published', 'review')");
+  const log = db.prepare("INSERT INTO moderation_actions (target_type, target_id, action, reason, actor) VALUES ('creator', ?, ?, ?, 'migration')");
+
+  const bare = (u) => String(u || '').toLowerCase().replace(/^https?:\/\/(www\.)?/, '').replace(/\/+$/, '');
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  /** How the creator himself names this feed: 'links' | 'bio' | 'alias' | 'identity' | null. */
+  const selfDeclared = (creatorId, f) => {
+    const c = creatorOf.get(creatorId);
+    if (!c) return null;
+    const t = String(f.target).toLowerCase(); const tb = bare(t);
+    const handle = t.length >= 3 && !/^https?:/.test(t);
+    let links = []; try { links = JSON.parse(c.links || '[]'); } catch { links = []; }
+    for (const l of links) {
+      if (!l) continue;
+      const lt = String(l.target || l.handle || '').toLowerCase(); const lu = bare(l.url);
+      if ((l.platform === f.platform && lt === t) || (lu && lu === tb) || (handle && lu && lu.includes(`/${t}`)) || (handle && lt === t)) return 'links';
+    }
+    const bioFromThisPlatform = hasBioSource && c.bio_source && c.bio_source === f.platform;
+    if (!bioFromThisPlatform && c.bio) {
+      const bio = String(c.bio).toLowerCase();
+      if (handle ? new RegExp(`(^|[^a-z0-9_])${esc(t)}($|[^a-z0-9_])`).test(bio) : tb.length > 8 && bio.includes(tb)) return 'bio';
+    }
+    if (handle && alias.get(creatorId, normAlias(t))) return 'alias';
+    for (const r of ident.all(creatorId, creatorId)) if (handle && String(r.evidence || '').toLowerCase().includes(t)) return 'identity';
+    return null;
+  };
+
+  const done = new Set();
+  for (const r of rows) {
+    const url = String(r.reason || '').split(' → ')[1];
+    if (!url) continue;
+    let spec = null;
+    try { spec = parseProfile(url); } catch { spec = null; }
+    for (const c of [spec, { platform: 'web', kind: 'page', target: url }].filter((x) => x && x.platform && x.target)) {
+      const f = find.get(r.creator_id, c.platform, c.kind || 'user', String(c.target));
+      if (!f || done.has(f.id) || handled.get(r.creator_id, url)) continue;
+      done.add(f.id);
+      const own = selfDeclared(r.creator_id, f);
+      if (own) { log.run(r.creator_id, 'imagematch-keep', `kept: self-declared (${own}); not retracted → ${url}`.slice(0, 400)); continue; }
+      off.run(f.id);
+      const hidden = hide.run(f.id).changes;
+      log.run(r.creator_id, 'imagematch-retract', `look-alike attribution removed: feed disabled, ${hidden} item(s) hidden → ${url}`.slice(0, 400));
+    }
+  }
+}
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

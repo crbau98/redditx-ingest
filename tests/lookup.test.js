@@ -27,6 +27,7 @@ const WORLD = {
 before(() => {
   prepareEnv({ MASTODON_INSTANCES: 'masto.test', MISSKEY_INSTANCES: 'miss.test' });
   repo = require('../src/db/repo');
+  require('../src/settings').update({ redditEnabled: true }); // Reddit is off by default: these tests exercise it
   registry = require('../src/sources');
   lookup = require('../src/engine/lookup');
   websearch = require('../src/lib/websearch');

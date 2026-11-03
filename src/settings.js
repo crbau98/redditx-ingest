@@ -35,6 +35,7 @@ const SCHEMA = {
   backupEnabled: { type: 'bool', default: config.isProd, label: 'Back up the database nightly' },
   backupKeep: { type: 'int', default: 3, min: 1, max: 30, label: 'Backups to keep' },
   keepRunHistoryDays: { type: 'int', default: 30, min: 1, max: 365, label: 'Run history retention (days)' },
+  redditEnabled: { type: 'bool', default: false, label: 'Reddit: read Reddit feeds (communities and users). OFF by default: without REDDIT_CLIENT_ID/SECRET every Reddit transport answers 403/429, so each run only fails. Turn on once the OAuth app is set up; nothing is deleted while it is off, feeds just wait' },
   xMonthlyReadBudget: { type: 'int', default: 10000, min: 0, max: 10000000, label: 'X API: max posts read per month (match your plan)' },
   xKeylessSearchesPerDay: { type: 'int', default: 150, min: 0, max: 5000, label: 'X without a token: web searches per day used to find X posts (keeps the search engines from blocking this server)' },
   // --- image filter (v4.10) ---
@@ -89,10 +90,9 @@ const SCHEMA = {
   coomerScoutQueries: { type: 'int', default: 8, min: 1, max: 20, label: 'Coomer discovery: male-creator searches per run, rotated through a 48-niche bank so every niche is covered within a few runs', group: 'discovery' },
   coomerScoutVerify: { type: 'bool', default: true, label: "Coomer discovery: read a candidate's own mirrored page before following him — drops pages that read female, follows pages that read male even when the handle says nothing", group: 'discovery' },
   gffDirectoryPages: { type: 'int', default: 8, min: 1, max: 20, label: 'GayForFans: directory pages walked per discovery run (75 pages total; higher = the whole directory is covered sooner)', group: 'discovery' },
-  imageMatch: { type: 'bool', default: true, label: 'AI image match: after a creator is found, search the web for pictures of his and keep the pages where his content shows up', group: 'discovery' },
-  imageMatchPerRun: { type: 'int', default: 4, min: 0, max: 30, label: 'AI image match: creators matched per discovery run', group: 'discovery' },
-  imageMatchSimilarity: { type: 'int', default: 62, min: 40, max: 99, label: 'AI image match: visual similarity (%) needed to call a web picture his (a page must also name him)', group: 'discovery' },
-  discoveryExpand: { type: 'bool', default: true, label: 'Find lookalike creators (Bluesky) and search Bluesky and RedGIFs for new people', group: 'discovery' },
+  imageMatch: { type: 'bool', default: true, label: 'Image match: after a creator is found, search the web for his pictures and note where the SAME picture (a repost or copy of his file, by perceptual hash) appears; a page becomes his feed only if it also names him. Never by look-alike', group: 'discovery' },
+  imageMatchPerRun: { type: 'int', default: 4, min: 0, max: 30, label: 'Image match: creators matched per discovery run', group: 'discovery' },
+  discoveryExpand: { type: 'bool', default: true, label: 'Find creators Bluesky suggests (its "similar accounts", from the follow graph) and search Bluesky and RedGIFs for new people', group: 'discovery' },
   discoveryAutoCommunities: { type: 'bool', default: true, label: 'Auto-follow strong communities and feeds (their posts are still checked one by one)', group: 'discovery' },
   // --- sources and playback (v5) ---
   keepVideos: { type: 'enum', values: ['expiring', 'all', 'off'], default: 'expiring', label: 'Keep a copy of videos in the media store: expiring = only videos whose links expire and cannot be refreshed, all = every direct video, off = never', group: 'sources' },

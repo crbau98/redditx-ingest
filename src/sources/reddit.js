@@ -30,9 +30,17 @@ const VREDDIT = /^https?:\/\/v\.redd\.it\/([a-z0-9]+)\/?$/i;
 const X_STATUS = /^https?:\/\/(?:www\.|mobile\.)?(?:x|twitter|fxtwitter|vxtwitter|fixupx)\.com\/[A-Za-z0-9_]{1,15}\/status\/\d+/i;
 
 /* ----------------------------------------------------------------- OAuth */
+// Reddit is OFF unless the setting redditEnabled is on (it answers 403/429 to every unauthenticated transport, so each run only
+// fails). The switch is checked INSIDE this module, at every function that can reach the network (the engine's feed runs, the
+// discovery searches, profile reads, every transport), not only where feeds are scheduled: "off" means zero requests.
+const OFF_NOTE = 'Reddit is switched off (setting redditEnabled): turn it on once REDDIT_CLIENT_ID/SECRET are set';
+const enabled = () => !!require('../settings').get().redditEnabled;
+function assertOn() { if (!enabled()) throw Object.assign(new Error(OFF_NOTE), { skip: true }); }
+
 let token = null;
 let tokenFailUntil = 0; // bad credentials must not turn into a token request per page
 async function oauthToken() {
+  assertOn();
   const { redditClientId: id, redditClientSecret: secret } = config.creds;
   if (!id || !secret) return null;
   if (token && Date.now() < token.expires - 60000) return token.value;
@@ -224,6 +232,7 @@ function qs(params) {
 }
 
 async function viaOauth(path, params) {
+  assertOn();
   const t = await oauthToken();
   if (!t) return null;
   try {
@@ -242,6 +251,7 @@ async function viaOauth(path, params) {
 const looksLikeSearchRedirect = (children) => children.length > 0 && children.every((c) => c && c.kind === 't5');
 
 async function viaJson(origin, path, params, label) {
+  assertOn();
   const json = await http.json(`${origin}${path}.json?${qs({ ...params, raw_json: 1 })}`, {
     headers: { 'user-agent': config.redditUserAgent },
   });
@@ -252,6 +262,7 @@ async function viaJson(origin, path, params, label) {
 }
 
 async function viaRss(path, params) {
+  assertOn();
   const text = await http.text(`${base}${path}.rss?${qs({ limit: params.limit, sort: params.sort, t: params.t })}`, {
     headers: { 'user-agent': config.redditUserAgent, accept: 'application/atom+xml, application/rss+xml, application/xml;q=0.9' },
   });
@@ -262,6 +273,7 @@ async function viaRss(path, params) {
 }
 
 async function viaArchive(feed, params) {
+  assertOn();
   // Arctic Shift: /api/posts/search?subreddit=<name>|author=<name>&limit=<=100&sort=desc  ->  {data:[reddit-shaped posts]}
   const q = { limit: Math.min(params.limit || 100, 100), sort: 'desc', ...(feed.kind === 'user' ? { author: feed.target } : { subreddit: feed.target }) };
   const json = await http.json(`${config.baseUrls.redditArchive}/api/posts/search?${qs(q)}`, { headers: { 'user-agent': config.redditUserAgent } });
@@ -289,6 +301,7 @@ function targetReason(e) {
  * `dead` remembers transports that already failed during this feed run, so pages 2..n do not re-knock.
  */
 async function fetchPage(feed, sort, params, dead = new Set()) {
+  assertOn();
   const path = listingPath(feed, sort);
   const paged = !!params.after;
   const label = `${feed.kind === 'user' ? 'u' : 'r'}/${feed.target}`;
@@ -342,6 +355,7 @@ async function fetchPage(feed, sort, params, dead = new Set()) {
 }
 
 async function fetchProfile(name) {
+  if (!enabled()) return null;
   try {
     const t = await oauthToken();
     const json = t
@@ -360,6 +374,7 @@ async function fetchProfile(name) {
 
 /** Search NSFW-inclusive subreddits by keyword (discovery). OAuth when configured, else www, else old.reddit. */
 async function searchSubreddits(q, limit = 25) {
+  if (!enabled()) return []; // discovery asks for a list: with Reddit off there is none, and no request is made
   const qs = `q=${encodeURIComponent(q)}&include_over_18=on&limit=${limit}&raw_json=1`;
   const t = await oauthToken().catch(() => null);
   const tries = t
@@ -385,6 +400,7 @@ async function searchSubreddits(q, limit = 25) {
  * Returns plain post records; the caller still runs the takedown and safety checks.
  */
 async function searchPosts(q, limit = 15) {
+  if (!enabled()) return [];
   const n = Math.max(1, Math.min(25, limit || 15));
   const qs = `q=${encodeURIComponent(q)}&include_over_18=on&limit=${n}&sort=new&type=link&raw_json=1`;
   const t = await oauthToken().catch(() => null);
@@ -420,12 +436,15 @@ module.exports = {
   intervalMin: { community: 90, user: 240 },
   parsePost, fromRssEntry,
   isConfigured() {
+    // Off by default (setting redditEnabled): the engine skips these feeds without counting a failure or tripping the breaker.
+    if (!enabled()) return { ok: false, note: OFF_NOTE };
     return config.creds.redditClientId && config.creds.redditClientSecret
       ? { ok: true, note: 'OAuth enabled' }
       : { ok: true, note: 'Public mode — add REDDIT_CLIENT_ID/SECRET for reliable access' };
   },
 
   async fetch(feed, ctx) {
+    assertOn();
     const cursor = ctx.cursor || {};
     const first = !cursor.newestAt;
     // First pass: breadth (top of the month + hot). After that: incremental "new".

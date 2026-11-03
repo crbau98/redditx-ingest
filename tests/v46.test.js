@@ -35,6 +35,7 @@ before(async () => {
   prepareEnv({ AGE_GATE_ENFORCE: 'true', REDDIT_BASE_URL: mock.url, BSKY_BASE_URL: mock.url, X_BEARER_TOKEN: 'xt', X_BASE_URL: mock.url, LEMMY_INSTANCES: 'lemmy.test' });
   repo = require('../src/db/repo'); engine = require('../src/engine/engine'); backup = require('../src/engine/backup');
   discovery = require('../src/engine/discovery'); settings = require('../src/settings'); registry = require('../src/sources'); query = require('../src/lib/query');
+  require('../src/settings').update({ redditEnabled: true }); // Reddit is off by default: these tests exercise the adapter
   server = require('../src/app').createApp().listen(0);
   await new Promise((r) => server.once('listening', r));
   base = `http://127.0.0.1:${server.address().port}`;

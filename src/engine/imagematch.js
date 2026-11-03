@@ -1,23 +1,23 @@
 'use strict';
 /**
- * AI image match: find a creator's own content wherever it appears on the web.
+ * Image match: find a creator's own content wherever it appears on the web, by the SAME PICTURE.
  *
- * Every followed creator already has his pictures in the library with a perceptual hash and a visual
- * embedding (image workers, lib/embeddings). This pass turns a web image search into leads:
+ * Every followed creator already has his pictures in the library with a perceptual hash (pHash, the same one the duplicate
+ * filter uses). This pass turns a web image search into leads:
  *
- *   1. reference   his most recent pictures (pHash + visual vector), rebuilt per creator
+ *   1. reference   his most recent pictures (pHash), rebuilt per creator
  *   2. search      image search for his name / handle / paid-page slug (Brave, or the keyless
- *                  Bing image feed — lib/brave.js `bingImages`)
- *   3. match       each result picture is read once (same on-device model pass as ingestion):
- *                    pHash within the dedupe distance  -> the very same picture = his content
- *                    visual cosine >= imageMatchSimilarity -> same look (body, setting, framing)
- *                  A text cue (the page names him) is required alongside a visual-only match,
- *                  so a look-alike page never becomes his by itself.
- *   4. act         the page is registered as a web feed owned by the creator (its items then run
- *                  through the usual safety / takedown / male-scope / picture gates), and a same
- *                  picture match also records the "also posted on ..." source.
+ *                  Bing image feed - lib/brave.js `bingImages`)
+ *   3. match       each result picture is hashed once (same on-device pass as ingestion):
+ *                    pHash within the dedupe distance -> the very same picture (a repost or a copy of his file)
+ *                  Nothing else counts. A picture that merely LOOKS like his (same build, setting, framing) is not his:
+ *                  there is no visual-similarity path here and none may be added (tests/no-lookalike-attribution.test.js).
+ *   4. act         a same-picture match records the "also posted on ..." source on the picture it belongs to. The page is
+ *                  registered as a web feed owned by the creator only if it ALSO names him (his name, handle or paid-page
+ *                  slug in its title, description or address), so a gallery that happens to host one of his files does not
+ *                  become his. Registered feeds run through the usual safety / takedown / male-scope / picture gates.
  *
- * No face or identity model: matching is over hashes and look-features of pictures he published.
+ * No face, body or identity model: matching is over hashes of pictures he published.
  */
 const repo = require('../db/repo');
 const events = require('./events');
@@ -25,7 +25,6 @@ const settingsStore = require('../settings');
 const brave = require('../lib/brave');
 const imagefilter = require('../lib/imagefilter');
 const phash = require('../lib/phash');
-const emb = require('../lib/embeddings');
 const takedowns = require('../lib/takedowns');
 const { hostBlocked } = require('../lib/mediaurl');
 const { parseProfile } = require('../lib/links');
@@ -36,51 +35,27 @@ const HITS_PER_QUERY = 16; // candidate images read per query
 const PAGES_PER_CREATOR = 4; // web pages registered per creator per pass
 const STALE_DAYS = 14;
 
-const packed = (buf) => { const u = emb.unpack(buf); if (!u) return null; return { scale: u.scale, q: u.q }; };
-const cos = (a, b) => {
-  if (!a || !b) return 0;
-  let dot = 0, na = 0, nb = 0;
-  for (let i = 0; i < a.q.length; i++) {
-    const x = a.scale * a.q[i];
-    const y = b.scale * b.q[i];
-    dot += x * y; na += x * x; nb += y * y;
-  }
-  return na && nb ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
-};
-
-/** His reference pictures: recent published ones with a hash and, where stored, a visual vector. */
+/** His reference pictures: recent published ones with a hash. */
 function reference(creatorId) {
-  // Vectors first: a visual match only exists when the reference has one (the backfill may not have
-  // reached his newest picture yet), phash-only references still catch exact reposts.
-  const rows = db.prepare(`SELECT m.id, m.phash, m.media_type, m.width, m.height,
-      (SELECT COUNT(*) FROM media_embeddings e WHERE e.media_id = m.id) AS has_vec
-    FROM media m
+  const rows = db.prepare(`SELECT m.id, m.phash FROM media m
     WHERE m.creator_id = ? AND m.phash IS NOT NULL AND m.publish_state = 'published'
-    ORDER BY has_vec DESC, COALESCE(m.posted_at, m.ingested_at) DESC LIMIT ?`).all(creatorId, REF_PICTURES);
-  if (!rows.length) return [];
-  const vecs = new Map(db.prepare('SELECT media_id, vec FROM media_embeddings WHERE media_id IN (' + rows.map(() => '?').join(',') + ')')
-    .all(...rows.map((r) => r.id)).map((r) => [r.media_id, packed(r.vec)]));
-  return rows.map((r) => ({ mediaId: r.id, phash: r.phash, vec: vecs.get(r.id) || null, aspect: r.width > 0 && r.height > 0 ? r.width / r.height : 0 }));
+    ORDER BY COALESCE(m.posted_at, m.ingested_at) DESC LIMIT ?`).all(creatorId, REF_PICTURES);
+  return rows.map((r) => ({ mediaId: r.id, phash: r.phash }));
 }
 
-/** How close one web picture is to the creator's own: {same: bool, score: 0..1, mediaId?} */
-function scoreHit(hit, refs, { distance, similarity }) {
+/** Is one web picture the very same picture as one of his? {same: bool, mediaId?, distance?} (pHash within the dedupe distance) */
+function scoreHit(hit, refs, { distance }) {
   let bestSame = null;
-  let bestCos = 0;
   for (const r of refs) {
     if (hit.phash && r.phash) {
       const d = phash.hamming(hit.phash, r.phash);
       if (d <= distance && (!bestSame || d < bestSame.d)) bestSame = { d, mediaId: r.mediaId };
     }
-    if (hit.vec && r.vec) {
-      const c = cos(hit.vec, r.vec);
-      if (c > bestCos) bestCos = c;
-    }
   }
-  return { same: !!bestSame, mediaId: bestSame ? bestSame.mediaId : null, distance: bestSame ? bestSame.d : null, cosine: bestCos, score: bestSame ? 1 : bestCos };
+  return { same: !!bestSame, mediaId: bestSame ? bestSame.mediaId : null, distance: bestSame ? bestSame.d : null };
 }
 
-/** Does the result page itself name him? (text alongside a visual-only match) */
+/** Does the result page itself name him? (required before a page becomes his feed) */
 function namesCreator(hit, creator, ...handles) {
   const blob = `${hit.title || ''} ${hit.description || ''} ${(hit.url || '').replace(/[-_/]+/g, ' ')}`;
   const texts = [creator.display_name, creator.handle, ...handles].filter(Boolean);
@@ -99,7 +74,6 @@ async function matchCreator(creator, { budget = 40, aborted = () => false, servi
 
   const s = settingsStore.get();
   const distance = s.dedupeDistance == null ? 6 : s.dedupeDistance;
-  const similarity = (s.imageMatchSimilarity || 62) / 100;
   const name = creator.display_name || creator.handle;
   const queries = [`"${name}" onlyfans`];
   if (paidHandle && paidHandle !== name) queries.push(`"${paidHandle}" ${service || 'onlyfans'}`);
@@ -133,24 +107,16 @@ async function matchCreator(creator, { budget = 40, aborted = () => false, servi
       out.checked++;
 
       const res = await imagefilter.analyze(img, { faces: false, hash: true, timeout: 10000 });
-      let vec = null;
-      if (res && res.status === 'ok' && res.phash) {
-        // Same picture: no embedding needed. A look-only match reads the vector too.
-        if (!refs.some((r) => r.phash && phash.hamming(res.phash, r.phash) <= distance)) {
-          const e = await imagefilter.embedUrl(img, { timeout: 10000 });
-          if (e && e.status === 'ok') vec = packed(e.vec);
-        }
-      }
       if (!res || res.status !== 'ok' || !res.phash) continue;
-      const verdict = scoreHit({ phash: res.phash, vec }, refs, { distance, similarity });
+      const verdict = scoreHit({ phash: res.phash }, refs, { distance });
+      if (!verdict.same) continue; // not the same picture: whatever it looks like, it is not his
       const named = namesCreator(hit, creator, paidHandle);
-      const isHis = verdict.same || (verdict.cosine >= similarity && named);
-      if (!isHis) continue;
 
       // Same picture elsewhere: remember it on the picture it belongs to.
-      if (verdict.same && verdict.mediaId) {
+      if (verdict.mediaId) {
         try { repo.media.addAltSource(verdict.mediaId, { platform: 'web', source_url: pageUrl, author: creator.handle || null }); out.pictures++; } catch { /* best effort */ }
       }
+      if (!named) continue; // a page that merely hosts one of his files is not thereby his
       const spec = parseProfile(pageUrl) || { platform: 'web', kind: 'page', target: pageUrl, ingestable: true, label: new URL(pageUrl).host };
       if (spec.external) continue;
       // Respect robots.txt before registering: a page that refuses crawlers would only produce a
@@ -162,7 +128,7 @@ async function matchCreator(creator, { budget = 40, aborted = () => false, servi
       if (r.status === 'created') {
         out.pages++;
         repo.logAction('creator', creator.id, 'image-match',
-          `${verdict.same ? `same picture (${verdict.distance} bits)` : `look-alike (${Math.round(verdict.cosine * 100)}%)`} → ${pageUrl}`, 'discovery');
+          `same picture (${verdict.distance} bits), page names him → ${pageUrl}`, 'discovery');
       }
       out.matched++;
     }
@@ -224,4 +190,4 @@ async function run({ limit, aborted = () => false, budget = 40 } = {}) {
   return out;
 }
 
-module.exports = { run, matchCreator, reference, scoreHit, pickCreators, _test: { packed, cos } };
+module.exports = { run, matchCreator, reference, scoreHit, namesCreator, pickCreators };

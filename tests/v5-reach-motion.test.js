@@ -74,6 +74,7 @@ before(async () => {
   redgifs = require('../src/sources/redgifs');
   webSource = require('../src/sources/web');
   registry = require('../src/sources');
+  require('../src/settings').update({ redditEnabled: true }); // Reddit is off by default: these tests exercise the adapter
 });
 
 after(async () => { await mock.close(); });
