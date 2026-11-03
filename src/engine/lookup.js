@@ -689,15 +689,18 @@ async function lookup(input, { imageCheck = true } = {}) {
 // name proves nothing (hogueblog, hogue38, christianhogue9, a Telegram "christian_hogue" and an OnlyFans "Christian" are five
 // different people). Accounts are grouped as ONE person only on evidence the accounts themselves publish, or that PRISM already
 // holds, and only when it is STRONG. The thresholds are identity.js's (WEIGHTS / AUTO_STRENGTH), applied to each PAIR:
-//   - a mutual link (each profile links to the other), or
-//   - two independent kinds of evidence (a link, a link-in-bio page, a paid page, an identity record), or
-//   - evidence of weight >= AUTO_STRENGTH (the same link page, the same paid page) plus a shared name, or
+//   - evidence of weight >= AUTO_STRENGTH plus a shared name (identity.js never merges without one), or
+//   - two STRONG kinds of evidence, with no name needed: a mutual link and the same link-in-bio page, or
 //   - PRISM already holds them as one creator, or an admin merged them.
-// Weak evidence never groups, alone or by chaining: a ONE-WAY profile link (a partner, a shout-out), a link page that lists
-// three or more accounts (agency, studio, "creators I like"), or the same paid page promoted by its owner and by a friend.
+// Strong kinds are a MUTUAL profile link and a link page that lists at most two accounts. Weak kinds (a ONE-WAY profile link, a
+// paid page promoted by its owner and by a friend, an identity link still awaiting review) count toward the weight but are never
+// "independent kinds": they cannot combine with each other to stand in for a name. A mutual link alone is not enough either:
+// couples and collab partners link to each other all the time ("my husband is alexrivera"). Weak or insufficient evidence never
+// groups, alone or by chaining; a link page that lists three or more accounts (agency, studio, favourites) is ignored.
 const linkKey = (l) => (l && l.platform && l.target ? `${l.platform}:${l.kind || 'user'}:${String(l.target).toLowerCase()}` : null);
 const accountKey = (c) => `${c.platform}:${c.kind}:${String(c.target).toLowerCase()}`;
-const FAMILY = { 'profile-link': 'link', mutual: 'link', 'same-linkpage': 'page', 'same-paid': 'paid', 'same-creator': 'identity', 'identity-merged': 'identity', 'identity-link': 'identity' };
+// the kinds of evidence that can stand in for a shared name, two of them together (see the rule above)
+const STRONG_KIND = new Set(['mutual', 'same-linkpage']);
 const OUT_TYPE = { 'profile-link': 'profile-link', mutual: 'profile-link', 'same-linkpage': 'link-page', 'same-paid': 'same-paid-page', 'same-creator': 'same-creator', 'identity-merged': 'identity-link', 'identity-link': 'identity-link' };
 const MAX_HUB_LISTED = 2; // a link page that lists more accounts than this is an agency / studio / favourites page, not one man's
 
@@ -794,9 +797,9 @@ function groupAccounts(poolList, visible) {
     if (rejected.has(`${pr.a}|${pr.b}`)) continue;
     const types = [...pr.types.keys()];
     const strength = types.reduce((sum, t) => sum + (t === 'same-creator' || t === 'identity-merged' ? WEIGHTS.admin : t === 'same-linkpage' ? WEIGHTS['same-linkpage'] : t === 'same-paid' ? WEIGHTS['same-paid'] : t === 'mutual' ? WEIGHTS.mutual : WEIGHTS['bio-link']), 0);
-    const families = new Set(types.map((t) => FAMILY[t]));
-    const ok = pr.types.has('mutual') || pr.types.has('same-creator') || pr.types.has('identity-merged')
-      || families.size >= 2 || (strength >= AUTO_STRENGTH && sharedName(accts.get(pr.a), accts.get(pr.b)));
+    const strongKinds = types.filter((t) => STRONG_KIND.has(t)).length;
+    const ok = pr.types.has('same-creator') || pr.types.has('identity-merged')
+      || strongKinds >= 2 || (strength >= AUTO_STRENGTH && sharedName(accts.get(pr.a), accts.get(pr.b)));
     if (ok) strong.push(pr);
   }
 
@@ -858,8 +861,8 @@ function checkSelections(lookupId, selections) {
 }
 
 /* ---------------------------------------------------------------------- follow */
-/** A handle, a URL or a page key: never several of them. */
-const validTarget = (t) => typeof t === 'string' && t.length > 0 && t.length <= 300 && !/[\s,;]/.test(t);
+/** A handle, a URL or a page key: letters, digits and the punctuation handles and URLs use, never whitespace, a separator (, ; |), a control or invisible character. */
+const validTarget = (t) => typeof t === 'string' && t.length > 0 && t.length <= 300 && /^[\p{L}\p{N}_.\-@:/?#=&%+~!$'()*]+$/u.test(t);
 
 const tokenFor = (c) => {
   switch (c.platform) {
@@ -882,8 +885,8 @@ function follow({ name, selections, externalLinks = [], bio, creatorId = null } 
   const accepted = []; const rejected = [];
   for (const s of (selections || []).slice(0, 30)) {
     if (!s || !s.platform || !s.target) continue;
-    // One selection is ONE account: a target holding whitespace, a comma, a semicolon or a newline is several accounts (or an
-    // attempt to smuggle them past the group check), never a handle.
+    // One selection is ONE account: a target holding whitespace, a separator (comma, semicolon, pipe) or a control or invisible
+    // character is several accounts (or an attempt to smuggle them past the group check), never a handle.
     if (!validTarget(s.target) || !/^[a-z0-9_-]{1,20}$/i.test(String(s.platform)) || (s.kind && !/^[a-z0-9_-]{1,20}$/i.test(String(s.kind)))) { rejected.push({ ...s, reason: 'invalid account' }); continue; }
     const adapter = registry.get(s.platform);
     const kind = s.kind || 'user';
@@ -935,9 +938,9 @@ function follow({ name, selections, externalLinks = [], bio, creatorId = null } 
 }
 
 /**
- * One call: look the person up and follow the best match, plus the accounts tied to it directly by strong evidence (see
- * groupAccounts). Accounts that merely share a name, or are tied only weakly or through a chain, are never added: following
- * a whole group stays a click on the group's own button.
+ * One call: look the person up and follow the single best match, as its own creator. Nothing else comes with it, not even
+ * accounts tied to it by evidence: a couple link to each other, and only a person's own click on "Follow these N as one
+ * creator" (a group the lookup showed him) may put several accounts under one creator.
  */
 async function findAndFollow(input, { minConfidence = 0.7 } = {}) {
   const found = await lookup(input);
@@ -945,11 +948,7 @@ async function findAndFollow(input, { minConfidence = 0.7 } = {}) {
   const isUser = (c) => c.kind === 'user' || (c.kind === 'channel' && c.platform === 'youtube');
   const top = found.candidates.find((c) => c.status === 'new' && c.confidence >= minConfidence && isUser(c));
   if (!top) return { ...found, followed: null, note: 'No strong new match to follow automatically — review the candidates and pick the right accounts.' };
-  // the best account, plus the accounts tied to IT directly by the strict rule (never a whole chain, never a name match)
-  const topKey = `${top.platform}:${top.kind}:${String(top.target).toLowerCase()}`;
-  const g = (found.groups || []).find((x) => x.members.includes(topKey));
-  const partners = new Set(g ? g.evidence.filter((e) => e.a === topKey || e.b === topKey).map((e) => (e.a === topKey ? e.b : e.a)) : []);
-  const picks = [top, ...found.candidates.filter((c) => partners.has(`${c.platform}:${c.kind}:${String(c.target).toLowerCase()}`) && c.status === 'new' && isUser(c))];
+  const picks = [top]; // exactly one account: linked accounts are added only by the "Follow these N" click (a couple links to each other too)
   const followed = follow({ name: found.name || input, selections: picks, externalLinks: picks.flatMap((c) => c.externalLinks || []) });
   return { ...found, followed };
 }

@@ -314,6 +314,10 @@ const OWNERSHIP = [
   /\bi (?:also )?(?:post|share|upload)\b/g,
   /\b(?:also on|also at|back-?up|back up|alt account|other account|new account|old account|main account|official|goes by|a\.?k\.?a\.?)(?=\W|$)/g,
 ];
+// "not me", "Not my account", "isn't me": the line says the account is NOT his. Together with the Telegram ownership check's
+// NEGATION (not affiliated, unofficial, fake, fan page, parody, tribute, no relation, ...), reused as it is.
+const NEGATION_SELF = /\b(?:not|never|isn'?t|aren'?t)\s+(?:(?:really|actually|even)\s+)?(?:me|my|mine|his|him)\b/i;
+const negated = (text) => NEGATION_SELF.test(text) || require('../services/telegram-public').NEGATION.test(text);
 const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // A platform label opens a profile line of his own: "IG: @x", "X: @x", "OnlyFans: x", "📸 IG @x", "TikTok | @x". It counts only at
 // the START of its segment (only emoji or punctuation before it), so "photographer: IG @x" or "video by IG @x" do not. The bare
@@ -347,7 +351,8 @@ const THIRD = new RegExp(
  * a fragment: "ed" in "fred", "jake_fit" in "jake_fit2"), and (3) it is his own: the quote is an entry of his own links
  * list (unless its label names someone else), or a platform label opens the segment right before the handle ("IG: @x"), or
  * a first-person phrase sits right next to it ("my OnlyFans: x", "I'm x", "follow me at x", "backup: @x"). A third-person
- * mention ("my ex is jake_fit", "shout out @x", "photo by @x", "boyfriend's IG: @x") is never his, whatever label it carries.
+ * mention ("my ex is jake_fit", "shout out @x", "photo by @x", "boyfriend's IG: @x") is never his, whatever label it carries, and
+ * neither is a line that says so ("not me", "Not my account", "unofficial", "fan page", "parody").
  * @param {Array<{label?: string, url?: string}>} [links] the creator's own links list
  */
 function grounded(haystack, quote, value, links = []) {
@@ -363,7 +368,7 @@ function grounded(haystack, quote, value, links = []) {
   const qseg = qn.replace(/\b(feat|ft|vs|mr|mrs|dr|jr|sr)\./g, (m0, w) => `${w}\u0001`);
   let from = 0; let to = qseg.length;
   for (const m of qseg.matchAll(SEGMENT_BREAK)) { if (m.index + m[0].length <= vStart) from = m.index + m[0].length; else if (m.index >= vEnd) { to = m.index; break; } }
-  if (THIRD.test(qseg.slice(from, to))) return false;
+  if (THIRD.test(qseg.slice(from, to)) || negated(qseg.slice(from, to))) return false;
   // a platform label that opens its segment sits right before the handle ("IG: @x", "TikTok | @x"); the segment it opens must be his too
   const before = qseg.slice(0, vStart).replace(/@$/, '').replace(/\b(?:r|u|user)\/$/, ''); // "r/x", "Reddit: u/x"
   // a relationship word in the segment right before the label ("bf | IG @x") makes it theirs; an occupation does not

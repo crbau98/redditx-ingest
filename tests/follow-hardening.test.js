@@ -24,14 +24,17 @@ const WORLD = {
   'bluesky:user:hogue38.bsky.social': who('Christian Hogue', 'gym', [], 'b2'),
   'bluesky:user:christianhogue912.bsky.social': who('Christian Hogue', 'another', [], 'b4'),
   'bluesky:user:fresh-namesake.bsky.social': who('Christian Hogue', 'yet another', [], 'b5'), // never followed by any other test
+  // a couple: they link to each other, different men ("my husband is alexrivera")
+  'bluesky:user:alexrivera.bsky.social': who('Alex Rivera', 'lifting', [link('bluesky', 'jordanblake.bsky.social')], 'a1'),
+  'bluesky:user:jordanblake.bsky.social': who('Jordan Blake', 'my husband is alexrivera', [link('bluesky', 'alexrivera.bsky.social')], 'a2'),
   // a four-account chain of MUTUAL links: x - telegram - bluesky - redgifs (no account links to all the others)
   'x:user:zedcalloway': who('Zed Calloway', 'x account', [link('telegram', 'zed_calloway')], 'z1'),
   'telegram:user:zed_calloway': who('Zed Calloway', 'tg account', [link('x', 'zedcalloway'), link('bluesky', 'zedcalloway.bsky.social')], 'z2'),
   'bluesky:user:zedcalloway.bsky.social': who('Zed Calloway', 'bsky account', [link('telegram', 'zed_calloway'), link('redgifs', 'zedcalloway')], 'z3'),
   'redgifs:user:zedcalloway': who('Zed Calloway', 'rg account', [link('bluesky', 'zedcalloway.bsky.social')], 'z4'),
 };
-const ACTORS = (term) => (/christian|hogue/i.test(term) ? ['hogueblog', 'hogue38', 'christianhogue912'] : /zed|calloway/i.test(term) ? ['zedcalloway'] : [])
-  .map((h) => ({ handle: `${h}.bsky.social`, displayName: /zed/i.test(h) ? 'Zed Calloway' : 'Christian Hogue', description: '', avatar: null, followers: 50 }));
+const ACTORS = (term) => (/christian|hogue/i.test(term) ? ['hogueblog', 'hogue38', 'christianhogue912'] : /zed|calloway/i.test(term) ? ['zedcalloway'] : /alex|rivera/i.test(term) ? ['alexrivera'] : [])
+  .map((h) => ({ handle: `${h}.bsky.social`, displayName: /zed/i.test(h) ? 'Zed Calloway' : /alex/i.test(h) ? 'Alex Rivera' : 'Christian Hogue', description: '', avatar: null, followers: 50 }));
 
 before(() => {
   prepareEnv({ MASTODON_INSTANCES: 'masto.test', MISSKEY_INSTANCES: 'miss.test' });
@@ -73,6 +76,8 @@ describe('1. one selection is one account', () => {
     'hogue38.bsky.social hogueblog.bsky.social',
     'hogue38.bsky.social\thogueblog.bsky.social',
   ];
+  // not several accounts, just junk: each is ONE odd string, but a handle never contains them
+  const JUNK = ['hogue38.bsky.social\u0085', 'hogue38|hogueblog.bsky.social', 'hogue\u200b38.bsky.social', 'hogue38.bsky.social\u2028', 'hogue38\u0000.bsky.social', '\ufeffhogue38.bsky.social', 'hogue38.bsky.social\u00a0'];
 
   test('HTTP: a newline-joined target in ONE selection (valid lookup) is refused and creates nothing', async () => {
     const found = await http('/lookup', { query: 'Christian Hogue' });
@@ -89,6 +94,18 @@ describe('1. one selection is one account', () => {
       assert.equal(c.status, 400, JSON.stringify(t));
     }
     assert.equal(lookup.checkSelections('whatever', [sel('hogue38.bsky.social')]).ok, true);
+  });
+
+  test('only handle / URL characters pass: NEL, pipe, zero-width space, line separator, NUL, BOM and no-break space are refused; real handles and URLs are not', () => {
+    for (const t of JUNK) {
+      assert.equal(lookup.checkSelections('x', [sel(t)]).status, 400, JSON.stringify(t));
+      const before = counts();
+      assert.equal(lookup.follow({ name: 'Junk', selections: [sel(t)] }).error, 'Nothing to follow', JSON.stringify(t));
+      assert.deepEqual(counts(), before);
+    }
+    for (const ok of ['hogue38.bsky.social', 'zed_lifts', 'Jürgen.bsky.social', 'https://linktr.ee/zed-lifts?ref=a&b=1#x', 'zed.of@mastodon.social', "o'brien", 'user(1)', 'ünïcode_ok']) {
+      assert.equal(lookup.checkSelections('x', [sel(ok)]).ok, true, ok);
+    }
   });
 
   test('follow() is the choke point too (admin route, findAndFollow): each bad pick is rejected, nothing is split', () => {
@@ -178,8 +195,8 @@ describe('3. a name is not a merge', () => {
   });
 });
 
-describe('4. auto-follow: the best account plus accounts tied to it directly, never the chain', () => {
-  test('a four-account chain of mutual links: findAndFollow follows the best account and its direct partners only', async () => {
+describe('4. auto-follow: the single best account, nothing else', () => {
+  test('a four-account chain of mutual links, same name: findAndFollow follows exactly ONE account (a group is a click)', async () => {
     const found = await lookup.lookup('Zed Calloway');
     const keys = found.candidates.map((c) => `${c.platform}:${c.target}`).sort();
     assert.deepEqual(keys, ['bluesky:zedcalloway.bsky.social', 'redgifs:zedcalloway', 'telegram:zed_calloway', 'x:zedcalloway'].sort());
@@ -187,15 +204,19 @@ describe('4. auto-follow: the best account plus accounts tied to it directly, ne
     assert.equal(found.groups[0].members.length, 4, 'the chain is ONE group on screen (a click follows all four)');
     const top = found.candidates.find((c) => c.status === 'new' && c.confidence >= 0.7);
     assert.ok(top, 'a strong best match exists');
-    const topKey = `${top.platform}:${top.kind}:${String(top.target).toLowerCase()}`;
-    const direct = new Set(found.groups[0].evidence.filter((e) => e.a === topKey || e.b === topKey).map((e) => (e.a === topKey ? e.b : e.a)));
-    const expected = [`${top.platform}:${top.target}`, ...found.candidates.filter((c) => direct.has(`${c.platform}:${c.kind}:${String(c.target).toLowerCase()}`)).map((c) => `${c.platform}:${c.target}`)].sort();
-
     const auto = await lookup.findAndFollow('Zed Calloway');
     assert.ok(auto.followed && auto.followed.ok, JSON.stringify(auto.followed || auto.note));
-    const followed = auto.followed.feeds.map((f) => `${f.platform}:${f.target}`).sort();
-    assert.deepEqual(followed, expected);
-    assert.ok(followed.length < 4, 'not the whole chain');
+    assert.deepEqual(auto.followed.feeds.map((f) => `${f.platform}:${f.target}`), [`${top.platform}:${top.target}`]);
+  });
+
+  test('a couple who link to each other, different men, different names: not grouped, and findAndFollow takes one of them only', async () => {
+    const found = await lookup.lookup('Alex Rivera');
+    assert.deepEqual(found.groups, []);
+    const auto = await lookup.findAndFollow('Alex Rivera');
+    assert.ok(auto.followed && auto.followed.ok, JSON.stringify(auto.followed || auto.note));
+    assert.deepEqual(auto.followed.feeds.map((f) => f.target), ['alexrivera.bsky.social']);
+    assert.ok(!repo.feeds.find('bluesky', 'user', 'jordanblake.bsky.social'), 'his husband is not followed with him');
+    assert.equal(auto.followed.creator.display_name, 'Alex Rivera');
   });
 
   test('name-only matches are never auto-followed with the best one', async () => {

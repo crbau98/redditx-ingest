@@ -161,4 +161,4 @@ async function joinApproved() {
 
 function status() { const b = budget(); const cfg = settingsStore.get(); return { ready: ready(cfg), searchesToday: b.searches, searchesPerDay: cfg.telegramSearchesPerDay, joinsToday: b.joins, joinsPerDay: cfg.telegramJoinsPerDay }; }
 
-module.exports = { claimsOwnership, ready, upgradeSpec, lookupHandles, queueLookup, joinApproved, handlesOf, status };
+module.exports = { claimsOwnership, NEGATION, ready, upgradeSpec, lookupHandles, queueLookup, joinApproved, handlesOf, status };
