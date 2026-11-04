@@ -109,3 +109,38 @@ describe('removing content purges its identifiers', () => {
     assert.equal(hasEmbedding(keep), true);
   });
 });
+
+describe('counters are right on write and repaired once', () => {
+  const tagUsage = (name) => db.prepare('SELECT usage_count FROM tags WHERE name = ?').get(name)?.usage_count;
+  const tagRows = (name) => db.prepare('SELECT COUNT(*) AS n FROM media_tags mt JOIN tags t ON t.id = mt.tag_id WHERE t.name = ?').get(name).n;
+  const counts = (cid) => db.prepare('SELECT media_count, video_count, total_score FROM creators WHERE id = ?').get(cid);
+
+  test('a new item counts toward its creator at once, and state changes move the count', () => {
+    const c = repo.creators.create({ handle: 'counter_bro', display_name: 'Counter' });
+    repo.media.insert(mk(20, { creator_id: c.id, source_key: 'reddit:c20:0', score: 7 }), ['gym']);
+    repo.media.insert(mk(21, { creator_id: c.id, source_key: 'reddit:c21:0', score: 5, media_type: 'video', media_url: 'https://v.redd.it/x.mp4' }), ['gym']);
+    assert.deepEqual(counts(c.id), { media_count: 2, video_count: 1, total_score: 12 });
+    repo.media.setState(idOf('reddit:c20:0'), 'hidden', 'test');
+    assert.deepEqual(counts(c.id), { media_count: 1, video_count: 1, total_score: 5 });
+  });
+
+  test('tags.usage_count follows the media_tags rows, including deletes', () => {
+    repo.media.insert(mk(22, { source_key: 'reddit:c22:0' }), ['youtubetest']);
+    repo.media.insert(mk(23, { source_key: 'reddit:c23:0' }), ['youtubetest']);
+    assert.equal(tagUsage('youtubetest'), 2);
+    assert.equal(tagUsage('youtubetest'), tagRows('youtubetest'));
+    db.prepare('DELETE FROM media_tags WHERE media_id = ?').run(idOf('reddit:c22:0'));
+    assert.equal(tagUsage('youtubetest'), 1);
+  });
+
+  test('the v23 migration repairs counters that were already wrong, and leaves correct ones alone', () => {
+    const c = repo.creators.create({ handle: 'drifted_bro', display_name: 'Drifted' });
+    repo.media.insert(mk(24, { creator_id: c.id, source_key: 'reddit:c24:0', score: 3 }), ['gym']);
+    db.prepare('UPDATE creators SET media_count = 0, video_count = 9, total_score = 1 WHERE id = ?').run(c.id);
+    db.prepare("UPDATE tags SET usage_count = 500 WHERE name = 'youtubetest'").run();
+    MIGRATIONS[22](db);
+    assert.deepEqual(counts(c.id), { media_count: 1, video_count: 0, total_score: 3 });
+    assert.equal(tagUsage('youtubetest'), 1);
+    assert.equal(tagUsage('youtubetest'), tagRows('youtubetest'));
+  });
+});

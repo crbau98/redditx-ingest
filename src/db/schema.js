@@ -816,7 +816,25 @@ function v22(db) {
     WHERE publish_state = 'removed' AND hash NOT LIKE 'purged:%'`);
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22];
+// Counters drifted: creators.media_count and friends were only refreshed by some writers, and tags.usage_count
+// was bumped by hand. Keep tags.usage_count equal to its media_tags rows with triggers (so every writer,
+// including cascades, is covered), then recompute both once for rows that are already wrong.
+function v23(db) {
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS trg_media_tags_insert AFTER INSERT ON media_tags
+    BEGIN UPDATE tags SET usage_count = usage_count + 1 WHERE id = NEW.tag_id; END;
+    CREATE TRIGGER IF NOT EXISTS trg_media_tags_delete AFTER DELETE ON media_tags
+    BEGIN UPDATE tags SET usage_count = usage_count - 1 WHERE id = OLD.tag_id; END;
+  `);
+  db.exec('UPDATE tags SET usage_count = (SELECT COUNT(*) FROM media_tags mt WHERE mt.tag_id = tags.id)');
+  db.exec(`UPDATE creators SET
+      media_count = (SELECT COUNT(*) FROM media m WHERE m.creator_id = creators.id AND m.publish_state = 'published'),
+      video_count = (SELECT COUNT(*) FROM media m WHERE m.creator_id = creators.id AND m.publish_state = 'published' AND m.media_type = 'video'),
+      total_score = (SELECT COALESCE(SUM(m.score), 0) FROM media m WHERE m.creator_id = creators.id AND m.publish_state = 'published'),
+      last_media_at = (SELECT MAX(m.posted_at) FROM media m WHERE m.creator_id = creators.id AND m.publish_state = 'published')`);
+}
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

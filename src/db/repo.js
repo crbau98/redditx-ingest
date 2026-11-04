@@ -35,7 +35,6 @@ const tagQ = {
   insert: db.prepare('INSERT OR IGNORE INTO tags (name, category) VALUES (?, ?)'),
   byName: db.prepare('SELECT id FROM tags WHERE name = ?'),
   link: db.prepare('INSERT OR IGNORE INTO media_tags (media_id, tag_id, source) VALUES (?, ?, ?)'),
-  bump: db.prepare('UPDATE tags SET usage_count = usage_count + 1 WHERE id = ?'),
   forMedia: db.prepare('SELECT t.name, t.category FROM tags t JOIN media_tags mt ON mt.tag_id = t.id WHERE mt.media_id = ? ORDER BY t.name'),
   setText: db.prepare('UPDATE media SET tags_text = ? WHERE id = ?'),
 };
@@ -53,7 +52,8 @@ function addTags(mediaId, names, source = 'ingest') {
   for (const name of clean) {
     tagQ.insert.run(name, 'general');
     const tag = tagQ.byName.get(name);
-    if (tag && tagQ.link.run(mediaId, tag.id, source).changes) tagQ.bump.run(tag.id);
+    // tags.usage_count is kept by the media_tags triggers (schema v23), so the link itself is enough
+    if (tag) tagQ.link.run(mediaId, tag.id, source);
   }
   const all = tagQ.forMedia.all(mediaId).map((t) => t.name);
   tagQ.setText.run(all.join(' '), mediaId);
@@ -1118,6 +1118,8 @@ const media = {
         throw e;
       }
       if (tags.length) addTags(id, tags, 'ingest');
+      // a new row changes its creator's counts (media_count, video_count, total_score, last_media_at)
+      if (row.creator_id) creatorQ.stats.run({ id: row.creator_id });
       hosts.add(row.media_url, row.preview_url, row.thumbnail_url, row.hls_url);
       return id;
     });
