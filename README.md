@@ -377,3 +377,19 @@ Content endpoints require the age cookie from `POST /api/age/confirm`. Admin end
 # Sentry
 
 Set `SENTRY_DSN` to enable sampled reports for HTTP errors reaching the final handler and uncaught exceptions or rejections. Reports contain only allowlisted error class and source area categories, environment (`RAILWAY_ENVIRONMENT_NAME`) and release (`RAILWAY_GIT_COMMIT_SHA`); they exclude requests, error messages, stacks, breadcrumbs, traces, and media. Errors caught inside routes or background jobs are not reported. Without a DSN it stays disabled. Categories deliberately limit diagnosis; use local logs for details.
+
+## Scrapfly unblocker (optional, paid)
+
+A public page that refuses PRISM (403/429/503 or a bot challenge) can be retried through Scrapfly after Bright Data.
+It is a fallback only: the direct download and the local browser still come first.
+
+- Key: set `SCRAPFLY_API_KEY`, or `SCRAPFLY_API_KEY_FILE` to a file outside the repo. It is never logged.
+- Settings (Sources): `scrapflyUnlocker` (`off` | `fallback`, default `fallback`, inert without a key),
+  `scrapflyBudget` (requests/day, default 100), `scrapflyMonthlyBudget` (requests/month, default 800),
+  `scrapflyCreditBudget` (credits/day, default 100).
+- Env: `SCRAPFLY_COST_BUDGET` (credits one page may burn, default 30), `SCRAPFLY_PROXY_POOL` (default `public_datacenter_pool`),
+  `SCRAPFLY_COUNTRY`, `SCRAPFLY_BASE_URL`, `SCRAPFLY_TIMEOUT_MS`, `SCRAPFLY_RENDER_WAIT_MS`.
+- Cost: a cheap datacenter read is about 1 credit; a JS-rendered retry adds about 5; a Cloudflare escalation can add 50 or more.
+  The run note shows the credits each unlock used.
+- Off: set `scrapflyUnlocker` to `off`, or unset the key.
+- Every URL passes the local gate (takedowns, private hosts, non-http(s), embedded credentials) before it leaves the machine.

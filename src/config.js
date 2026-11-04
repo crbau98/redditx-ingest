@@ -91,6 +91,8 @@ module.exports = {
     // BRAVE_API_KEY_FILE points at a key file outside the workspace (the OpenBot vault), so the
     // secret itself never lands in the repo or in any file the repo ships.
     braveKey: env.BRAVE_API_KEY || env.BRAVE_SEARCH_API_KEY || readKeyFile(env.BRAVE_API_KEY_FILE),
+    // Scrapfly (paid unblock/render tier, lib/scrapfly.js). The key file lives outside the repo, like BRAVE_API_KEY_FILE.
+    scrapflyKey: env.SCRAPFLY_API_KEY || readKeyFile(env.SCRAPFLY_API_KEY_FILE),
     // Keenable web search (an AI-agent search engine, MCP over HTTP). Used by creator lookup and discovery.
     keenableKey: env.KEENABLE_API_KEY || '',
     // Bright Data (https://brightdata.com) Discover API: intent-ranked web search. BRIGHTDATA_API_KEY is accepted too (same token).
@@ -133,6 +135,16 @@ module.exports = {
     // Ask the API to retry a request a safety classifier declined on a fallback model (server-side, beta; Claude API only).
     fallbacks: !/^(0|false|no|off)$/i.test(String(env.ANTHROPIC_FALLBACKS || '1')),
   },
+  scrapfly: {
+    // Scrape API endpoint. The key is sent as the 'key' query parameter by lib/scrapfly.js and is never logged.
+    baseUrl: String(env.SCRAPFLY_BASE_URL || 'https://api.scrapfly.io/scrape').trim(),
+    country: String(env.SCRAPFLY_COUNTRY || '').trim(),
+    proxyPool: String(env.SCRAPFLY_PROXY_POOL || 'public_datacenter_pool').trim(),
+    costBudget: int(env.SCRAPFLY_COST_BUDGET, 40),
+    timeoutMs: int(env.SCRAPFLY_TIMEOUT_MS, 90000),
+    renderWaitMs: int(env.SCRAPFLY_RENDER_WAIT_MS, 3000),
+  },
+
   brightdata: {
     intent: String(env.BRIGHTDATA_DISCOVER_INTENT || 'Public creator profiles, portfolios, galleries and link-in-bio pages, and the creator\'s own public social accounts. Public paid-subscription pages are read like any other public page.').trim(),
     minRelevance: parseFloat(env.BRIGHTDATA_MIN_RELEVANCE) || 0,   // drop results scored below this (0 = keep all, ranked)

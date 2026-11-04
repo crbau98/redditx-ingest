@@ -19,6 +19,7 @@ const { hostOf, hostBlocked, looksLikeDirectMedia, looksLikeVideo } = require('.
 const { checkHtmlOptOut } = require('../lib/takedowns');
 const render = require('../lib/render'); // Browser4 or Playwright (RENDER_ENGINE)
 const brightdata = require('../lib/brightdata');
+const scrapfly = require('../lib/scrapfly');
 const settingsStore = require('../settings');
 const hoststrategy = require('../engine/hoststrategy');
 const rss = require('./rss');
@@ -481,13 +482,57 @@ const REFUSED_STATUS = new Set([403, 429, 503]);
  *   - a daily budget caps the spend and a host where unlocking keeps finding nothing is backed off (engine/hoststrategy.js).
  * Returns null when not applicable, else {page, via, notes, info} / {skipped} / {error}.
  */
+/**
+ * Bright Data first, then Scrapfly (lib/scrapfly.js), only for a page that refused us. Each tier keeps its own back-off and
+ * budget; the first answer that has media or links wins. Returns null, {skipped}, {error}, or {page, via, notes}.
+ */
 async function unlockedRead(feed, need) {
   const cfg = settingsStore.get();
-  if (cfg.brightdataUnlocker !== 'fallback' || !cfg.brightdataUnlockBudget) return null;
-  if (!brightdata.unlockerConfigured() && !(brightdata.browserConfigured() && render.enabled())) return null;
+  const bdOn = cfg.brightdataUnlocker === 'fallback' && !!cfg.brightdataUnlockBudget && (brightdata.unlockerConfigured() || (brightdata.browserConfigured() && render.enabled()));
+  const scrapOn = cfg.scrapflyUnlocker === 'fallback' && scrapfly.configured();
+  if (!bdOn && !scrapOn) return null;
   // robots.txt first, inside this function, because the link-in-bio adapter does not consult it on its own
   if (!(await robotsAllows(feed.target))) return { skipped: 'robots.txt disallows this page' };
   const host = hostOf(feed.target);
+  const count = (pg) => (need === 'media' ? pg.media.length : pg.links.length);
+  const bd = bdOn ? await brightdataRead(feed, need, cfg, host) : null;
+  if (bd && bd.page && count(bd.page) > 0) return bd;
+  if (!scrapOn) return bd;
+  const s = await scrapflyRead(feed, need, cfg, host);
+  if (s && s.page && count(s.page) > 0) return s;
+  if (bd && bd.page) return bd;   // Bright Data answered (empty): keep its answer
+  return s || bd;
+}
+
+/** Which unblocker answered, for the run note. */
+const unlockLabel = (u) => (u.via === 'scrapfly-unlocker' ? 'Scrapfly Unblocker' : u.via === 'brightdata-browser' ? 'Bright Data Browser API' : 'Bright Data Web Unlocker');
+
+/** Scrapfly Unblocker: datacenter pool first (cheap), a JS-rendered retry only when the first answer is empty or blocked. */
+async function scrapflyRead(feed, need, cfg, host) {
+  const verdict = scrapfly.decide(host);
+  if (!verdict.ok) return { skipped: verdict.why };
+  const count = (pg) => (need === 'media' ? pg.media.length : pg.links.length);
+  let cost = 0;
+  try {
+    const first = await scrapfly.scrape(feed.target, { unblocker: true, renderJs: false });
+    cost += first.cost;
+    let page = first.blocked ? null : extractPage(first.html, feed.target, { headers: first.headers, status: first.status || 200, maxMedia: RENDERED_MAX_MEDIA });
+    if (!page || (!page.optedOut && count(page) === 0)) {
+      const second = await scrapfly.scrape(feed.target, { unblocker: true, renderJs: true });
+      cost += second.cost;
+      const page2 = second.blocked ? null : extractPage(second.html, feed.target, { headers: second.headers, status: second.status || 200, maxMedia: RENDERED_MAX_MEDIA });
+      if (page2 && (!page || count(page2) > count(page))) page = page2;
+    }
+    if (!page) throw Object.assign(new Error('Scrapfly returned a block page, not the page'), { status: 502 });
+    if (!page.optedOut) scrapfly.recordHost(host, { found: count(page) });
+    return { page, via: 'scrapfly-unlocker', notes: [], cost };
+  } catch (e) {
+    if (!e.skip && !e.budget) scrapfly.recordHost(host, { found: 0 }); // a refusal or failed answer counts toward the back-off
+    return { error: e, cost };
+  }
+}
+
+async function brightdataRead(feed, need, cfg, host) {
   const verdict = hoststrategy.decideUnlock(host);
   if (!verdict.unlock) return { skipped: verdict.why };
   const count = (pg) => (need === 'media' ? pg.media.length : pg.links.length);
@@ -577,12 +622,12 @@ const webAdapter = {
     }
     if (refused && !page.optedOut) {
       const u = await unlockedRead(feed, 'media');
-      if (u && u.skipped) info.push(`Bright Data not used: ${u.skipped}`);
-      else if (u && u.error) notes.push(`Bright Data: ${u.error.message}`);
+      if (u && u.skipped) info.push(`unblocker not used: ${u.skipped}`);
+      else if (u && u.error) notes.push(u.error.message);
       else if (u) {
-        notes.push(...u.notes.map((n) => `Bright Data: ${n}`));
+        notes.push(...(u.notes || []));
         if (u.page.optedOut) page = u.page;
-        else if (u.page.media.length) { page = u.page; via = u.via; info.push(`${u.via === 'brightdata-browser' ? 'Bright Data Browser API' : 'Bright Data Web Unlocker'} got past the refusal: ${page.media.length} media`); }
+        else if (u.page.media.length) { page = u.page; via = u.via; info.push(`${unlockLabel(u)} got past the refusal: ${page.media.length} media${u.cost != null ? ` (Scrapfly cost ${u.cost} credits)` : ''}`); }
       }
     }
     if (page.optedOut) {
@@ -660,11 +705,11 @@ const linkInBioAdapter = {
     }
     if (refused && !page.optedOut) {
       const u = await unlockedRead(feed, 'links');
-      if (u && u.skipped) info.push(`Bright Data not used: ${u.skipped}`);
-      else if (u && u.error) notes.push(`Bright Data: ${u.error.message}`);
+      if (u && u.skipped) info.push(`unblocker not used: ${u.skipped}`);
+      else if (u && u.error) notes.push(u.error.message);
       else if (u) {
         if (u.page.optedOut) page = u.page;
-        else if (u.page.links.length) { page = u.page; via = u.via; info.push(`Bright Data got past the refusal: ${page.links.length} profile links`); }
+        else if (u.page.links.length) { page = u.page; via = u.via; info.push(`${unlockLabel(u)} got past the refusal: ${page.links.length} profile links${u.cost != null ? ` (Scrapfly cost ${u.cost} credits)` : ''}`); }
       }
     }
     if (page.optedOut) {
