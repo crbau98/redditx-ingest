@@ -523,6 +523,7 @@ async function scrapflyRead(feed, need, cfg, host) {
     });
     return { page: r.value, via: 'scrapfly-unlocker', notes: [], cost: r.cost };
   } catch (e) {
+    e.tier = 'scrapfly';
     return { error: e, cost: e.cost || 0 };
   }
 }
@@ -617,10 +618,10 @@ const webAdapter = {
     }
     if (refused && !page.optedOut) {
       const u = await unlockedRead(feed, 'media');
-      if (u && u.skipped) info.push(`unblocker not used: ${u.skipped}`);
-      else if (u && u.error) notes.push(u.error.message);
+      if (u && u.skipped) info.push(`Bright Data not used: ${u.skipped}`);
+      else if (u && u.error) notes.push(`${u.error.tier === 'scrapfly' ? 'Scrapfly' : 'Bright Data'}: ${u.error.message}`);
       else if (u) {
-        notes.push(...(u.notes || []));
+        notes.push(...u.notes.map((n) => `Bright Data: ${n}`));
         if (u.page.optedOut) page = u.page;
         else if (u.page.media.length) { page = u.page; via = u.via; info.push(`${unlockLabel(u)} got past the refusal: ${page.media.length} media${u.cost != null ? ` (Scrapfly cost ${u.cost} credits)` : ''}`); }
       }
@@ -700,8 +701,8 @@ const linkInBioAdapter = {
     }
     if (refused && !page.optedOut) {
       const u = await unlockedRead(feed, 'links');
-      if (u && u.skipped) info.push(`unblocker not used: ${u.skipped}`);
-      else if (u && u.error) notes.push(u.error.message);
+      if (u && u.skipped) info.push(`Bright Data not used: ${u.skipped}`);
+      else if (u && u.error) notes.push(`${u.error.tier === 'scrapfly' ? 'Scrapfly' : 'Bright Data'}: ${u.error.message}`);
       else if (u) {
         if (u.page.optedOut) page = u.page;
         else if (u.page.links.length) { page = u.page; via = u.via; info.push(`${unlockLabel(u)} got past the refusal: ${page.links.length} profile links${u.cost != null ? ` (Scrapfly cost ${u.cost} credits)` : ''}`); }
