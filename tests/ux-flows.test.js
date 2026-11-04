@@ -19,7 +19,7 @@ test('the flow stylesheet is linked and part of the offline shell', () => {
 
 test('every page the footer links to is reachable from the phone menu (the footer sits under an endless feed)', () => {
   const menu = read('js', 'components', 'menu.js');
-  for (const route of ['/browse', '/galaxy', '/admin']) assert.ok(menu.includes(`'${route}'`), `phone menu links ${route}`);
+  for (const route of ['/browse', '/admin']) assert.ok(menu.includes(`'${route}'`), `phone menu links ${route}`);
   for (const fn of ['openDisplaySettings', 'openTakedownForm']) assert.ok(menu.includes(fn), `phone menu offers ${fn}`);
   // the menu is loaded on first use (components/ondemand.js) and fetched in the background once the page is idle
   const graph = staticGraph(path.join(pub, 'js'), 'main.js').map((f) => path.basename(f));

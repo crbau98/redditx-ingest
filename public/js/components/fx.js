@@ -1,76 +1,9 @@
-import { prefs, bus } from '../store.js';
 // Small, cheap effects that make the UI feel physical. Everything here respects
 // prefers-reduced-motion and only runs on devices where it makes sense.
 
 import { spring } from './transitions.js';
 
 const reduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-/**
- * Rough graphics tier, detected once: 'software' when WebGL runs on the CPU (SwiftShader,
- * llvmpipe — VMs, blocklisted GPUs), where continuous 3D/shader animation would make the
- * whole page stutter; 'low' for small touch devices; otherwise 'high'.
- */
-let tier = null;
-export function gpuTier() {
-  if (tier) return tier;
-  // Creating a WebGL context costs tens of ms on a phone: the answer is kept for a week.
-  try { const c = JSON.parse(localStorage.getItem('prism.gpu') || 'null'); if (c && Date.now() - c.at < 7 * 864e5 && /^(high|low|software)$/.test(c.tier)) return (tier = c.tier); } catch { /* storage blocked */ }
-  tier = probeGpu();
-  try { localStorage.setItem('prism.gpu', JSON.stringify({ tier, at: Date.now() })); } catch { /* storage blocked */ }
-  return tier;
-}
-function probeGpu() {
-  let tier = 'high';
-  try {
-    // failIfMajorPerformanceCaveat: no context at all on software rendering, instead of a slow,
-    // console-warning fallback — which is exactly what we want to detect.
-    const gl = document.createElement('canvas').getContext('webgl', { failIfMajorPerformanceCaveat: true });
-    if (!gl) tier = 'software';
-    else {
-      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
-      const r = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : '';
-      if (/swiftshader|llvmpipe|software|basic render/i.test(r)) tier = 'software';
-      const lose = gl.getExtension('WEBGL_lose_context'); if (lose) lose.loseContext();
-    }
-  } catch { tier = 'software'; }
-  if (tier === 'high' && window.matchMedia('(pointer: coarse)').matches && (navigator.hardwareConcurrency || 8) <= 4) tier = 'low';
-  return tier;
-}
-const finePointer = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
-
-/* ------------------------------------------------------------ 3D tilt + glare
- * One delegated pointer listener for the whole app: the card under the pointer
- * leans toward it and a soft glare follows. Values go through CSS custom
- * properties, written at most once per frame. */
-export function initTilt() {
-  if (!finePointer || reduced() || !prefs.ambientFx) return;
-  let active = null; let raf = 0; let px = 0; let py = 0;
-  const SEL = '.card, .creator-card, .coll-card, .browse-tile, .orbit-card';
-  const apply = () => {
-    raf = 0;
-    if (!active) return;
-    const r = active.getBoundingClientRect();
-    const x = Math.min(1, Math.max(0, (px - r.left) / r.width));
-    const y = Math.min(1, Math.max(0, (py - r.top) / r.height));
-    const max = active.classList.contains('orbit-card') ? 0 : active.classList.contains('card') ? 5 : 7;
-    active.style.setProperty('--ry', `${((x - 0.5) * 2 * max).toFixed(2)}deg`);
-    active.style.setProperty('--rx', `${((0.5 - y) * 2 * max).toFixed(2)}deg`);
-    active.style.setProperty('--gx', `${(x * 100).toFixed(1)}%`);
-    active.style.setProperty('--gy', `${(y * 100).toFixed(1)}%`);
-  };
-  const release = (el) => { if (!el) return; el.classList.remove('tilting'); ['--rx', '--ry'].forEach((p) => el.style.setProperty(p, '0deg')); };
-  document.addEventListener('pointermove', (e) => {
-    if (e.pointerType !== 'mouse') return;
-    const el = e.target.closest && e.target.closest(SEL);
-    if (el !== active) { release(active); active = el; if (el) el.classList.add('tilting'); }
-    if (!active) return;
-    px = e.clientX; py = e.clientY;
-    if (!raf) raf = requestAnimationFrame(apply);
-  }, { passive: true });
-  document.addEventListener('pointerleave', () => { release(active); active = null; });
-  window.addEventListener('blur', () => { release(active); active = null; });
-}
 
 /* ---------------------------------------------------------------- heart burst */
 /** A little shower of hearts from a point (e.g. the save button). */

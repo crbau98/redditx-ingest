@@ -57,7 +57,7 @@ describe('v4.13 compositor-only looping animations', () => {
 });
 
 describe('v4.13 shell', () => {
-  test('the galaxy view is loaded on demand, not preloaded with the shell', () => {
+  test('the retired galaxy view is not part of the shell graph', () => {
     const graph = staticGraph(path.join(pub, 'js'), 'main.js').map((f) => path.relative(pub, f).split(path.sep).join('/'));
     assert.ok(graph.includes('js/views/home.js'));
     assert.ok(!graph.includes('js/views/galaxy.js'));

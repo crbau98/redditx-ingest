@@ -33,15 +33,19 @@ describe('Phase 1: UI audit & subtraction guards', () => {
     assert.deepEqual(keys, ['home', 'explore', 'reels', 'creators', 'saved']);
   });
 
-  test('decorative WebGL shader, 3D orbit, and pointer card tilt are off by default behind prefs.ambientFx', () => {
-    const storeJs = fs.readFileSync(path.join(ROOT, 'public/js/store.js'), 'utf8');
-    assert.match(storeJs, /get ambientFx\(\)\s*\{\s*return read\('prism\.ambientFx',\s*false\);/);
+  test('decorative WebGL shader, 3D orbit, pointer card tilt and the galaxy map are removed, not just gated', () => {
+    for (const gone of ['js/components/prism-bg.js', 'js/components/orbit.js', 'js/views/galaxy.js']) assert.ok(!fs.existsSync(path.join(ROOT, 'public', gone)), `${gone} is deleted`);
+    const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
+    assert.ok(!/ambientFx/.test(read('public/js/store.js') + read('public/js/views/home.js') + read('public/js/components/display.js')), 'no ambientFx pref remains');
+    assert.ok(!/initTilt|gpuTier/.test(read('public/js/components/fx.js') + read('public/js/main.js')), 'tilt and the WebGL GPU probe are gone');
+    const css = ['app', 'v6', 'ux', 'tokens'].map((n) => read(`public/css/${n}.css`)).join('\n');
+    assert.ok(!/\.orbit|\.galaxy|prism-canvas|\.tilting|data-gpu/.test(css), 'no orbit, galaxy, shader or tilt CSS remains');
+    assert.match(read('public/js/main.js'), /pattern: '\/galaxy', view: \(\) => \{ navigate\('\/creators'/, 'old /galaxy links land on Creators');
+  });
+
+  test('Home keeps the safety and male-only gates visible in the hero copy', () => {
     const homeJs = fs.readFileSync(path.join(ROOT, 'public/js/views/home.js'), 'utf8');
-    assert.ok(!/^import .*prism-bg\.js/m.test(homeJs), 'home.js does not eagerly import prism-bg.js');
-    assert.ok(!/^import .*orbit\.js/m.test(homeJs), 'home.js does not eagerly import orbit.js');
-    assert.match(homeJs, /prefs\.ambientFx/);
-    const fxJs = fs.readFileSync(path.join(ROOT, 'public/js/components/fx.js'), 'utf8');
-    assert.match(fxJs, /prefs\.ambientFx/);
+    assert.match(homeJs, /Adults 18\+ only\. Male creators only/);
   });
 
   test('Creators view consolidates inline web lookup and Following filter and removes 3D galaxy header promo', () => {

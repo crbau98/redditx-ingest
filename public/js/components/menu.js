@@ -5,7 +5,7 @@ import { repaintFollowBadges } from '../following.js';
 
 /**
  * Phone "more" sheet. The tab bar has room for five destinations; everything else
- * (Find, Browse, the galaxy map, collections, history, settings, admin) used to live only in
+ * (Find, Browse, collections, history, settings, admin) used to live only in
  * the footer, which an infinite feed never lets you reach.
  */
 export function openMenu() {
@@ -21,8 +21,7 @@ export function openMenu() {
       h('div', { class: 'menu-grid' },
         link('search', 'Find a creator', 'Name, @handle or link', href('/find')),
         link('rss', 'Following', 'New from creators you follow', href('/following')),
-        link('layers', 'Browse', 'Tags, sources, communities', href('/browse')),
-        link('sparkle', 'Creator galaxy', 'Map of who posts alike', href('/galaxy'))),
+        link('layers', 'Browse', 'Tags, sources, communities', href('/browse'))),
       group('Your library'),
       h('div', { class: 'menu-grid' },
         link('folder', 'Collections', 'Grouped saves', href('/saved', { tab: 'collections' })),
