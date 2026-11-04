@@ -67,15 +67,20 @@ function pathAllowed(rules, path) {
   return !best || best.allow;
 }
 
-async function robotsAllows(url) {
+/**
+ * robots.txt for this URL, read under the SAME identity the page will be requested with (opts.userAgent; none = PRISM's own
+ * agent). The robots we obey is the robots served to the identity we use. See README "Refusals, identity and robots".
+ */
+async function robotsAllows(url, opts = {}) {
   let u;
   try { u = new URL(url); } catch { return false; }
-  const key = u.origin;
+  const ua = opts.userAgent || null;
+  const key = `${u.origin}|${ua || 'prism'}`;
   let entry = robotsCache.get(key);
   if (!entry || entry.expires < Date.now()) {
     let rules = [];
     try {
-      const res = await http.raw(`${key}/robots.txt`, { maxBytes: 500_000, retries: 0, headers: { accept: 'text/plain, */*;q=0.5' } });
+      const res = await http.raw(`${u.origin}/robots.txt`, { maxBytes: 500_000, retries: 0, headers: { accept: 'text/plain, */*;q=0.5', ...(ua ? { 'user-agent': ua } : {}) } });
       const body = res.body.toString('utf8');
       const ctype = String(res.headers['content-type'] || '');
       // Only a real robots.txt counts. A 404/5xx, a soft-404 HTML page or a login wall means "no rules" - it must
@@ -436,8 +441,9 @@ function mergeRendered(pages) {
  *   {skipped}                      the plain read showed nothing but the host's history says rendering will not help now
  *   need 'media'  web pages: wanted in 'fallback' mode when the plain download showed no media
  *   need 'links'  link-in-bio hubs: wanted when it showed no profile links
- * The browser is never used to get around a refusal: it runs only after a plain download that SUCCEEDED but showed nothing,
- * and a bot-challenge page makes PRISM leave that host alone for a while (never solves or evades it).
+ * Refusals: a browser runs only after a plain download that SUCCEEDED but showed nothing, and a bot-challenge page makes PRISM
+ * leave that host alone for a while. The rule for refusals in general (no solving, no credentials, paid tiers only when the
+ * operator switches them on) is in the README, "Refusals, identity and robots"; this file does not restate it.
  */
 const ENGINE_LABEL = { browser4: 'Browser4', playwright: 'Playwright' };
 const engineLabel = () => ENGINE_LABEL[render.engineName()] || 'Browser';
