@@ -90,6 +90,42 @@ const blocklist = {
   remove(id) { return blockQ.remove.run(id).changes > 0; },
 };
 
+/* ------------------------------------------------- removed content: identifiers */
+const hasTable = (name) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
+/**
+ * Remove the content identifiers of media that is 'removed': face and visual embeddings, the perceptual
+ * and exact hashes, and every URL. The rows, their publish state, review reason and all blocklists stay,
+ * so an item stays removed and can never be re-imported. Only 'removed' rows are touched; a published
+ * row given here is skipped by the SQL, not by the caller.
+ */
+function purgeRemovedContent(ids) {
+  const all = [...new Set(ids.filter(Boolean))];
+  let purged = 0;
+  for (let i = 0; i < all.length; i += 500) {
+    const chunk = all.slice(i, i + 500);
+    const ph = chunk.map(() => '?').join(',');
+    const gone = db.prepare(`SELECT id FROM media WHERE publish_state = 'removed' AND id IN (${ph})`).all(...chunk).map((r) => r.id);
+    if (!gone.length) continue;
+    const gph = gone.map(() => '?').join(',');
+    if (hasTable('media_embeddings')) db.prepare(`DELETE FROM media_embeddings WHERE media_id IN (${gph})`).run(...gone);
+    // hash and media_url are NOT NULL, and hash is UNIQUE: they get placeholders that no real hash or URL equals
+    db.prepare(`UPDATE media SET phash = NULL, hash = 'purged:' || id, media_url = '', preview_url = NULL,
+      thumbnail_url = NULL, thumb_url = NULL, hls_url = NULL, tint = NULL,
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE publish_state = 'removed' AND id IN (${gph})`).run(...gone);
+    purged += gone.length;
+  }
+  return purged;
+}
+/** Purge every removed item of one creator (a block or takedown may leave older removed rows behind). */
+const purgeRemovedFor = (creatorId) => purgeRemovedContent(db.prepare("SELECT id FROM media WHERE creator_id = ? AND publish_state = 'removed'").all(creatorId).map((r) => r.id));
+/** Keep a removed item's hashes blocked before its identifiers are cleared. Idempotent. */
+function rememberRemovedHashes(creatorId, reason) {
+  for (const m of db.prepare("SELECT hash, phash FROM media WHERE creator_id = ? AND publish_state = 'removed'").all(creatorId)) {
+    if (m.hash && !String(m.hash).startsWith('purged:')) blocklist.add('hash', m.hash, reason);
+    if (m.phash) db.prepare('INSERT OR IGNORE INTO phash_blocklist (phash, reason) VALUES (?, ?)').run(m.phash, reason || null);
+  }
+}
+
 /* ------------------------------------------------------------ moderation log */
 const logQ = db.prepare('INSERT INTO moderation_actions (target_type, target_id, action, reason, actor) VALUES (?, ?, ?, ?, ?)');
 function logAction(targetType, targetId, action, reason, actor = 'system') {
@@ -310,6 +346,8 @@ const creators = {
     db.transaction(() => {
       db.prepare("UPDATE creators SET status = 'blocked', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(id);
       db.prepare("UPDATE media SET publish_state = 'removed', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE creator_id = ? AND publish_state != 'removed'").run(id);
+      rememberRemovedHashes(id, reason);
+      purgeRemovedFor(id);
       db.prepare('UPDATE feeds SET enabled = 0 WHERE creator_id = ?').run(id);
       blocklist.add('creator', id, reason);
       for (const f of creatorQ.feedsOf.all(id)) blocklist.add('creator', `${f.platform}:${String(f.target).toLowerCase()}`, reason);
@@ -1124,6 +1162,7 @@ const media = {
       if (m.source_key) blocklist.add('source_key', m.source_key, reason);
       // the same picture re-uploaded anywhere else stays blocked too
       if (m.phash) db.prepare('INSERT OR IGNORE INTO phash_blocklist (phash, reason) VALUES (?, ?)').run(m.phash, reason || null);
+      purgeRemovedContent([id]);
       logAction('media', id, 'block', reason, actor);
       if (m.creator_id) creators.refreshStats(m.creator_id);
     })();
@@ -1823,6 +1862,9 @@ const takedowns = {
         purgedMedia++;
       }
 
+      // blocked creators' older removed rows: keep their hashes blocked, then clear the identifiers
+      for (const cid of blockedCreatorIds) { rememberRemovedHashes(cid, why); purgeRemovedFor(cid); }
+      purgeRemovedContent(removedMediaIds);
       for (const cid of affectedCreators) {
         creatorQ.stats.run({ id: cid });
       }

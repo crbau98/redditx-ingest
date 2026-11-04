@@ -800,7 +800,23 @@ function v21(db) {
   }
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21];
+// Removed media kept its embeddings, hashes and URLs. Keep each removed item's hashes in the blocklists
+// (they are what stops a re-upload), then clear the identifiers. Only publish_state = 'removed' rows change.
+function v22(db) {
+  db.exec(`INSERT OR IGNORE INTO phash_blocklist (phash, reason)
+    SELECT phash, COALESCE(review_reason, 'removed') FROM media WHERE publish_state = 'removed' AND phash IS NOT NULL`);
+  db.exec(`INSERT OR IGNORE INTO blocklist (type, value, reason)
+    SELECT 'hash', lower(hash), review_reason FROM media
+    WHERE publish_state = 'removed' AND hash NOT LIKE 'purged:%'`);
+  if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'media_embeddings'").get()) {
+    db.exec("DELETE FROM media_embeddings WHERE media_id IN (SELECT id FROM media WHERE publish_state = 'removed')");
+  }
+  db.exec(`UPDATE media SET phash = NULL, hash = 'purged:' || id, media_url = '', preview_url = NULL,
+    thumbnail_url = NULL, thumb_url = NULL, hls_url = NULL, tint = NULL
+    WHERE publish_state = 'removed' AND hash NOT LIKE 'purged:%'`);
+}
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });
