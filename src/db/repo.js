@@ -354,7 +354,35 @@ function buildLibrary() {
   const visibleCreators = new Set(db.prepare("SELECT id FROM creators WHERE status = 'active' AND scope != 'excluded'").all().map((r) => r.id));
   return { tagCount, creatorTags, tagCreators, tagList, total, visibleCreators };
 }
+/** The similarity index for a library, built alongside it (src/lib/similarity.js), so no request builds it. */
+function libraryWithIndex() {
+  const lib = buildLibrary();
+  return { lib, index: require('../lib/similarity').indexFor(lib, GENERIC_TAGS) };
+}
+// Served while the first worker build is running: empty results, never a blocking build.
+const EMPTY_LIBRARY = { tagCount: new Map(), creatorTags: new Map(), tagCreators: new Map(), tagList: [], total: 0, visibleCreators: new Set() };
+const LIB_MAX_AGE = 60000;
+let libV = -1; // the write counter when the last worker refresh was asked for
+/**
+ * Production (worker mode): never builds on the main thread. The snapshot is built by the aggregate
+ * worker (src/lib/aggregate-jobs.js: 'library'), served stale while a refresh runs, refreshed at most
+ * once a minute and only after a write on this process. Before the first build it is empty.
+ * Tests and ':memory:' databases (no worker): synchronous, exact, as before.
+ */
 function library() {
+  const snapshots = require('../lib/snapshots');
+  if (!snapshots.USE_WORKER) return libraryInline();
+  const entry = snapshots.peek('library');
+  const v = changesV.get().v;
+  if (!entry || (v !== libV && Date.now() - entry.at > LIB_MAX_AGE)) {
+    libV = v;
+    snapshots.refresh('library').catch((e) => console.error('[library] refresh failed:', e.message));
+  }
+  if (!entry) return EMPTY_LIBRARY;
+  require('../lib/similarity').adopt(entry.value.lib, entry.value.index);
+  return entry.value.lib;
+}
+function libraryInline() {
   const v = changesV.get().v;
   if (!snap.data || (SNAP_MAX_AGE === 0 && v !== snap.v)) { snap.data = buildLibrary(); snap.at = Date.now(); snap.v = changesV.get().v; return snap.data; }
   if (v !== snap.v && Date.now() - snap.at > SNAP_MAX_AGE && !snap.pending) {
@@ -1868,6 +1896,6 @@ function getDiscoveryLead(platform, externalId) {
 module.exports = {
   db, nowIso, clampInt, upsertDiscoveryLead, getDiscoveryLead, cleanTag, ftsQuery, settings, hosts, blocklist, logAction, suggest, audit,
   creators, feeds, runs, media, reports, addTags, publicStats, adminOverview, discover,
-  candidates, discoveryState, onlyfans, takedowns, mentionSource, discoveryTargets, communityHangouts, PLATFORM_TAGS, GENERIC_TAGS, tagIntel, library,
+  candidates, discoveryState, onlyfans, takedowns, mentionSource, discoveryTargets, communityHangouts, PLATFORM_TAGS, GENERIC_TAGS, tagIntel, library, libraryWithIndex,
   serializeMedia, serializeCreator, SELECT_CREATOR_CARD,
 };
