@@ -72,21 +72,32 @@ function evidenceChips(text) {
 }
 
 /** The creator's small knowledge graph as one row of jump links: accounts, paid pages, web matches, co-stars, style. */
+/** Unhide a connections chip (and its strip) once the section it jumps to exists. */
+function revealJump(root, to) {
+  const chip = root.querySelector(`[data-jump="${to}"]`);
+  if (!chip) return;
+  chip.hidden = false;
+  const strip = chip.closest('.conn-strip'); if (strip) strip.hidden = false;
+}
+
 function connectionsStrip(c, { onElsewhere }) {
   const accounts = (c.accounts || []).filter((a) => a.url).length;
   const paid = paidPages(c).length;
   const web = Array.isArray(c.webMatches) ? c.webMatches.length : 0;
   const jump = (id) => () => { const el = document.getElementById(id); if (el) el.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }); };
-  const chip = (ic, label, n, onclick) => h('button', { type: 'button', class: 'chip conn-chip', 'data-jump': label === 'Co-stars' ? 'conn-collabs' : label === 'Similar style' ? 'conn-similar' : '', onclick }, icon(ic, 'sm'), label, n != null ? h('span', { class: 'n' }, String(n)) : null);
+  // `to` is the id of the section the chip jumps to; the reveal code below finds the chip by it
+  const chip = (ic, label, n, onclick, { to = '', hidden = false } = {}) => h('button', { type: 'button', class: 'chip conn-chip', 'data-jump': to, hidden, onclick }, icon(ic, 'sm'), label, n != null ? h('span', { class: 'n' }, String(n)) : null);
   const chips = [
     accounts ? chip('users', 'Accounts', accounts, onElsewhere) : null,
     paid ? chip('lock', 'Paid pages', paid, onElsewhere) : null,
     web ? chip('compass', 'On the web', web, jump('also-web')) : null,
     // these two sections load after the page: their chips stay hidden until there is something to jump to
-    Object.assign(chip('film', 'Co-stars', null, jump('conn-collabs')), { hidden: true }),
-    Object.assign(chip('sparkle', 'Similar style', null, jump('conn-similar')), { hidden: true }),
+    chip('film', 'Co-stars', null, jump('conn-collabs'), { to: 'conn-collabs', hidden: true }),
+    chip('sparkle', 'Similar creators', null, jump('conn-similar'), { to: 'conn-similar', hidden: true }),
   ].filter(Boolean);
-  return h('nav', { class: 'conn-strip', 'aria-label': `Where ${c.display_name || c.handle} connects` }, h('span', { class: 'conn-label' }, 'Connected'), ...chips);
+  const visible = chips.filter((x) => !x.hidden).length;
+  // with nothing to show yet, the strip stays out of the way; revealing a chip shows the strip too
+  return h('nav', { class: 'conn-strip', hidden: visible === 0, 'aria-label': `Where ${c.display_name || c.handle} connects` }, h('span', { class: 'conn-label' }, 'Connected'), ...chips);
 }
 
 function alsoOnWebSection(c) {
@@ -190,7 +201,7 @@ export async function creator(root, { params, query }) {
     stats,
     freeOn.length ? h('div', { class: 'free-on' }, h('span', { class: 'free-on-label' }, 'Free on'), h('div', { class: 'free-on-row' }, freeOn)) : null,
     ext.length ? h('div', { class: 'group' }, h('div', { class: 'group-label' }, 'Other links'), h('div', { class: 'linkrow' }, ext)) : null,
-    c.topTags && c.topTags.length ? h('div', { class: 'row wrap', style: { marginTop: '14px', gap: '6px' } }, c.topTags.slice(0, 10).map((t) => h('a', { class: 'tag', href: href('/explore', { tag: t.name }) }, `#${t.name}`))) : null,
+    c.topTags && c.topTags.length ? h('div', { class: 'group' }, h('div', { class: 'group-label' }, 'Tags'), h('div', { class: 'row wrap', style: { gap: '6px' } }, c.topTags.slice(0, 10).map((t) => h('a', { class: 'tag', href: href('/explore', { tag: t.name }) }, `#${t.name}`)))) : null,
     h('div', { style: { height: '22px' } }),
     connectionsStrip(c, { onElsewhere: () => openElsewhere(c.id, { name: c.display_name || c.handle }) }),
     alsoOnWebSection(c),
@@ -212,7 +223,7 @@ export async function creator(root, { params, query }) {
     anchor.closest('.row').before(h('section', { class: 'section', id: 'conn-collabs', style: { marginTop: '28px' } },
       h('div', { class: 'section-head' }, h('div', null, h('h2', null, icon('users'), 'Frequent Co-Stars & Collabs'), h('div', { class: 'sub' }, 'Creators they scene or feature with'))),
       h('div', { class: 'rail' }, list.map((x) => creatorCard(x, { mini: true, badge: x.collab_count > 1 ? `${x.collab_count} collabs` : 'Co-Star' })))), h('div', { style: { height: '8px' } }));
-    root.querySelector('[data-jump="conn-collabs"]')?.removeAttribute('hidden');
+    revealJump(root, 'conn-collabs');
   }).catch(() => {});
   get(`/api/creators/${c.id}/similar`, { limit: 12 }).then((list) => {
     if (!list.length || !root.isConnected) return;
@@ -221,7 +232,7 @@ export async function creator(root, { params, query }) {
     anchor.closest('.row').before(h('section', { class: 'section', id: 'conn-similar', style: { marginTop: '28px' } },
       h('div', { class: 'section-head' }, h('div', null, h('h2', null, icon('users'), 'Similar creators'), h('div', { class: 'sub' }, 'Based on the tags and styles they post'))),
       h('div', { class: 'rail' }, list.map((x) => creatorCard(x, { mini: true })))), h('div', { style: { height: '8px' } }));
-    root.querySelector('[data-jump="conn-similar"]')?.removeAttribute('hidden');
+    revealJump(root, 'conn-similar');
   }).catch(() => {});
   // OnlyFans creators: more men with a page who post in the same style.
   if (c.onlyfans) get(`/api/creators/${c.id}/similar`, { limit: 12, onlyfans: 1 }).then((list) => {
