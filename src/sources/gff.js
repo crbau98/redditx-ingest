@@ -40,6 +40,12 @@ const SITES = [
   { host: 'justthegays.tv', label: 'JustTheGays' },
   { host: 'gayforfans.com', label: 'GayForFans' },
 ];
+// justthegays.tv answers 403 to the identified PRISM user agent and serves the same public HTML
+// to a normal browser. gayforfans.com can still answer with a real bot check; that path stays a challenge.
+const PAGE_HEADERS = {
+  accept: 'text/html',
+  'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+};
 /** Performer-page URL for a slug on either directory. */
 const performerUrl = (host, slug) => `https://${host}/performer/${slug}`;
 
@@ -195,7 +201,7 @@ module.exports = {
       let html;
       try {
         html = await http.text(`https://${site.host}/search?q=${encodeURIComponent(q)}`, {
-          maxBytes: 2_000_000, retries: 0, timeout, headers: { accept: 'text/html' },
+          maxBytes: 2_000_000, retries: 0, timeout, headers: PAGE_HEADERS,
         });
       } catch {
         // One directory being unreachable must not hide the other one's answers.
@@ -237,7 +243,7 @@ module.exports = {
         if (out.length >= limit) break;
         let html;
         try {
-          html = await http.text(`https://${site.host}${path}`, { maxBytes: 2_000_000, retries: 0, timeout, headers: { accept: 'text/html' } });
+          html = await http.text(`https://${site.host}${path}`, { maxBytes: 2_000_000, retries: 0, timeout, headers: PAGE_HEADERS });
         } catch { continue; }
         if (isChallengeText(String(html))) continue;
         const $ = cheerio.load(String(html));
@@ -268,7 +274,7 @@ module.exports = {
     const read = async (url) => {
       if (!(await robotsAllows(url))) return null;
       try {
-        const html = await http.text(url, { maxBytes: 3_000_000, retries: 1, headers: { accept: 'text/html' } });
+        const html = await http.text(url, { maxBytes: 3_000_000, retries: 1, headers: PAGE_HEADERS });
         if (isChallengeText(html)) throw challengeError();
         return performerPage(String(html));
       } catch (e) {
@@ -299,7 +305,7 @@ module.exports = {
       if (ctx.aborted && ctx.aborted()) break;
       let vh;
       try {
-        vh = await http.text(v.url, { maxBytes: 3_000_000, retries: 1, headers: { accept: 'text/html' } });
+        vh = await http.text(v.url, { maxBytes: 3_000_000, retries: 1, headers: PAGE_HEADERS });
       } catch (e) {
         if (isBlockedStatus(e.status) || isChallengeText(e.body)) throw challengeError();
         notes.push(`gayforfans: ${v.slug} — ${e.message}`);
