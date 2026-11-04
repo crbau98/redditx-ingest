@@ -53,7 +53,7 @@ export async function render(root) {
   const q = parse().query;
   const f = { status: q.get('status') || 'pending', q: q.get('q') || '', sort: q.get('sort') || 'score', platform: q.get('platform') || '', page: parseInt(q.get('page') || '0', 10) };
   const set = (patch) => navigate('/admin/discovery', { ...f, ...patch }, { replace: true });
-  const head = h('div'); const kpis = h('div', { class: 'kpis' }); const tableHost = h('div'); const tune = h('div'); const ofHost = h('div');
+  const head = h('div'); const kpis = h('div', { class: 'kpis' }); const tableHost = h('div'); const tune = h('div'); const wmHost = h('div'); const ofHost = h('div');
   const selected = new Set();
   let data; let seedsText = '';
 
