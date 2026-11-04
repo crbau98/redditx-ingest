@@ -737,4 +737,4 @@ const linkInBioAdapter = {
   },
 };
 
-module.exports = { webAdapter, linkInBioAdapter, extractPage, robotsAllows, parseRobots, pathAllowed, checkHtmlOptOut };
+module.exports = { webAdapter, linkInBioAdapter, extractPage, robotsAllows, parseRobots, pathAllowed, checkHtmlOptOut, _unlockedRead: unlockedRead };
