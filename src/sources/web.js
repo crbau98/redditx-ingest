@@ -512,23 +512,16 @@ async function scrapflyRead(feed, need, cfg, host) {
   const verdict = scrapfly.decide(host);
   if (!verdict.ok) return { skipped: verdict.why };
   const count = (pg) => (need === 'media' ? pg.media.length : pg.links.length);
-  let cost = 0;
   try {
-    const first = await scrapfly.scrape(feed.target, { unblocker: true, renderJs: false });
-    cost += first.cost;
-    let page = first.blocked ? null : extractPage(first.html, feed.target, { headers: first.headers, status: first.status || 200, maxMedia: RENDERED_MAX_MEDIA });
-    if (!page || (!page.optedOut && count(page) === 0)) {
-      const second = await scrapfly.scrape(feed.target, { unblocker: true, renderJs: true });
-      cost += second.cost;
-      const page2 = second.blocked ? null : extractPage(second.html, feed.target, { headers: second.headers, status: second.status || 200, maxMedia: RENDERED_MAX_MEDIA });
-      if (page2 && (!page || count(page2) > count(page))) page = page2;
-    }
-    if (!page) throw Object.assign(new Error('Scrapfly returned a block page, not the page'), { status: 502 });
-    if (!page.optedOut) scrapfly.recordHost(host, { found: count(page) });
-    return { page, via: 'scrapfly-unlocker', notes: [], cost };
+    // the shared helper owns the gate, the budgets, the block-page check, the JS retry and the back-off
+    const r = await scrapfly.read(feed.target, {
+      host,
+      parse: (html, headers) => extractPage(html, feed.target, { headers: headers || {}, status: 200, maxMedia: RENDERED_MAX_MEDIA }),
+      count: (pg) => (pg.optedOut ? 1 : count(pg)),
+    });
+    return { page: r.value, via: 'scrapfly-unlocker', notes: [], cost: r.cost };
   } catch (e) {
-    if (!e.skip && !e.budget) scrapfly.recordHost(host, { found: 0 }); // a refusal or failed answer counts toward the back-off
-    return { error: e, cost };
+    return { error: e, cost: e.cost || 0 };
   }
 }
 

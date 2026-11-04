@@ -11,7 +11,10 @@
  *   - the URL goes through lib/browser4.assertAllowed() first: takedowns, private/loopback hosts, non-http(s) URLs and URLs
  *     with embedded credentials are refused, and nothing is sent to Scrapfly;
  *   - the key is only ever sent as the `key` query parameter. It is redacted from every error message and is never logged;
- *   - daily caps on requests (setting scrapflyBudget) and credits (setting scrapflyCreditBudget) stop the call before it is made;
+ *   - daily caps on requests (scrapflyBudget) and credits (scrapflyCreditBudget), and monthly caps on requests
+ *     (scrapflyMonthlyBudget) and credits (scrapflyMonthlyCreditBudget), stop a call before it is made. Each attempt is checked
+ *     against the cost_budget it actually sends. A COST_BUDGET_LIMIT answer is retried once at the escalated ceiling (80);
+ *     that retry is only made when the caps can cover it;
  *   - a host where Scrapfly keeps finding nothing backs off (12 h, 24 h, 48 h, 72 h), tracked here in repo.settings.
  */
 const config = require('../config');
@@ -83,10 +86,11 @@ function buildParams(url, { unblocker = true, renderJs = false, costBudget = 30,
 
 /** Map a Scrapfly HTTP status to the error kinds the callers already understand (skip / budget / status). */
 function apiError(status, rejectCode) {
-  if (status === 401) return Object.assign(new Error('Scrapfly rejected the key (HTTP 401); check SCRAPFLY_API_KEY'), { skip: true, status });
-  if (status === 403) return Object.assign(new Error('Scrapfly refused this request (HTTP 403: no permission for this account or option)'), { skip: true, status });
-  if (status === 402) return Object.assign(new Error('Scrapfly account has no credit left (HTTP 402)'), { budget: true, status });
-  if (status === 429) return Object.assign(new Error('Scrapfly quota or concurrency limit hit (HTTP 429)'), { budget: true, status });
+  if (status === 401) return Object.assign(new Error('Scrapfly rejected the key (HTTP 401); check SCRAPFLY_API_KEY'), { skip: true, ours: true, status });
+  if (status === 403) return Object.assign(new Error('Scrapfly refused this request (HTTP 403: no permission for this account or option)'), { skip: true, ours: true, status });
+  if (status === 402) return Object.assign(new Error('Scrapfly account has no credit left (HTTP 402)'), { budget: true, ours: true, status });
+  if (status === 429) return Object.assign(new Error('Scrapfly quota or concurrency limit hit (HTTP 429)'), { budget: true, ours: true, status });
+  if (status === 422 && /COST_BUDGET_LIMIT/.test(String(rejectCode || ''))) return Object.assign(new Error(`Scrapfly stopped at the cost ceiling (HTTP 422: ${rejectCode})`), { status, costLimit: true, ours: true });
   if (status === 422) return Object.assign(new Error(`Scrapfly could not fetch the page (HTTP 422${rejectCode ? `: ${rejectCode}` : ''})`), { status, target: true });
   return Object.assign(new Error(`Scrapfly is unavailable (HTTP ${status})`), { status, transient: true });
 }
@@ -100,9 +104,22 @@ async function scrape(url, opts = {}) {
   if (!configured()) throw Object.assign(new Error('SCRAPFLY_API_KEY (or SCRAPFLY_API_KEY_FILE) is not set'), { skip: true });
   // The local content gate comes first: a takedown, a private host or a non-public URL is never sent to a third party.
   await require('./browser4').assertAllowed(url);
+  const sc = config.scrapfly;
+  const first = opts.costBudget || sc.costBudget;
+  try {
+    return await attempt(url, { ...opts, costBudget: first });
+  } catch (e) {
+    // Our ceiling refused a page that costs more than 30 credits: one retry at the escalated ceiling, if the caps can cover it.
+    if (e.costLimit && sc.escalateCostBudget > first) return attempt(url, { ...opts, costBudget: sc.escalateCostBudget });
+    throw e;
+  }
+}
+
+/** One request to Scrapfly. The caps are checked against the cost_budget this attempt will actually send, before it is sent. */
+async function attempt(url, opts) {
   const cfg = settingsStore.get();
   const sc = config.scrapfly;
-  const costBudget = opts.costBudget || sc.costBudget;
+  const costBudget = opts.costBudget;
   const unblocker = opts.unblocker !== false;
   const renderJs = !!opts.renderJs;
   const u0 = usage();
@@ -111,6 +128,9 @@ async function scrape(url, opts = {}) {
   const reserve = reserveFor({ unblocker, renderJs, costBudget });
   if (u0.credits + reserve > cfg.scrapflyCreditBudget) {
     throw Object.assign(new Error(`Scrapfly daily credit budget reached (${u0.credits} of ${cfg.scrapflyCreditBudget} used; this call may cost up to ${reserve})`), { budget: true });
+  }
+  if (u0.monthCredits + reserve > cfg.scrapflyMonthlyCreditBudget) {
+    throw Object.assign(new Error(`Scrapfly monthly credit budget reached (${u0.monthCredits} of ${cfg.scrapflyMonthlyCreditBudget} used; this call may cost up to ${reserve})`), { budget: true });
   }
   const params = buildParams(url, { unblocker, renderJs, costBudget, country: sc.country, proxyPool: sc.proxyPool || undefined, renderWaitMs: sc.renderWaitMs });
   const endpoint = `${sc.baseUrl}?${params.toString()}`;
@@ -130,10 +150,10 @@ async function scrape(url, opts = {}) {
   const cost = Number(headers['x-scrapfly-api-cost']) || 0;
   const remaining = headers['x-scrapfly-remaining-api-credit'] != null ? Number(headers['x-scrapfly-remaining-api-credit']) : null;
   if (res.status !== 200) {
-    const reject = String(headers['x-scrapfly-reject-code'] || '').slice(0, 80);
-    if (res.status === 422) record(cost);
-    else if (res.status < 400) record(cost);
-    else record(0);
+    const bodyText = res.body ? res.body.toString('utf8', 0, 600) : '';
+    const reject = String(headers['x-scrapfly-reject-code'] || (/COST_BUDGET_LIMIT/.test(bodyText) ? 'ERR::SCRAPE::COST_BUDGET_LIMIT' : '')).slice(0, 80);
+    // A 422 was processed by Scrapfly (counts as a request); the account errors 401/402/403/429 are not billed scrapes.
+    record(res.status === 422 || res.status < 400 ? cost : 0);
     throw apiError(res.status, reject);
   }
   record(cost);
@@ -143,7 +163,7 @@ async function scrape(url, opts = {}) {
   const html = String(r.content || '');
   const status = Number(r.status_code) || 0;
   const blocked = status >= 400 || !html || looksBlocked(html);
-  return { status, html, headers: r.headers || {}, cost, remaining, blocked };
+  return { status, html, headers: r.headers || {}, cost, remaining, costBudget, blocked };
 }
 
 /* ------------------------------------------------------- per-host back-off */
@@ -168,4 +188,57 @@ function recordHost(host, { found }) {
   repo.settings.set(hostKey(host), JSON.stringify({ runs: (s.runs || 0) + 1, wins: (s.wins || 0) + (found > 0 ? 1 : 0), streak, after }));
 }
 
-module.exports = { configured, scrape, usage, buildParams, reserveFor, redact, decide, recordHost, hostState, setRequester, apiError };
+/**
+ * The one fallback every caller uses (web pages as HTML, Mastodon-style APIs as JSON). Owns, in one place: the local gate
+ * (inside scrape), the daily request, daily credit and monthly caps (inside scrape), the cost-capped unblocker call, the
+ * block-page check, the per-host back-off, and the optional JavaScript-rendered retry.
+ *
+ * @param {string} url
+ * @param {{json?: boolean, parse?: (html: string, headers: object) => any, count?: (value: any) => number, host?: string}} opts
+ *   json: parse the answer as JSON. parse: custom parser for HTML (throw, or return null, to say "not the page").
+ *   count: how many useful things the answer holds (drives the back-off and whether the JS-rendered retry runs).
+ * @returns {Promise<{value: any, cost: number, rendered: boolean}>} throws skip / budget / status errors like scrape().
+ */
+async function read(url, { json = false, parse, count, host } = {}) {
+  const h = host || hostOfUrl(url);
+  const v = decide(h);
+  if (!v.ok) throw Object.assign(new Error(v.why), { skip: true });
+  const toValue = (r) => {
+    if (r.blocked) return null;
+    try {
+      if (parse) return parse(r.html, r.headers);
+      if (json) return JSON.parse(r.html);
+      return r.html;
+    } catch { return null; }
+  };
+  const n = (value) => (value == null ? 0 : (count ? count(value) : 1));
+  let cost = 0; let rendered = false; let value;
+  try {
+    const first = await scrape(url, { unblocker: true, renderJs: false });
+    cost += first.cost;
+    value = toValue(first);
+    if (!json && n(value) === 0) {
+      // A JavaScript-built page: one rendered retry (costs more, so the scrape() budget checks run again).
+      rendered = true;
+      const second = await scrape(url, { unblocker: true, renderJs: true });
+      cost += second.cost;
+      const v2 = toValue(second);
+      if (v2 != null && n(v2) > n(value)) value = v2;
+    }
+  } catch (e) {
+    // A refusal or a failed answer counts toward the back-off. Our own limits (budget, ceiling, account) never do.
+    if (!e.skip && !e.budget && !e.ours) recordHost(h, { found: 0 });
+    e.cost = cost;
+    throw e;
+  }
+  if (value == null) {
+    recordHost(h, { found: 0 });
+    throw Object.assign(new Error('Scrapfly returned a block page or an unreadable answer, not the page'), { status: 502, cost });
+  }
+  recordHost(h, { found: n(value) });
+  return { value, cost, rendered };
+}
+
+function hostOfUrl(url) { try { return new URL(url).hostname.toLowerCase(); } catch { return ''; } }
+
+module.exports = { configured, scrape, read, attempt, usage, buildParams, reserveFor, redact, decide, recordHost, hostState, setRequester, apiError };

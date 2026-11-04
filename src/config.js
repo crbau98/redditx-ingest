@@ -140,7 +140,8 @@ module.exports = {
     baseUrl: String(env.SCRAPFLY_BASE_URL || 'https://api.scrapfly.io/scrape').trim(),
     country: String(env.SCRAPFLY_COUNTRY || '').trim(),
     proxyPool: String(env.SCRAPFLY_PROXY_POOL || 'public_datacenter_pool').trim(),
-    costBudget: int(env.SCRAPFLY_COST_BUDGET, 40),
+    costBudget: int(env.SCRAPFLY_COST_BUDGET, 30),                 // first attempt: a clean read is 1 credit
+    escalateCostBudget: int(env.SCRAPFLY_ESCALATE_COST_BUDGET, 80), // retried once at this ceiling on COST_BUDGET_LIMIT
     timeoutMs: int(env.SCRAPFLY_TIMEOUT_MS, 90000),
     renderWaitMs: int(env.SCRAPFLY_RENDER_WAIT_MS, 3000),
   },
