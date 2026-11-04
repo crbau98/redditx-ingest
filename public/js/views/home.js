@@ -1,5 +1,5 @@
 import { h, icon, fmt, emptyState } from '../dom.js';
-import { get } from '../api.js';
+import { get, prefetch } from '../api.js';
 import { href } from '../router.js';
 import { platformLabel, platformColor, follows, searches, tastes, history as viewHistory, prefs, visits } from '../store.js';
 import { mediaCard } from '../components/card.js';
@@ -138,6 +138,16 @@ export async function home(root) {
   root.replaceChildren(holder);
   let feed;
   let data;
+  // Everything that does not need /api/discover starts now, with it, instead of one round trip
+  // (150 ms+ on a phone) after another. Each one is only awaited where the page uses it.
+  const open = (list) => (item) => openLightbox(list, Math.max(0, list.findIndex((x) => x.id === item.id)));
+  const followIds = follows.list().map((c) => c.id).slice(0, 100);
+  const followedP = followIds.length ? get('/api/media', { creators: followIds.join(','), sort: 'recent', limit: 14 }).then((r) => r.items, () => []) : Promise.resolve([]);
+  const sinceP = sinceSection();
+  const forYouP = forYouSection(open).catch(() => null);
+  const becauseP = becauseRails(open).catch(() => []);
+  const topicsP = topicCards({ limit: 8 }).catch(() => null);
+  prefetch('/api/media', { sort: 'recent', page: 0, limit: 36 }); // the first feed page, reused by createFeed below
   try { data = await get('/api/discover'); } catch (e) {
     root.replaceChildren(emptyState({ icon: 'alert', title: 'Couldn’t load', text: e.message, actions: [h('button', { class: 'btn primary', onclick: () => home(root) }, 'Try again')] }));
     return () => {};
@@ -176,18 +186,10 @@ export async function home(root) {
   }
 
   // Newest posts from creators this device follows (the server never learns who you follow beyond this request).
-  let fromFollowed = [];
-  const followIds = follows.list().map((c) => c.id).slice(0, 100);
-  if (followIds.length) {
-    try { fromFollowed = (await get('/api/media', { creators: followIds.join(','), sort: 'recent', limit: 14 })).items; } catch { /* rail is optional */ }
-  }
+  const fromFollowed = await followedP; // the rail is optional: a failed request leaves it empty
 
   const parts = [hero];
-  const open = (list) => (item) => openLightbox(list, Math.max(0, list.findIndex((x) => x.id === item.id)));
   // Fetched in parallel with the rest of the page; slotted in when ready.
-  const topicsP = topicCards({ limit: 8 });
-  const sinceP = sinceSection();
-  const becauseP = becauseRails(open);
   const picker = interestPicker(data.tags, async () => { const sec = await forYouSection(open); if (picker.isConnected) { if (sec) picker.replaceWith(sec); else picker.remove(); } });
   const since = await sinceP;
   if (since) parts.push(since);
@@ -196,7 +198,7 @@ export async function home(root) {
     parts.push(h('section', { class: 'section suggested-spotlight' }, sectionHead('users', 'Featured OnlyFans Creators', 'Top creators with verified OnlyFans pages and media in the library — tap to open or follow', { href: href('/creators', { paid: 'onlyfans' }), label: 'All OnlyFans creators' }),
       h('div', { class: 'rail' }, data.topCreators.map((c) => creatorCard(c, { spotlight: true })))));
   }
-  const forYou = await forYouSection(open);
+  const forYou = await forYouP;
   if (forYou) parts.push(forYou);
   const smart = smartFeeds();
   if (smart) parts.push(smart);
