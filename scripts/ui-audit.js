@@ -33,7 +33,7 @@ const VIEWS = [
 ];
 const PAGES = [
   ['home', '/'], ['explore', '/explore'], ['search', '/explore?tags=beard&smart=1&raw=beard'], ['reels', '/reels'], ['browse', '/browse'],
-  ['creators', '/creators'], ['find', '/find'], ['galaxy', '/galaxy'], ['saved', '/saved'], ['following', '/following'],
+  ['creators', '/creators'], ['find', '/find'], ['saved', '/saved'], ['following', '/following'],
 ];
 const ADMIN_PAGES = ['overview', 'feeds', 'creators', 'discovery', 'moderation', 'sources', 'settings'];
 

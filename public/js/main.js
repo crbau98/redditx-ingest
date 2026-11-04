@@ -3,7 +3,7 @@ import { get, post, onAgeRequired, streamPublic, ApiError, clearApiCache, prefet
 import { parse, href, navigate, matchRoute, routeKey } from './router.js';
 import { prefs, favorites, follows, platforms, bus, visits } from './store.js';
 import { syncFromUrl, lightboxOpen as isOpen, openPalette, paletteOpen, surpriseMe, openDisplaySettings, openTakedownForm, openMenu, warm } from './components/ondemand.js';
-import { initTilt, initRails, gpuTier } from './components/fx.js';
+import { initRails } from './components/fx.js';
 import { dropFeedStash } from './components/feed.js';
 import { attachSuggest } from './components/suggest.js';
 import { dur, sharedMotionBusy, spring } from './components/transitions.js';
@@ -30,8 +30,7 @@ const routes = [
   { pattern: '/browse', view: browse, nav: 'explore' },
   { pattern: '/creators', view: creators, nav: 'creators' },
   { pattern: '/find', view: find, nav: 'creators' },
-  // loaded on first visit: the 3D map is the heaviest view and most sessions never open it
-  { pattern: '/galaxy', view: (...a) => import('./views/galaxy.js').then((m) => m.galaxy(...a)), nav: 'creators' },
+  { pattern: '/galaxy', view: () => { navigate('/creators', {}, { replace: true }); return () => {}; }, nav: 'creators' }, // the 3D map was retired; old links land on Creators
   { pattern: '/creator/:id', view: creator, nav: 'creators' },
   { pattern: '/saved', view: saved, nav: 'saved' },
   { pattern: '/admin/:tab?', view: (...a) => import('./views/admin/index.js').then((m) => m.admin(...a)), nav: 'admin' },
@@ -72,7 +71,7 @@ const NAV = [['home', '/', 'Home', 'home'], ['explore', '/explore', 'Explore', '
 
 /* --------------------------------------------------------- global shortcuts */
 function showShortcuts() {
-  const rows = [['Ctrl / ⌘ + K', 'Command palette — jump anywhere, run actions'], ['/', 'Search'], ['?', 'This help'], ['G then H / F / E / R / C / S / M', 'Go to Home, Following, Explore, Reels, Creators, Saved, Galaxy map'], ['X', 'Surprise me (open something random)'],
+  const rows = [['Ctrl / ⌘ + K', 'Command palette — jump anywhere, run actions'], ['/', 'Search'], ['?', 'This help'], ['G then H / F / E / R / C / S', 'Go to Home, Following, Explore, Reels, Creators, Saved'], ['X', 'Surprise me (open something random)'],
     ['In the viewer', ''], ['← / →  (J / K)', 'Previous / next'], ['F · C', 'Save · add to collection'], ['S · I · M', 'Slideshow · details · mute'],
     ['In Reels', ''], ['↑ / ↓  (K / J)', 'Previous / next'], ['Space · M', 'Pause · sound'], ['F · C · Enter', 'Save · collect · open details'], ['Double-tap', 'Save'],
     ['In the review queue (Admin)', ''], ['← / →', 'Move between items'], ['Space', 'Select / deselect'], ['A · H · R', 'Approve · Hide · Remove the selection']];
@@ -87,7 +86,7 @@ function wireShortcuts() {
     if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openPalette(); return; }
     if (e.metaKey || e.ctrlKey || e.altKey || isOpen() || paletteOpen() || $('#modal-root').children.length || e.target.closest('input, textarea, select, [contenteditable]')) return;
     if (Date.now() - g < 1200) {
-      const dest = { h: '/', f: '/following', e: '/explore', r: '/reels', c: '/creators', s: '/saved', b: '/browse', a: '/admin', m: '/galaxy' }[e.key.toLowerCase()];
+      const dest = { h: '/', f: '/following', e: '/explore', r: '/reels', c: '/creators', s: '/saved', b: '/browse', a: '/admin' }[e.key.toLowerCase()];
       g = 0;
       if (dest) { e.preventDefault(); navigate(dest); }
       return;
@@ -103,7 +102,7 @@ function buildShell() {
   // the long example gets cut off mid-word on a phone, so narrow screens get a short one
   const narrow = window.matchMedia('(max-width: 560px)');
   const searchInput = h('input', { class: 'input', type: 'search', id: 'global-search', 'aria-label': 'Search', enterkeyhint: 'search', autocomplete: 'off' });
-  const paintPlaceholder = () => { searchInput.placeholder = narrow.matches ? 'Search creators, tags…' : 'Search creators, tags, or describe what you want'; };
+  const paintPlaceholder = () => { searchInput.placeholder = narrow.matches ? 'Search' : 'Search creators, tags, or describe what you want'; };
   paintPlaceholder();
   narrow.addEventListener('change', paintPlaceholder);
   // Local matches first; the last row hands any query to Discover's verified web lookup.
@@ -155,7 +154,6 @@ function buildShell() {
   const footer = h('footer', { class: 'footer' },
     h('span', null, 'PRISM — adults only (18+)'),
     h('a', { href: href('/browse') }, 'Browse'),
-    h('a', { href: href('/galaxy') }, 'Creator galaxy'),
     h('button', { onclick: showShortcuts }, 'Keyboard shortcuts'),
     h('button', { onclick: openDisplaySettings }, 'Display settings'),
     h('button', { onclick: openTakedownForm }, 'Report content / takedown'),
@@ -211,12 +209,11 @@ window.addEventListener('resize', () => { cancelAnimationFrame(navResize); navRe
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => requestAnimationFrame(placeNavIndicators)); // labels change width when the web font arrives
 
 /* --------------------------------------------------------- route motion */
-// A short opacity + translate on <main>. Skipped for Reels/Galaxy (a transform on main
-// becomes the containing block of their fixed layer) and while a shared-element flight
+// A short opacity + translate on <main>. Skipped for Reels (a transform on main
+// becomes the containing block of its fixed layer) and while a shared-element flight
 // is measuring, so this never fights transitions.js.
 function routeMotionBlocked() {
   return document.body.classList.contains('reels-mode')
-    || document.body.classList.contains('galaxy-mode')
     || window.matchMedia('(prefers-reduced-motion: reduce)').matches
     || sharedMotionBusy();
 }
@@ -315,8 +312,6 @@ async function boot() {
 
   const shell = buildShell();
   wireShortcuts();
-  document.documentElement.dataset.gpu = gpuTier(); // CSS trims costly effects on software rendering
-  initTilt();
   initRails($('#app'));
   // Hover (or touch) on a creator link warms the profile request, so the click opens instantly.
   // Pointer hover waits a brief 65ms intent window so fast cursor sweeps across a grid never fire a storm of prefetches.

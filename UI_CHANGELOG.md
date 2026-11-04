@@ -1,5 +1,15 @@
 # UI changelog
 
+## 2026-11-04 — "Quiet": remove decorative clutter, one calm hero, a clearer creator graph
+
+- **Deleted, not gated:** WebGL prism backdrop (`prism-bg.js`), 3D orbit (`orbit.js`), pointer card tilt/glare (`initTilt`), the 3D galaxy map (`views/galaxy.js`), the GPU probe (`gpuTier`) and the `ambientFx` display setting. `/galaxy` now lands on Creators. About 34 KB of JS and ~120 lines of CSS gone; no WebGL context is created on any page.
+- **Home hero:** one kicker (counts once, no second stats row), headline, one search box, three actions (Find a creator, Watch Reels, Surprise me) and a line of gate copy: "Adults 18+ only. Male creators only. Report anything that doesn't belong." The Featured pill tray moved out (the Featured creators section below already covers it). Phone search placeholders no longer truncate.
+- **Creator page:** a Connected strip (Accounts, Paid pages, On the web, Co-stars, Similar style) jumps to each part of the creator's graph. "Also on the web" is a rail whose cards say why they matched and show evidence as chips.
+- **Why this:** cards now say "You follow X", "You often open X", "You like #tag" or "Similar to @x" instead of "A creator you like".
+- **Touch targets:** link chips, platform pills, tags and "see all" links are 44px tall on touch (measured with Playwright at 390px: 0 interactive elements under 44px on Home, Creators, Creator, Saved and Find).
+
+---
+
 ## 2026-11-02 — "Velocità": Mobile ergonomics, 44px touch targets, and zero-blur guardrails
 
 ### Mobile ergonomics & touch targets (minimum 44px)

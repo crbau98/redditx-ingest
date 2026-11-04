@@ -34,7 +34,7 @@ body {
     var(--bg);
   background-repeat: no-repeat;
 }
-body.reels-mode, body.galaxy-mode { background: var(--bg); }
+body.reels-mode { background: var(--bg); }
 
 /* ---------- type ---------- */
 .page-head h1, .explore-head h1 { font-size: var(--fs-xl); letter-spacing: -.035em; }
@@ -174,8 +174,6 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
   .nav-ind, .card, .btn.primary, .creator-card, .coll-card, .browse-tile, .topic-card { transition: none; }
   .creator-card:hover, .coll-card:hover, .browse-tile:hover, .topic-card:hover { transform: none; }
 }
-/* software rendering (see fx.js gpuTier): no live blur behind the chrome */
-:root[data-gpu='software'] .appbar, :root[data-gpu='software'] .bottomnav, :root[data-gpu='software'] .filterbar { backdrop-filter: none; -webkit-backdrop-filter: none; animation: none; background: var(--bg-elev); }
 /* Decorative layers (the hero glow drifts and scales past 100% width) must never widen the page on a phone.
    clip, not hidden: no scroll container is created, so the sticky app bar keeps working. */
 #app { overflow-x: clip; }
@@ -225,19 +223,9 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
   pointer-events: none;
 }
 
-/* ---------- Hero search & quick jump enhancements ---------- */
+/* ---------- Hero search ---------- */
 .hero-search input {
   transition: border-color var(--dur-base), box-shadow var(--dur-base) var(--ease-out);
-}
-.hero-pill {
-  transition: transform var(--dur-base) var(--spring-snap), background-color var(--dur-quick), border-color var(--dur-quick), box-shadow var(--dur-quick);
-}
-.hero-pill:hover {
-  transform: translateY(-1px) scale(1.02);
-  box-shadow: 0 4px 14px -4px rgba(0, 0, 0, 0.4);
-}
-.hero-pill:active {
-  transform: scale(0.96);
 }
 
 /* ---------- Reels OnlyFans interactive badges & rail CTA ---------- */
@@ -338,8 +326,8 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
 }
 @media (prefers-reduced-motion: reduce) {
   .avatar-ring.live::after { animation: none; }
-  .reel-of-chip, .reel-act.of-reel-btn, .hero-pill { transition: none; }
-  .reel-of-chip:hover, .hero-pill:hover { transform: none; }
+  .reel-of-chip, .reel-act.of-reel-btn { transition: none; }
+  .reel-of-chip:hover { transform: none; }
 }
 
 /* ==========================================================================
@@ -687,3 +675,21 @@ body.reels-mode, body.galaxy-mode { background: var(--bg); }
     align-items: center;
   }
 }
+
+/* ---------- touch targets: every link chip, pill and "see all" is at least 44px tall on touch ---------- */
+@media (pointer: coarse), (max-width: 899px) {
+  .link-more, .ps-pill, .linkchip, .free-pill, a.tag, a.row.card-creator { min-height: 44px; display: inline-flex; align-items: center; }
+  a.row.card-creator { display: flex; min-width: 44px !important; justify-content: center; }
+}
+
+/* ---------- creator: connections strip and "Also on the web" rail ---------- */
+.conn-strip { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 18px 0 6px; }
+.conn-label { font-size: var(--fs-xs); font-weight: var(--fw-strong); letter-spacing: var(--track-label); text-transform: uppercase; color: var(--muted); margin-right: 4px; }
+.conn-chip { min-height: var(--hit); }
+.also-web { margin-top: 20px; }
+.also-web-card { flex: none; display: grid; gap: 4px; align-content: start; width: min(300px, 78vw); padding: 14px; border-radius: var(--r-md); background: var(--surface); box-shadow: var(--shadow-1), 0 0 0 1px var(--line); color: var(--text); text-decoration: none; }
+.also-web-card:hover { box-shadow: 0 0 0 1px var(--line-strong); background: var(--surface-2); }
+.also-web-title { font-weight: var(--fw-strong); margin-top: 6px; }
+.also-web-why { margin: 6px 0 0; font-size: var(--fs-sm); line-height: var(--lh-sm); color: var(--text-2); white-space: normal; }
+.also-web-ev { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.chip.static { cursor: default; pointer-events: none; }

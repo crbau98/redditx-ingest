@@ -1,4 +1,4 @@
-import { h, icon, fmt, emptyState, avatar } from '../dom.js';
+import { h, icon, fmt, emptyState } from '../dom.js';
 import { get } from '../api.js';
 import { href } from '../router.js';
 import { platformLabel, platformColor, follows, searches, tastes, history as viewHistory, prefs, visits } from '../store.js';
@@ -6,7 +6,6 @@ import { mediaCard } from '../components/card.js';
 import { creatorCard } from '../components/creator-card.js';
 import { createFeed } from '../components/feed.js';
 import { openLightbox, surpriseMe } from '../components/ondemand.js';
-import { countUp } from '../components/fx.js';
 import { smartSearch } from '../smart.js';
 import { attachSuggest } from '../components/suggest.js';
 import { topicCards, becauseRails } from '../components/topics.js';
@@ -145,64 +144,27 @@ export async function home(root) {
   }
 
   const s = data.stats;
-  const input = h('input', { class: 'input', type: 'search', placeholder: 'Try “muscle guys at the gym, videos this week”', 'aria-label': 'Search', enterkeyhint: 'search', autocomplete: 'off' });
+  const input = h('input', { class: 'input', type: 'search', placeholder: window.matchMedia('(max-width: 560px)').matches ? 'Search creators or tags' : 'Try “muscle guys at the gym, videos this week”', 'aria-label': 'Search', enterkeyhint: 'search', autocomplete: 'off' });
   const go = () => smartSearch(input.value);
   attachSuggest(input, { id: 'hero-suggest' });
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
 
-  // Stats count up once on arrival; the hero's backdrop is a live WebGL prism shader and
-  // trending media turn on a 3D orbit beside the copy. Both mount after first paint so the
-  // largest paint is not held back by WebGL setup on phones (static wash first, motion after).
-  const stat = (n, label, format = fmt.num) => { const b = h('b', { class: 'num' }, format(n)); requestAnimationFrame(() => countUp(b, n, (v) => format(Math.round(v)))); return h('div', null, b, h('span', null, label)); };
-  const openFromOrbit = (it, list) => openLightbox(list, Math.max(0, list.findIndex((x) => x.id === it.id)));
-  const orbitHolder = h('div', { class: 'hero-visual' });
+  // One calm hero: the promise, one search box, three actions. Counts live in the kicker once (no second stats row),
+  // the featured creators have their own section below, and nothing here animates or loads WebGL.
   const copy = h('div', { class: 'hero-copy' },
-    h('div', { class: 'hero-kicker' }, h('span', { class: 'live-dot' }), `${fmt.num(s.total)} photos & videos · ${fmt.num(s.creators)} creators · updated continuously`),
+    h('div', { class: 'hero-kicker' }, h('span', { class: 'live-dot' }), `${fmt.num(s.total)} photos & videos · ${fmt.num(s.creators)} creators · ${data.platforms.length} sources`),
     h('h1', null, 'The Master Index for ', h('em', null, 'Gay OnlyFans & Male Creators')),
-    h('p', { class: 'lead' }, 'Stream, explore, and follow thousands of gay male creators across OnlyFans, GayForFans, JustTheGays, Bluesky, Reddit, and X — verified, high-res, and organized.'),
+    h('p', { class: 'lead' }, 'Follow gay male creators across OnlyFans, GayForFans, Bluesky, Reddit and X in one place. Public posts only; paid pages link out.'),
     h('div', { class: 'hero-search' }, icon('search', 'lg'), input, h('button', { class: 'btn primary', onclick: go }, 'Search')),
     h('div', { class: 'hero-actions' },
-      h('a', { class: 'btn glass', href: href('/find') }, icon('search', 'sm'), 'Find a creator'),
+      h('a', { class: 'btn glass', href: href('/creators') }, icon('users', 'sm'), 'Find a creator'),
       h('a', { class: 'btn glass', href: href('/reels') }, icon('film', 'sm'), 'Watch Reels'),
-      h('button', { class: 'btn glass', onclick: surpriseMe }, icon('shuffle', 'sm'), 'Surprise me'),
-      h('a', { class: 'btn ghost hide-mobile', href: href('/browse') }, icon('layers', 'sm'), 'Browse everything')),
-    h('div', { class: 'hero-quick-jump', role: 'group', 'aria-label': 'Featured feeds and creators' },
-      h('span', { class: 'hero-quick-label' }, 'Featured'),
-      h('a', { class: 'chip hero-pill of-pill', href: href('/explore', { paid: 'onlyfans' }) }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), 'OnlyFans'),
-      h('a', { class: 'chip hero-pill fresh-pill', href: href('/explore', { fresh: '7' }) }, icon('sparkle', 'sm'), 'Fresh 2026'),
-      h('a', { class: 'chip hero-pill video-pill', href: href('/explore', { type: 'video' }) }, icon('video', 'sm'), 'HD Videos'),
-      ...(data.topCreators || []).slice(0, 5).map((c) =>
-        h('a', { class: 'chip hero-pill creator-pill', href: href(`/creator/${c.id}`), title: `${c.display_name || c.handle} (${c.media_count} posts)` },
-          avatar(c, 18),
-          h('span', null, c.display_name || c.handle)))),
-    h('div', { class: 'hero-stats' }, stat(s.total, 'items'), stat(s.creators, 'creators'), stat(s.videos, 'videos'), stat(data.platforms.length, 'sources', (v) => String(v))));
+      h('button', { class: 'btn glass', onclick: surpriseMe }, icon('shuffle', 'sm'), 'Surprise me')),
+    h('p', { class: 'hero-note' }, 'Adults 18+ only. Male creators only. Report anything that doesn’t belong.'));
   const hero = h('section', { class: 'hero' },
     copy,
-    prefs.ambientFx && data.trending.length >= 5 ? orbitHolder : null,
-    data.tags.length && !(!tastes.ready() && !prefs.introDone) ? h('div', { class: 'hero-chips' }, data.tags.slice(0, 10).map((t) => h('a', { class: 'chip', href: href('/explore', { tag: t.name }) }, `#${t.name}`, h('span', { class: 'n' }, fmt.num(t.count))))) : null);
-  let stopPrism = () => {};
-  let orbit = null;
-  const teardownHero = () => { stopPrism(); if (orbit) orbit.destroy(); };
-  const mountMotion = async () => {
-    if (!prefs.ambientFx || !hero.isConnected) return;
-    try {
-      const [{ createOrbit }, { mountPrismBackground }] = await Promise.all([
-        import('../components/orbit.js'),
-        import('../components/prism-bg.js'),
-      ]);
-      if (!hero.isConnected) return;
-      if (data.trending.length >= 5) {
-        hero.classList.add('hero-split');
-        orbit = createOrbit(data.trending, { onOpen: openFromOrbit, compact: window.matchMedia('(max-width: 899px)').matches });
-        orbitHolder.replaceChildren(orbit.el, h('div', { class: 'orbit-hint' }, icon('chev-l', 'sm'), 'Drag to spin · tap to open', icon('chev-r', 'sm')));
-      }
-      stopPrism = mountPrismBackground(hero);
-    } catch { /* optional ambient effects */ }
-  };
-  if (prefs.ambientFx) {
-    if ('requestIdleCallback' in window) requestIdleCallback(mountMotion, { timeout: 1500 });
-    else setTimeout(mountMotion, 300);
-  }
+    data.tags.length && !(!tastes.ready() && !prefs.introDone) ? h('div', { class: 'hero-chips' }, data.tags.slice(0, 8).map((t) => h('a', { class: 'chip', href: href('/explore', { tag: t.name }) }, `#${t.name}`, h('span', { class: 'n' }, fmt.num(t.count))))) : null);
+  const teardownHero = () => {};
 
   if (!s.total) {
     root.replaceChildren(hero, emptyState({

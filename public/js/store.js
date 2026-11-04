@@ -31,8 +31,6 @@ export const prefs = {
   set accent(v) { write('prism.accent', v); document.documentElement.dataset.accent = v; bus.emit('accent', v); },
   get historyOff() { return read('prism.historyOff', false); },
   set historyOff(v) { write('prism.historyOff', !!v); },
-  get ambientFx() { return read('prism.ambientFx', false); },
-  set ambientFx(v) { write('prism.ambientFx', !!v); bus.emit('ambientFx', !!v); },
   get theme() { return read('prism.theme', 'dark'); }, // dark by default: it is a media app
   set theme(v) {
     write('prism.theme', v);
@@ -317,12 +315,21 @@ export const tastes = {
   /** A short human reason an item was picked for you ("A creator you like", "#beach", "Like @jake"), or null. */
   why(item) {
     if (!item) return null;
-    if (item.reason) return item.reason;
+    const name = item.creator_name || item.creator_handle || 'this creator';
+    if (item.reason) { // the server's short label, said in the user's own terms
+      const r = String(item.reason);
+      if (r === 'A creator you like') return item.creator_id && follows.has(item.creator_id) ? `You follow ${name}` : `You often open ${name}`;
+      if (r.startsWith('#')) return `You like ${r}`;
+      if (r.startsWith('Like @')) return `Similar to ${r.slice(5)}`;
+      return r;
+    }
     const creators = Object.entries(taste.c).sort((a, b) => b[1] - a[1]).slice(0, 25).map(([k]) => k);
-    if (item.creator_id && creators.includes(item.creator_id)) return 'A creator you like';
+    // Say the reason in the user's own terms: who they follow, what they keep opening, which tag they lean on.
+    if (item.creator_id && follows.has(item.creator_id)) return `You follow ${name}`;
+    if (item.creator_id && creators.includes(item.creator_id)) return `You often open ${name}`;
     const top = Object.entries(taste.t).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([k]) => k);
     const hit = (item.tags || []).find((t) => top.includes(t));
-    return hit ? `#${hit}` : null;
+    return hit ? `You like #${hit}` : null;
   },
   /** Query parameters for /api/recommend (weighted: "beach:3.5,beard:1.2"). */
   query({ exclude = [] } = {}) {

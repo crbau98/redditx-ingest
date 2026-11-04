@@ -147,7 +147,7 @@ export function mediaCard(item, { open, compact = false, why = null, eager = fal
     if (reliefIo) reliefIo.observe(media);
   } else ph.classList.add('done');
   // On full cards the "why" chip rides in the caption over the image; compact cards keep it on the media.
-  const whyChip = why ? h('span', { class: 'card-why', title: 'Why you are seeing this' }, icon('sparkle', 'sm'), why) : null;
+  const whyChip = why ? h('span', { class: 'card-why', title: `Why you are seeing this: ${why}. This comes from what you open and save on this device.` }, icon('sparkle', 'sm'), why) : null;
   if (whyChip && compact) media.appendChild(whyChip);
   media.appendChild(h('div', { class: 'card-badges' },
     item.onlyfans ? h('span', { class: `pill of${item.onlyfans.free ? ' free' : ''}`, title: `OnlyFans: ${item.onlyfans.handle}` }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), item.onlyfans.free ? 'OF Free' : 'OnlyFans') : null,

@@ -8,6 +8,7 @@ import { dominantColor, countUp } from '../components/fx.js';
 import { landAvatar } from '../components/transitions.js';
 import { openReport } from '../components/ondemand.js';
 import { platformSwitcher } from '../components/platform-switcher.js';
+import { paidPages, openElsewhere } from '../components/elsewhere.js';
 
 /** Year-long posting heatmap, source split and usual posting hours (UTC → local). */
 function activityPanel(a) {
@@ -53,41 +54,59 @@ function activityPanel(a) {
 const counted = new Set(); // creators whose stats already counted up this visit
 
 
-function matchKindLabel(k) {
-  switch (k) {
-    case 'face+text': return ['good', 'Verified face + handle'];
-    case 'video_keyframe': return ['info', 'Video keyframe match'];
-    case 'seed_crawl': return ['info', 'Linked from bio'];
-    default: return ['', 'Same picture (pHash)'];
-  }
+// Each kind of match says what was compared, in words, so "why is this here?" never needs a guess.
+const MATCH_KINDS = {
+  'face+text': ['good', 'Verified face + handle', 'A face match on this device, backed by the same handle or bio text.'],
+  video_keyframe: ['info', 'Video keyframe', 'A still frame from one of his videos appears on this page.'],
+  seed_crawl: ['info', 'Linked from his bio', 'His own bio or page links here.'],
+};
+function matchKindLabel(k) { return MATCH_KINDS[k] || ['', 'Same picture', 'The same image (perceptual hash) appears on this page.']; }
+
+/** Evidence arrives as one string; show its parts as short chips (max 3, "+N" for the rest). */
+function evidenceChips(text) {
+  const parts = String(text || '').split(/\s*[;·|]\s*/).map((x) => x.trim()).filter(Boolean);
+  if (!parts.length) return null;
+  const shown = parts.slice(0, 3).map((x) => h('span', { class: 'chip sm static', title: x }, x.length > 40 ? `${x.slice(0, 39)}…` : x));
+  if (parts.length > 3) shown.push(h('span', { class: 'chip sm static muted', title: parts.slice(3).join(' · ') }, `+${parts.length - 3}`));
+  return h('div', { class: 'also-web-ev' }, shown);
+}
+
+/** The creator's small knowledge graph as one row of jump links: accounts, paid pages, web matches, co-stars, style. */
+function connectionsStrip(c, { onElsewhere }) {
+  const accounts = (c.accounts || []).filter((a) => a.url).length;
+  const paid = paidPages(c).length;
+  const web = Array.isArray(c.webMatches) ? c.webMatches.length : 0;
+  const jump = (id) => () => { const el = document.getElementById(id); if (el) el.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }); };
+  const chip = (ic, label, n, onclick) => h('button', { type: 'button', class: 'chip conn-chip', 'data-jump': label === 'Co-stars' ? 'conn-collabs' : label === 'Similar style' ? 'conn-similar' : '', onclick }, icon(ic, 'sm'), label, n != null ? h('span', { class: 'n' }, String(n)) : null);
+  const chips = [
+    accounts ? chip('users', 'Accounts', accounts, onElsewhere) : null,
+    paid ? chip('lock', 'Paid pages', paid, onElsewhere) : null,
+    web ? chip('compass', 'On the web', web, jump('also-web')) : null,
+    // these two sections load after the page: their chips stay hidden until there is something to jump to
+    Object.assign(chip('film', 'Co-stars', null, jump('conn-collabs')), { hidden: true }),
+    Object.assign(chip('sparkle', 'Similar style', null, jump('conn-similar')), { hidden: true }),
+  ].filter(Boolean);
+  return h('nav', { class: 'conn-strip', 'aria-label': `Where ${c.display_name || c.handle} connects` }, h('span', { class: 'conn-label' }, 'Connected'), ...chips);
 }
 
 function alsoOnWebSection(c) {
   const list = Array.isArray(c.webMatches) ? c.webMatches : [];
   if (!list.length) return null;
-  return h('section', { class: 'section also-web', style: { marginTop: '20px' } },
+  return h('section', { class: 'section also-web', id: 'also-web' },
     h('div', { class: 'section-head' },
       h('div', null,
         h('h2', null, icon('compass'), 'Also on the web'),
-        h('div', { class: 'sub' }, 'Confirmed public pages where their work or linked accounts appear, with provenance evidence'))),
-    h('div', { class: 'row wrap', style: { gap: '10px' } }, list.slice(0, 12).map((wm) => {
+        h('div', { class: 'sub' }, 'Public pages that show his work or his linked accounts. Each one says why it matched.'))),
+    h('div', { class: 'rail' }, list.slice(0, 12).map((wm) => {
       let host = wm.platform || 'web';
       try { host = new URL(wm.page_url).hostname.replace(/^www\./, ''); } catch { /* ignore */ }
-      const [tone, badgeText] = matchKindLabel(wm.match_kind);
-      return h('a', {
-        class: 'card also-web-card',
-        href: wm.page_url,
-        target: '_blank',
-        rel: 'noopener noreferrer nofollow',
-        style: { padding: '10px 14px', minWidth: '220px', maxWidth: '340px', textDecoration: 'none' },
-      },
-        h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
-          h('span', { class: `badge ${tone}` }, badgeText),
-          h('span', { class: 'muted sm truncate' }, host),
-          h('span', { class: 'grow' }),
-          icon('external', 'sm')),
-        h('div', { class: 'truncate', style: { fontWeight: 600, marginTop: '6px' } }, wm.title || host),
-        wm.evidence ? h('div', { class: 'muted sm truncate', style: { marginTop: '4px' }, title: wm.evidence }, wm.evidence) : null);
+      const [tone, badgeText, why] = matchKindLabel(wm.match_kind);
+      return h('a', { class: 'also-web-card', href: wm.page_url, target: '_blank', rel: 'noopener noreferrer nofollow' },
+        h('div', { class: 'row', style: { gap: '8px' } }, h('span', { class: `badge ${tone}` }, badgeText), h('span', { class: 'grow' }), icon('external', 'sm')),
+        h('div', { class: 'also-web-title truncate' }, wm.title || host),
+        h('div', { class: 'muted sm truncate' }, host),
+        h('p', { class: 'also-web-why' }, why),
+        evidenceChips(wm.evidence));
     })));
 }
 
@@ -171,6 +190,7 @@ export async function creator(root, { params, query }) {
     ext.length ? h('div', { class: 'linkrow' }, ext) : null,
     c.topTags && c.topTags.length ? h('div', { class: 'row wrap', style: { marginTop: '14px', gap: '6px' } }, c.topTags.slice(0, 10).map((t) => h('a', { class: 'tag', href: href('/explore', { tag: t.name }) }, `#${t.name}`))) : null,
     h('div', { style: { height: '22px' } }),
+    connectionsStrip(c, { onElsewhere: () => openElsewhere(c.id, { name: c.display_name || c.handle }) }),
     alsoOnWebSection(c),
     platformSwitcher(c, { value: platform, onChange: (p) => setQ({ platform: p }) }), // pills per platform, plus his paid-page cards
     h('div', { class: 'row wrap', style: { alignItems: 'flex-end', gap: '8px' } }, h('div', { class: 'grow' }, tabs), searchPost, sortSel),
@@ -187,17 +207,19 @@ export async function creator(root, { params, query }) {
     if (!list.length || !root.isConnected) return;
     const anchor = root.querySelector('.tabs');
     if (!anchor) return;
-    anchor.closest('.row').before(h('section', { class: 'section', style: { marginTop: '28px' } },
+    anchor.closest('.row').before(h('section', { class: 'section', id: 'conn-collabs', style: { marginTop: '28px' } },
       h('div', { class: 'section-head' }, h('div', null, h('h2', null, icon('users'), 'Frequent Co-Stars & Collabs'), h('div', { class: 'sub' }, 'Creators they scene or feature with'))),
       h('div', { class: 'rail' }, list.map((x) => creatorCard(x, { mini: true, badge: x.collab_count > 1 ? `${x.collab_count} collabs` : 'Co-Star' })))), h('div', { style: { height: '8px' } }));
+    root.querySelector('[data-jump="conn-collabs"]')?.removeAttribute('hidden');
   }).catch(() => {});
   get(`/api/creators/${c.id}/similar`, { limit: 12 }).then((list) => {
     if (!list.length || !root.isConnected) return;
     const anchor = root.querySelector('.tabs');
     if (!anchor) return;
-    anchor.closest('.row').before(h('section', { class: 'section', style: { marginTop: '28px' } },
-      h('div', { class: 'section-head' }, h('div', null, h('h2', null, icon('users'), 'Similar creators'), h('div', { class: 'sub' }, 'Based on what they post'))),
+    anchor.closest('.row').before(h('section', { class: 'section', id: 'conn-similar', style: { marginTop: '28px' } },
+      h('div', { class: 'section-head' }, h('div', null, h('h2', null, icon('users'), 'Similar creators'), h('div', { class: 'sub' }, 'Based on the tags and styles they post'))),
       h('div', { class: 'rail' }, list.map((x) => creatorCard(x, { mini: true })))), h('div', { style: { height: '8px' } }));
+    root.querySelector('[data-jump="conn-similar"]')?.removeAttribute('hidden');
   }).catch(() => {});
   // OnlyFans creators: more men with a page who post in the same style.
   if (c.onlyfans) get(`/api/creators/${c.id}/similar`, { limit: 12, onlyfans: 1 }).then((list) => {

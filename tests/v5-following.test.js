@@ -127,7 +127,8 @@ describe('front end wiring', () => {
   test('the Following page is routed, in the desktop nav, the phone menu and the palette', () => {
     const main = read('js', 'main.js');
     assert.match(main, /pattern: '\/following', view: following/);
-    assert.match(main, /\['following', '\/following', 'Following', 'rss', true\]/);
+    // Following folded into Creators (five primary tabs): the route stays and highlights Creators
+    assert.match(main, /pattern: '\/following', view: following, nav: 'creators'/);
     assert.match(read('js', 'components', 'menu.js'), /href\('\/following'\)/);
     assert.match(read('js', 'components', 'palette.js'), /go\('\/following'\)/);
   });
