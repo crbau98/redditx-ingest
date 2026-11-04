@@ -6,9 +6,16 @@ const { migrate } = require('./schema');
 
 if (config.dbPath !== ':memory:') fs.mkdirSync(config.dataDir, { recursive: true });
 
-const db = new Database(config.dbPath);
-db.pragma('journal_mode = WAL');
-db.pragma('synchronous = NORMAL');
+// PRISM_DB_READONLY=1: the aggregate worker thread (src/lib/aggregate-worker.js). It reads only, so it
+// never migrates, writes pragmas, or runs the planner refresh below; the main thread owns all of that.
+const READONLY = process.env.PRISM_DB_READONLY === '1';
+const db = READONLY
+  ? new Database(config.dbPath, { readonly: true, fileMustExist: true })
+  : new Database(config.dbPath);
+if (!READONLY) {
+  db.pragma('journal_mode = WAL');
+  db.pragma('synchronous = NORMAL');
+}
 db.pragma('foreign_keys = ON');
 db.pragma('busy_timeout = 5000');
 db.pragma('cache_size = -32000');
@@ -33,8 +40,9 @@ db.function('epoch_ms', { deterministic: true }, (iso) => {
   return Number.isFinite(t) ? t : 0;
 });
 
-const migration = migrate(db);
+const migration = READONLY ? null : migrate(db);
 
+// (Read-only worker connections skip this: the PRAGMAs need a write, fail, and the catch below absorbs it.)
 // Planner statistics. Without them SQLite assumes "publish_state = 'published'" is selective and
 // sorts the whole library instead of walking the right index (ids / community / creator lookups
 // measured 20-50x slower on a 60k-item library). optimize=0x10002 analyses whatever needs it at open

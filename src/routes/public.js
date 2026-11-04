@@ -4,6 +4,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const config = require('../config');
 const repo = require('../db/repo');
+const { snapshot, prime: primeSnapshots } = require('../lib/snapshots');
 const registry = require('../sources');
 const events = require('../engine/events');
 const age = require('../middleware/age');
@@ -98,8 +99,6 @@ const prep = [
   () => repo.media.list({ platform: 'reddit', limit: 48 }),
   () => repo.media.list({ tag: 'gay', limit: 48 }),
   () => repo.creators.list({ sort: 'media', limit: 48 }),
-  () => repo.media.tags(120, 1),
-  () => repo.media.communities(100),
 ];
 const ttl = (ms, fn) => {
   let at = 0; let val; let pending = false;
@@ -115,6 +114,7 @@ const ttl = (ms, fn) => {
 };
 /** Fill every cache once, one per tick, so the first visitors after a deploy never pay for it. */
 function warm() {
+  primeSnapshots(); // the library-wide aggregates, on the worker thread, before any visitor asks
   // Statement prep is the expensive part of SQLite's first run of a query shape (~0.4 s here):
   // touching the hot list queries once at boot keeps the first page load fast for real users.
   const queue = [...prep, ...warmers, () => repo.library()];
@@ -143,23 +143,23 @@ function suggestCached(query, limit = 6) {
   if (suggestCache.size > SUGGEST_CACHE_MAX) suggestCache.delete(suggestCache.keys().next().value);
   return val;
 }
-const discoverCached = ttl(30000, () => {
-  const d = repo.discover();
+// Library-wide aggregates come from the snapshot store (src/lib/snapshots.js): computed on a worker
+// thread, never on a request. The handlers below only shape the snapshot for the response.
+const asyncRoute = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+const discoverView = async () => {
+  const d = await snapshot('discover');
   return {
     ...d,
     trending: d.trending.map(publicMedia), freshVideos: d.freshVideos.map(publicMedia),
     topCreators: d.topCreators.map(publicCreator), newCreators: d.newCreators.map(publicCreator),
     rising: d.rising.map((c) => ({ ...publicCreator(c), week_count: c.week_count })),
   };
-});
-const graphCached = ttl(5 * 60000, () => {
-  const g = repo.creators.graph({ limit: 160 });
+};
+const graphView = async () => {
+  const g = await snapshot('graph');
   return { nodes: g.nodes.map((n) => ({ id: n.id, handle: n.handle, display_name: n.display_name, avatar_url: n.avatar_url, media_count: n.media_count, last_media_at: n.last_media_at, preview: n.preview, group: n.group })), links: g.links };
-});
+};
 const vocabCached = ttl(60000, () => buildVocabulary(repo.tagIntel.vocabulary()));
-const topicsCached = ttl(10 * 60000, () => repo.tagIntel.topics());
-const tagsCached = ttl(60000, () => repo.media.tags(120, 1));
-const communitiesCached = ttl(60000, () => repo.media.communities(100));
 
 /* ------------------------------------------------------------------- open */
 // Event-loop delay: when the server stalls (a long synchronous job), pages time out even though nothing crashed.
@@ -221,8 +221,8 @@ router.post('/report', reportLimiter, (req, res) => {
 /* -------------------------------------------------------- age-gated content */
 router.use(['/discover', '/stats', '/suggest', '/search', '/recommend', '/graph', '/understand', '/topics', '/media', '/creators', '/tags', '/communities', '/subreddits', '/platforms', '/stream', '/lookup'], age.requireAge);
 
-router.get('/discover', (req, res) => res.json(discoverCached()));
-router.get('/stats', (req, res) => res.json(repo.publicStats()));
+router.get('/discover', asyncRoute(async (req, res) => res.json(await discoverView())));
+router.get('/stats', asyncRoute(async (req, res) => res.json(await snapshot('stats'))));
 
 router.get('/media', (req, res) => {
   const r = repo.media.list(mediaFilters(req.query));
@@ -367,7 +367,7 @@ router.get('/recommend/creators', (req, res) => {
   res.json(recs.creatorsForYou(t, repo.clampInt(req.query.limit, 1, 30, 12)).map((c) => ({ ...publicCreator(c), reason: c.reason })));
 });
 
-router.get('/graph', (req, res) => res.json(graphCached()));
+router.get('/graph', asyncRoute(async (req, res) => res.json(await graphView())));
 
 /** /api/understand's answer for an understood query. */
 function understoodPayload(u) {
@@ -442,7 +442,7 @@ router.get('/tags/related', (req, res) => {
   res.json(repo.tagIntel.related(names, repo.clampInt(req.query.limit, 1, 30, 12), { all: req.query.mode !== 'any' }));
 });
 
-router.get('/topics', (req, res) => res.json(topicsCached()));
+router.get('/topics', asyncRoute(async (req, res) => res.json(await snapshot('topics'))));
 
 router.get('/creators/:id/activity', (req, res) => {
   const c = repo.creators.get(req.params.id);
@@ -450,10 +450,10 @@ router.get('/creators/:id/activity', (req, res) => {
   res.json(repo.creators.activity(c.id));
 });
 
-router.get('/tags', (req, res) => res.json(tagsCached().slice(0, repo.clampInt(req.query.limit, 1, 200, 100))));
-router.get('/communities', (req, res) => res.json(communitiesCached()));
-router.get('/subreddits', (req, res) => res.json(communitiesCached().filter((c) => c.platform === 'reddit').map((c) => c.name)));
-router.get('/platforms', (req, res) => res.json(repo.media.platforms()));
+router.get('/tags', asyncRoute(async (req, res) => res.json((await snapshot('tags')).slice(0, repo.clampInt(req.query.limit, 1, 200, 100)))));
+router.get('/communities', asyncRoute(async (req, res) => res.json(await snapshot('communities'))));
+router.get('/subreddits', asyncRoute(async (req, res) => res.json((await snapshot('communities')).filter((c) => c.platform === 'reddit').map((c) => c.name))));
+router.get('/platforms', asyncRoute(async (req, res) => res.json(await snapshot('platforms'))));
 
 router.get('/stream', (req, res) => events.subscribe('public', req, res));
 
