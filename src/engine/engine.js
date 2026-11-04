@@ -572,12 +572,16 @@ function seedCuratedCreators(db) {
     for (const m of seed.media || []) {
       insertMedia.run(m);
     }
-    db.prepare(`
+    // Only the curated creators: the counts are per creator, and a correlated UPDATE over every creator in
+    // the library (14k on prod) cost ~16 s inside this transaction, on the main thread, at boot.
+    const refreshStats = db.prepare(`
       UPDATE creators SET
         media_count = (SELECT COUNT(*) FROM media WHERE creator_id = creators.id AND publish_state = 'published'),
         video_count = (SELECT COUNT(*) FROM media WHERE creator_id = creators.id AND publish_state = 'published' AND media_type = 'video'),
         total_score = COALESCE((SELECT SUM(score) FROM media WHERE creator_id = creators.id), 0)
-    `).run();
+      WHERE id = ?
+    `);
+    for (const c of seed.creators) refreshStats.run(c.id);
   });
 
   tx();
@@ -601,15 +605,37 @@ function seedDefaults() {
   }
   seedCuratedCreators(repo.db);
   repo.settings.set('seed_version', String(registry.SEED_VERSION));
+  backfillCreatorStats(repo.db);
   return created;
+}
+
+/**
+ * The seed used to refresh the counts of every creator in one transaction (14k on prod: ~16 s on the main thread).
+ * This does the same for every creator, a few at a time, so the event loop answers between the chunks.
+ */
+function backfillCreatorStats(db, chunk = 25) {
+  const pick = db.prepare('SELECT id FROM creators WHERE id > ? ORDER BY id LIMIT ?');
+  const stmt = db.prepare(`
+    UPDATE creators SET
+      media_count = (SELECT COUNT(*) FROM media WHERE creator_id = creators.id AND publish_state = 'published'),
+      video_count = (SELECT COUNT(*) FROM media WHERE creator_id = creators.id AND publish_state = 'published' AND media_type = 'video'),
+      total_score = COALESCE((SELECT SUM(score) FROM media WHERE creator_id = creators.id), 0)
+    WHERE id = ?`);
+  let after = ''; let done = 0;
+  const step = () => {
+    const ids = pick.all(after, chunk).map((r) => r.id);
+    if (!ids.length) { if (done) events.log('INFO', `Refreshed media counts for ${done} creators`); return; }
+    db.transaction(() => { for (const id of ids) stmt.run(id); })();
+    done += ids.length; after = ids[ids.length - 1];
+    setImmediate(step);
+  };
+  setImmediate(step);
 }
 
 function start() {
   if (state.timer) return;
   state.session.startedAt = new Date().toISOString();
   repo.runs.abandonRunning();
-  const seeded = seedDefaults();
-  if (seeded) events.log('INFO', `Seeded ${seeded} default feeds`);
   const cfg = settingsStore.get();
   state.timer = setInterval(tick, cfg.tickSeconds * 1000);
   state.timer.unref();
@@ -620,7 +646,11 @@ function start() {
     try { repo.runs.prune(settingsStore.get().keepRunHistoryDays); } catch (e) { events.log('ERR', `maintenance: ${e.message}`); }
   }, 10 * 60000);
   state.hotTimer.unref();
-  setTimeout(() => { repo.media.recomputeHotChunked().catch(() => { /* ignore */ }); tick(); }, 2000).unref();
+  setTimeout(() => {
+    // Seeding is a transaction on the main thread: it runs after the first health answer, never before the listener is up.
+    try { seedDefaults(); } catch (e) { events.log('ERR', `seed: ${e.message}`); }
+    repo.media.recomputeHotChunked().catch(() => { /* ignore */ }); tick();
+  }, 2000).unref();
 }
 
 function shutdown() {

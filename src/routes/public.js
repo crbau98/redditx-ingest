@@ -93,11 +93,11 @@ const SWR = !config.isTest;
 const warmers = [];
 /** The hot list-query shapes: first execution pays SQLite statement prep (~0.4 s), so boot runs them. */
 const prep = [
-  () => repo.media.list({ sort: 'recent', limit: 48 }),
-  () => repo.media.list({ sort: 'trending', limit: 48 }),
-  () => repo.media.list({ sort: 'foryou', limit: 48 }),
-  () => repo.media.list({ platform: 'reddit', limit: 48 }),
-  () => repo.media.list({ tag: 'gay', limit: 48 }),
+  () => repo.media.list({ sort: 'recent', limit: 48, noCount: true }),
+  () => repo.media.list({ sort: 'trending', limit: 48, noCount: true }),
+  () => repo.media.list({ sort: 'foryou', limit: 48, noCount: true }),
+  () => repo.media.list({ platform: 'reddit', limit: 48, noCount: true }),
+  () => repo.media.list({ tag: 'gay', limit: 48, noCount: true }),
   () => repo.creators.list({ sort: 'media', limit: 48 }),
 ];
 const ttl = (ms, fn) => {
@@ -117,7 +117,7 @@ function warm() {
   primeSnapshots(); // the library-wide aggregates, on the worker thread, before any visitor asks
   // Statement prep is the expensive part of SQLite's first run of a query shape (~0.4 s here):
   // touching the hot list queries once at boot keeps the first page load fast for real users.
-  const queue = [...prep, ...warmers, () => repo.library()];
+  const queue = [...prep, ...warmers];
   const next = () => { const g = queue.shift(); if (!g) return; try { g(); } catch (e) { console.error('[warm]', e.message); } setImmediate(next); };
   setImmediate(next);
 }
@@ -159,7 +159,13 @@ const graphView = async () => {
   const g = await snapshot('graph');
   return { nodes: g.nodes.map((n) => ({ id: n.id, handle: n.handle, display_name: n.display_name, avatar_url: n.avatar_url, media_count: n.media_count, last_media_at: n.last_media_at, preview: n.preview, group: n.group })), links: g.links };
 };
-const vocabCached = ttl(60000, () => buildVocabulary(repo.tagIntel.vocabulary()));
+// The vocabulary comes from the snapshot store (worker); the built form is kept while the snapshot object is the same.
+let vocabBuilt = { raw: null, built: null };
+async function vocabCached() {
+  const raw = await snapshot('vocabulary');
+  if (vocabBuilt.raw !== raw) vocabBuilt = { raw, built: buildVocabulary(raw) };
+  return vocabBuilt.built;
+}
 
 /* ------------------------------------------------------------------- open */
 // Event-loop delay: when the server stalls (a long synchronous job), pages time out even though nothing crashed.
@@ -354,7 +360,13 @@ router.get('/creators/:id/collabs', (req, res) => {
 const recs = require('../engine/recommend');
 router.get('/recommend', (req, res) => {
   const t = recs.tasteFromQuery(req.query, repo);
-  const r = recs.recommend(t);
+  let r;
+  try { r = recs.recommend(t); } catch (e) {
+    if (e.code !== 'warming') throw e;
+    // the taste profile needs the library, which is still being built: answer with what is trending, say so
+    const tr = repo.media.list({ sort: 'trending', page: t.page, limit: t.limit, type: t.type, notCreators: [...t.avoidCreators], notTags: [...t.avoidTags] });
+    return res.json({ ...tr, items: tr.items.map(publicMedia), personalized: false, warming: true });
+  }
   // Nothing to go on yet (new visitor): fall back to what is trending, so the rail is never empty.
   // Whatever was marked "Not interested" stays out of the fallback too.
   if (!r.personalized) {
@@ -386,10 +398,10 @@ function understoodPayload(u) {
 }
 
 /** Plain-language search → structured filters (see src/lib/query.js). */
-router.get('/understand', (req, res) => {
+router.get('/understand', asyncRoute(async (req, res) => {
   const q = typeof req.query.q === 'string' ? req.query.q : '';
-  res.json(understoodPayload(understand(q, vocabCached())));
-});
+  res.json(understoodPayload(understand(q, await vocabCached())));
+}));
 
 // Each AI reading is one paid API request (answers are cached, and lib/llm enforces a daily budget on top). Over the
 // limit, the rules' reading is answered instead: a search box never shows a 429.
@@ -401,7 +413,7 @@ const aiLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 60, standardHeaders
  */
 router.get('/understand/ai', aiLimiter, async (req, res, next) => { try {
   const q = typeof req.query.q === 'string' ? req.query.q.slice(0, 200) : '';
-  const vocab = vocabCached();
+  const vocab = await vocabCached();
   const rules = understand(q, vocab);
   if (!q.trim() || !rules.text || req.aiLimited) return res.json({ ...understoodPayload(rules), ai: null });
   const r = await ai.readSearch(q, vocab);
@@ -422,7 +434,7 @@ router.get('/search', aiSearchLimiter, async (req, res, next) => { try {
     type: req.query.type === 'image' || req.query.type === 'video' ? req.query.type : undefined,
     sort: SORTS.has(req.query.sort) ? req.query.sort : undefined,
   };
-  const vocab = vocabCached();
+  const vocab = await vocabCached();
   let r = search(q, vocab, opts);
   let aiInfo = null;
   if (req.query.ai === '1' && !req.aiLimited && understand(q, vocab).text) {

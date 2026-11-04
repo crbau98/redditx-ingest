@@ -104,6 +104,7 @@ function createApp() {
     if (err && err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Invalid JSON body' });
     require('./lib/sentry').captureHttpError(err, req);
     if (!config.isTest) console.error('[ERROR]', req.method, req.path, err && err.stack ? err.stack.split('\n').slice(0, 3).join(' | ') : err);
+    if (err && err.code === 'warming') { res.set('Retry-After', String(err.retryAfter || 5)); return res.status(503).json({ error: 'Still warming up, try again shortly', code: 'warming', retryAfter: err.retryAfter || 5 }); }
     res.status((err && err.status) || 500).json({ error: config.isProd ? 'Internal server error' : String((err && err.message) || err) });
   });
 

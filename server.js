@@ -25,8 +25,11 @@ const server = app.listen(config.port, () => {
 
 engine.start();
 maintenance.startupSweepIfNeeded();
-require('./src/routes/public').warmPrep(); // compile the hot SQL now: a cold statement costs the first page load ~0.4 s
-setTimeout(() => require('./src/routes/public').warm(), 1500).unref(); // pre-build the big caches (topics, graph, home)
+// The warm-up waits for the first health answer (src/lib/ready.js): it is main-thread work, and a probe that arrives
+// during it is the one that fails the deploy. The fallback timer still runs it when nothing probes /api/health.
+const { afterHealthy } = require('./src/lib/ready');
+afterHealthy(() => require('./src/routes/public').warmPrep()); // compile the hot SQL: a cold statement costs the first page load
+afterHealthy(() => require('./src/routes/public').warm()); // pre-build the big caches (topics, graph, home)
 backup.start();
 discovery.start();
 health.start();

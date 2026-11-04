@@ -59,12 +59,24 @@ function runOnWorker(name) {
   });
 }
 
+// A job that failed is not re-queued by every request (each one would run the whole job again, and on the
+// worker that is the library build, seconds of CPU per request). The failure is kept for FAIL_BACKOFF_MS and
+// returned to callers; the next attempt starts after that.
+const FAIL_BACKOFF_MS = 30000;
+const failed = new Map(); // name -> { at, error }
+
 function refresh(name) {
   if (inflight.has(name)) return inflight.get(name);
+  const f = failed.get(name);
+  if (f && Date.now() - f.at < FAIL_BACKOFF_MS) return Promise.reject(f.error);
   const run = USE_WORKER ? runOnWorker(name) : Promise.resolve().then(() => computeInline(name));
   const p = run.then((value) => {
+    failed.delete(name);
     store.set(name, { value, at: Date.now() });
     return value;
+  }, (error) => {
+    failed.set(name, { at: Date.now(), error });
+    throw error;
   }).finally(() => { inflight.delete(name); });
   inflight.set(name, p);
   return p;
@@ -99,4 +111,7 @@ function prime() {
 /** The last value of `name` and when it was computed, without waiting or refreshing. */
 function peek(name) { return store.get(name); }
 
-module.exports = { snapshot, prime, refresh, peek, USE_WORKER, _store: store };
+/** Tests only: forget a recorded failure so the next call runs the job again. */
+function _forget(name) { failed.delete(name); }
+
+module.exports = { snapshot, prime, refresh, peek, USE_WORKER, FAIL_BACKOFF_MS, _store: store, _forget };

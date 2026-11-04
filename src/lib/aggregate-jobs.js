@@ -18,6 +18,8 @@ const JOB_FNS = {
   topics: () => repo.tagIntel.topics(),
   // the creator-similarity snapshot and its index, built here so the main thread only receives them
   library: () => repo.libraryWithIndex(),
+  // the query-understanding vocabulary: three library-wide queries, run on the worker (was on the main thread at boot)
+  vocabulary: () => repo.tagIntel.vocabulary(),
 };
 
 /** How long a computed value is served before a background refresh starts. */
@@ -30,6 +32,7 @@ const JOB_TTL_MS = {
   graph: 5 * 60000,
   topics: 10 * 60000,
   library: 60000,
+  vocabulary: 60000,
 };
 
 module.exports = { JOB_FNS, JOB_TTL_MS };

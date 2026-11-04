@@ -359,8 +359,11 @@ function libraryWithIndex() {
   const lib = buildLibrary();
   return { lib, index: require('../lib/similarity').indexFor(lib, GENERIC_TAGS) };
 }
-// Served while the first worker build is running: empty results, never a blocking build.
-const EMPTY_LIBRARY = { tagCount: new Map(), creatorTags: new Map(), tagCreators: new Map(), tagList: [], total: 0, visibleCreators: new Set() };
+// Before the first worker build the library does not exist yet. A read that needs it gets 503 "warming" (with
+// Retry-After, see src/app.js), not an empty 200: an empty answer reads as "there are no similar creators".
+class LibraryWarmingError extends Error {
+  constructor() { super('The library is still being built, try again shortly'); this.status = 503; this.code = 'warming'; this.retryAfter = 5; }
+}
 const LIB_MAX_AGE = 60000;
 let libV = -1; // the write counter when the last worker refresh was asked for
 /**
@@ -378,7 +381,7 @@ function library() {
     libV = v;
     snapshots.refresh('library').catch((e) => console.error('[library] refresh failed:', e.message));
   }
-  if (!entry) return EMPTY_LIBRARY;
+  if (!entry) throw new LibraryWarmingError();
   require('../lib/similarity').adopt(entry.value.lib, entry.value.index);
   return entry.value.lib;
 }
@@ -1907,6 +1910,6 @@ function getDiscoveryLead(platform, externalId) {
 module.exports = {
   db, nowIso, clampInt, upsertDiscoveryLead, getDiscoveryLead, cleanTag, ftsQuery, settings, hosts, blocklist, logAction, suggest, audit,
   creators, feeds, runs, media, reports, addTags, publicStats, adminOverview, discover,
-  candidates, discoveryState, onlyfans, takedowns, mentionSource, discoveryTargets, communityHangouts, PLATFORM_TAGS, GENERIC_TAGS, tagIntel, library, libraryWithIndex,
+  candidates, discoveryState, onlyfans, takedowns, mentionSource, discoveryTargets, communityHangouts, PLATFORM_TAGS, GENERIC_TAGS, tagIntel, library, libraryWithIndex, LibraryWarmingError,
   serializeMedia, serializeCreator, SELECT_CREATOR_CARD,
 };
