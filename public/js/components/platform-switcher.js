@@ -45,7 +45,7 @@ function pills(list, total, value, onChange) {
 function paidCards(pages) {
   if (!pages.length) return null;
   const paidTone = (name) => (/onlyfans/i.test(name) ? ' of' : /fansly/i.test(name) ? ' fansly' : /justfor\.?fans|^jff$/i.test(name) ? ' jff' : '');
-  return h('div', { class: 'ps-paid', role: 'list', 'aria-label': 'Paid pages' }, pages.map((p) => h('a', {
+  return h('div', { class: 'group' }, h('div', { class: 'group-label' }, `Paid pages · ${pages.length}`), h('div', { class: 'ps-paid', role: 'list', 'aria-label': 'Paid pages' }, pages.map((p) => h('a', {
     class: `ps-card${paidTone(p.name)}`, role: 'listitem', href: p.url, target: '_blank', rel: 'noopener noreferrer nofollow',
     title: `Opens ${p.name} in a new tab`,
   },
@@ -53,7 +53,7 @@ function paidCards(pages) {
   h('span', { class: 'ps-card-meta' },
     p.free ? h('span', { class: 'badge good' }, 'Free tier') : null,
     p.price ? h('span', { class: 'ps-price' }, String(p.price)) : null),
-  icon('external', 'sm'))));
+  icon('external', 'sm')))));
 }
 
 export function platformSwitcher(c, { value = '', onChange = () => {} } = {}) {
@@ -66,7 +66,7 @@ export function platformSwitcher(c, { value = '', onChange = () => {} } = {}) {
     const total = list.reduce((s, p) => s + p.n, 0);
     // one platform and no filter set: nothing to switch between
     if (list.length < 2 && !value) return;
-    el.prepend(pills(list, total, value, onChange));
+    el.prepend(h('div', { class: 'group' }, h('div', { class: 'group-label' }, 'Posts from'), pills(list, total, value, onChange)));
   }).catch(() => {});
   return el;
 }
