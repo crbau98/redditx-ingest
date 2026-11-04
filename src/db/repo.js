@@ -703,6 +703,9 @@ const feeds = {
       return { feed: feedQ.get.get(existing.id), created: false };
     }
     const id = uuid();
+    // A feed on a host that is gone or is the wrong platform is created disabled, so no seed can switch it on.
+    const dead = require('../lib/deadhosts').deadReason(platform, target);
+    if (dead) enabled = 0;
     feedQ.insert.run({
       id, platform, kind, target, label: label || target, creator_id: creatorId, enabled: enabled ? 1 : 0,
       trusted: trusted ? 1 : 0, origin, interval_min: intervalMin, priority, next_run_at: runNow ? null : new Date(Date.now() + intervalMin * 60000).toISOString(),

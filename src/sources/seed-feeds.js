@@ -40,6 +40,7 @@ function deriveFeeds(seed) {
   const add = (platform, kind, target, creatorId, label) => {
     const t = String(target || '').trim();
     if (!t || !creators.has(creatorId)) return;
+    if (require('../lib/deadhosts').deadReason(platform, t)) return; // gone or wrong-platform host: never seeded
     const key = `${platform}|${kind}|${t.toLowerCase()}`;
     if (seen.has(key)) return;
     seen.add(key);
