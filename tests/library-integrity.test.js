@@ -144,3 +144,45 @@ describe('counters are right on write and repaired once', () => {
     assert.equal(tagUsage('youtubetest'), tagRows('youtubetest'));
   });
 });
+
+describe('same handle on different creator rows is a candidate, never an automatic merge', () => {
+  const identity = require('../src/engine/identity');
+  const row = (id) => repo.creators.get(id);
+
+  test('a shared handle is noted for the admin and both rows stay live', () => {
+    const a = repo.creators.create({ handle: 'svandylove', display_name: 'Svandy A' });
+    const b = repo.creators.create({ handle: 'SvandyLove', display_name: 'Svandy B' });
+    const r = identity.scan();
+    assert.ok(r.handleCandidates >= 1);
+    const link = db.prepare("SELECT * FROM identity_links WHERE ((a_id = ? AND b_id = ?) OR (a_id = ? AND b_id = ?))").get(a.id, b.id, b.id, a.id);
+    assert.ok(link, 'the pair is in the admin queue');
+    assert.equal(link.status, 'pending');
+    assert.ok(JSON.parse(link.evidence).some((e) => e.type === 'same-handle' && e.detail === 'svandylove'));
+    assert.equal(row(a.id).status, 'active');
+    assert.equal(row(b.id).status, 'active');
+  });
+
+  test('a shared handle does not auto-merge even with strong evidence and a shared name', () => {
+    const a = repo.creators.create({ handle: 'dann00dann', display_name: 'Dann One' });
+    const b = repo.creators.create({ handle: 'dann00dann', display_name: 'Dann Two' });
+    identity.addAlias(a.id, 'Dann Shared', { kind: 'name', source: 'profile' });
+    identity.addAlias(b.id, 'Dann Shared', { kind: 'name', source: 'profile' });
+    // strong evidence first, before any scan has noted the handle: the live check still keeps it for the admin
+    identity.noteLink(a.id, b.id, { type: 'same-onlyfans', detail: 'dannshared' });
+    const link = db.prepare('SELECT * FROM identity_links WHERE (a_id = ? AND b_id = ?) OR (a_id = ? AND b_id = ?)').get(a.id, b.id, b.id, a.id);
+    assert.equal(link.status, 'pending', 'waits for the admin');
+    assert.equal(row(a.id).status, 'active');
+    assert.equal(row(b.id).status, 'active');
+  });
+
+  test('the admin can still merge the pair', () => {
+    const a = repo.creators.create({ handle: 'beauxanddick', display_name: 'Beaux A' });
+    const b = repo.creators.create({ handle: 'beauxanddick', display_name: 'Beaux B' });
+    identity.scan();
+    const link = db.prepare('SELECT * FROM identity_links WHERE (a_id = ? AND b_id = ?) OR (a_id = ? AND b_id = ?)').get(a.id, b.id, b.id, a.id);
+    const kept = identity.merge(link.id, { actor: 'admin' });
+    assert.ok(kept);
+    const survivors = [a.id, b.id].filter((id) => repo.creators.get(id));
+    assert.equal(survivors.length, 1, 'one of the two rows survives the admin merge');
+  });
+});
