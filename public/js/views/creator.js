@@ -143,7 +143,9 @@ export async function creator(root, { params, query }) {
   const freeOn = (c.accounts || []).map((a) => h('a', { class: 'free-pill', href: a.url, target: '_blank', rel: 'noopener noreferrer nofollow', style: { '--c': platformColor(a.platform) } }, h('span', { class: 'dot' }), h('b', null, platformLabel(a.platform)), h('span', { class: 'h' }, String(a.label).replace(/^[@/]?(?:u\/)?/, ''))));
   if (c.onlyfans && c.onlyfans.free) freeOn.unshift(h('a', { class: 'free-pill of', href: c.onlyfans.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), h('b', null, 'OnlyFans'), h('span', { class: 'h' }, 'free')));
   // The OnlyFans page gets its own button in the header; the other external links stay chips.
-  const ext = (c.links || []).filter((l) => l.url && !(c.onlyfans && /onlyfans\.com/i.test(l.url))).map((l) => h('a', { class: 'linkchip ext', href: l.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, icon('link', 'sm'), l.label || l.service));
+  // paid pages are listed once, under their own label (platform switcher); the other-links row keeps everything else
+  const paidUrls = new Set(paidPages(c).map((p) => p.url));
+  const ext = (c.links || []).filter((l) => l.url && !paidUrls.has(l.url) && !(c.onlyfans && /onlyfans\.com/i.test(l.url))).map((l) => h('a', { class: 'linkchip ext', href: l.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, icon('link', 'sm'), l.label || l.service));
 
   // names and handles he uses elsewhere (creator identity), shown once each
   const aka = [...new Set((c.aliases || []).map((a) => (typeof a === 'string' ? a : a && a.alias)).filter(Boolean))].slice(0, 4);
@@ -187,7 +189,7 @@ export async function creator(root, { params, query }) {
     c.bio ? h('p', { class: 'profile-bio' }, c.bio) : null,
     stats,
     freeOn.length ? h('div', { class: 'free-on' }, h('span', { class: 'free-on-label' }, 'Free on'), h('div', { class: 'free-on-row' }, freeOn)) : null,
-    ext.length ? h('div', { class: 'linkrow' }, ext) : null,
+    ext.length ? h('div', { class: 'group' }, h('div', { class: 'group-label' }, 'Other links'), h('div', { class: 'linkrow' }, ext)) : null,
     c.topTags && c.topTags.length ? h('div', { class: 'row wrap', style: { marginTop: '14px', gap: '6px' } }, c.topTags.slice(0, 10).map((t) => h('a', { class: 'tag', href: href('/explore', { tag: t.name }) }, `#${t.name}`))) : null,
     h('div', { style: { height: '22px' } }),
     connectionsStrip(c, { onElsewhere: () => openElsewhere(c.id, { name: c.display_name || c.handle }) }),
