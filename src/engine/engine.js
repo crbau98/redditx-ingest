@@ -558,6 +558,7 @@ function seedCuratedCreators(db) {
     // Coomer: see sources/seed-feeds. Targets that were a Bluesky handle in an OnlyFans slot are repaired there.
     const derived = deriveFeeds(seed);
     for (const f of derived) {
+      if (require('../lib/deadhosts').deadReason(f.platform, f.target)) continue; // a dead or wrong-platform host is never seeded on
       const id = `seed-${f.platform}-${f.kind}-${crypto.createHash('md5').update(f.target.toLowerCase()).digest('hex').slice(0, 10)}`;
       insertFeed.run(id, f.platform, f.kind, f.target, f.label, f.creator_id, f.interval_min || 240);
     }

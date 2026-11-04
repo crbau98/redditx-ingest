@@ -742,6 +742,14 @@ const feeds = {
   },
 
   update(id, patch) {
+    // Every path that turns a feed on or points it at a new target comes through here (admin PATCH, follow, re-enable,
+    // physique, stagger, import). A feed on a dead or wrong-platform host stays off, whatever the caller asked for.
+    const current = feedQ.get.get(id);
+    if (current && patch && (patch.enabled !== undefined || patch.target !== undefined)) {
+      const wantOn = patch.enabled !== undefined ? !!patch.enabled : !!current.enabled;
+      const target = patch.target !== undefined ? patch.target : current.target;
+      if (wantOn && require('../lib/deadhosts').deadReason(current.platform, target)) patch = { ...patch, enabled: false };
+    }
     const cols = { target: 'target', label: 'label', enabled: 'enabled', trusted: 'trusted', interval_min: 'intervalMin', priority: 'priority', creator_id: 'creatorId' };
     const sets = []; const params = { id };
     for (const [col, key] of Object.entries(cols)) {
