@@ -91,7 +91,7 @@ function repostsOn() { try { return require('../settings').get().reposts !== fal
  * we report it, we do not solve it or route around it.
  */
 function isChallengeText(body) {
-  return /challenge-platform|cf_chl|Just a moment|Attention Required|checking-your-browser/i.test(String(body || '').slice(0, 8192));
+  return /challenge-platform|cf_chl|Just a moment|Attention Required|checking-your-browser|not a bot|Making sure you/i.test(String(body || '').slice(0, 8192));
 }
 
 module.exports = { repostsOn, toIso, decodeHtml, htmlToText, absUrl, clip, uniq, pickWidth, stripQuery, bestSrcset, originOf, errorDetail, isChallengeText };

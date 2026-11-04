@@ -201,7 +201,7 @@ module.exports = {
   color: '#0085ff',
   kinds: ['user', 'search', 'feedgen', 'list'],
   intervalMin: { user: 180, search: 120, feedgen: 90, list: 120 },
-  parsePostView, mediaOf, resolveUri, sessionToken, _resetSession() { session = null; loginInFlight = null; },
+  parsePostView, mediaOf, resolveUri, actorOf, sessionToken, _resetSession() { session = null; loginInFlight = null; },
   isConfigured(kind) {
     if (kind === 'search') {
       return config.creds.bskyIdentifier && config.creds.bskyPassword ? { ok: true } : { ok: false, note: SEARCH_NEEDS_LOGIN };
@@ -224,6 +224,17 @@ module.exports = {
 const BACKFILL_PAGES = 3; // extra pages of older posts per run
 const FIRST_RUN_PAGES = 4; // pages a creator's very first run reads from the top (see maxPages below)
 const BACKFILL_MISSES = 3; // backfill cursors rejected in a row before backfill is given up for a creator
+
+/**
+ * Bluesky handles always contain a dot ("name.bsky.social" or a custom domain). A bare name such as "cademaddox" is the
+ * default-domain handle: the AppView answers it with HTTP 400 "Invalid AT identifier", so it is qualified here.
+ * DIDs (did:...) pass through unchanged.
+ */
+function actorOf(target) {
+  const t = String(target || '').trim().replace(/^@/, '');
+  if (!t || t.startsWith('did:') || t.includes('.')) return t;
+  return `${t}.bsky.social`;
+}
 
 async function fetchFeed(feed, ctx) {
   const cursor = ctx.cursor || {};
@@ -248,7 +259,7 @@ async function fetchFeed(feed, ctx) {
     } else if (feed.kind === 'list') {
       json = await http.json(`${base}/xrpc/app.bsky.feed.getListFeed?list=${encodeURIComponent(uri)}&limit=50${cur()}`);
     } else {
-      json = await http.json(`${base}/xrpc/app.bsky.feed.getAuthorFeed?actor=${encodeURIComponent(String(feed.target).replace(/^@/, ''))}&filter=posts_with_media&limit=50&includePins=false${cur()}`);
+      json = await http.json(`${base}/xrpc/app.bsky.feed.getAuthorFeed?actor=${encodeURIComponent(actorOf(feed.target))}&filter=posts_with_media&limit=50&includePins=false${cur()}`);
     }
     let reachedKnown = false;
     for (const entry of json.feed || []) {
@@ -273,7 +284,7 @@ async function fetchFeed(feed, ctx) {
   // run already read (FIRST_RUN_PAGES) to find where its history stops, then backfill from there. One-off cost, then bfNext is stored.
   const legacy = feed.kind === 'user' && !!cursor.newestAt && !cursor.bfNext && !bfDone;
   if (feed.kind === 'user' && cursor.newestAt && (bfNext || legacy) && !bfDone && !ctx.aborted() && !(ctx.limit && ctx.limit < 20)) {
-    const url = (at) => `${base}/xrpc/app.bsky.feed.getAuthorFeed?actor=${encodeURIComponent(String(feed.target).replace(/^@/, ''))}&filter=posts_with_media&limit=50&includePins=false${at ? `&cursor=${encodeURIComponent(at)}` : ''}`;
+    const url = (at) => `${base}/xrpc/app.bsky.feed.getAuthorFeed?actor=${encodeURIComponent(actorOf(feed.target))}&filter=posts_with_media&limit=50&includePins=false${at ? `&cursor=${encodeURIComponent(at)}` : ''}`;
     const older = [];
     let progress = bfNext; // the cursor to resume from: advances with every page that was read
     try {
