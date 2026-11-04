@@ -1204,6 +1204,32 @@ const media = {
       .run({ now, tol: tolerance }).changes;
   },
 
+  /**
+   * The same refresh as recomputeHot(), but in rowid ranges with a yield between them.
+   *
+   * The single statement rewrites every published row whose score drifted, and it evaluates the
+   * hot_score() SQL function three times per row. On a large library that is minutes of blocked
+   * event loop: requests time out and the platform's health check cannot answer, so a deploy is
+   * killed even though the container is fine. Chunked, the same work is done in pieces small
+   * enough that the server keeps answering between them.
+   */
+  async recomputeHotChunked(tolerance = 0.02, chunk = 20000) {
+    const now = Date.now();
+    const stmt = db.prepare(`UPDATE media SET hot = hot_score(score, likes, views, epoch_ms(posted_at), @now)
+      WHERE seq > @from AND seq <= @to AND publish_state = 'published' AND abs(hot - hot_score(score, likes, views, epoch_ms(posted_at), @now)) > @tol * hot_score(score, likes, views, epoch_ms(posted_at), @now)`);
+    const max = db.prepare('SELECT MAX(seq) AS m FROM media WHERE publish_state = ?').get('published');
+    const top = max && max.m ? max.m : 0;
+    let from = 0;
+    let updated = 0;
+    while (from < top) {
+      const to = Math.min(from + chunk, top);
+      updated += stmt.run({ now, tol: tolerance, from, to }).changes;
+      from = to;
+      await new Promise((r) => setImmediate(r)); // let requests (and the health check) through
+    }
+    return updated;
+  },
+
   communities(limit = 60) {
     return db.prepare(`SELECT community AS name, platform, COUNT(*) AS count FROM media
       WHERE publish_state = 'published' AND scope != 'excluded' AND community IS NOT NULL AND community != ''

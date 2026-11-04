@@ -486,7 +486,10 @@ router.post('/maintenance/store-migrate', async (req, res) => {
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 router.post('/maintenance/store-migrate/stop', (req, res) => res.json({ ok: true, stopped: require('../services/storemigrate').stop() }));
-router.post('/maintenance/recompute', (req, res) => res.json({ ok: true, updated: repo.media.recomputeHot() }));
+router.post('/maintenance/recompute', (req, res) => {
+  // Chunked so a big library does not freeze the event loop while the admin waits.
+  repo.media.recomputeHotChunked().then((updated) => res.json({ ok: true, updated })).catch((e) => res.status(500).json({ error: e.message }));
+});
 
 /* ------------------------------------------------- audit / duplicates / backups / portability */
 router.get('/takedowns', (req, res) => {

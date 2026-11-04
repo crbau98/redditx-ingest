@@ -613,10 +613,13 @@ function start() {
   state.timer = setInterval(tick, cfg.tickSeconds * 1000);
   state.timer.unref();
   state.hotTimer = setInterval(() => {
-    try { repo.media.recomputeHot(); repo.runs.prune(settingsStore.get().keepRunHistoryDays); } catch (e) { events.log('ERR', `maintenance: ${e.message}`); }
+    // Chunked: the refresh rewrites every published row whose score drifted, and one statement
+    // for the whole library blocks the event loop for minutes on a large one.
+    repo.media.recomputeHotChunked().catch((e) => events.log('ERR', `maintenance: ${e.message}`));
+    try { repo.runs.prune(settingsStore.get().keepRunHistoryDays); } catch (e) { events.log('ERR', `maintenance: ${e.message}`); }
   }, 10 * 60000);
   state.hotTimer.unref();
-  setTimeout(() => { try { repo.media.recomputeHot(); } catch { /* ignore */ } tick(); }, 2000).unref();
+  setTimeout(() => { repo.media.recomputeHotChunked().catch(() => { /* ignore */ }); tick(); }, 2000).unref();
 }
 
 function shutdown() {

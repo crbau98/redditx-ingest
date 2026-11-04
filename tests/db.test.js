@@ -34,8 +34,11 @@ const repo = require('../src/db/repo');
 
 describe('migration from a real v3 database', () => {
   test('upgrades in place and reports it', () => {
-    assert.deepEqual(migration, { from: 0, to: 20 });
-    assert.equal(db.pragma('user_version', { simple: true }), 20);
+    // The target is the schema's own migration count: an absolute number goes stale with every
+    // new migration and fails the suite for a reason that has nothing to do with the migration.
+    const { MIGRATIONS } = require('../src/db/schema');
+    assert.deepEqual(migration, { from: 0, to: MIGRATIONS.length });
+    assert.equal(db.pragma('user_version', { simple: true }), MIGRATIONS.length);
     assert.equal(db.pragma('integrity_check', { simple: true }), 'ok');
     assert.deepEqual(db.pragma('foreign_key_check'), []);
   });
@@ -79,8 +82,8 @@ describe('migration from a real v3 database', () => {
     assert.ok(repo.blocklist.has('hash', repo.media.get('m5').hash), 'and it can never be re-imported');
   });
   test('opening again is a no-op', () => {
-    const { migrate } = require('../src/db/schema');
-    assert.deepEqual(migrate(db), { from: 20, to: 20 });
+    const { migrate, MIGRATIONS } = require('../src/db/schema');
+    assert.deepEqual(migrate(db), { from: MIGRATIONS.length, to: MIGRATIONS.length });
   });
 });
 
@@ -162,6 +165,38 @@ describe('repository behaviour', () => {
     repo.media.recomputeHot();
     const order = repo.media.list({ q: 'zzzhot', sort: 'trending' }).items.map((m) => m.title);
     assert.deepEqual(order, ['fresh good zzzhot', 'old banger zzzhot']);
+  });
+  test('the chunked trending recompute gives the same result as the whole-library one', async () => {
+    // The chunked version is what runs at boot and every ten minutes: it must score every row
+    // exactly like the single statement, or trending quietly drifts.
+    const c = repo.creators.create({ handle: 'chunkhot' });
+    for (let i = 0; i < 12; i++) {
+      repo.media.insert(mk(200 + i, {
+        creator_id: c.id, title: `chunk hot ${i}`, score: 100 + i * 50,
+        posted_at: new Date(Date.now() - i * 3600000).toISOString(),
+      }));
+    }
+    const ids = repo.media.list({ q: 'chunk hot', sort: 'recent', limit: 50 }).items.map((m) => m.id).sort();
+    repo.media.recomputeHot();
+    const whole = ids.map((id) => repo.media.get(id).hot);
+    // Score them all back to zero so the chunked pass has real drift to rewrite.
+    for (const id of ids) repo.db.prepare('UPDATE media SET hot = 0 WHERE id = ?').run(id);
+    // A turn counter proves the chunked pass gives the event loop back between chunks: the whole
+    // library in one statement is what made the health check time out.
+    let turns = 0;
+    let counting = true;
+    const tick = () => { if (!counting) return; turns++; setImmediate(tick); };
+    setImmediate(tick);
+    const updated = await repo.media.recomputeHotChunked(0.02, 3); // a tiny chunk, so it really yields
+    counting = false;
+    assert.equal(updated, ids.length, 'every drifted row is rewritten');
+    assert.ok(turns > 1, `the event loop got turns between chunks (got ${turns})`);
+    // The two runs are milliseconds apart, and the score decays with time, so they agree to a
+    // fraction of a percent rather than bit for bit.
+    const chunked = ids.map((id) => repo.media.get(id).hot);
+    for (let i = 0; i < ids.length; i++) {
+      assert.ok(Math.abs(chunked[i] - whole[i]) <= whole[i] * 0.001, `row ${ids[i]} scored ${chunked[i]} vs ${whole[i]}`);
+    }
   });
   test('reports persist and the open count tracks them', () => {
     const before = repo.reports.openCount();
