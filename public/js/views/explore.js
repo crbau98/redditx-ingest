@@ -10,6 +10,15 @@ const SINCE = [['', 'All time'], ['day', 'Past day'], ['week', 'Past week'], ['m
 // URL-only state that is not part of the filter itself (never saved, never sent to the API).
 const UI_KEYS = ['smart', 'raw', 'relaxed', 'from', 'norelax', 'label'];
 
+/** A plain label over a chip rail. The group shows only while the rail has content, because the rail fills in after a request. */
+function labelledGroup(text, rail) {
+  const group = h('div', { class: 'group rail-group', hidden: true }, h('div', { class: 'group-label' }, text), rail);
+  const sync = () => { group.hidden = !!rail.hidden || !rail.childElementCount; };
+  new MutationObserver(sync).observe(rail, { attributes: true, childList: true, attributeFilter: ['hidden'] });
+  sync();
+  return group;
+}
+
 export async function explore(root, { query }) {
   const f = {
     type: query.get('type') || '', sort: query.get('sort') || (query.get('q') ? 'relevance' : 'recent'), platform: query.get('platform') || '',
@@ -164,7 +173,7 @@ export async function explore(root, { query }) {
     btn.addEventListener('click', () => { open = !open; panel.hidden = !open; btn.setAttribute('aria-expanded', String(open)); });
     return [btn, panel];
   })() : [];
-  const bar = h('div', { class: 'filterbar', role: 'toolbar', 'aria-label': 'Explore filters' }, h('div', { class: 'filter-scroll' }, allChip, ofChip, videosChip, photosChip, topRatedChip, followChip, sortSel, ...filtersDisclosure), h('span', { class: 'spacer' }), active.length ? h('div', { class: 'active-filters' }, active) : null);
+  const bar = h('div', { class: 'filterbar', role: 'toolbar', 'aria-label': 'Explore filters' }, h('div', { class: 'filter-scroll' }, h('span', { class: 'group-label filter-label' }, 'Type'), allChip, ofChip, videosChip, photosChip, topRatedChip, followChip, sortSel, ...filtersDisclosure), h('span', { class: 'spacer' }), active.length ? h('div', { class: 'active-filters' }, active) : null);
 
   // Tag rail: with tags in play, show tags that go with them (click narrows); otherwise the most used tags.
   // Required tags (tags= / tag=) are what a refinement narrows, so suggestions are measured against
@@ -175,6 +184,7 @@ export async function explore(root, { query }) {
   const tagRail = focusTags.length ? relatedRail(focusTags, { onPick: addTag, title: 'Narrow with', mode: required.length ? 'all' : 'any' }) : h('div', { class: 'row', style: { gap: '8px', overflowX: 'auto', padding: '14px 0 2px', scrollbarWidth: 'none' } });
 
   const creatorRail = h('div', { class: 'row', style: { gap: '8px', overflowX: 'auto', padding: '10px 0 2px', scrollbarWidth: 'none' }, role: 'group', 'aria-label': 'Filter by creator' });
+  const creatorGroup = labelledGroup('Creator', creatorRail);
 
   const emptyHost = h('div', { class: 'stack empty-wrap', style: { justifyItems: 'center', width: '100%', padding: '36px 0' } },
     f.following && !followIds.length ? emptyState({ icon: 'heart', title: 'You’re not following anyone yet', text: 'Follow a creator and their newest posts collect here.', actions: [h('a', { class: 'btn primary', href: href('/creators') }, 'Browse creators')] })
@@ -208,7 +218,8 @@ export async function explore(root, { query }) {
   });
   let feed = makeFeed();
 
-  root.replaceChildren(h('div', { class: 'page-head explore-head' }, h('div', null, titleEl, count), h('div', { class: 'row wrap' }, reelsBtn, saveBtn)), banner, relaxedNote, bar, creatorRail, tagRail, h('div', { style: { height: '14px' } }), feed.el);
+  const tagGroup = labelledGroup('Tags', tagRail);
+  root.replaceChildren(h('div', { class: 'page-head explore-head' }, h('div', null, titleEl, count), h('div', { class: 'row wrap' }, reelsBtn, saveBtn)), banner, relaxedNote, bar, creatorGroup, tagGroup, h('div', { style: { height: '14px' } }), feed.el);
   const offSearches = bus.on('searches', paintSave);
   // Toggling "Hide seen" (here or from the palette) rebuilds the feed in place.
   const offSeen = bus.on('hideSeen', (on) => {
@@ -226,13 +237,13 @@ export async function explore(root, { query }) {
   }).catch(() => {});
   get('/api/creators', { sort: 'media', platform: f.platform || undefined, limit: 16 }).then((res) => {
     const list = (res && res.items) || [];
-    if (!list.length) { creatorRail.remove(); return; }
+    if (!list.length) { creatorRail.replaceChildren(); return; }
     creatorRail.replaceChildren(
       h('button', { type: 'button', class: `chip${!f.creator ? ' on' : ''}`, 'aria-pressed': String(!f.creator), onclick: () => set({ creator: '' }) }, 'All creators'),
       ...list.map((c) => h('button', { type: 'button', class: `chip${f.creator === c.id ? ' on' : ''}`, 'aria-pressed': String(f.creator === c.id), onclick: () => set({ creator: f.creator === c.id ? '' : c.id }), title: `${c.display_name || c.handle} (${c.media_count} posts)` },
         c.display_name || c.handle, h('span', { class: 'n' }, fmt.num(c.media_count)))),
     );
-  }).catch(() => { creatorRail.remove(); });
+  }).catch(() => { creatorRail.replaceChildren(); });
   if (!focusTags.length) {
     get('/api/tags', { limit: 30 }).then((tags) => {
       tagRail.replaceChildren(...tags.map((t) => h('button', { class: 'chip', onclick: () => set({ tag: t.name }) }, `#${t.name}`, h('span', { class: 'n' }, fmt.num(t.count)))));
