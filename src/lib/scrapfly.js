@@ -24,6 +24,32 @@ const http = require('../sources/http').forPlatform('scrapfly', 1000);
 const { looksBlocked } = require('./brightdata');
 
 const HOUR = 3600 * 1000;
+
+/**
+ * The allowlist (setting scrapflyAllowlist, one creator id or handle per line or comma-separated). The Scrapfly tier may spend
+ * credits ONLY on a feed that belongs to one of these creators. Empty list = the tier never runs.
+ */
+function allowlist() {
+  let raw = '';
+  try { raw = settingsStore.get().scrapflyAllowlist || ''; } catch { raw = ''; }
+  return new Set(String(raw).split(/[\n,]+/).map((x) => x.trim().replace(/^@/, '').toLowerCase()).filter(Boolean));
+}
+
+/** Does this feed belong to an allowlisted creator? Matches the creator id, the creator's handle, or a user feed's own handle. */
+function allowedFor(feed) {
+  const list = allowlist();
+  if (!list.size || !feed) return false;
+  if (feed.creator_id && list.has(String(feed.creator_id).toLowerCase())) return true;
+  try {
+    const c = feed.creator_id ? repo.creators.get(feed.creator_id) : null;
+    if (c && c.handle && list.has(String(c.handle).toLowerCase())) return true;
+  } catch { /* no creator row */ }
+  if (feed.kind === 'user' && feed.target) {
+    const handle = String(feed.target).split('@')[0].replace(/^@/, '').toLowerCase();
+    if (handle && list.has(handle)) return true;
+  }
+  return false;
+}
 const today = () => new Date().toISOString().slice(0, 10);
 const thisMonth = () => new Date().toISOString().slice(0, 7);
 const configured = () => !!config.creds.scrapflyKey;
@@ -109,9 +135,18 @@ async function scrape(url, opts = {}) {
   try {
     return await attempt(url, { ...opts, costBudget: first });
   } catch (e) {
-    // Our ceiling refused a page that costs more than 30 credits: one retry at the escalated ceiling, if the caps can cover it.
-    if (e.costLimit && sc.escalateCostBudget > first) return attempt(url, { ...opts, costBudget: sc.escalateCostBudget });
-    throw e;
+    // The ONLY escalation rule: our ceiling refused the page, the caller allows it, and the caps can cover the 80-credit ceiling
+    // (attempt() checks the caps against the budget it sends). The refused attempt's cost is carried over, once.
+    if (!(opts.escalate && e.costLimit && sc.escalateCostBudget > first)) throw e;
+    const refused = e.cost || 0;
+    try {
+      const r = await attempt(url, { ...opts, costBudget: sc.escalateCostBudget });
+      r.cost += refused;
+      return r;
+    } catch (e2) {
+      e2.cost = refused + (e2.cost || 0);
+      throw e2;
+    }
   }
 }
 
@@ -154,7 +189,9 @@ async function attempt(url, opts) {
     const reject = String(headers['x-scrapfly-reject-code'] || (/COST_BUDGET_LIMIT/.test(bodyText) ? 'ERR::SCRAPE::COST_BUDGET_LIMIT' : '')).slice(0, 80);
     // A 422 was processed by Scrapfly (counts as a request); the account errors 401/402/403/429 are not billed scrapes.
     record(res.status === 422 || res.status < 400 ? cost : 0);
-    throw apiError(res.status, reject);
+    const err = apiError(res.status, reject);
+    err.cost = cost;
+    throw err;
   }
   record(cost);
   let body;
@@ -199,7 +236,8 @@ function recordHost(host, { found }) {
  *   count: how many useful things the answer holds (drives the back-off and whether the JS-rendered retry runs).
  * @returns {Promise<{value: any, cost: number, rendered: boolean}>} throws skip / budget / status errors like scrape().
  */
-async function read(url, { json = false, parse, count, host } = {}) {
+async function read(url, { json = false, parse, count, host, allowed = false, escalate = true } = {}) {
+  if (!allowed) throw Object.assign(new Error('this creator is not on the Scrapfly allowlist (setting scrapflyAllowlist)'), { skip: true });
   const h = host || hostOfUrl(url);
   const v = decide(h);
   if (!v.ok) throw Object.assign(new Error(v.why), { skip: true });
@@ -211,24 +249,30 @@ async function read(url, { json = false, parse, count, host } = {}) {
       return r.html;
     } catch { return null; }
   };
-  const n = (value) => (value == null ? 0 : (count ? count(value) : 1));
-  let cost = 0; let rendered = false; let value;
+  const n = (value) => (value == null || (value && value.optedOut) ? 0 : (count ? count(value) : 1));
+  const cfgSc = config.scrapfly;
+  let cost = 0; let rendered = false; let value = null;
   try {
-    const first = await scrape(url, { unblocker: true, renderJs: false });
+    const first = await scrape(url, { unblocker: true, renderJs: false, escalate: !!escalate });
     cost += first.cost;
     value = toValue(first);
-    if (!json && n(value) === 0) {
-      // A JavaScript-built page: one rendered retry (costs more, so the scrape() budget checks run again).
+    if (value && value.optedOut) {
+      // Our own opt-out (noindex / nopin / takedown) wins exactly as it does for the plain read: not content, not a refusal.
+      return { value, cost, rendered, optedOut: true };
+    }
+    if (!json && n(value) === 0 && value != null) {
+      // A JavaScript-built page: one rendered retry at the first ceiling (the scrape() budget checks run again).
       rendered = true;
       const second = await scrape(url, { unblocker: true, renderJs: true });
       cost += second.cost;
       const v2 = toValue(second);
-      if (v2 != null && n(v2) > n(value)) value = v2;
+      if (v2 != null && (v2.optedOut || n(v2) > n(value))) value = v2;
+      if (value && value.optedOut) return { value, cost, rendered, optedOut: true };
     }
   } catch (e) {
     // A refusal or a failed answer counts toward the back-off. Our own limits (budget, ceiling, account) never do.
     if (!e.skip && !e.budget && !e.ours) recordHost(h, { found: 0 });
-    e.cost = cost;
+    e.cost = cost + (e.cost || 0); // cost of earlier successful phases + this failing phase (counted once)
     throw e;
   }
   if (value == null) {
@@ -241,4 +285,4 @@ async function read(url, { json = false, parse, count, host } = {}) {
 
 function hostOfUrl(url) { try { return new URL(url).hostname.toLowerCase(); } catch { return ''; } }
 
-module.exports = { configured, scrape, read, attempt, usage, buildParams, reserveFor, redact, decide, recordHost, hostState, setRequester, apiError };
+module.exports = { configured, scrape, read, attempt, allowlist, allowedFor, usage, buildParams, reserveFor, redact, decide, recordHost, hostState, setRequester, apiError };

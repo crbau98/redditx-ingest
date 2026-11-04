@@ -104,22 +104,22 @@ const isRefusal = (e) => !!e && ([403, 429, 503].includes(e.status) || e.code ==
  * read through Scrapfly instead (lib/scrapfly.read: the gate, the budgets and the back-off live there). The cost goes into `sink`
  * as a run note so the admin can see which servers are expensive.
  */
-async function getJson(url, host, sink) {
+async function getJson(url, host, ctx) {
   try {
     return await http.json(url, { headers: authHeaders(host) });
   } catch (e) {
     const cfg = settingsStore.get();
-    if (!isRefusal(e) || cfg.scrapflyUnlocker !== 'fallback' || !scrapfly.configured()) throw e;
-    const r = await scrapfly.read(url, { json: true, host, count: (v) => (v && typeof v === 'object' ? 1 : 0) });
-    if (sink) sink.push(`${host}: read through the Scrapfly unblocker (${r.cost} credits)`);
+    if (!isRefusal(e) || cfg.scrapflyUnlocker !== 'fallback' || !scrapfly.configured() || !scrapfly.allowedFor(ctx && ctx.feed)) throw e;
+    const r = await scrapfly.read(url, { json: true, host, allowed: true, count: (v) => (v && typeof v === 'object' ? 1 : 0) });
+    if (ctx && ctx.notes) ctx.notes.push(`${host}: read through the Scrapfly unblocker (${r.cost} credits)`);
     return r.value;
   }
 }
 
-async function lookup(host, name, sink) {
+async function lookup(host, name, ctx) {
   const key = `${name}@${host}`;
   if (accountCache.has(key)) return accountCache.get(key);
-  const acct = await getJson(`${originOf(host)}/api/v1/accounts/lookup?acct=${encodeURIComponent(name)}`, host, sink);
+  const acct = await getJson(`${originOf(host)}/api/v1/accounts/lookup?acct=${encodeURIComponent(name)}`, host, ctx);
   if (!acct || !acct.id) throw Object.assign(new Error(`Mastodon account not found: ${name}@${host}`), { status: 404 });
   accountCache.set(key, acct);
   return acct;
@@ -130,9 +130,9 @@ function splitTarget(target) {
   return { name, host: (host || '').toLowerCase() };
 }
 
-async function pageTimeline(host, path, maxId, sink) {
+async function pageTimeline(host, path, maxId, ctx) {
   const sep = path.includes('?') ? '&' : '?';
-  return getJson(`${originOf(host)}${path}${sep}limit=40${maxId ? `&max_id=${encodeURIComponent(maxId)}` : ''}`, host, sink);
+  return getJson(`${originOf(host)}${path}${sep}limit=40${maxId ? `&max_id=${encodeURIComponent(maxId)}` : ''}`, host, ctx);
 }
 
 /**
@@ -187,11 +187,12 @@ module.exports = {
 
     const targets = [];
     const unlockNotes = []; // Scrapfly cost notes for refused requests
+    const unlockCtx = { notes: unlockNotes, feed };
     if (feed.kind === 'user') {
       const { name, host } = splitTarget(feed.target);
       if (!name || !host) throw new Error('Mastodon user target must look like name@instance.tld');
       let acct;
-      try { acct = await lookup(host, name, unlockNotes); } catch (e) {
+      try { acct = await lookup(host, name, unlockCtx); } catch (e) {
         // Misskey-family servers (Misskey, Sharkey, Firefish...) look like Mastodon from the outside but
         // have their own API. Read them through it instead of failing the feed.
         const misskey = require('./misskey');
@@ -230,7 +231,7 @@ module.exports = {
       try {
         for (let page = 0; page < (cursor.newestAt ? 2 : 4); page++) {
           if (ctx.aborted()) break;
-          const statuses = await pageTimeline(t.host, t.path, maxId, unlockNotes);
+          const statuses = await pageTimeline(t.host, t.path, maxId, unlockCtx);
           if (!Array.isArray(statuses) || !statuses.length) break;
           let reachedKnown = false;
           for (const s of statuses) {

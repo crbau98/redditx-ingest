@@ -74,6 +74,7 @@ test('a block page or a refused target is reported as blocked, not as content', 
   stubAllowed();
   scrapfly.setRequester(async () => answer({ result: { content: '<html><title>Just a moment...</title><body>Checking your browser</body></html>', status_code: 200, headers: {} } }));
   assert.equal((await scrapfly.scrape(PUBLIC, {})).blocked, true);
+  resetUsage(); // the default daily credit cap is 30 now: one clean read cost 1, the next reserve is 30
   scrapfly.setRequester(async () => answer({ result: { content: '<html>gone</html>', status_code: 403, headers: {} } }));
   assert.equal((await scrapfly.scrape(PUBLIC, {})).blocked, true);
   restoreAllowed();

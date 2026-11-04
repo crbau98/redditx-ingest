@@ -39,7 +39,7 @@ const reset = () => { repo.settings.set('scrapfly.usage', ''); };
 test('read() returns parsed JSON from the answer and records the cost', async () => {
   reset(); stubAllowed(); withSettings({ scrapflyBudget: 100, scrapflyCreditBudget: 100, scrapflyMonthlyBudget: 700 });
   scrapfly.setRequester(async () => answer(JSON.stringify({ acct: 'EricNSFW', id: '116957361408268479' }), { cost: 25 }));
-  const r = await scrapfly.read('https://gayfr.example.net/api/v1/accounts/lookup?acct=EricNSFW', { json: true, host: 'gayfr.example.net' });
+  const r = await scrapfly.read('https://gayfr.example.net/api/v1/accounts/lookup?acct=EricNSFW', { json: true, host: 'gayfr.example.net', allowed: true });
   assert.equal(r.value.acct, 'EricNSFW');
   assert.equal(r.cost, 25);
   assert.equal(scrapfly.usage().credits, 25);
@@ -54,7 +54,7 @@ test('read() treats a block page as no answer, and a JS-built HTML page gets one
     seen.push(rendered);
     return answer(rendered ? '<html><body><a href="https://example.org/x">x</a></body></html>' : '<html><div id="root"></div></html>', { cost: rendered ? 6 : 1 });
   });
-  const r = await scrapfly.read('https://links.example.net/page', { host: 'links.example.net', count: (h) => (h.includes('example.org') ? 1 : 0) });
+  const r = await scrapfly.read('https://links.example.net/page', { host: 'links.example.net', allowed: true, count: (h) => (h.includes('example.org') ? 1 : 0) });
   assert.deepEqual(seen, [false, true]);
   assert.equal(r.rendered, true);
   assert.equal(r.cost, 7);
@@ -66,29 +66,29 @@ test('read() never sends a takedown or a private address to Scrapfly', async () 
   let calls = 0;
   scrapfly.setRequester(async () => { calls++; return answer('{}'); });
   repo.takedowns.add({ kind: 'domain', value: 'taken-down-read.example', reason: 'asked' });
-  await assert.rejects(scrapfly.read('https://taken-down-read.example/x', { json: true }), (e) => e.skip === true);
-  await assert.rejects(scrapfly.read('http://10.0.0.5/api', { json: true }), (e) => e.skip === true);
+  await assert.rejects(scrapfly.read('https://taken-down-read.example/x', { json: true, allowed: true }), (e) => e.skip === true);
+  await assert.rejects(scrapfly.read('http://10.0.0.5/api', { json: true, allowed: true }), (e) => e.skip === true);
   assert.equal(calls, 0);
   scrapfly.setRequester(null);
 });
 
 test('Mastodon: a refused lookup is read through Scrapfly when the fallback is on, and the cost is noted', async () => {
-  reset(); stubAllowed(); withSettings({ scrapflyUnlocker: 'fallback', scrapflyBudget: 100, scrapflyCreditBudget: 100, scrapflyMonthlyBudget: 700 });
+  reset(); stubAllowed(); withSettings({ scrapflyUnlocker: 'fallback', scrapflyAllowlist: 'creator-allow', scrapflyBudget: 100, scrapflyCreditBudget: 100, scrapflyMonthlyBudget: 700 });
   directStatus = 403;
   scrapfly.setRequester(async () => answer(JSON.stringify({ id: '1', acct: 'EricNSFW', username: 'EricNSFW' }), { cost: 25 }));
   const sink = [];
-  const acct = await mastodon._getJson('https://gayfr.example.net/api/v1/accounts/lookup?acct=EricNSFW', 'gayfr.example.net', sink);
+  const acct = await mastodon._getJson('https://gayfr.example.net/api/v1/accounts/lookup?acct=EricNSFW', 'gayfr.example.net', { notes: sink, feed: { platform: 'mastodon', kind: 'user', creator_id: 'creator-allow' } });
   assert.equal(acct.acct, 'EricNSFW');
   assert.match(sink[0], /Scrapfly unblocker \(25 credits\)/);
   scrapfly.setRequester(null); restoreAllowed(); restoreSettings();
 });
 
 test('Mastodon: with the fallback off, the refusal is still an error and Scrapfly is not called', async () => {
-  reset(); stubAllowed(); withSettings({ scrapflyUnlocker: 'off' });
+  reset(); stubAllowed(); withSettings({ scrapflyUnlocker: 'off', scrapflyAllowlist: 'creator-allow' });
   directStatus = 403;
   let calls = 0;
   scrapfly.setRequester(async () => { calls++; return answer('{}'); });
-  await assert.rejects(mastodon._getJson('https://gayfr.example.net/api/v1/accounts/lookup?acct=x', 'gayfr.example.net', []), (e) => e.status === 403);
+  await assert.rejects(mastodon._getJson('https://gayfr.example.net/api/v1/accounts/lookup?acct=x', 'gayfr.example.net', { notes: [], feed: { creator_id: 'creator-allow' } }), (e) => e.status === 403);
   assert.equal(calls, 0);
   scrapfly.setRequester(null); restoreAllowed(); restoreSettings();
 });

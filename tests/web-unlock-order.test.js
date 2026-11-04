@@ -30,7 +30,7 @@ const TARGET = 'https://refused.example.net/performer/someone';
 const PAGE = '<html><head><title>Someone</title></head><body><video src="https://cdn.example.org/clip.mp4"></video></body></html>';
 
 function withSettings(over) {
-  settings.get = () => ({ ...realGet(), brightdataUnlocker: 'fallback', brightdataUnlockBudget: 100, scrapflyUnlocker: 'fallback', scrapflyBudget: 20, scrapflyCreditBudget: 100, scrapflyMonthlyBudget: 300, scrapflyMonthlyCreditBudget: 400, ...over });
+  settings.get = () => ({ ...realGet(), brightdataUnlocker: 'fallback', brightdataUnlockBudget: 100, scrapflyUnlocker: 'fallback', scrapflyAllowlist: 'creator-allow', scrapflyBudget: 20, scrapflyCreditBudget: 100, scrapflyMonthlyBudget: 300, scrapflyMonthlyCreditBudget: 400, ...over });
 }
 function restore() {
   settings.get = realGet;
@@ -46,7 +46,7 @@ const scrapflyAnswer = (html, cost) => ({
   body: Buffer.from(JSON.stringify({ result: { content: html, status_code: 200, headers: {} } })),
 });
 const reset = () => repo.settings.set('scrapfly.usage', '');
-const feed = { platform: 'web', kind: 'page', target: TARGET };
+const feed = { platform: 'web', kind: 'page', target: TARGET, creator_id: 'creator-allow' };
 
 test('Bright Data is tried first; when it gives nothing, Scrapfly reads the page and the cost is reported', async () => {
   reset(); withSettings({}); browser4.assertAllowed = async () => {};
@@ -65,7 +65,7 @@ test('Bright Data is tried first; when it gives nothing, Scrapfly reads the page
 
 test('a Bright Data success stops the chain: Scrapfly is not called', async () => {
   reset(); withSettings({}); browser4.assertAllowed = async () => {};
-  const okFeed = { platform: 'web', kind: 'page', target: 'https://bd-ok.example.net/page' }; // its own host: the first test rested refused.example.net
+  const okFeed = { platform: 'web', kind: 'page', target: 'https://bd-ok.example.net/page', creator_id: 'creator-allow' }; // its own host: the first test rested refused.example.net
   brightdata.unlockerConfigured = () => true;
   brightdata.browserConfigured = () => false;
   brightdata.unlock = async () => ({ html: PAGE, status: 200 });

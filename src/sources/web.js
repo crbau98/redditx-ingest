@@ -489,7 +489,7 @@ const REFUSED_STATUS = new Set([403, 429, 503]);
 async function unlockedRead(feed, need) {
   const cfg = settingsStore.get();
   const bdOn = cfg.brightdataUnlocker === 'fallback' && !!cfg.brightdataUnlockBudget && (brightdata.unlockerConfigured() || (brightdata.browserConfigured() && render.enabled()));
-  const scrapOn = cfg.scrapflyUnlocker === 'fallback' && scrapfly.configured();
+  const scrapOn = cfg.scrapflyUnlocker === 'fallback' && scrapfly.configured() && scrapfly.allowedFor(feed);
   if (!bdOn && !scrapOn) return null;
   // robots.txt first, inside this function, because the link-in-bio adapter does not consult it on its own
   if (!(await robotsAllows(feed.target))) return { skipped: 'robots.txt disallows this page' };
@@ -517,7 +517,9 @@ async function scrapflyRead(feed, need, cfg, host) {
     const r = await scrapfly.read(feed.target, {
       host,
       parse: (html, headers) => extractPage(html, feed.target, { headers: headers || {}, status: 200, maxMedia: RENDERED_MAX_MEDIA }),
-      count: (pg) => (pg.optedOut ? 1 : count(pg)),
+      count: (pg) => (pg.optedOut ? 0 : count(pg)),
+      allowed: scrapfly.allowedFor(feed),
+      host,
     });
     return { page: r.value, via: 'scrapfly-unlocker', notes: [], cost: r.cost };
   } catch (e) {
