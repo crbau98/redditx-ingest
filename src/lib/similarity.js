@@ -97,4 +97,7 @@ function between(lib, generic, a, b) {
   return dot / (ix.norms.get(a) * ix.norms.get(b));
 }
 
-module.exports = { neighbours, creatorsForTags, idfOf, between, indexFor };
+/** Attach an index built on the worker thread to the snapshot it was built from. */
+function adopt(lib, index) { if (!perLib.has(lib)) perLib.set(lib, index); }
+
+module.exports = { neighbours, creatorsForTags, idfOf, between, indexFor, adopt };

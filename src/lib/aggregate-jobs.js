@@ -16,6 +16,8 @@ const JOB_FNS = {
   discover: () => repo.discover(),
   graph: () => repo.creators.graph({ limit: 160 }),
   topics: () => repo.tagIntel.topics(),
+  // the creator-similarity snapshot and its index, built here so the main thread only receives them
+  library: () => repo.libraryWithIndex(),
 };
 
 /** How long a computed value is served before a background refresh starts. */
@@ -27,6 +29,7 @@ const JOB_TTL_MS = {
   discover: 30000,
   graph: 5 * 60000,
   topics: 10 * 60000,
+  library: 60000,
 };
 
 module.exports = { JOB_FNS, JOB_TTL_MS };

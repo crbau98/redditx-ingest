@@ -96,4 +96,7 @@ function prime() {
   next();
 }
 
-module.exports = { snapshot, prime, USE_WORKER, _store: store };
+/** The last value of `name` and when it was computed, without waiting or refreshing. */
+function peek(name) { return store.get(name); }
+
+module.exports = { snapshot, prime, refresh, peek, USE_WORKER, _store: store };
