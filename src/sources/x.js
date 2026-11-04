@@ -18,6 +18,7 @@ const { toIso, clip, repostsOn } = require('./util');
 const { extractLinks } = require('../lib/links');
 
 const base = config.baseUrls.x;
+const NO_HIT_TTL_MS = 7 * 24 * 3600 * 1000;
 
 /* X API plans cap how many posts you may read per month. Count what we read and stop
  * using the API (falling back to the keyless route for profiles) before the cap. */
@@ -313,6 +314,11 @@ const SEEN_KEEP = 400;
 async function viaWebSearch(feed, ctx, cursor) {
   const websearch = require('../lib/websearch');
   if (!websearch.configured()) throw Object.assign(new Error('Keyless X needs web search: set SEARXNG_URL (bundled in deploy/) or BRAVE_API_KEY'), { skip: true });
+  // A handle that the last search could not find on x.com is not searched again for a week: the same query returns the same empty answer, and each search is budget.
+  const handleNow = feed.kind === 'user' ? String(feed.target).replace(/^@/, '') : null;
+  if (handleNow && !ctx.force && cursor.noHitAt && Date.now() - Date.parse(cursor.noHitAt) < NO_HIT_TTL_MS) {
+    return { items: [], cursor, notes: [`no x.com posts for @${handleNow} on the last search; searched again after 7 days`], via: 'websearch:cached-miss' };
+  }
   if (webUsage().count >= webBudget()) throw Object.assign(new Error(`Keyless X: today's ${webBudget()} web searches are used (Settings: X web searches per day)`), { skip: true, budget: true });
   let budget = 40; try { budget = require('../settings').get().braveDailyBudget; } catch { /* default */ }
   webSpend();
@@ -347,7 +353,8 @@ async function viaWebSearch(feed, ctx, cursor) {
   }
   if (todo.length && failed === todo.length) throw Object.assign(new Error(`X posts found by web search could not be read (${notes[0]})`), { status: 502 });
   const newestAt = items.reduce((a, it) => (it.postedAt && (!a || it.postedAt > a) ? it.postedAt : a), cursor.newestAt || null);
-  return { items, cursor: { ...cursor, newestAt, seen: [...seen].slice(-SEEN_KEEP) }, notes, via: `websearch${results.provider ? `:${results.provider}` : ''}` };
+  const noHitAt = handle && !posts.length ? new Date().toISOString() : null;
+  return { items, cursor: { ...cursor, newestAt, seen: [...seen].slice(-SEEN_KEEP), noHitAt }, notes, via: `websearch${results.provider ? `:${results.provider}` : ''}` };
 }
 
 /** Keyless profile (name, bio, avatar, links) through fxtwitter. */
@@ -368,7 +375,7 @@ async function lookupUsers(usernames) {
   return (json.data || []).map((u) => ({ username: u.username, name: u.name, description: u.description || '', followers: (u.public_metrics && u.public_metrics.followers_count) || 0, avatar: (u.profile_image_url || '').replace('_normal', '_400x400') || null }));
 }
 
-module.exports = {
+module.exports = { _viaWebSearch: viaWebSearch,
   expandedLinks,
   lookupUsers,
   apiAvailable,

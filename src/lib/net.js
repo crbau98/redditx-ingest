@@ -414,6 +414,12 @@ async function fetchJSON(url, opts = {}) {
   try {
     return JSON.parse(res.body.toString('utf8'));
   } catch {
+    // An HTML page where JSON was expected: a bot-protection interstitial ("Making sure you're not a bot!") or a
+    // parked/moved domain. Named as such so the breaker and feed notes say what is happening; never solved or bypassed.
+    const head = res.body.toString('utf8', 0, 4096);
+    if (/<html|<!doctype/i.test(head) && /not a bot|making sure you|checking your browser|just a moment/i.test(head)) {
+      throw new HttpError(`Bot-protection page instead of JSON from ${url} (the site is challenging automated requests)`, { status: res.status, url, code: 'BOT_CHALLENGE' });
+    }
     throw new HttpError(`Invalid JSON from ${url}`, { status: res.status, url });
   }
 }
