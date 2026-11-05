@@ -76,3 +76,14 @@ test('a picture that is gone for good (404, not an image) is marked at once, as 
   await thumbs.sweep({ limit: 30, fetch });
   assert.equal(tint(gone), ''); assert.equal(tint(junk), '');
 });
+
+test('the work list is read from its partial index (not by sorting every published row), statistics or not', () => {
+  repo.db.prepare('DELETE FROM media').run();
+  const ins = repo.db.prepare("INSERT INTO media (id, platform, source_key, post_key, media_type, media_url, hash, publish_state, tint) VALUES (?, 'rss', ?, ?, 'image', ?, ?, ?, ?)");
+  repo.db.transaction(() => { for (let i = 0; i < 6000; i++) ins.run(`p${i}`, `k${i}`, `k${i}`, `https://x.example/${i}.jpg`, `h${i}`, i % 20 === 0 ? 'review' : 'published', i % 3 ? '#aabbcc' : null); })();
+  const plan = () => repo.db.prepare(`EXPLAIN QUERY PLAN ${thumbs.TODO_SQL}`).all(30).map((r) => r.detail).join(' | ');
+  assert.match(plan(), /ix_media_tint_todo/); assert.doesNotMatch(plan(), /TEMP B-TREE/);
+  repo.db.exec('ANALYZE');
+  assert.match(plan(), /ix_media_tint_todo/); assert.doesNotMatch(plan(), /TEMP B-TREE/);
+  assert.equal(thumbs.progress().remaining, repo.db.prepare("SELECT COUNT(*) AS n FROM media WHERE tint IS NULL AND publish_state = 'published'").get().n);
+});

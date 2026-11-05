@@ -28,16 +28,21 @@ const MAX_TRIES = 4;
 const RETRY_BASE_MS = 2 * 60 * 1000;
 const retry = new Map(); // id -> { tries, until }
 
+// The planner reads every published row and sorts them (ix_media_state + a temporary B-tree: ~0.2 s per call on 300k rows, on the
+// main thread, every minute) instead of walking the partial index made for exactly this question, so the index is named. Same
+// reason as the INDEXED BY in repo.js and engine/health.js.
+const TODO_SQL = `SELECT id, media_type, media_url, preview_url, thumbnail_url, width, height FROM media INDEXED BY ix_media_tint_todo
+    WHERE tint IS NULL AND publish_state = 'published' ORDER BY seq DESC LIMIT ?`;
+
 const q = {
-  todo: repo.db.prepare(`SELECT id, media_type, media_url, preview_url, thumbnail_url, width, height FROM media
-    WHERE tint IS NULL AND publish_state = 'published' ORDER BY seq DESC LIMIT ?`),
+  todo: repo.db.prepare(TODO_SQL),
   // @w/@h only come for a picture (never a video: its poster is not its size) and only fill a size that is missing; a size a source
   // reported is never replaced
   save: repo.db.prepare(`UPDATE media SET tint = @tint, thumb_url = COALESCE(@thumb_url, thumb_url),
     width = CASE WHEN @w IS NOT NULL AND (width IS NULL OR width <= 0 OR height IS NULL OR height <= 0) THEN @w ELSE width END,
     height = CASE WHEN @h IS NOT NULL AND (width IS NULL OR width <= 0 OR height IS NULL OR height <= 0) THEN @h ELSE height END
     WHERE id = @id`),
-  left: repo.db.prepare("SELECT COUNT(*) AS n FROM media WHERE tint IS NULL AND publish_state = 'published'"),
+  left: repo.db.prepare("SELECT COUNT(*) AS n FROM media INDEXED BY ix_media_tint_todo WHERE tint IS NULL AND publish_state = 'published'"),
 };
 
 const hex = (n) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0');
@@ -155,4 +160,4 @@ function start() {
 }
 function stop() { clearInterval(timer); timer = null; }
 
-module.exports = { start, stop, sweep, make, render, progress };
+module.exports = { start, stop, sweep, make, render, progress, TODO_SQL };
