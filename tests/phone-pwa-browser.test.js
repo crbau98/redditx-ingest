@@ -153,14 +153,23 @@ describe('phone behaviours', { timeout: 240000 }, () => {
 });
 
 describe('installed app: service worker', { timeout: 120000 }, () => {
-  test('after one visit the app starts offline from the worker (shell + the reads it already showed)', async (t) => {
+  test('with "Keep what I browse for offline use" on, the app starts offline from the worker (shell + the reads it already showed); off by default', async (t) => {
     const { page, ctx } = await visit(t, { serviceWorkers: 'allow', hash: '/' });
     await page.evaluate(() => navigator.serviceWorker.ready);
     await page.reload(); // now controlled by the worker
     await page.locator('main .card').first().waitFor();
     await page.waitForFunction(() => navigator.serviceWorker.controller, null, { timeout: 5000 });
+    const before = await page.evaluate(async () => (await caches.keys()).sort());
+    assert.ok(before.some((k) => /^prism-shell-v\d+$/.test(k)), `shell cached: ${before}`);
+    assert.ok(!before.includes('prism-api-v1') && !before.includes('prism-img-v1'), `no content cached by default: ${before}`);
+    // the person switches it on (Display > "Keep what I browse for offline use"), then browses
+    await page.evaluate(() => { localStorage.setItem('prism.offlineContent', JSON.stringify(true)); navigator.serviceWorker.controller.postMessage({ type: 'prism-offline-content', on: true }); });
+    await page.reload();
+    await page.locator('main .card').first().waitFor();
+    await page.reload(); // second visit: the reads of the first are in the cache now
+    await page.locator('main .card').first().waitFor();
     const caches = await page.evaluate(async () => (await caches.keys()).sort());
-    assert.ok(caches.some((k) => /^prism-shell-v\d+$/.test(k)) && caches.includes('prism-api-v1'), `caches: ${caches}`);
+    assert.ok(caches.includes('prism-api-v1'), `caches: ${caches}`);
     await ctx.setOffline(true);
     await page.reload();
     await page.locator('.offline-pill').waitFor({ timeout: 8000 });

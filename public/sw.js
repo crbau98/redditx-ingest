@@ -10,11 +10,18 @@
  *              fails (offline). Any write (POST/PUT/PATCH/DELETE) empties it, like the app's own memory cache.
  *   images     /api/proxy pictures: cache-first, newest IMG_MAX kept. Video, HLS, ranges, admin, SSE: never cached.
  *
+ * The api and image caches are OPT-IN and off by default: they would keep adult content on the device, which the previous
+ * worker deliberately never did. The page tells the worker with {type:'prism-offline-content', on:true|false} (Display >
+ * "Keep what I browse for offline use"); the choice is remembered in a tiny cache entry, and turning it off deletes both
+ * caches. The shell, the offline page and the install icons hold no content and are always cached.
+ *
  * Everything is same-origin and capped, and the caches hold only what this device already showed. Posting
  * {type:'prism-clear-caches'} to the worker (the app does on "Clear history") empties them all. */
 const VERSION = 'prism-shell-v9';
 const API_CACHE = 'prism-api-v1';
 const IMG_CACHE = 'prism-img-v1';
+const FLAGS_CACHE = 'prism-flags-v1';
+const OFFLINE_FLAG = '/__prism/offline-content';
 const SHELL = ['/', '/offline.html', '/offline.js', '/css/tokens.css', '/css/app.css', '/css/ux.css', '/css/v6.css', '/css/aurora.css', '/js/main.js', '/favicon.svg', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon-maskable-512.png', '/icons/apple-touch-icon.png'];
 const API_FRESH_MS = 60 * 1000;
 const API_STALE_MS = 24 * 60 * 60 * 1000; // an offline answer older than a day is worse than the offline state
@@ -39,13 +46,29 @@ self.addEventListener('install', (event) => {
   })());
 });
 
+/** Is "keep what I browse for offline use" on? null = not read yet since this worker started. */
+let offlineContent = null;
+async function offlineContentOn() {
+  if (offlineContent === null) offlineContent = !!(await caches.match(OFFLINE_FLAG, { cacheName: FLAGS_CACHE }));
+  return offlineContent;
+}
+
 self.addEventListener('activate', (event) => {
-  const keep = new Set([VERSION, API_CACHE, IMG_CACHE]);
+  const keep = new Set([VERSION, API_CACHE, IMG_CACHE, FLAGS_CACHE]);
   event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => !keep.has(k)).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
 self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'prism-clear-caches') event.waitUntil(Promise.all([caches.delete(API_CACHE), caches.delete(IMG_CACHE)]));
+  const d = event.data;
+  if (!d) return;
+  if (d.type === 'prism-clear-caches') event.waitUntil(Promise.all([caches.delete(API_CACHE), caches.delete(IMG_CACHE)]));
+  if (d.type === 'prism-offline-content') {
+    offlineContent = !!d.on;
+    event.waitUntil((async () => {
+      if (offlineContent) await (await caches.open(FLAGS_CACHE)).put(OFFLINE_FLAG, new Response('1'));
+      else await Promise.all([caches.delete(FLAGS_CACHE), caches.delete(API_CACHE), caches.delete(IMG_CACHE)]);
+    })());
+  }
 });
 
 /** Keep a cache to `max` entries, dropping the oldest (insertion order). */
@@ -107,12 +130,12 @@ self.addEventListener('fetch', (event) => {
   if ((req.headers.get('accept') || '').includes('text/event-stream')) return;
 
   if (url.pathname === '/api/proxy') { // pictures only; the proxy also carries video bytes
-    if (req.destination === 'image') event.respondWith(imageRequest(req));
+    if (req.destination === 'image' && offlineContent !== false) event.respondWith((async () => ((await offlineContentOn()) ? imageRequest(req) : fetch(req)))());
     return;
   }
   if (url.pathname.startsWith('/api/')) {
     if (NEVER_API.test(url.pathname + url.search)) return;
-    event.respondWith(apiRequest(req, event));
+    if (offlineContent !== false) event.respondWith((async () => ((await offlineContentOn()) ? apiRequest(req, event) : fetch(req)))()); // off (the default): the browser's own fetch
     return;
   }
 

@@ -175,6 +175,7 @@ describe('service worker: caching rules', () => {
   });
   test('api reads are stale-while-revalidate: fresh copy served at once and refreshed, stale copy only when offline', async () => {
     const w = worker();
+    await w.lifecycle('message', { data: { type: 'prism-offline-content', on: true } });
     w.net.bodies['/api/creators'] = json({ items: ['a'] });
     assert.deepEqual(await (await w.fetchEvent('/api/creators?limit=2')).json(), { items: ['a'] });
     assert.equal(w.net.calls.length, 1);
@@ -191,6 +192,7 @@ describe('service worker: caching rules', () => {
   });
   test('/api/meta (it carries "age verified") is never answered from a copy while online', async () => {
     const w = worker();
+    await w.lifecycle('message', { data: { type: 'prism-offline-content', on: true } });
     w.net.bodies['/api/meta'] = json({ ageGate: { verified: false } });
     await w.fetchEvent('/api/meta');
     w.net.bodies['/api/meta'] = json({ ageGate: { verified: true } });
@@ -201,6 +203,7 @@ describe('service worker: caching rules', () => {
   });
   test('admin, live stream, age, hls, lookup and non-GET requests are never cached; a write empties the api cache', async () => {
     const w = worker();
+    await w.lifecycle('message', { data: { type: 'prism-offline-content', on: true } });
     for (const p of ['/api/admin/stats', '/api/stream', '/api/age/confirm', '/api/hls?u=x', '/api/lookup?q=x']) assert.equal(await w.fetchEvent(p), null, `${p} is not handled`);
     assert.equal(await w.fetchEvent('/api/x', { headers: { accept: 'text/event-stream' } }), null);
     w.net.bodies['/api/media'] = json({ ok: 1 });
@@ -212,6 +215,7 @@ describe('service worker: caching rules', () => {
   });
   test('api cache is capped; only JSON, only status 200', async () => {
     const w = worker();
+    await w.lifecycle('message', { data: { type: 'prism-offline-content', on: true } });
     for (let i = 0; i < 95; i++) { w.net.bodies[`/api/p${i}`] = json({ i }); await w.fetchEvent(`/api/p${i}`); }
     assert.ok(w.stores.get('prism-api-v1').map.size <= 80, `capped at 80 (has ${w.stores.get('prism-api-v1').map.size})`);
     w.net.bodies['/api/html'] = { type: 'text/html', data: '<p>x</p>' };
@@ -222,6 +226,7 @@ describe('service worker: caching rules', () => {
   });
   test('proxy pictures are cache-first with a size cap; video, ranges and HLS are left alone', async () => {
     const w = worker();
+    await w.lifecycle('message', { data: { type: 'prism-offline-content', on: true } });
     for (let i = 0; i < 160; i++) { w.net.bodies['/api/proxy'] = { type: 'image/jpeg', data: `img${i}` }; await w.fetchEvent(`/api/proxy?url=${i}`, { destination: 'image' }); }
     const imgs = w.stores.get('prism-img-v1').map;
     assert.ok(imgs.size <= 150 && imgs.size >= 140, `capped at 150 (has ${imgs.size})`);
@@ -234,8 +239,39 @@ describe('service worker: caching rules', () => {
     await w.fetchEvent('/api/proxy?url=notimg', { destination: 'image' });
     assert.ok(![...imgs.keys()].some((k) => /notimg/.test(k)), 'only image/* responses are stored');
   });
+  test('content caches are OFF by default: nothing is stored, no copy is ever served, and once the flag is read the browser fetches natively', async () => {
+    const w = worker();
+    w.net.bodies['/api/media'] = json({ a: 1 }); w.net.bodies['/api/proxy'] = { type: 'image/jpeg', data: 'img' };
+    assert.deepEqual(await (await w.fetchEvent('/api/media')).json(), { a: 1 }, 'the first request reads the flag and goes to the network');
+    assert.equal(await w.fetchEvent('/api/media'), null, 'then the worker steps aside (the browser fetches it itself)');
+    assert.equal(await w.fetchEvent('/api/proxy?url=1', { destination: 'image' }), null);
+    assert.ok(!w.stores.has('prism-api-v1') && !w.stores.has('prism-img-v1'), 'nothing stored');
+  });
+  test('turning it on stores content, the choice survives a worker restart, and turning it off deletes everything', async () => {
+    const w = worker();
+    w.net.bodies['/api/media'] = json({ a: 1 });
+    await w.lifecycle('message', { data: { type: 'prism-offline-content', on: true } });
+    await w.fetchEvent('/api/media');
+    assert.equal(w.stores.get('prism-api-v1').map.size, 1);
+    assert.ok(w.stores.has('prism-flags-v1'), 'the choice is remembered');
+    const w2 = worker(); // a restarted worker: same storage, no memory
+    for (const [n, c] of w.stores) w2.stores.set(n, c);
+    w2.net.bodies['/api/media'] = json({ a: 2 });
+    await w2.fetchEvent('/api/media'); await w2.fetchEvent('/api/media?x=1');
+    assert.ok(w2.stores.get('prism-api-v1').map.size >= 2, 'still on after the restart');
+    await w2.lifecycle('message', { data: { type: 'prism-offline-content', on: false } });
+    assert.ok(!w2.stores.has('prism-api-v1') && !w2.stores.has('prism-img-v1') && !w2.stores.has('prism-flags-v1'), 'off deletes the content and the flag');
+    await w2.fetchEvent('/api/media');
+    assert.ok(!w2.stores.has('prism-api-v1'), 'and stays uncached');
+  });
+  test('the Display sheet offers the opt-in, off by default, and the page tells the worker', () => {
+    assert.match(read('js', 'store.js'), /read\('prism\.offlineContent', false\)/);
+    assert.match(read('js', 'components', 'display.js'), /Keep what I browse for offline use/);
+    assert.match(read('js', 'components', 'pwa.js'), /prism-offline-content/);
+  });
   test('"clear history" empties what the worker kept', async () => {
     const w = worker();
+    await w.lifecycle('message', { data: { type: 'prism-offline-content', on: true } });
     w.net.bodies['/api/media'] = json({ a: 1 });
     await w.fetchEvent('/api/media');
     await w.lifecycle('message', { data: { type: 'prism-clear-caches' } });

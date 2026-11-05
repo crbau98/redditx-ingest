@@ -1,7 +1,7 @@
 // The installed-app side of PRISM: the "offline" pill, the install prompt, the browser chrome colour, and the
 // service worker. Small on purpose; the worker itself (public/sw.js) holds the caching rules.
 import { h, icon, toast } from '../dom.js';
-import { bus } from '../store.js';
+import { bus, prefs } from '../store.js';
 
 /* ------------------------------------------------------------ offline state */
 let pill = null;
@@ -50,6 +50,11 @@ export function initPwa() {
 
   // "forget what I opened" also forgets what the worker kept
   bus.on('history', (id) => { if (id === null && navigator.serviceWorker && navigator.serviceWorker.controller) navigator.serviceWorker.controller.postMessage({ type: 'prism-clear-caches' }); });
+
+  // "Keep what I browse for offline use" (off by default): tell the worker, now and whenever it changes or a new one takes over
+  const tellWorker = () => { const c = navigator.serviceWorker && navigator.serviceWorker.controller; if (c) c.postMessage({ type: 'prism-offline-content', on: !!prefs.offlineContent }); };
+  bus.on('offlineContent', tellWorker);
+  if ('serviceWorker' in navigator) { navigator.serviceWorker.addEventListener('controllerchange', tellWorker); navigator.serviceWorker.ready.then(tellWorker).catch(() => {}); }
 
   if (!('serviceWorker' in navigator)) return;
   if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') return;
