@@ -401,3 +401,41 @@ It is a fallback only: the direct download and the local browser still come firs
   The run note shows the credits each unlock used.
 - Off: set `scrapflyUnlocker` to `off`, or unset the key.
 - Every URL passes the local gate (takedowns, private hosts, non-http(s), embedded credentials) before it leaves the machine.
+
+## Yandex Images (keyword discovery, flag `YANDEX_IMAGES`)
+
+`lib/yandex.js` runs Yandex Images keyword searches as the first image provider in `lib/brave.js` `images()`.
+
+- **Flag:** `YANDEX_IMAGES` (default **on**; `YANDEX_IMAGES=0` turns it off). `YANDEX_BASE_URL` is for tests only.
+- **Parser:** the results page carries its data in `data-state` / `data-bem` attributes as HTML-escaped JSON. We parse those
+  attributes, walk the JSON for objects with `origUrl` and `snippet.url`, drop censored and non-http results, and deduplicate by
+  page. We never parse the whole page as HTML and never regex the markup.
+- **Ingestion target:** the page (`snippet.url`). The index's copy of the picture (`origUrl`) is never requested, and no
+  third-party CDN is hotlinked. Results come back with `imageUrl: null`; the web adapter reads the page, so robots, takedowns,
+  the safety gate, the male-only scope gate and the review queue all run on what is read.
+- **Robots:** `yandex.com/robots.txt` disallows `/images/*`. The owner accepted this deviation on 2026-11-05 and approved shipping
+  the provider default-on. This is the only provider that fetches a path its robots disallows by default; set `YANDEX_IMAGES=0`
+  to stop it.
+- **CAPTCHA:** a CAPTCHA page starts a 30-minute cooldown on this provider only (its own limiter key). Other providers are not
+  affected. The reason is reported in `yandex.status()`.
+- **Reverse image (mirror candidates):** `cbirSites(imageUrl)` reads the imageview page, follows its "sites" tab link, and
+  returns the source pages (`li.CbirSites-Item` title links). Those are review-queue candidates; the caller decides, and nothing
+  is merged into a creator automatically. It is not yet called from the image-match pass.
+
+## Policy: paid pages, mirrors and leak hosts
+
+Owner decision, 2026-11-05 (verbatim, this is the standing rule):
+
+> Paid pages, mirror sites, leak/tube-rip/file-locker hosts and personal pages are all allowed extraction targets whenever the
+> platform serves the content publicly to any visitor — free posts, previews, teasers, public CDN assets. Owner decision
+> 2026-11-05: every one of those host classes is in scope. Still hard: no paywall or entitlement bypass, no signing in as a fan,
+> no borrowed session cookie or token, no private or subscriber-only content, and the safety gate, male-only scope gate and
+> takedowns (NCII reports included) run on every single item.
+
+In code: `src/sources/_policy.js` allows every host. When a search result is a paid page (`src/lib/paid.js`), discovery still
+records the lead and the traced creator link-out card, and also registers the page as a public web page feed, so anything the page
+serves publicly is read like any other page.
+
+Measured 2026-11-05 with plain GETs (no login): OnlyFans returns a 608-byte login shell with no media. JustFor.Fans redirects to
+an age-verification interstitial with no media; PRISM does not click through it. Fansly's homepage and a creator page both return
+the same 19 KB generic shell with no media.
