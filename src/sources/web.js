@@ -19,6 +19,7 @@ const { hostOf, hostBlocked, looksLikeDirectMedia, looksLikeVideo } = require('.
 const { checkHtmlOptOut } = require('../lib/takedowns');
 const render = require('../lib/render'); // Browser4 or Playwright (RENDER_ENGINE)
 const brightdata = require('../lib/brightdata');
+const scrapfly = require('../lib/scrapfly');
 const settingsStore = require('../settings');
 const hoststrategy = require('../engine/hoststrategy');
 const rss = require('./rss');
@@ -66,15 +67,20 @@ function pathAllowed(rules, path) {
   return !best || best.allow;
 }
 
-async function robotsAllows(url) {
+/**
+ * robots.txt for this URL, read under the SAME identity the page will be requested with (opts.userAgent; none = PRISM's own
+ * agent). The robots we obey is the robots served to the identity we use. See README "Refusals, identity and robots".
+ */
+async function robotsAllows(url, opts = {}) {
   let u;
   try { u = new URL(url); } catch { return false; }
-  const key = u.origin;
+  const ua = opts.userAgent || null;
+  const key = `${u.origin}|${ua || 'prism'}`;
   let entry = robotsCache.get(key);
   if (!entry || entry.expires < Date.now()) {
     let rules = [];
     try {
-      const res = await http.raw(`${key}/robots.txt`, { maxBytes: 500_000, retries: 0, headers: { accept: 'text/plain, */*;q=0.5' } });
+      const res = await http.raw(`${u.origin}/robots.txt`, { maxBytes: 500_000, retries: 0, headers: { accept: 'text/plain, */*;q=0.5', ...(ua ? { 'user-agent': ua } : {}) } });
       const body = res.body.toString('utf8');
       const ctype = String(res.headers['content-type'] || '');
       // Only a real robots.txt counts. A 404/5xx, a soft-404 HTML page or a login wall means "no rules" - it must
@@ -435,8 +441,9 @@ function mergeRendered(pages) {
  *   {skipped}                      the plain read showed nothing but the host's history says rendering will not help now
  *   need 'media'  web pages: wanted in 'fallback' mode when the plain download showed no media
  *   need 'links'  link-in-bio hubs: wanted when it showed no profile links
- * The browser is never used to get around a refusal: it runs only after a plain download that SUCCEEDED but showed nothing,
- * and a bot-challenge page makes PRISM leave that host alone for a while (never solves or evades it).
+ * Refusals: a browser runs only after a plain download that SUCCEEDED but showed nothing, and a bot-challenge page makes PRISM
+ * leave that host alone for a while. The rule for refusals in general (no solving, no credentials, paid tiers only when the
+ * operator switches them on) is in the README, "Refusals, identity and robots"; this file does not restate it.
  */
 const ENGINE_LABEL = { browser4: 'Browser4', playwright: 'Playwright' };
 const engineLabel = () => ENGINE_LABEL[render.engineName()] || 'Browser';
@@ -481,13 +488,53 @@ const REFUSED_STATUS = new Set([403, 429, 503]);
  *   - a daily budget caps the spend and a host where unlocking keeps finding nothing is backed off (engine/hoststrategy.js).
  * Returns null when not applicable, else {page, via, notes, info} / {skipped} / {error}.
  */
+/**
+ * Bright Data first, then Scrapfly (lib/scrapfly.js), only for a page that refused us. Each tier keeps its own back-off and
+ * budget; the first answer that has media or links wins. Returns null, {skipped}, {error}, or {page, via, notes}.
+ */
 async function unlockedRead(feed, need) {
   const cfg = settingsStore.get();
-  if (cfg.brightdataUnlocker !== 'fallback' || !cfg.brightdataUnlockBudget) return null;
-  if (!brightdata.unlockerConfigured() && !(brightdata.browserConfigured() && render.enabled())) return null;
+  const bdOn = cfg.brightdataUnlocker === 'fallback' && !!cfg.brightdataUnlockBudget && (brightdata.unlockerConfigured() || (brightdata.browserConfigured() && render.enabled()));
+  const scrapOn = cfg.scrapflyUnlocker === 'fallback' && scrapfly.configured() && scrapfly.allowedFor(feed);
+  if (!bdOn && !scrapOn) return null;
   // robots.txt first, inside this function, because the link-in-bio adapter does not consult it on its own
   if (!(await robotsAllows(feed.target))) return { skipped: 'robots.txt disallows this page' };
   const host = hostOf(feed.target);
+  const count = (pg) => (need === 'media' ? pg.media.length : pg.links.length);
+  const bd = bdOn ? await brightdataRead(feed, need, cfg, host) : null;
+  if (bd && bd.page && count(bd.page) > 0) return bd;
+  if (!scrapOn) return bd;
+  const s = await scrapflyRead(feed, need, cfg, host);
+  if (s && s.page && count(s.page) > 0) return s;
+  if (bd && bd.page) return bd;   // Bright Data answered (empty): keep its answer
+  return s || bd;
+}
+
+/** Which unblocker answered, for the run note. */
+const unlockLabel = (u) => (u.via === 'scrapfly-unlocker' ? 'Scrapfly Unblocker' : u.via === 'brightdata-browser' ? 'Bright Data Browser API' : 'Bright Data Web Unlocker');
+
+/** Scrapfly Unblocker: datacenter pool first (cheap), a JS-rendered retry only when the first answer is empty or blocked. */
+async function scrapflyRead(feed, need, cfg, host) {
+  const verdict = scrapfly.decide(host);
+  if (!verdict.ok) return { skipped: verdict.why };
+  const count = (pg) => (need === 'media' ? pg.media.length : pg.links.length);
+  try {
+    // the shared helper owns the gate, the budgets, the block-page check, the JS retry and the back-off
+    const r = await scrapfly.read(feed.target, {
+      host,
+      parse: (html, headers) => extractPage(html, feed.target, { headers: headers || {}, status: 200, maxMedia: RENDERED_MAX_MEDIA }),
+      count: (pg) => (pg.optedOut ? 0 : count(pg)),
+      allowed: scrapfly.allowedFor(feed),
+      host,
+    });
+    return { page: r.value, via: 'scrapfly-unlocker', notes: [], cost: r.cost };
+  } catch (e) {
+    e.tier = 'scrapfly';
+    return { error: e, cost: e.cost || 0 };
+  }
+}
+
+async function brightdataRead(feed, need, cfg, host) {
   const verdict = hoststrategy.decideUnlock(host);
   if (!verdict.unlock) return { skipped: verdict.why };
   const count = (pg) => (need === 'media' ? pg.media.length : pg.links.length);
@@ -578,11 +625,11 @@ const webAdapter = {
     if (refused && !page.optedOut) {
       const u = await unlockedRead(feed, 'media');
       if (u && u.skipped) info.push(`Bright Data not used: ${u.skipped}`);
-      else if (u && u.error) notes.push(`Bright Data: ${u.error.message}`);
+      else if (u && u.error) notes.push(`${u.error.tier === 'scrapfly' ? 'Scrapfly' : 'Bright Data'}: ${u.error.message}`);
       else if (u) {
         notes.push(...u.notes.map((n) => `Bright Data: ${n}`));
         if (u.page.optedOut) page = u.page;
-        else if (u.page.media.length) { page = u.page; via = u.via; info.push(`${u.via === 'brightdata-browser' ? 'Bright Data Browser API' : 'Bright Data Web Unlocker'} got past the refusal: ${page.media.length} media`); }
+        else if (u.page.media.length) { page = u.page; via = u.via; info.push(`${unlockLabel(u)} got past the refusal: ${page.media.length} media${u.cost != null ? ` (Scrapfly cost ${u.cost} credits)` : ''}`); }
       }
     }
     if (page.optedOut) {
@@ -661,10 +708,10 @@ const linkInBioAdapter = {
     if (refused && !page.optedOut) {
       const u = await unlockedRead(feed, 'links');
       if (u && u.skipped) info.push(`Bright Data not used: ${u.skipped}`);
-      else if (u && u.error) notes.push(`Bright Data: ${u.error.message}`);
+      else if (u && u.error) notes.push(`${u.error.tier === 'scrapfly' ? 'Scrapfly' : 'Bright Data'}: ${u.error.message}`);
       else if (u) {
         if (u.page.optedOut) page = u.page;
-        else if (u.page.links.length) { page = u.page; via = u.via; info.push(`Bright Data got past the refusal: ${page.links.length} profile links`); }
+        else if (u.page.links.length) { page = u.page; via = u.via; info.push(`${unlockLabel(u)} got past the refusal: ${page.links.length} profile links${u.cost != null ? ` (Scrapfly cost ${u.cost} credits)` : ''}`); }
       }
     }
     if (page.optedOut) {
@@ -699,4 +746,4 @@ const linkInBioAdapter = {
   },
 };
 
-module.exports = { webAdapter, linkInBioAdapter, extractPage, robotsAllows, parseRobots, pathAllowed, checkHtmlOptOut };
+module.exports = { webAdapter, linkInBioAdapter, extractPage, robotsAllows, parseRobots, pathAllowed, checkHtmlOptOut, _unlockedRead: unlockedRead };

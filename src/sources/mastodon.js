@@ -11,6 +11,8 @@
  */
 const config = require('../config');
 const http = require('./http').forPlatform('mastodon', 600);
+const scrapfly = require('../lib/scrapfly');
+const settingsStore = require('../settings');
 const { toIso, htmlToText, clip, originOf, errorDetail, repostsOn } = require('./util');
 const { extractLinks } = require('../lib/links');
 
@@ -91,10 +93,33 @@ function parseStatus(status, host) {
   });
 }
 
-async function lookup(host, name) {
+/**
+ * A Mastodon API answer that was refused: a 403/429/503, or a bot-protection page where JSON was expected. Only these are
+ * retried through Scrapfly; a 404 (no such account) or a 401 (login) is not a refusal.
+ */
+const isRefusal = (e) => !!e && ([403, 429, 503].includes(e.status) || e.code === 'BOT_CHALLENGE' || /Invalid JSON|Bot-protection/i.test(String(e.message || '')));
+
+/**
+ * GET a Mastodon API URL as JSON. If it was refused and the Scrapfly fallback is on (setting scrapflyUnlocker), the same URL is
+ * read through Scrapfly instead (lib/scrapfly.read: the gate, the budgets and the back-off live there). The cost goes into `sink`
+ * as a run note so the admin can see which servers are expensive.
+ */
+async function getJson(url, host, ctx) {
+  try {
+    return await http.json(url, { headers: authHeaders(host) });
+  } catch (e) {
+    const cfg = settingsStore.get();
+    if (!isRefusal(e) || cfg.scrapflyUnlocker !== 'fallback' || !scrapfly.configured() || !scrapfly.allowedFor(ctx && ctx.feed)) throw e;
+    const r = await scrapfly.read(url, { json: true, host, allowed: true, count: (v) => (v && typeof v === 'object' ? 1 : 0) });
+    if (ctx && ctx.notes) ctx.notes.push(`${host}: read through the Scrapfly unblocker (${r.cost} credits)`);
+    return r.value;
+  }
+}
+
+async function lookup(host, name, ctx) {
   const key = `${name}@${host}`;
   if (accountCache.has(key)) return accountCache.get(key);
-  const acct = await http.json(`${originOf(host)}/api/v1/accounts/lookup?acct=${encodeURIComponent(name)}`, { headers: authHeaders(host) });
+  const acct = await getJson(`${originOf(host)}/api/v1/accounts/lookup?acct=${encodeURIComponent(name)}`, host, ctx);
   if (!acct || !acct.id) throw Object.assign(new Error(`Mastodon account not found: ${name}@${host}`), { status: 404 });
   accountCache.set(key, acct);
   return acct;
@@ -105,9 +130,9 @@ function splitTarget(target) {
   return { name, host: (host || '').toLowerCase() };
 }
 
-async function pageTimeline(host, path, maxId) {
+async function pageTimeline(host, path, maxId, ctx) {
   const sep = path.includes('?') ? '&' : '?';
-  return http.json(`${originOf(host)}${path}${sep}limit=40${maxId ? `&max_id=${encodeURIComponent(maxId)}` : ''}`, { headers: authHeaders(host) });
+  return getJson(`${originOf(host)}${path}${sep}limit=40${maxId ? `&max_id=${encodeURIComponent(maxId)}` : ''}`, host, ctx);
 }
 
 /**
@@ -143,6 +168,8 @@ async function searchAccounts(q, { hosts, limit = 5 } = {}) {
 }
 
 module.exports = {
+  _isRefusal: isRefusal,
+  _getJson: getJson,
   platform: 'mastodon',
   label: 'Mastodon',
   color: '#6364ff',
@@ -159,11 +186,13 @@ module.exports = {
     let profile;
 
     const targets = [];
+    const unlockNotes = []; // Scrapfly cost notes for refused requests
+    const unlockCtx = { notes: unlockNotes, feed };
     if (feed.kind === 'user') {
       const { name, host } = splitTarget(feed.target);
       if (!name || !host) throw new Error('Mastodon user target must look like name@instance.tld');
       let acct;
-      try { acct = await lookup(host, name); } catch (e) {
+      try { acct = await lookup(host, name, unlockCtx); } catch (e) {
         // Misskey-family servers (Misskey, Sharkey, Firefish...) look like Mastodon from the outside but
         // have their own API. Read them through it instead of failing the feed.
         const misskey = require('./misskey');
@@ -202,7 +231,7 @@ module.exports = {
       try {
         for (let page = 0; page < (cursor.newestAt ? 2 : 4); page++) {
           if (ctx.aborted()) break;
-          const statuses = await pageTimeline(t.host, t.path, maxId);
+          const statuses = await pageTimeline(t.host, t.path, maxId, unlockCtx);
           if (!Array.isArray(statuses) || !statuses.length) break;
           let reachedKnown = false;
           for (const s of statuses) {
@@ -234,6 +263,7 @@ module.exports = {
         fail(e, t.host);
       }
     }
+    notes.push(...unlockNotes);
     if (errors.length && errors.length === targets.length) {
       // Every server refused. If all of them want a login the feed is rested (skip), otherwise it counts as a failure.
       throw Object.assign(new Error(errors.join('; ')), failed.every((x) => x.authWall) ? { skip: true } : { status: targets.length === 1 ? failed[0].status : undefined });

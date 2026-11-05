@@ -27,6 +27,7 @@ const cheerio = require('cheerio');
 const http = require('./http').forPlatform('gff', 900);
 const { clip, toIso, isChallengeText } = require('./util');
 const { robotsAllows } = require('./web');
+const settingsStore = require('../settings');
 const { cleanDisplayName } = require('../lib/links');
 
 const PAGE_VIDEOS = 14;   // video pages read per run (each is one full page fetch)
@@ -42,10 +43,17 @@ const SITES = [
 ];
 // justthegays.tv answers 403 to the identified PRISM user agent and serves the same public HTML
 // to a normal browser. gayforfans.com can still answer with a real bot check; that path stays a challenge.
-const PAGE_HEADERS = {
-  accept: 'text/html',
-  'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-};
+const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+/**
+ * The identity PRISM uses for these two sites: the page request AND the robots.txt request carry the same user agent,
+ * so the robots we obey is the robots served to the identity we actually use. Setting gffBrowserAgent off = PRISM's own agent.
+ */
+function identity() {
+  let on = true;
+  try { on = settingsStore.get().gffBrowserAgent !== false; } catch { on = true; }
+  return { userAgent: on ? BROWSER_UA : null };
+}
+const pageHeaders = () => { const { userAgent } = identity(); return { accept: 'text/html', ...(userAgent ? { 'user-agent': userAgent } : {}) }; };
 /** Performer-page URL for a slug on either directory. */
 const performerUrl = (host, slug) => `https://${host}/performer/${slug}`;
 
@@ -166,6 +174,8 @@ function performerPage(html) {
 }
 
 module.exports = {
+  _identity: identity,
+  _pageHeaders: pageHeaders,
   platform: 'gff',
   label: 'GayForFans',
   color: '#38bdf8',
@@ -201,7 +211,7 @@ module.exports = {
       let html;
       try {
         html = await http.text(`https://${site.host}/search?q=${encodeURIComponent(q)}`, {
-          maxBytes: 2_000_000, retries: 0, timeout, headers: PAGE_HEADERS,
+          maxBytes: 2_000_000, retries: 0, timeout, headers: pageHeaders(),
         });
       } catch {
         // One directory being unreachable must not hide the other one's answers.
@@ -243,7 +253,7 @@ module.exports = {
         if (out.length >= limit) break;
         let html;
         try {
-          html = await http.text(`https://${site.host}${path}`, { maxBytes: 2_000_000, retries: 0, timeout, headers: PAGE_HEADERS });
+          html = await http.text(`https://${site.host}${path}`, { maxBytes: 2_000_000, retries: 0, timeout, headers: pageHeaders() });
         } catch { continue; }
         if (isChallengeText(String(html))) continue;
         const $ = cheerio.load(String(html));
@@ -267,14 +277,14 @@ module.exports = {
   async fetch(feed, ctx = {}) {
     const notes = [];
     const items = [];
-    if (!(await robotsAllows(feed.target))) return { items: [], notes: ['robots.txt disallows this page'], via: 'gff' };
+    if (!(await robotsAllows(feed.target, identity()))) return { items: [], notes: ['robots.txt disallows this page'], via: 'gff' };
 
     const original = this.parse(feed.target);
     let target = feed.target;
     const read = async (url) => {
-      if (!(await robotsAllows(url))) return null;
+      if (!(await robotsAllows(url, identity()))) return null;
       try {
-        const html = await http.text(url, { maxBytes: 3_000_000, retries: 1, headers: PAGE_HEADERS });
+        const html = await http.text(url, { maxBytes: 3_000_000, retries: 1, headers: pageHeaders() });
         if (isChallengeText(html)) throw challengeError();
         return performerPage(String(html));
       } catch (e) {
@@ -305,7 +315,7 @@ module.exports = {
       if (ctx.aborted && ctx.aborted()) break;
       let vh;
       try {
-        vh = await http.text(v.url, { maxBytes: 3_000_000, retries: 1, headers: PAGE_HEADERS });
+        vh = await http.text(v.url, { maxBytes: 3_000_000, retries: 1, headers: pageHeaders() });
       } catch (e) {
         if (isBlockedStatus(e.status) || isChallengeText(e.body)) throw challengeError();
         notes.push(`gayforfans: ${v.slug} — ${e.message}`);
