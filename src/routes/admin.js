@@ -19,10 +19,13 @@ const identity = require('../engine/identity');
 const browser4 = require('../lib/browser4');
 const brightdata = require('../lib/brightdata');
 const expand = require('../engine/expand');
-const { adminRateLimit, adminCredentialAuth } = require('../middleware/auth');
+const { adminRateLimit, adminCredentialAuth, adminKeyValid } = require('../middleware/auth');
 
 const router = express.Router();
-router.use(adminRateLimit, adminCredentialAuth);
+// The brute-force guard counts every request that does not finish with a success. The live event stream never finishes (it ends when
+// the page is left), so each visit to a screen that listens to it used up one of the 20 attempts: 21 page changes in ten minutes locked
+// the owner out. A stream that already carries the right key has nothing to guess, so it skips the guard; a wrong key still counts.
+router.use((req, res, next) => (req.path === '/stream' && adminKeyValid(req) ? next() : adminRateLimit(req, res, next)), adminCredentialAuth);
 
 const int = repo.clampInt;
 const page = (req, max = 200) => ({ page: int(req.query.page, 0, 100000, 0), limit: int(req.query.limit, 1, max, 50) });
