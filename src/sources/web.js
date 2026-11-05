@@ -19,6 +19,7 @@ const { hostOf, hostBlocked, looksLikeDirectMedia, looksLikeVideo } = require('.
 const { checkHtmlOptOut } = require('../lib/takedowns');
 const render = require('../lib/render'); // Browser4 or Playwright (RENDER_ENGINE)
 const agegate = require('../lib/agegate');
+const paid = require('../lib/paid');
 const brightdata = require('../lib/brightdata');
 const scrapfly = require('../lib/scrapfly');
 const settingsStore = require('../settings');
@@ -495,6 +496,9 @@ const REFUSED_STATUS = new Set([403, 429, 503]);
  */
 async function unlockedRead(feed, need) {
   const cfg = settingsStore.get();
+  // A paid platform that refuses us is not ours to unblock: that would spend credits to break a refusal
+  // on a host whose content sits behind its own gate. The page stays a link-out and a note explains why.
+  if (paid.isPaidPlatform(feed.target)) return { skipped: 'paid platform: PRISM does not spend credits to break a refusal here' };
   const bdOn = cfg.brightdataUnlocker === 'fallback' && !!cfg.brightdataUnlockBudget && (brightdata.unlockerConfigured() || (brightdata.browserConfigured() && render.enabled()));
   const scrapOn = cfg.scrapflyUnlocker === 'fallback' && scrapfly.configured() && scrapfly.allowedFor(feed);
   if (!bdOn && !scrapOn) return null;
