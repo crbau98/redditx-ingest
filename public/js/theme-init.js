@@ -27,3 +27,39 @@
     document.head.appendChild(l);
   } catch (e) { /* only a hint */ }
 })();
+
+// Start the first screen's requests now. Without this they begin only after main.js has been fetched, parsed and run
+// (and, for /api/discover, after /api/meta has answered): two or three round trips (~150 ms each on a phone link) in a
+// chain. api.js `get()` takes these over by URL (viaEarly), so the page code does not change; an unused answer is
+// dropped after 15 s. Keep the URLs identical to what the views ask for (same params, same order: see api.js qs()).
+//
+// /api/meta goes first and alone: it says whether this visitor has passed the age gate. The lists are behind that gate,
+// so asking for them before it is known would answer a first-time visitor with 403s (and console errors); they start the
+// moment meta says the visitor is through (or that the gate is off), which is still long before main.js has run.
+(function () {
+  try {
+    if (!window.fetch) return;
+    var early = window.__early = {};
+    var start = function (url) {
+      var p = fetch(url, { credentials: 'same-origin' }).then(function (r) { return r.ok ? r.text() : Promise.reject(new Error(String(r.status))); });
+      p.catch(function () { /* the normal request will report the error */ });
+      early[url] = { at: Date.now(), p: p };
+      return p;
+    };
+    var seg = (location.hash.replace(/^#\/?/, '').split(/[/?]/)[0] || '');
+    var lists = [];
+    if (!seg) { // home: the discover payload and the first page of the latest feed (views/home.js)
+      lists.push('/api/discover', '/api/media?sort=recent&page=0&limit=36');
+    } else if (seg === 'browse') { // views/browse.js
+      lists.push('/api/tags?limit=200', '/api/communities', '/api/platforms', '/api/topics', '/api/creators?onlyfans=1&limit=1', '/api/media?paid=onlyfans&limit=1', '/api/creators?paid=fansly&limit=1');
+    }
+    var meta = start('/api/meta');
+    if (lists.length) {
+      meta.then(function (text) {
+        var gate = JSON.parse(text).ageGate;
+        if (gate && gate.enforce && !gate.verified) return; // main.js shows the age gate first; the lists are asked for after it
+        lists.forEach(start);
+      }).catch(function () { /* the normal requests follow */ });
+    }
+  } catch (e) { /* only a hint */ }
+})();

@@ -16,6 +16,8 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const zlib = require('zlib');
+const { promisify } = require('util');
 
 function walk(dir, out = []) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -100,4 +102,125 @@ function buildNow(publicDir) {
   return { version, prefix, html, css, modules: graph };
 }
 
-module.exports = { build, staticGraph, minifyCss, CSS_BUNDLE };
+/* ------------------------------------------------------------ pre-compressed copies */
+// The `compression` middleware squeezes every response on the fly at Brotli quality 4 (its default, chosen for speed).
+// The app's own files never change within a version, so they are compressed once at quality 11 instead (about 15%
+// smaller than quality 4 on this code base, see the test) and the bytes are served from memory with a Content-Length.
+// Compression runs on the libuv thread pool, one file at a time, so it never blocks the event loop.
+const brotli = promisify(zlib.brotliCompress);
+const gzip = promisify(zlib.gzip);
+const brotliQ11 = (buf) => brotli(buf, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 11, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: buf.length } });
+
+/** The best encoding the request accepts out of those we pre-compress: 'br', 'gzip' or null. */
+function acceptedEncoding(header) {
+  if (!header) return null;
+  const q = {};
+  for (const part of String(header).split(',')) {
+    const [name, ...params] = part.trim().toLowerCase().split(';');
+    const m = /^\s*q\s*=\s*([0-9.]+)/.exec(params.join(';'));
+    q[name.trim()] = m ? Number(m[1]) : 1;
+  }
+  const ok = (n) => (q[n] !== undefined ? q[n] > 0 : (q['*'] || 0) > 0);
+  if (ok('br')) return 'br';
+  if (ok('gzip')) return 'gzip';
+  return null;
+}
+
+/**
+ * An in-memory store of pre-compressed responses. `add(key, type, body)` registers one and starts compressing it in
+ * the background; `send(req, res, key, opts)` answers from it once it is ready and returns false when it is not (the
+ * caller then falls back to the ordinary path), so a request is never held up by compression.
+ */
+function createCompressedStore() {
+  const entries = new Map(); // key -> { type, raw, etag, br, gzip, work }
+  const queue = [];
+  let running = false;
+
+  async function drain() {
+    if (running) return;
+    running = true;
+    try {
+      while (queue.length) {
+        const e = queue.shift();
+        try { [e.br, e.gzip] = [await brotliQ11(e.raw), await gzip(e.raw, { level: 9 })]; } catch { /* stays uncompressed: served by the ordinary path */ }
+        e.done();
+      }
+    } finally { running = false; }
+  }
+
+  return {
+    has: (key) => entries.has(key),
+    add(key, type, body) {
+      if (entries.has(key)) return entries.get(key).work;
+      const raw = Buffer.isBuffer(body) ? body : Buffer.from(body);
+      const e = { type, raw, etag: crypto.createHash('sha1').update(raw).digest('hex').slice(0, 16), br: null, gzip: null };
+      e.work = new Promise((resolve) => { e.done = resolve; });
+      entries.set(key, e);
+      queue.push(e);
+      drain();
+      return e.work;
+    },
+    /** Resolves when everything added so far has been compressed (tests, boot warm-up). */
+    async settled() { await Promise.all([...entries.values()].map((e) => e.work)); },
+    /**
+     * @param opts.immutable  `Cache-Control: public, max-age=31536000, immutable` (a versioned URL), otherwise `no-cache` + ETag revalidation
+     * @returns true when the response was sent
+     */
+    send(req, res, key, { immutable = false } = {}) {
+      const e = entries.get(key);
+      const enc = acceptedEncoding(req.headers['accept-encoding']);
+      const body = e && enc && (enc === 'br' ? e.br : e.gzip);
+      if (!body) return false;
+      const etag = `"${e.etag}-${enc}"`;
+      res.set({ 'Content-Type': e.type, 'Content-Encoding': enc, Vary: 'Accept-Encoding', 'Cache-Control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache' });
+      if (!immutable) {
+        res.set('ETag', etag);
+        const inm = req.headers['if-none-match'];
+        if (inm && inm.split(',').some((t) => t.trim() === etag)) { res.status(304).end(); return true; }
+      }
+      res.set('Content-Length', String(body.length));
+      res.status(200);
+      if (req.method === 'HEAD') res.end(); else res.end(body);
+      return true;
+    },
+  };
+}
+
+/**
+ * Express middleware for `/v/:ver/...` that answers .js and .css files of the CURRENT version from a
+ * pre-compressed store. Anything else (another version, another type, not ready yet, a client that accepts no
+ * encoding) is passed on with next().
+ */
+function compressedStatic(publicDir, store, currentVersion) {
+  const TYPES = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
+  const root = path.resolve(publicDir);
+  return (req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    const ext = path.extname(req.path);
+    if (!TYPES[ext] || req.params.ver !== currentVersion()) return next();
+    const file = path.resolve(root, `.${req.path}`);
+    const inside = path.relative(root, file);
+    if (inside.startsWith('..') || path.isAbsolute(inside) || !/^(js|css)[\\/]/.test(inside)) return next();
+    const key = `${req.params.ver}${req.path}`;
+    if (!store.has(key)) {
+      let raw; try { raw = fs.readFileSync(file); } catch { return next(); }
+      store.add(key, TYPES[ext], raw);
+      return next(); // this first request takes the ordinary path
+    }
+    return store.send(req, res, key, { immutable: true }) ? undefined : next();
+  };
+}
+
+/** Pre-compress everything the shell references, in the background (called once the server is listening). */
+function warmCompressed(store, publicDir, built) {
+  const root = path.resolve(publicDir);
+  store.add(`${built.version}/css/bundle.css`, 'text/css; charset=utf-8', built.css);
+  store.add(`${built.version}:shell`, 'text/html; charset=utf-8', built.html);
+  // every module, not only the static graph: the views load on first visit and are fetched ahead while idle
+  for (const file of walk(path.join(root, 'js')).filter((f) => f.endsWith('.js'))) {
+    try { store.add(`${built.version}/${path.relative(root, file).split(path.sep).join('/')}`, 'text/javascript; charset=utf-8', fs.readFileSync(file)); } catch { /* gone: ordinary path */ }
+  }
+  return store.settled();
+}
+
+module.exports = { build, staticGraph, minifyCss, CSS_BUNDLE, acceptedEncoding, createCompressedStore, compressedStatic, warmCompressed };

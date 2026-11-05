@@ -47,7 +47,7 @@ export function createMasonry({ density = 'm', render }) {
 
   function restore(shell, { focus = false } = {}) {
     if (!shell.isConnected || !shell.classList.contains('card-parked') || !shell._masonryItem) return;
-    const fresh = render(shell._masonryItem, cur, { eager: false });
+    const fresh = render(shell._masonryItem, cur, { eager: false, width: colWidth });
     fresh.style.containIntrinsicSize = shell.style.containIntrinsicSize;
     tag(fresh, shell._masonryItem, shell._est);
     if (windowIo) windowIo.unobserve(shell);
@@ -59,11 +59,14 @@ export function createMasonry({ density = 'm', render }) {
     }
   }
 
-  function park(card) {
+  /** The height a card is replaced by, read separately from the replacement: see the observer below. */
+  const parkHeight = (card) => Math.round(card.offsetHeight || card._est || 240);
+
+  function park(card, measured) {
     if (!card || !card.isConnected || card.classList.contains('card-parked') || !card._masonryItem) return;
     if (card.contains(document.activeElement)) return;
     const item = card._masonryItem;
-    const px = Math.round(card.offsetHeight || card._est || 240);
+    const px = measured || parkHeight(card);
     const shell = h('article', {
       class: `card card-parked${card.classList.contains('compact') ? ' compact' : ''}`,
       dataset: { id: item.id },
@@ -81,11 +84,15 @@ export function createMasonry({ density = 'm', render }) {
 
   const windowIo = typeof IntersectionObserver !== 'undefined'
     ? new IntersectionObserver((entries) => {
+      // Reads before writes: measuring a card (offsetHeight) right after replacing its neighbour forces a layout each
+      // time, once per card in a fast fling. Restore first, then measure every card that is leaving in ONE pass, then replace.
+      const leaving = [];
       for (const e of entries) {
-        const node = e.target;
-        if (e.isIntersecting) restore(node);
-        else park(node);
+        if (e.isIntersecting) restore(e.target);
+        else leaving.push(e.target);
       }
+      const heights = leaving.map((n) => (n.isConnected && !n.classList.contains('card-parked') ? parkHeight(n) : 0));
+      leaving.forEach((n, i) => park(n, heights[i]));
     }, { rootMargin: `${WINDOW_PX}px 0px`, threshold: 0 })
     : null;
 
@@ -141,7 +148,7 @@ export function createMasonry({ density = 'm', render }) {
         tag(card, item, est);
         card.addEventListener('focus', () => restore(card, { focus: true }));
       } else {
-        card = render(item, cur, { eager });
+        card = render(item, cur, { eager, width: colWidth });
         card.style.containIntrinsicSize = `auto ${Math.round(est)}px`;
         tag(card, item, est);
         if (arrive && staggerN < STAGGER_CAP) {
