@@ -293,6 +293,13 @@ async function bingImages(query, { count = 30 } = {}) {
  * Brave Image Search (`https://api.search.brave.com/res/v1/images/search`) with automatic DDG/Bing fallback.
  */
 async function images(q, { count = 20, budget = 40, preferKeyless = false } = {}) {
+  // Yandex Images first when its flag is on: its results are page URLs (the page is read by the web adapter, never the index's copy).
+  if (config.yandexImages) {
+    try {
+      const yx = await require('./yandex').keywordImages(q, { count });
+      if (yx.length) return yx;
+    } catch { /* off, cooling down, or a CAPTCHA: fall through to the other providers */ }
+  }
   // preferKeyless: a secondary pass (image match) starts on the free feeds and only reaches for the
   // metered Brave API if they return nothing — the daily counter is shared with lookup and discovery.
   if (preferKeyless || !configured()) {

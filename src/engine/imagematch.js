@@ -11,6 +11,7 @@
  *    and search hits for the creator's handle + paid slug + tags within feed caps and safety gates.
  */
 const repo = require('../db/repo');
+const config = require('../config');
 const settingsStore = require('../settings');
 const brave = require('../lib/brave');
 const imagefilter = require('../lib/imagefilter');
@@ -272,6 +273,38 @@ async function matchCreator(creator, { budget = 40, aborted = () => false, servi
         }
       }
     }
+  }
+  // Reverse-image mirror candidates (Yandex's "sites" list for one of his public pictures). Review-queue rows only: a page that
+  // shows the same picture is a candidate for a human, never an automatic match. At most one lookup per creator per run.
+  try {
+    const yx = require('../lib/yandex');
+    if (config.yandexImages && refs.length) {
+      const ref = db.prepare(`SELECT id, media_url FROM media WHERE creator_id = ? AND publish_state = 'published'
+        AND media_url LIKE 'http%' AND media_url NOT LIKE '%' || ? || '%' ORDER BY COALESCE(posted_at, ingested_at) DESC LIMIT 1`)
+        .get(creator.id, config.storeHost);
+      if (ref && ref.media_url) {
+        const sites = await yx.cbirSites(ref.media_url, { count: 20 });
+        for (const site of sites) {
+          if (takedowns.checkUrl(site.pageUrl)) continue;
+          const paidPage = require('../engine/paidpage').paidPageUrl(site.pageUrl);
+          if (paidPage) require('../engine/paidpage').registerPaidPage(site.pageUrl, { creatorId: creator.id, origin: 'cbir' });
+          faceMatch.recordWebMatch({
+            creatorId: creator.id,
+            mediaId: ref.id,
+            pageUrl: site.pageUrl,
+            imageUrl: null,
+            title: site.title || site.source,
+            platform: 'web',
+            matchKind: 'cbir',
+            evidence: 'Yandex reverse-image: the same picture appears on this page (review before any link)',
+            status: 'review',
+          });
+          out.pages++;
+        }
+      }
+    }
+  } catch (e) {
+    events.log('WARN', `Reverse-image lookup skipped for creator ${creator.id}: ${e.message}`);
   }
   try {
     db.prepare("UPDATE creators SET last_monitored_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(creator.id);
