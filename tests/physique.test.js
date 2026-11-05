@@ -114,7 +114,7 @@ describe('physique words', () => {
 
 describe('older men: words and stated ages only', () => {
   test('a man who calls himself older, or states an age of 45 or more, is matched', () => {
-    for (const t of ['silver fox', '#silverdaddy', 'GreyDaddy', 'Grandpa', 'older men', 'Mature Men', '#oldman', '52yo', '52 y/o', '52 years old', '52-year-old', 'Age: 55', 'aged 58', "I'm 58", 'im 47', 'in my 50s', 'late 40s', 'mid-60s', 'Looking good at 61 yrs old']) {
+    for (const t of ['silver fox', '#silverdaddy', 'GreyDaddy', 'Grandpa', 'Grandpa fucks twink', 'your new grandad', '#oldman', '#maturemen', '52yo', '52 y/o', '52 y o', '52 years old', '52-year-old', 'Age: 55', 'aged 58', "I'm 58", "I'm 58, gym rat", "I'm 52 and lifting", 'I am 61 years old', 'in my 50s', 'in my early 50s', 'late 40s', 'mid-60s', 'Looking good at 61 yrs old']) {
       const r = textCheck(t);
       assert.equal(r.heavy, true, t); assert.equal(r.kind, 'older', t); assert.match(r.rule, /^physique:older:/, t);
     }
@@ -122,6 +122,18 @@ describe('older men: words and stated ages only', () => {
   test('look-alikes, younger stated ages and plain "daddy" are not matched', () => {
     for (const t of ['Goldman', 'Holderman', 'age 24', "I'm 24", '24yo', '31 y/o', '44 years of age', 'turning 25', 'age 18', '19yo', 'in my 20s', '18+ only', 'mature content',
       '50 years of experience', "I'm 60 kg", "I'm 50% done", 'over 50 videos', 'sugar daddy', 'gym daddy', 'daddy', 'old school gym', 'Old Spice', 'Class of 2010', 'gay muscle jock'])
+      assert.equal(textCheck(t).heavy, false, t);
+  });
+  test('regressions from an independent review: comp-prep and fitness lines, other people, and attraction are not an older man', () => {
+    for (const t of [
+      // "I'm NN" followed by something other than an age
+      "I'm 48 hours into fasting", 'I am 60 days out from my first show', "I'm 60 days into my cut", 'Im 46 days into keto', "I'm 45 days sober", "I'm 50 weeks out",
+      "I'm 50 sets", "I'm 50 pounds down", "I'm 50/50", "I'm 70 percent there", 'Age: 45 days to go', 'turning 50 pages', 'im 50 Meter Becken', '27 | natural | I am 60 days out from my first show',
+      // somebody else, or a thing, not himself
+      'my old man taught me to lift', 'Raised by my grandpa', 'My grandfather got me into lifting', 'Grandfather clock', 'gramps hoodie giveaway', 'Elderly care worker, 29',
+      'Old Man Strength lifts', 'OldManStrength', 'Gray Fox Gaming', 'Grey fox sneakers', 'pensioner discount',
+      // liking older men is not being one, and 44 to 46 is under the line
+      'Seeking older men', 'I love older men (19yo twink)', 'Into mature men', "Mature men's skincare brand", 'mid 40s'])
       assert.equal(textCheck(t).heavy, false, t);
   });
   test('the rule is words only: it never reads a picture, and the age line is a constant', () => {

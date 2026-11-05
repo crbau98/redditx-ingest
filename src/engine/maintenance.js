@@ -204,13 +204,17 @@ function imageSweepProgress() {
   return { cursor, checkedUpTo: q('<='), remaining: q('>'), version: IMAGE_SWEEP_VERSION };
 }
 
-let sweepTimer = null; let sweepBusy = false; let sweepGaveUp = false; let lastRetire = 0;
+let sweepTimer = null; let sweepBusy = false; let sweepGaveUp = false;
 const RETIRE_EVERY_MS = 24 * 3600 * 1000;
-/** Once a day: pause the app's own feeds that have clearly stopped working (see sourcehealth.retireDead). */
+/**
+ * Once a day (the time of the last run is stored, so a restart does not start a second round): pause the app's own feeds that
+ * never worked (see sourcehealth.retireDead). Nothing is recorded while the setting is off, so switching it on runs it at once.
+ */
 function retireDeadFeeds(now = Date.now()) {
-  if (now - lastRetire < RETIRE_EVERY_MS) return null;
-  lastRetire = now;
   if (!settingsStore.get().autoRetireFeeds) return null;
+  const last = Date.parse(repo.settings.get('auto_retire_last') || '') || 0;
+  if (last <= now && now - last < RETIRE_EVERY_MS) return null; // (a stored time in the future, after a clock step, is stale)
+  repo.settings.set('auto_retire_last', new Date(now).toISOString());
   const r = require('./sourcehealth').retireDead({ now });
   if (r.paused.length) events.log('INFO', `Feeds paused (stopped working): ${r.paused.length}${r.capped ? ' (daily cap reached)' : ''} — ${r.paused.slice(0, 5).map((f) => `${f.platform}:${f.target}`).join(', ')}${r.paused.length > 5 ? ', …' : ''}. Admin → Sources lists them; enabling one keeps it on.`);
   return r;
