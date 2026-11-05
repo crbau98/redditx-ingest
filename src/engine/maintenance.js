@@ -168,15 +168,28 @@ function physiqueSweepProgress() {
  * picture matches an OLDER item, it is hidden and listed under the original as "also posted on ...". Hashing only needs
  * the image bytes (no model), so it is cheap and runs even when the face filter is unavailable.
  */
+const siblingPoster = repo.db.prepare('SELECT 1 FROM media WHERE post_key = ? AND id != ? AND preview_url = ? LIMIT 1');
+/**
+ * Is this video's poster borrowed, i.e. not a picture of THIS video? A creator banner / icon, or the same picture its sibling items of
+ * the post use (Coomer videos have no poster of their own). A borrowed poster says nothing about which video it is, so its hash must
+ * not decide that two videos are the same (see pipeline: posterShared).
+ */
+function borrowedPoster(row) {
+  if (row.media_type !== 'video' || !row.preview_url) return false;
+  if (/\/(?:banners|icons)\//.test(row.preview_url)) return true;
+  return !!(row.post_key && siblingPoster.get(row.post_key, row.id, row.preview_url));
+}
+
 async function hashSweep({ limit = 12, settings } = {}) {
   const s = settings || settingsStore.get();
   const res = { checked: 0, hashed: 0, collapsed: 0, errors: 0, done: false };
   let after = parseInt(repo.settings.get('hash_sweep_seq') || '0', 10) || 0;
-  const rows = repo.db.prepare(`SELECT seq, id, platform, source_url, author, community, posted_at, media_type, media_url, preview_url, thumbnail_url, width, height, phash FROM media
+  const rows = repo.db.prepare(`SELECT seq, id, platform, post_key, source_url, author, community, posted_at, media_type, media_url, preview_url, thumbnail_url, width, height, phash FROM media
     WHERE publish_state IN ('published','review') AND seq > ? ORDER BY seq LIMIT ?`).all(after, limit);
   if (!rows.length) { res.done = true; return res; }
   for (const row of rows) {
     after = row.seq; res.checked++;
+    if (borrowedPoster(row)) continue;
     let hash = row.phash;
     if (!hash) {
       const v = await imagefilter.checkItem({ mediaType: row.media_type, mediaUrl: row.media_url, previewUrl: row.preview_url, thumbnailUrl: row.thumbnail_url }, { faces: false, hash: true });
@@ -195,6 +208,32 @@ async function hashSweep({ limit = 12, settings } = {}) {
   repo.settings.set('hash_sweep_seq', String(after));
   if (res.collapsed || res.hashed) events.log('OK', `Hash sweep: ${res.hashed} hashed, ${res.collapsed} duplicate(s) collapsed (of ${res.checked} checked)`);
   return res;
+}
+
+/**
+ * One-off repair for videos the hash sweep collapsed before it knew about borrowed posters: a Coomer video hidden as "duplicate of X"
+ * where X is a video with the very same poster URL is a different video (the poster is shared), so it comes back, and the stale hash
+ * of both is cleared. Nothing else is touched. Idempotent.
+ * @returns {{restored: number}}
+ */
+function repairSharedPosterCollapse() {
+  const rows = repo.db.prepare(`SELECT id, preview_url, review_reason, source_url FROM media
+    WHERE platform = 'coomer' AND media_type = 'video' AND publish_state = 'hidden' AND review_reason LIKE 'duplicate of %'`).all();
+  const orig = repo.db.prepare('SELECT id, media_type, preview_url FROM media WHERE id = ?');
+  const dropAlt = repo.db.prepare('DELETE FROM media_alt_sources WHERE media_id = ? AND source_url = ?');
+  let restored = 0;
+  for (const r of rows) {
+    const o = orig.get(String(r.review_reason).slice('duplicate of '.length).trim());
+    if (!o || o.media_type !== 'video' || !r.preview_url || o.preview_url !== r.preview_url) continue;
+    repo.db.transaction(() => {
+      repo.media.setPhash(r.id, null); repo.media.setPhash(o.id, null);
+      if (r.source_url) dropAlt.run(o.id, r.source_url);
+      repo.media.setState(r.id, 'published', null, { exact: true });
+    })();
+    restored++;
+  }
+  if (restored) events.log('OK', `Restored ${restored} video(s) the duplicate sweep had collapsed on a shared poster`);
+  return { restored };
 }
 
 function hashSweepProgress() {
@@ -260,6 +299,11 @@ function startupSweepIfNeeded() {
     try { physique.migrateDefaults(); physique.reapply(settingsStore.get()); } catch (e) { events.log('WARN', `Body filter: ${e.message}`); }
     physique.textSweep(settingsStore.get()).catch((e) => events.log('WARN', `Body filter: ${e.message}`));
   }, 3000).unref();
+  setTimeout(() => {
+    try {
+      if (repo.settings.get('shared_poster_repair') !== '1') { repairSharedPosterCollapse(); repo.settings.set('shared_poster_repair', '1'); }
+    } catch (e) { events.log('WARN', `Shared-poster repair: ${e.message}`); }
+  }, 4000).unref();
   if (repo.settings.get('safety_sweep_version') === SAFETY_SWEEP_VERSION) return;
   setTimeout(async () => {
     try { await sweep(); repo.settings.set('safety_sweep_version', SAFETY_SWEEP_VERSION); }
@@ -267,4 +311,4 @@ function startupSweepIfNeeded() {
   }, 1500).unref();
 }
 
-module.exports = { retireDeadFeeds, sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, physiqueSweep, physiqueSweepProgress, hashSweep, hashSweepProgress, startImageSweep, stopImageSweep };
+module.exports = { repairSharedPosterCollapse, retireDeadFeeds, sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, physiqueSweep, physiqueSweepProgress, hashSweep, hashSweepProgress, startImageSweep, stopImageSweep };
