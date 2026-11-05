@@ -14,13 +14,13 @@ export const thumb = (m) => h('div', { class: 'thumb', style: thumbOf(m) ? { bac
 
 /**
  * A list that is a table on a wide screen and a stack of cards on a phone (CSS only: the same cells, laid out by `.tbl.a-cards`).
- * Column: { label, render, class, width, cell } where cell is 'check' | 'title' | 'wide' | 'actions' to say where it sits in a card.
+ * Column: { label, render, class, width, cell, noLabel } (noLabel: no "Label:" prefix on a phone card) where cell is 'check' | 'title' | 'wide' | 'actions' to say where it sits in a card.
  * Table roles are written out because a table laid out as blocks loses them in some browsers.
  */
 export function table(columns, rows, { empty = 'Nothing here.', label = 'List' } = {}) {
   const head = h('tr', { role: 'row' }, columns.map((c) => h('th', { role: 'columnheader', scope: 'col', style: c.width ? { width: c.width } : null, class: c.class }, c.label || h('span', { class: 'sr-only' }, c.srLabel || ''))));
   const body = rows.length
-    ? rows.map((r) => h('tr', { role: 'row' }, columns.map((c) => h('td', { role: 'cell', class: c.class, 'data-label': c.label || null, 'data-cell': c.cell || null }, c.render(r)))))
+    ? rows.map((r) => h('tr', { role: 'row' }, columns.map((c) => h('td', { role: 'cell', class: c.class, 'data-label': (c.label && !c.noLabel) ? c.label : null, 'data-cell': c.cell || null }, c.render(r)))))
     : [h('tr', { role: 'row' }, h('td', { role: 'cell', colspan: columns.length, class: 'tbl-empty' }, empty))];
   return h('div', { class: 'tbl-wrap a-cards' }, h('table', { class: 'tbl a-cards', role: 'table', 'aria-label': label }, h('thead', { role: 'rowgroup' }, head), h('tbody', { role: 'rowgroup' }, body)));
 }

@@ -11,6 +11,8 @@ const HINT = {
   x: '@handle  /  search query (needs token)', telegram: 't.me/channelname (public preview)', rss: 'https://site.com/feed.xml', web: 'https://site.com/gallery', linkinbio: 'https://linktr.ee/name',
 };
 const INTERVALS = [[30, '30 min'], [60, '1 hour'], [90, '90 min'], [180, '3 hours'], [360, '6 hours'], [720, '12 hours'], [1440, '1 day'], [4320, '3 days']];
+// a phone shows cards (about 190px each), so a page is half as long there
+const PAGE = window.matchMedia('(max-width: 899px)').matches ? 25 : 50;
 const STATUS_CHIPS = [['', 'All'], ['error', 'Failing'], ['paused', 'Paused'], ['never', 'Never run']];
 
 /** Add a feed. A sheet on a phone. One field is enough: paste a link or a handle. */
@@ -143,7 +145,7 @@ export async function render(root) {
 
   async function load() {
     let r;
-    try { r = await adminGet('/feeds', { ...feedQuery(f), limit: 50 }); } catch (e) { listHost.replaceChildren(h('div', { class: 'a-alert bad', role: 'alert' }, icon('alert', 'sm'), h('div', null, `Couldn’t load feeds: ${e.message}. `, h('button', { class: 'btn sm', type: 'button', onclick: () => load() }, 'Try again')))); return; }
+    try { r = await adminGet('/feeds', { ...feedQuery(f), limit: PAGE }); } catch (e) { listHost.replaceChildren(h('div', { class: 'a-alert bad', role: 'alert' }, icon('alert', 'sm'), h('div', null, `Couldn’t load feeds: ${e.message}. `, h('button', { class: 'btn sm', type: 'button', onclick: () => load() }, 'Try again')))); return; }
     current = r.items;
     for (const id of [...selected.keys()]) if (!current.some((x) => x.id === id)) selected.delete(id);
     count.textContent = `${fmt.int(r.total)} feed${r.total === 1 ? '' : 's'}`;
@@ -154,7 +156,7 @@ export async function render(root) {
         { label: 'Feed', cell: 'title', render: (x) => h('div', { class: 'cell-stack' },
           h('div', { class: 'a-title' }, statusDot(x.last_status), h('span', { class: 'name' }, x.label || x.target), platBadge(x.platform), h('span', { class: 'a-sub' }, x.kind)),
           x.creator_handle ? h('a', { class: 'a-sub', href: href('/admin/creators', { q: x.creator_handle }) }, `↳ ${x.creator_name || x.creator_handle}`) : h('span', { class: 'a-sub' }, x.origin)) },
-        { label: 'Status', cell: 'wide', render: statusCell },
+        { label: 'Status', noLabel: true, render: statusCell },
         { label: 'Last run', render: (x) => (x.last_run_at ? fmt.ago(x.last_run_at) : 'never') },
         { label: 'Next', render: (x) => (x.enabled ? fmt.until(x.next_run_at) : '—') },
         { label: 'Items', class: 'num', render: (x) => fmt.int(x.items_total) },
