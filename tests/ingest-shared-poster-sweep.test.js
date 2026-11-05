@@ -74,3 +74,23 @@ test('repair: coomer videos the sweep collapsed on a shared poster come back, wi
   assert.equal(get(real).publish_state, 'hidden'); assert.equal(get(other).publish_state, 'hidden');
   assert.equal(maintenance.repairSharedPosterCollapse().restored, 0, 'idempotent');
 });
+
+test('a hash the old sweep took from a borrowed poster is cleared (database and dedupe index), by the sweep and by the one-off', async () => {
+  reset();
+  const H = 'c'.repeat(32);
+  const swept = row({ preview: BANNER, phash: H });                 // the sweep reaches this one
+  const passed = row({ preview: BANNER, phash: H });                // a cursor that is already past it: only the one-off can reach it
+  const own = row({ preview: 'https://thumbs.example/own.jpg', phash: 'd'.repeat(32) }); // a poster of its own keeps its hash
+  dedupe.load(); dedupe.remember(swept, H, { mediaType: 'video' }); dedupe.remember(passed, H, { mediaType: 'video' });
+  assert.ok(dedupe.check({ phash: H, mediaType: 'video' }).dup, 'the stale hash is findable before');
+  repo.settings.set('hash_sweep_seq', String(repo.db.prepare('SELECT seq FROM media WHERE id = ?').get(passed).seq));
+  const out = await maintenance.clearBorrowedPosterHashes();
+  assert.equal(out.cleared, 2); assert.equal(get(passed).phash, null); assert.equal(get(own).phash, 'd'.repeat(32));
+  assert.equal(dedupe.check({ phash: H, mediaType: 'video' }).dup, null, 'and gone from the dedupe index');
+  assert.equal((await maintenance.clearBorrowedPosterHashes()).cleared, 0, 'idempotent');
+  repo.settings.set('hash_sweep_seq', '0');
+  const again = row({ preview: BANNER, phash: H }); dedupe.remember(again, H, { mediaType: 'video' });
+  await maintenance.hashSweep({ limit: 100, settings });
+  assert.equal(get(again).phash, null, 'the sweep clears one it reaches');
+  assert.equal(dedupe.check({ phash: H, mediaType: 'video' }).dup, null);
+});

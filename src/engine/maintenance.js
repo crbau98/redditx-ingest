@@ -129,7 +129,8 @@ async function physiqueSweep({ limit = 12, settings } = {}) {
     repo.settings.set('physique_sweep_version', PHYSIQUE_SWEEP_VERSION); repo.settings.set('physique_sweep_seq', '0');
   }
   let after = parseInt(repo.settings.get('physique_sweep_seq') || '0', 10) || 0;
-  const rows = repo.db.prepare(`SELECT seq, id, creator_id, media_type, media_url, preview_url, thumbnail_url, publish_state, physique FROM media
+  const startedAt = after;
+  const rows = repo.db.prepare(`SELECT seq, id, creator_id, media_type, media_url, preview_url, thumbnail_url, publish_state, physique, review_reason, title, description, tags_text, community, author FROM media
     WHERE publish_state IN ('published','review','hidden') AND seq > ? ORDER BY seq LIMIT ?`).all(after, limit);
   if (!rows.length) { res.done = true; return res; }
   const creators = new Set();
@@ -141,17 +142,35 @@ async function physiqueSweep({ limit = 12, settings } = {}) {
     const now = settingsStore.get();
     if (!now.physiqueFilter) { res.stopped = true; break; }
     after = row.seq; res.checked++;
+    // The row as it is NOW: the model call above can take long enough for an admin to approve, reject, remove or block it, and
+    // the snapshot read before it must not undo that.
+    const cur = repo.db.prepare('SELECT publish_state, physique, review_reason, title, description, tags_text, community, author FROM media WHERE id = ?').get(row.id);
+    if (!cur) continue;
     if (v.female) { repo.media.block(row.id, 'physique sweep: picture shows a woman', 'system'); res.removed++; continue; }
     if (v.status === 'error' || v.status === 'unavailable') { res.errors++; continue; }
-    if (v.physique == null || row.physique === physique.APPROVED) continue; // an admin approved it over the body filter
+    // A row hidden for its WORDS that the current word list no longer matches (the text sweep leaves it hidden and rewinds this
+    // sweep to it): it is shown again only now, after a real measurement, with the stored verdict: hidden with a body reason if
+    // heavy, published otherwise. No torso in view leaves it unmeasured, as the pipeline publishes any other such picture.
+    if (cur.publish_state === 'hidden' && cur.physique !== physique.APPROVED && /^physique:(text:|101$)/.test(cur.review_reason || '')
+        && !physique.textCheck(cur.title, cur.description, cur.tags_text, cur.community, cur.author).heavy) {
+      repo.media.setPhysique(row.id, v.physique == null ? null : v.physique);
+      physique.publish(row.id, now);
+      res.restored = (res.restored || 0) + 1;
+      if (row.creator_id) creators.add(row.creator_id);
+      continue;
+    }
+    if (v.physique == null || cur.physique === physique.APPROVED) continue; // an admin approved it over the body filter
     res.measured++;
     repo.media.setPhysique(row.id, v.physique);
-    const verdict = row.publish_state === 'published' ? physique.stateFor(v.physique, now) : null;
+    const verdict = cur.publish_state === 'published' ? physique.stateFor(v.physique, now) : null;
     if (verdict) { repo.media.setState(row.id, verdict.state, verdict.reason, { exact: true }); imagefilter.noteHeavy(); res.hidden++; }
     if (row.creator_id) creators.add(row.creator_id);
   }
   if (creators.size) { const now = settingsStore.get(); for (const id of creators) physique.reviewCreator(id, now); }
-  repo.settings.set('physique_sweep_seq', String(after));
+  // a text sweep may have moved the cursor BACK while this batch awaited the model (a rewind to rows it left for measuring):
+  // keep that lower value, the rows between are measured again on the next tick
+  const stored = parseInt(repo.settings.get('physique_sweep_seq') || '0', 10) || 0;
+  repo.settings.set('physique_sweep_seq', String(stored < startedAt ? stored : after));
   if (res.hidden || res.removed) events.log('OK', `Body sweep: ${res.measured} of ${res.checked} measured · ${res.hidden} hidden (heavy)${res.removed ? ` · ${res.removed} removed (women)` : ''}`);
   return res;
 }
@@ -189,7 +208,12 @@ async function hashSweep({ limit = 12, settings } = {}) {
   if (!rows.length) { res.done = true; return res; }
   for (const row of rows) {
     after = row.seq; res.checked++;
-    if (borrowedPoster(row)) continue;
+    if (borrowedPoster(row)) {
+      // a hash the OLD sweep took from the borrowed poster is wrong: drop it, from the database and from the dedupe index, so it cannot
+      // make an unrelated video with a similar poster look like a duplicate
+      if (row.phash) { repo.media.setPhash(row.id, null); dedupe.forget(row.id); }
+      continue;
+    }
     let hash = row.phash;
     if (!hash) {
       const v = await imagefilter.checkItem({ mediaType: row.media_type, mediaUrl: row.media_url, previewUrl: row.preview_url, thumbnailUrl: row.thumbnail_url }, { faces: false, hash: true });
@@ -236,6 +260,25 @@ function repairSharedPosterCollapse() {
   return { restored };
 }
 
+/**
+ * One-off, after the repair above: clear the perceptual hash of EVERY video whose poster is borrowed (the old sweep took them from the
+ * poster). The hash sweep clears these as its cursor reaches them, but on an upgraded database its cursor is already past them.
+ * Chunked, yielding between chunks. Idempotent.
+ * @returns {Promise<{cleared: number}>}
+ */
+async function clearBorrowedPosterHashes() {
+  const rows = repo.db.prepare("SELECT id, post_key, media_type, preview_url FROM media WHERE media_type = 'video' AND phash IS NOT NULL AND preview_url IS NOT NULL").all();
+  let cleared = 0;
+  for (let i = 0; i < rows.length; i += 500) {
+    repo.db.transaction(() => {
+      for (const r of rows.slice(i, i + 500)) if (borrowedPoster(r)) { repo.media.setPhash(r.id, null); dedupe.forget(r.id); cleared++; }
+    })();
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  if (cleared) events.log('OK', `Cleared the perceptual hash of ${cleared} video(s) taken from a borrowed poster`);
+  return { cleared };
+}
+
 function hashSweepProgress() {
   const cursor = parseInt(repo.settings.get('hash_sweep_seq') || '0', 10) || 0;
   const remaining = repo.db.prepare("SELECT COUNT(*) AS n FROM media WHERE publish_state IN ('published','review') AND seq > ?").get(cursor).n;
@@ -248,14 +291,27 @@ function imageSweepProgress() {
   return { cursor, checkedUpTo: q('<='), remaining: q('>'), version: IMAGE_SWEEP_VERSION };
 }
 
-let sweepTimer = null; let sweepBusy = false; let sweepGaveUp = false; let lastRetire = 0;
+let sweepTimer = null; let sweepBusy = false; let sweepGaveUp = false;
 const RETIRE_EVERY_MS = 24 * 3600 * 1000;
-/** Once a day: pause the app's own feeds that have clearly stopped working (see sourcehealth.retireDead). */
+const RETIRE_RETRY_MS = 3600 * 1000;
+/**
+ * Once a day (the time of the last run is stored, so a restart does not start a second round): pause the app's own feeds that
+ * never worked (see sourcehealth.retireDead). Nothing is recorded while the setting is off, so switching it on runs it at once.
+ */
 function retireDeadFeeds(now = Date.now()) {
-  if (now - lastRetire < RETIRE_EVERY_MS) return null;
-  lastRetire = now;
   if (!settingsStore.get().autoRetireFeeds) return null;
-  const r = require('./sourcehealth').retireDead({ now });
+  const last = Date.parse(repo.settings.get('auto_retire_last') || '') || 0;
+  if (last <= now && now - last < RETIRE_EVERY_MS) return null; // (a stored time in the future, after a clock step, is stale)
+  let r;
+  try {
+    r = require('./sourcehealth').retireDead({ now });
+  } catch (e) {
+    // a failed pass is retried in an hour (not next minute, which would repeat a persistent error 1,440 times a day, and not
+    // tomorrow, which would let one transient database error switch the step off for a day)
+    repo.settings.set('auto_retire_last', new Date(now - RETIRE_EVERY_MS + RETIRE_RETRY_MS).toISOString());
+    throw e;
+  }
+  repo.settings.set('auto_retire_last', new Date(now).toISOString()); // recorded only once the pass has worked
   if (r.paused.length) events.log('INFO', `Feeds paused (stopped working): ${r.paused.length}${r.capped ? ' (daily cap reached)' : ''} — ${r.paused.slice(0, 5).map((f) => `${f.platform}:${f.target}`).join(', ')}${r.paused.length > 5 ? ', …' : ''}. Admin → Sources lists them; enabling one keeps it on.`);
   return r;
 }
@@ -302,6 +358,7 @@ function startupSweepIfNeeded() {
   setTimeout(() => {
     try {
       if (repo.settings.get('shared_poster_repair') !== '1') { repairSharedPosterCollapse(); repo.settings.set('shared_poster_repair', '1'); }
+      if (repo.settings.get('shared_poster_hash_clear') !== '1') clearBorrowedPosterHashes().then(() => repo.settings.set('shared_poster_hash_clear', '1')).catch((e) => events.log('WARN', `Borrowed-poster hashes: ${e.message}`));
     } catch (e) { events.log('WARN', `Shared-poster repair: ${e.message}`); }
   }, 4000).unref();
   if (repo.settings.get('safety_sweep_version') === SAFETY_SWEEP_VERSION) return;
@@ -311,4 +368,4 @@ function startupSweepIfNeeded() {
   }, 1500).unref();
 }
 
-module.exports = { repairSharedPosterCollapse, retireDeadFeeds, sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, physiqueSweep, physiqueSweepProgress, hashSweep, hashSweepProgress, startImageSweep, stopImageSweep };
+module.exports = { clearBorrowedPosterHashes, repairSharedPosterCollapse, retireDeadFeeds, sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, physiqueSweep, physiqueSweepProgress, hashSweep, hashSweepProgress, startImageSweep, stopImageSweep };

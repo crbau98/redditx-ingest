@@ -14,6 +14,13 @@ A prism splits light into a spectrum, so the spectrum is the one structural devi
 - **Touch**: every interactive element is at least 44px on coarse pointers, including Browse tag chips (measured with Playwright at 390px: 0 under 44px on Home, Explore, Creators, Reels, Saved, Find, Browse).
 - No new infinite animation. The ring only transitions `transform` and is off for reduced motion.
 
+## Phone & install (v7.1, `aurora.css` last block, `components/scroll-chrome.js`, `components/pwa.js`, `sw.js`)
+
+- Budgets, enforced by `node scripts/ui-audit.js <url> --phone --strict` on the demo library at 360x740, 390x844, 430x932 and 768x1024: 0 px of sideways overflow, 0 clipped elements, 0 targets under 44px, 0 text under 12px, 0 form fields under 16px, 0 content under the tab bar, 0 pinned controls under the notch (47px) or home indicator (34px), pinned chrome (app bar + filter bar + tab bar, minus safe areas) at most 22% of the viewport after scrolling.
+- The sticky filter bar tucks away while scrolling down and returns on the first scroll up (transform only; instant under reduced motion). While a text field has focus the tab bar is hidden (`html.typing`).
+- Every viewport-height rule carries a `dvh` / `svh` line after the `vh` one (guarded by `tests/phone-pwa.test.js`); `content-visibility: auto` always comes with `contain-intrinsic-size`.
+- Install: PNG icons incl. a separate maskable one, shortcuts, `theme-color` follows the theme, Install / Add to Home Screen in the phone menu. Offline: shell and hashed files precached; public reads (stale-while-revalidate, 60 s fresh) and pictures (cache-first, 150) are cached ONLY when the person turns on Display > "Keep what I browse for offline use" (off by default: adult content is not kept on the device unasked), never admin / stream / age / HLS / video; a pill says when the device is offline. Bump `VERSION` in `sw.js` when the worker or a precached file changes.
+
 ## Information architecture (top first)
 
 The job is to find the top OnlyFans creators fast. Home is, in order: masthead, ring strip, Top OnlyFans creators, follows, trending, For you, latest uploads. Creators opens on **Top** (OnlyFans-linked first), with **OnlyFans only**, **Following** and **New** beside it; other sorts live in Filters. A section earns its place only if it answers a different question from another one; the rest were cut. No number on a page may be typed in by hand: Browse tiles are live counts or absent.

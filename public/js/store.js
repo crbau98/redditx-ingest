@@ -29,6 +29,8 @@ export const prefs = {
   set introDone(v) { write('prism.introDone', !!v); },
   get accent() { return read('prism.accent', 'prism'); },
   set accent(v) { write('prism.accent', v); document.documentElement.dataset.accent = v; bus.emit('accent', v); },
+  get offlineContent() { return read('prism.offlineContent', false); }, // keep browsed pages and pictures on this device (service worker caches); off by default
+  set offlineContent(v) { write('prism.offlineContent', !!v); bus.emit('offlineContent', !!v); },
   get historyOff() { return read('prism.historyOff', false); },
   set historyOff(v) { write('prism.historyOff', !!v); },
   get theme() { return read('prism.theme', 'dark'); }, // dark by default: it is a media app

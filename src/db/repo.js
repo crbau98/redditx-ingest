@@ -1202,11 +1202,12 @@ const media = {
   },
 
   /** `exact`: write `reason` as given (null clears it) instead of keeping the previous reason when none is passed. */
-  setState(id, state, reason, { exact = false } = {}) {
+  setState(id, state, reason, { exact = false, deferStats = false } = {}) {
     if (!PUBLISH_STATES.includes(state)) throw new Error('bad state');
     const m = db.prepare('SELECT creator_id FROM media WHERE id = ?').get(id);
     (exact ? mediaQ.stateExact : mediaQ.state).run(state, reason || null, id);
-    if (m && m.creator_id) creators.refreshStats(m.creator_id);
+    // `deferStats`: a bulk caller refreshes each affected creator once itself (refreshStats recounts all of a creator's media)
+    if (m && m.creator_id && !deferStats) creators.refreshStats(m.creator_id);
     notifyState(id, state);
   },
 
