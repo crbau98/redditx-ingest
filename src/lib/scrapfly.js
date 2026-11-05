@@ -48,6 +48,13 @@ function allowedFor(feed) {
     const handle = String(feed.target).split('@')[0].replace(/^@/, '').toLowerCase();
     if (handle && list.has(handle)) return true;
   }
+  // A page feed (no creator row yet): an allowlisted handle of at least 6 characters in the URL's PATH. The host alone never
+  // matches, and a short token such as 'logan' can never match, so a creator's own page is covered without a creator row.
+  if (feed.target && /^https?:\/\//i.test(String(feed.target))) {
+    let path = '';
+    try { path = new URL(String(feed.target)).pathname.toLowerCase(); } catch { path = ''; }
+    for (const entry of list) if (entry.length >= 6 && path.includes(entry)) return true;
+  }
   return false;
 }
 const today = () => new Date().toISOString().slice(0, 10);
@@ -139,8 +146,16 @@ async function scrape(url, opts = {}) {
     // (attempt() checks the caps against the budget it sends). The refused attempt's cost is carried over, once.
     if (!(opts.escalate && e.costLimit && sc.escalateCostBudget > first)) throw e;
     const refused = e.cost || 0;
+    // Say WHY the escalation did not run, in words an admin can act on: our cap, not the site.
+    const u = usage(); const cfg = settingsStore.get(); const esc = sc.escalateCostBudget;
+    if (u.credits + esc > cfg.scrapflyCreditBudget) {
+      throw Object.assign(new Error(`escalation refused: the daily credit cap is ${cfg.scrapflyCreditBudget}, the escalated ceiling needs ${esc} (used today: ${u.credits})`), { budget: true, escalationRefused: true, cost: refused });
+    }
+    if (u.monthCredits + esc > cfg.scrapflyMonthlyCreditBudget) {
+      throw Object.assign(new Error(`escalation refused: the monthly credit cap is ${cfg.scrapflyMonthlyCreditBudget}, the escalated ceiling needs ${esc} (used this month: ${u.monthCredits})`), { budget: true, escalationRefused: true, cost: refused });
+    }
     try {
-      const r = await attempt(url, { ...opts, costBudget: sc.escalateCostBudget });
+      const r = await attempt(url, { ...opts, costBudget: esc });
       r.cost += refused;
       return r;
     } catch (e2) {
