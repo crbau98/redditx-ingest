@@ -232,7 +232,11 @@ const creators = {
     return creators.get(id);
   },
 
-  /** Fill blanks only — never overwrite what an admin curated. */
+  /**
+   * Fill blanks only — never overwrite what an admin curated. One exception: a picture (avatar / banner) a platform now serves from
+   * the SAME site as the stored one replaces it (a changed or dead avatar link would otherwise stay for ever); a link from another
+   * site never does, so a creator's accounts on different platforms cannot take the avatar back and forth.
+   */
   enrich(id, { displayName, bio, avatarUrl, bannerUrl, links }) {
     const c = creatorQ.get.get(id);
     if (!c) return;
@@ -240,8 +244,10 @@ const creators = {
     const validName = displayName && !/^(?:untitled|sin t[íi]tulo|unbenannt|sans titre)$/i.test(String(displayName).trim());
     if (validName && (!c.display_name || c.display_name === c.handle)) patch.displayName = displayName;
     if (bio && !c.bio) patch.bio = bio;
-    if (avatarUrl && !c.avatar_url) patch.avatarUrl = avatarUrl;
-    if (bannerUrl && !c.banner_url) patch.bannerUrl = bannerUrl;
+    const siteOf = (u) => { try { return new URL(u).hostname.toLowerCase().split('.').slice(-2).join('.'); } catch { return null; } };
+    const better = (now, stored) => !!now && (!stored || (now !== stored && siteOf(now) && siteOf(now) === siteOf(stored)));
+    if (better(avatarUrl, c.avatar_url)) patch.avatarUrl = avatarUrl;
+    if (better(bannerUrl, c.banner_url)) patch.bannerUrl = bannerUrl;
     if (links && links.length) {
       let existing = []; try { existing = JSON.parse(c.links || '[]'); } catch { /* ignore */ }
       const normUrl = (u) => String(u || '').toLowerCase().replace(/\/+$/, '');

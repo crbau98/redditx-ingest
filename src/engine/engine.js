@@ -133,6 +133,24 @@ function computeNextRun(feed, failures, retryAfterMs = 0, factor = 1) {
 
 const ITEM_CONCURRENCY = 4;
 
+/**
+ * Should this run also read the creator's profile? Always on the feed's first run and on a manual run; after that every
+ * `profileRefreshDays` days (0 = never), for the platforms where it is one cheap request. The time of the last read lives in the
+ * feed cursor (`profiledAt`; `profileTryAt` when the adapter gave no profile, retried after a day), so it needs no column.
+ * Telegram is left out: its profile read costs MTProto budget (see lib/telegram-budget).
+ */
+const PROFILE_REFRESH_PLATFORMS = new Set(['bluesky', 'mastodon', 'misskey', 'reddit', 'x', 'peertube']);
+function profileDue(feed, cursor, cfg, trigger, now = Date.now()) {
+  if (!feed.creator_id) return false;
+  if (!feed.last_success_at || trigger === 'manual') return true;
+  const days = cfg && cfg.profileRefreshDays;
+  if (!days || feed.kind !== 'user' || !PROFILE_REFRESH_PLATFORMS.has(feed.platform)) return false;
+  const c = cursor || {};
+  const read = Date.parse(c.profiledAt); const tried = Date.parse(c.profileTryAt);
+  if (Number.isFinite(tried) && now - tried < 86400000) return false;
+  return !Number.isFinite(read) || now - read >= days * 86400000;
+}
+
 /* -------------------------------------------------------------- run a feed */
 /**
  * Reposts and crossposts are ways in to more creators and more sources (v5 A6):
@@ -233,7 +251,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
       limit: runLimit,
       cursor,
       force: !!opts.force,
-      needProfile: !!feed.creator_id && (!feed.last_success_at || trigger === 'manual'),
+      needProfile: profileDue(feed, cursor, cfg, trigger),
       aborted: () => state.stopRequested || !!opts.aborted,
     };
     if (opts.lane !== undefined) budget.charge(feed.platform, opts.lane); // only a run that really goes to the source uses the budget
@@ -325,7 +343,14 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     // poll interval. A flag on the result covers adapters whose cursor cannot say it (Coomer's walk).
     const prevCur = backfill.parse(feed.cursor);
     const baseCur = result.cursor || (prevCur.backfillPending ? prevCur : undefined);
-    const cursorOut = result.backfillPending ? { ...(baseCur || {}), backfillPending: true } : (baseCur && baseCur.backfillPending ? { ...baseCur, backfillPending: false } : baseCur);
+    let cursorOut = result.backfillPending ? { ...(baseCur || {}), backfillPending: true } : (baseCur && baseCur.backfillPending ? { ...baseCur, backfillPending: false } : baseCur);
+    // when the profile was last read (see profileDue); adapters build their cursor from scratch, so the stamps are carried over here
+    const stamp = {};
+    const readNow = ctx.needProfile && result.profile ? new Date().toISOString() : null;
+    if (readNow || prevCur.profiledAt) stamp.profiledAt = readNow || prevCur.profiledAt;
+    if (ctx.needProfile && !result.profile && PROFILE_REFRESH_PLATFORMS.has(feed.platform)) stamp.profileTryAt = new Date().toISOString();
+    else if (!readNow && prevCur.profileTryAt) stamp.profileTryAt = prevCur.profileTryAt;
+    if (Object.keys(stamp).length && (ctx.needProfile || prevCur.profiledAt || prevCur.profileTryAt)) cursorOut = { ...(cursorOut || prevCur), ...stamp };
     const more = backfill.pending({ cursor: cursorOut });
     repo.feeds.finishRun(feed.id, {
       status, cursor: cursorOut, addedItems: stats.added, failures: 0,
@@ -672,4 +697,4 @@ function shutdown() {
   state.timer = null; state.hotTimer = null; state.stopRequested = true;
 }
 
-module.exports = { _nextWork: nextWork, slotsFor, runningOn, start, shutdown, tick, runFeed, enqueue, enqueuePlatforms, stopAll, pause, resume, status, seedDefaults, seedCuratedCreators, computeNextRun, tempo, adoptDiscoveredFeeds, _state: state, _waysIn: { noteWaysIn, followWaysIn } };
+module.exports = { _nextWork: nextWork, slotsFor, runningOn, start, shutdown, tick, runFeed, enqueue, enqueuePlatforms, stopAll, pause, resume, status, seedDefaults, seedCuratedCreators, computeNextRun, tempo, adoptDiscoveredFeeds, _profileDue: profileDue, _state: state, _waysIn: { noteWaysIn, followWaysIn } };

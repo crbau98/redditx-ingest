@@ -26,6 +26,7 @@ const SCHEMA = {
   untrustedUnclear: { type: 'enum', values: ['drop', 'review'], default: 'drop', label: 'Items from open searches/tags with no male wording at all: drop = discard, review = queue for a human' },
   autoTrack: { type: 'bool', default: true, label: 'Auto-follow creators discovered in communities' },
   autoTrackMinItems: { type: 'int', default: 2, min: 1, max: 20, label: 'Posts before a creator is auto-followed' },
+  profileRefreshDays: { type: 'int', default: 14, min: 0, max: 365, label: 'Re-read a followed creator\'s profile (avatar, bio, the links in it) every this many days, from the same feed (Bluesky, Mastodon, Misskey, Reddit, X, PeerTube; one extra request per creator per period; 0 = only on the first run and on manual runs)', group: 'sources' },
   autoLinkProfiles: { type: 'bool', default: true, label: 'Follow creators’ other public accounts found in their bios' },
   identityAutoMerge: { type: 'bool', default: true, label: 'Merge a creator’s accounts on their own when his profiles link to each other (or to the same OnlyFans / link page) and he uses the same name on both. Anything less certain waits in Creators → Same person?' },
   adaptiveScheduling: { type: 'bool', default: true, label: 'Adaptive scheduling: check busy feeds sooner, quiet ones less often' },
