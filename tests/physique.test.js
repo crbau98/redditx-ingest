@@ -342,6 +342,23 @@ describe('body filter policy (model replaced by a fake)', () => {
     assert.equal(repo.media.get(person).publish_state, 'hidden'); assert.equal(repo.media.get(person).review_reason, 'reported:spam');
   });
 
+  test('restoring a word-hidden item never throws away a MEASURED score: heavy stays hidden (with the body reason), light is shown', async () => {
+    fake({});
+    const base = (k, extra) => repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: k, source_key: `reddit:${k}:0`, post_key: `reddit:${k}`, source_url: `https://reddit.com/${k}`,
+      media_type: 'image', media_url: `https://i.redd.it/${k}.jpg`, hash: `h-${k}`, publish_state: 'hidden', title: 'I am 60 days out from my first show', ...extra });
+    // the body sweep replaced the word marker (101) with a measured score but left the old text reason on the row
+    const heavy = base('meas-heavy', { physique: 88, review_reason: 'physique:text:older:i am 60' });
+    const light = base('meas-light', { physique: 20, review_reason: 'physique:text:older:i am 60' });
+    const r = await physique.textSweep(settings, { force: true });
+    assert.equal(repo.media.get(heavy).publish_state, 'hidden', 'a measured heavy picture must not be published');
+    assert.equal(repo.media.get(heavy).physique, 88, 'and its measured score is kept');
+    assert.equal(repo.media.get(heavy).review_reason, 'physique:88', 'now hidden for the right reason');
+    assert.equal(repo.media.get(light).publish_state, 'published'); assert.equal(repo.media.get(light).physique, 20);
+    assert.ok(r.restored >= 1);
+    physique.reapply(settings);
+    assert.equal(repo.media.get(heavy).publish_state, 'hidden'); assert.equal(repo.media.get(light).publish_state, 'published');
+  });
+
   test('a feed this policy paused whose name no longer matches runs again, unless a person acted on it', async () => {
     const ok = repo.feeds.upsert({ platform: 'reddit', kind: 'community', target: 'plainlifters', enabled: 0, trusted: 1, origin: 'admin' }).feed;
     repo.logAction('feed', ok.id, 'physique-feed-off', 'body filter: "older:i am 60"', 'system');

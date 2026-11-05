@@ -186,9 +186,9 @@ async function textSweep(settings, { force = false } = {}) {
   }
   if (!stillOn()) return res;
   // Show again what an EARLIER, broader word list hid and the current one does not (version 3 hid "I'm 60 days out" as an
-  // age). Only items still hidden by this policy's own text reason, so a decision by a person is never undone; their stored
-  // score goes back to "unmeasured", otherwise `reapply` (score 101 >= threshold) would hide them again at the next boot.
-  const stale = repo.db.prepare(`SELECT seq, id, title, description, tags_text, community, author FROM media
+  // age). Only items still hidden by this policy's own text reason, so a decision by a person is never undone; the word marker (101) goes back to
+  // "unmeasured", otherwise `reapply` would hide them again at the next boot; a MEASURED score stays and still decides.
+  const stale = repo.db.prepare(`SELECT seq, id, physique, title, description, tags_text, community, author FROM media
     WHERE publish_state = 'hidden' AND review_reason LIKE '${REASON}text:%' AND seq > ? ORDER BY seq LIMIT 500`);
   after = 0;
   for (;;) {
@@ -199,9 +199,10 @@ async function textSweep(settings, { force = false } = {}) {
       for (const r of rows) {
         after = r.seq;
         if (textCheck(r.title, r.description, r.tags_text, r.community, r.author).heavy) continue;
-        repo.media.setPhysique(r.id, null);
-        repo.media.setState(r.id, 'published', null, { exact: true });
-        res.restored++;
+        if (r.physique === APPROVED) continue;                         // an admin's approval is never touched
+        if (r.physique === TEXT_SCORE) repo.media.setPhysique(r.id, null); // only the word marker is reset; a MEASURED score (the body sweep
+        publish(r.id, settings);                                           // replaces the marker) stays and still decides: `publish` re-applies it
+        if (repo.media.get(r.id).publish_state !== 'hidden') res.restored++;
       }
     })();
     await new Promise((r) => setImmediate(r));

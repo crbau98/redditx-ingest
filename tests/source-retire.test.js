@@ -91,6 +91,22 @@ test('a feed a person touched recently is left alone, even if a later system act
   assert.ok(dry.paused.some((p) => p.id === g.id)); assert.equal(enabled(g), 1, 'dry run: nothing changed');
 });
 
+test('quiet feeds with MORE runs cannot crowd a never-worked feed out of the candidate list (the filter runs before the limit)', () => {
+  // 1,005 productive-but-quiet app-made feeds with 15 runs each, and one never-worked feed with the minimum 12 runs:
+  // ordered by runs the never-worked feed would fall past a 1000-row limit if the filter ran after it
+  const ins = repo.db.prepare('INSERT INTO feed_runs (id, feed_id, started_at, finished_at, status, fetched, added) VALUES (?, ?, ?, ?, ?, ?, ?)');
+  repo.db.transaction(() => {
+    for (let i = 0; i < 1005; i++) {
+      const q = feed('ingest', { runs: 0, items: 40 });
+      for (let k = 0; k < 15; k++) ins.run(crypto.randomUUID(), q.id, iso(k * DAY + HOUR), iso(k * DAY), 'empty', 5, 0);
+    }
+  })();
+  const never = feed('discovered', { runs: 12, items: 0 });
+  const r = sourcehealth.retireDead({ max: 1000 });
+  assert.ok(r.paused.some((p) => p.id === never.id), 'the never-worked feed is still found');
+  assert.equal(enabled(never), 0);
+});
+
 test('one call pauses at most `max` feeds, so a bad day cannot empty the library', () => {
   for (let i = 0; i < 5; i++) feed('discovered', { runs: 14, items: 0 });
   const r = sourcehealth.retireDead({ max: 2 });
