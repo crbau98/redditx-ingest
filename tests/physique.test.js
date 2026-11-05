@@ -405,6 +405,53 @@ describe('body filter policy (model replaced by a fake)', () => {
     assert.ok(seqOf(id2) > 0);
   });
 
+  test('a marker row is NOT published while nothing could measure it again (image sweep off or 0 per minute), and the pass is not marked done', async () => {
+    fake({});
+    const store = require('../src/settings');
+    const base = (k) => repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: k, source_key: `reddit:${k}:0`, post_key: `reddit:${k}`, source_url: `https://reddit.com/${k}`,
+      media_type: 'image', media_url: `https://i.redd.it/${k}.jpg`, hash: `h-${k}`, publish_state: 'hidden', title: 'I am 60 days out from my first show', physique: 101, review_reason: 'physique:text:older:i am 60' });
+    const id = base('defer1');
+    repo.settings.set('physique_text_sweep_version', '');
+    for (const off of [{ imageSweep: false }, { imageSweepPerTick: 0 }]) {
+      const before = { imageSweep: store.get().imageSweep, imageSweepPerTick: store.get().imageSweepPerTick };
+      store.update(off);
+      try {
+        const r = await physique.textSweep(settings, { force: true });
+        assert.equal(repo.media.get(id).publish_state, 'hidden', `still hidden with ${JSON.stringify(off)}`);
+        assert.equal(repo.media.get(id).physique, 101); assert.ok(r.deferred >= 1);
+        assert.notEqual(repo.settings.get('physique_text_sweep_version'), '4', 'not marked done, so the next start tries again');
+      } finally { store.update(before); }
+    }
+    await physique.textSweep(settings, { force: true });              // sweep on again: now it is restored and queued for measuring
+    assert.equal(repo.media.get(id).publish_state, 'published');
+    assert.equal(repo.settings.get('physique_text_sweep_version'), '4');
+  });
+
+  test('the cursor rewind is kept when the filter is switched off between restore batches', async () => {
+    fake({});
+    const store = require('../src/settings');
+    const ids = [];
+    for (let i = 0; i < 501; i++) ids.push(repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: `bt${i}`, source_key: `reddit:bt${i}:0`, post_key: `reddit:bt${i}`, source_url: `https://reddit.com/bt${i}`,
+      media_type: 'image', media_url: `https://i.redd.it/bt${i}.jpg`, hash: `h-bt${i}`, publish_state: 'hidden', title: 'I am 60 days out from my first show', physique: 101, review_reason: 'physique:text:older:i am 60' }));
+    const lowest = repo.db.prepare('SELECT MIN(seq) AS s FROM media WHERE id IN (' + ids.map(() => '?').join(',') + ')').get(...ids).s;
+    const far = String(lowest + 100000);
+    repo.settings.set('physique_sweep_seq', far);
+    const realSI = global.setImmediate;
+    const restoredAny = () => repo.db.prepare("SELECT 1 FROM media WHERE id = ? AND publish_state = 'published'").get(ids[0]);
+    global.setImmediate = (fn, ...a) => { if (restoredAny() && store.get().physiqueFilter) store.update({ physiqueFilter: false }); return realSI(fn, ...a); }; // off right after the first restore batch
+    try { await physique.textSweep(settings, { force: true }); } finally { global.setImmediate = realSI; store.update({ physiqueFilter: true }); }
+    assert.equal(repo.settings.get('physique_sweep_seq'), String(lowest - 1), 'the first batch\'s rewind was applied before the abort');
+    repo.db.prepare('DELETE FROM media WHERE id IN (' + ids.map(() => '?').join(',') + ')').run(...ids); // leave the shared library as it was
+  });
+
+  test('a stated age is still read when other fields follow it: "I\'m 58" then an author name', () => {
+    for (const args of [["I'm 58", '', '', '', 'someauthor'], ["I'm 58", 'bio text', ['tag1', 'tag2'], 'community', 'author'], ['Age 52', null, null, 'r/fitness', 'x']]) {
+      const r = physique.textCheck(...args);
+      assert.equal(r.heavy, true, JSON.stringify(args)); assert.equal(r.kind, 'older');
+    }
+    for (const args of [["I'm 60 days out", 'prep', '', '', 'author'], ["I'm 50,000 followers strong", 'x', '', '', 'author']]) assert.equal(physique.textCheck(...args).heavy, false, JSON.stringify(args));
+  });
+
   test('a feed this policy paused whose name no longer matches runs again, unless a person acted on it', async () => {
     const ok = repo.feeds.upsert({ platform: 'reddit', kind: 'community', target: 'plainlifters', enabled: 0, trusted: 1, origin: 'admin' }).feed;
     repo.logAction('feed', ok.id, 'physique-feed-off', 'body filter: "older:i am 60"', 'system');

@@ -197,6 +197,14 @@ async function textSweep(settings, { force = false } = {}) {
     ORDER BY seq LIMIT 500`);
   after = 0;
   let rewind = null; // lowest seq of a row whose word marker was reset to "unmeasured": the body sweep must look at it again
+  let deferred = 0;  // marker rows left hidden because nothing would re-measure them (see below)
+  // applied after EVERY batch, so an early return (the filter switched off while a batch yields) cannot lose it
+  const applyRewind = () => {
+    if (rewind == null) return;
+    const cursor = parseInt(repo.settings.get('physique_sweep_seq') || '0', 10) || 0;
+    if (cursor >= rewind) { repo.settings.set('physique_sweep_seq', String(rewind - 1)); res.rewound = rewind - 1; }
+    rewind = null;
+  };
   for (;;) {
     if (!stillOn()) return res;
     const rows = stale.all(after);
@@ -207,21 +215,21 @@ async function textSweep(settings, { force = false } = {}) {
         if (textCheck(r.title, r.description, r.tags_text, r.community, r.author).heavy) continue;
         if (r.physique === APPROVED) continue;                         // an admin's approval is never touched
         if (r.physique === TEXT_SCORE) {                                    // only the word marker is reset; a MEASURED score (the body sweep
-          repo.media.setPhysique(r.id, null);                               // replaces the marker) stays and still decides: `publish` re-applies it
-          rewind = rewind == null ? r.seq : Math.min(rewind, r.seq);        // and its measurement may have been overwritten by the marker earlier
+          // replaces the marker) stays and still decides: `publish` re-applies it. A marker row has no score, and its measurement may
+          // have been overwritten by the marker earlier, so it is measured again by the body sweep: if that sweep cannot run
+          // (switched off, or 0 per minute) nothing would, and a heavy picture would stay visible for good, so it stays hidden
+          // for now and the whole pass runs again at the next start instead of being marked done.
+          const now = require('../settings').get();
+          if (!now.imageSweep || !now.imageSweepPerTick) { deferred++; continue; }
+          repo.media.setPhysique(r.id, null);
+          rewind = rewind == null ? r.seq : Math.min(rewind, r.seq);
         }
         publish(r.id, current());
         if (repo.media.get(r.id).publish_state !== 'hidden') res.restored++;
       }
     })();
+    applyRewind();
     await new Promise((r) => setImmediate(r));
-  }
-  // The body sweep measures each row once per version, then moves its cursor on. A row whose measured score the word marker
-  // replaced may be behind that cursor, so a heavy picture would stay unmeasured (and visible) for good: move the cursor back to
-  // just before the lowest such row so the sweep measures them again.
-  if (rewind != null) {
-    const cursor = parseInt(repo.settings.get('physique_sweep_seq') || '0', 10) || 0;
-    if (cursor >= rewind) { repo.settings.set('physique_sweep_seq', String(rewind - 1)); res.rewound = rewind - 1; }
   }
   if (!stillOn()) return res;
   for (const c of repo.db.prepare("SELECT id FROM creators WHERE status = 'active'").all()) {
@@ -242,7 +250,8 @@ async function textSweep(settings, { force = false } = {}) {
     repo.logAction('feed', f.id, 'physique-feed-on', 'the word list no longer matches this feed', 'system');
     res.feedsRestored++;
   }
-  repo.settings.set('physique_text_sweep_version', TEXT_SWEEP_VERSION);
+  if (deferred) { res.deferred = deferred; events.log('INFO', `Body filter (words): ${deferred} item(s) with no measured picture stay hidden until the image sweep is on; this pass runs again at the next start`); }
+  else repo.settings.set('physique_text_sweep_version', TEXT_SWEEP_VERSION);
   if (res.items || res.creators || res.feeds || res.restored || res.feedsRestored) {
     events.log('OK', `Body filter (words): ${res.items} item(s) hidden, ${res.creators} creator(s) hidden, ${res.feeds} feed(s) paused; shown again: ${res.restored} item(s), ${res.feedsRestored} feed(s)`);
   }

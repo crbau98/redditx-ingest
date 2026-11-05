@@ -200,7 +200,8 @@ function olderCheck(t) {
  */
 function textCheck(...texts) {
   const flat = [].concat(texts).flat(Infinity).filter(Boolean).map(String);
-  const variants = [flat.join(' \n '), flat.map((s) => s.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ')).join(' \n ')].map(normalize);
+  const split = (s) => s.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ');
+  const variants = [flat.join(' \n '), flat.map(split).join(' \n ')].map(normalize);
   for (const t of variants) {
     if (!t) continue;
     for (const w of HEAVY_SUBSTR) if (t.includes(w)) return { heavy: true, rule: `physique:${w.trim()}`, kind: 'heavy' };
@@ -208,8 +209,15 @@ function textCheck(...texts) {
     if (g) return { heavy: true, rule: `physique:${g[0]}`, kind: 'heavy' };
     const m = t.match(HEAVY_WORDS);
     if (m) return { heavy: true, rule: `physique:${m[0]}`, kind: 'heavy' };
-    const o = olderCheck(t);
-    if (o) return { heavy: true, rule: `physique:${o}`, kind: 'older' };
+  }
+  // A man's own words about his age are read one field at a time: `normalize` collapses whitespace, so a joined string has no
+  // field boundary left and "I'm 58" followed by an author name would no longer end its clause.
+  for (const f of flat) {
+    for (const t of [normalize(f), normalize(split(f))]) {
+      if (!t) continue;
+      const o = olderCheck(t);
+      if (o) return { heavy: true, rule: `physique:${o}`, kind: 'older' };
+    }
   }
   return { heavy: false, rule: null, kind: null };
 }
