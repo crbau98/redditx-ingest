@@ -73,7 +73,7 @@ const SCHEMA = {
   // --- link health (v4.8) ---
   linkHealth: { type: 'bool', default: true, label: 'Check media at the source and hide what has been removed there', group: 'maintenance' },
   linkHealthPerSweep: { type: 'int', default: 40, min: 0, max: 500, label: 'Items re-checked every 10 minutes', group: 'maintenance' },
-  linkHealthCohortPerSweep: { type: 'int', default: 80, min: 0, max: 500, label: 'Items from the rot hosts below re-checked every 10 minutes (their own rate; the other items keep linkHealthPerSweep)', group: 'maintenance' },
+  linkHealthCohortPerSweep: { type: 'int', default: 200, min: 0, max: 500, label: 'Items from the rot hosts below re-checked every 10 minutes (their own rate; the other items keep linkHealthPerSweep)', group: 'maintenance' },
   linkHealthRotHosts: { type: 'text', default: 'i.redd.it\npreview.redd.it', label: 'Hosts where media is known to disappear at the source (one per line). Their items are checked as a cohort, whatever their age', group: 'maintenance' },
   creatorSeeds: {
     type: 'text', group: 'discovery', label: 'Creators to find by name (one per line: a name, @handle or profile link). Each is looked up across every platform PRISM reads and his verified public accounts are followed; re-checked monthly',

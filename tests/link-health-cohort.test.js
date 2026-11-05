@@ -50,18 +50,18 @@ describe('rot-host cohort', () => {
     assert.equal(health_(coomer).verdict, 'ok');
   });
 
-  test('the cohort rate is 80 per sweep; other hosts keep 40', async () => {
-    for (let i = 0; i < 100; i++) item('i.redd.it');
+  test('the cohort rate is 200 per sweep; other hosts keep 40', async () => {
+    for (let i = 0; i < 220; i++) item('i.redd.it');
     for (let i = 0; i < 60; i++) item('coomer.su');
-    assert.equal(settings.get().linkHealthCohortPerSweep, 80);
+    assert.equal(settings.get().linkHealthCohortPerSweep, 200);
     assert.equal(settings.get().linkHealthPerSweep, 40);
     const { calls, probe } = fakeProbe(() => ({ ok: true }));
     const r = await health.sweep({ probe });
     const reddit = calls.filter((u) => u.includes('i.redd.it')).length;
     const other = calls.filter((u) => u.includes('coomer.su')).length;
-    assert.equal(reddit, 80, 'cohort probes per sweep');
+    assert.equal(reddit, 200, 'cohort probes per sweep');
     assert.equal(other, 40, 'general probes per sweep');
-    assert.equal(r.cohort, 80);
+    assert.equal(r.cohort, 200);
   });
 
   test('a recent reddit item stays in the live sweep, not the cohort', async () => {
