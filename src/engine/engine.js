@@ -613,14 +613,8 @@ function seedCuratedCreators(db) {
     }
     // Only the curated creators: the counts are per creator, and a correlated UPDATE over every creator in
     // the library (14k on prod) cost ~16 s inside this transaction, on the main thread, at boot.
-    const refreshStats = db.prepare(`
-      UPDATE creators SET
-        media_count = (SELECT COUNT(*) FROM media WHERE creator_id = creators.id AND publish_state = 'published'),
-        video_count = (SELECT COUNT(*) FROM media WHERE creator_id = creators.id AND publish_state = 'published' AND media_type = 'video'),
-        total_score = COALESCE((SELECT SUM(score) FROM media WHERE creator_id = creators.id), 0)
-      WHERE id = ?
-    `);
-    for (const c of seed.creators) refreshStats.run(c.id);
+    // (repo.creators.recount is the one definition of the counters: published items only.)
+    for (const c of seed.creators) repo.creators.recount(c.id);
   });
 
   tx();
@@ -654,21 +648,17 @@ function seedDefaults() {
  */
 function backfillCreatorStats(db, chunk = 25) {
   const pick = db.prepare('SELECT id FROM creators WHERE id > ? ORDER BY id LIMIT ?');
-  const stmt = db.prepare(`
-    UPDATE creators SET
-      media_count = (SELECT COUNT(*) FROM media WHERE creator_id = creators.id AND publish_state = 'published'),
-      video_count = (SELECT COUNT(*) FROM media WHERE creator_id = creators.id AND publish_state = 'published' AND media_type = 'video'),
-      total_score = COALESCE((SELECT SUM(score) FROM media WHERE creator_id = creators.id), 0)
-    WHERE id = ?`);
-  let after = ''; let done = 0;
-  const step = () => {
-    const ids = pick.all(after, chunk).map((r) => r.id);
-    if (!ids.length) { if (done) events.log('INFO', `Refreshed media counts for ${done} creators`); return; }
-    db.transaction(() => { for (const id of ids) stmt.run(id); })();
-    done += ids.length; after = ids[ids.length - 1];
+  return new Promise((resolve) => {
+    let after = ''; let done = 0;
+    const step = () => {
+      const ids = pick.all(after, chunk).map((r) => r.id);
+      if (!ids.length) { if (done) events.log('INFO', `Refreshed media counts for ${done} creators`); return resolve(done); }
+      db.transaction(() => { for (const id of ids) repo.creators.recount(id); })();
+      done += ids.length; after = ids[ids.length - 1];
+      setImmediate(step);
+    };
     setImmediate(step);
-  };
-  setImmediate(step);
+  });
 }
 
 function start() {
@@ -697,4 +687,4 @@ function shutdown() {
   state.timer = null; state.hotTimer = null; state.stopRequested = true;
 }
 
-module.exports = { _nextWork: nextWork, slotsFor, runningOn, start, shutdown, tick, runFeed, enqueue, enqueuePlatforms, stopAll, pause, resume, status, seedDefaults, seedCuratedCreators, computeNextRun, tempo, adoptDiscoveredFeeds, _profileDue: profileDue, _state: state, _waysIn: { noteWaysIn, followWaysIn } };
+module.exports = { _nextWork: nextWork, slotsFor, runningOn, start, shutdown, tick, runFeed, enqueue, enqueuePlatforms, stopAll, pause, resume, status, seedDefaults, seedCuratedCreators, backfillCreatorStats, computeNextRun, tempo, adoptDiscoveredFeeds, _profileDue: profileDue, _state: state, _waysIn: { noteWaysIn, followWaysIn } };

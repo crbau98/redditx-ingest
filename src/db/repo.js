@@ -152,19 +152,23 @@ function serializeCreator(row) {
   return out;
 }
 
+/** The ONE definition of a creator's counters: what is visible (published) now. Every writer uses it; do not write a second one. */
+const STATS_SET = `media_count = (SELECT COUNT(*) FROM media WHERE creator_id = @id AND publish_state = 'published'),
+      video_count = (SELECT COUNT(*) FROM media WHERE creator_id = @id AND publish_state = 'published' AND media_type = 'video'),
+      total_score = (SELECT COALESCE(SUM(score), 0) FROM media WHERE creator_id = @id AND publish_state = 'published'),
+      last_media_at = (SELECT MAX(posted_at) FROM media WHERE creator_id = @id AND publish_state = 'published')`;
+
 const creatorQ = {
   get: db.prepare('SELECT * FROM creators WHERE id = ?'),
   insert: db.prepare(`INSERT INTO creators (id, handle, display_name, bio, avatar_url, banner_url, scope, origin)
                       VALUES (@id, @handle, @display_name, @bio, @avatar_url, @banner_url, @scope, @origin)`),
   byAccount: db.prepare(`SELECT c.* FROM feeds f JOIN creators c ON c.id = f.creator_id
                          WHERE f.platform = ? AND f.kind IN ('user', 'channel') AND f.target = ? COLLATE NOCASE LIMIT 1`),
-  stats: db.prepare(`UPDATE creators SET
-      media_count = (SELECT COUNT(*) FROM media WHERE creator_id = @id AND publish_state = 'published'),
-      video_count = (SELECT COUNT(*) FROM media WHERE creator_id = @id AND publish_state = 'published' AND media_type = 'video'),
-      total_score = (SELECT COALESCE(SUM(score), 0) FROM media WHERE creator_id = @id AND publish_state = 'published'),
-      last_media_at = (SELECT MAX(posted_at) FROM media WHERE creator_id = @id AND publish_state = 'published'),
+  stats: db.prepare(`UPDATE creators SET ${STATS_SET},
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
     WHERE id = @id`),
+  // the same counts without touching updated_at (boot-time reconciliation of many creators)
+  recount: db.prepare(`UPDATE creators SET ${STATS_SET} WHERE id = @id`),
   feedsOf: db.prepare('SELECT * FROM feeds WHERE creator_id = ? ORDER BY platform, target'),
   topTags: db.prepare(`SELECT t.name, COUNT(*) AS n FROM media m
       JOIN media_tags mt ON mt.media_id = m.id JOIN tags t ON t.id = mt.tag_id
@@ -273,6 +277,8 @@ const creators = {
   },
 
   refreshStats(id) { if (id) creatorQ.stats.run({ id }); },
+  /** Recompute the counters of one creator without marking it updated. */
+  recount(id) { if (id) creatorQ.recount.run({ id }); },
 
   list({ page = 0, limit = 48, q: query, sort = 'media', platform, admin = false, minMedia, onlyfans: ofOnly = false, paidHost, freshDays, ids } = {}) {
     const where = []; const params = [];
