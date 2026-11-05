@@ -115,7 +115,7 @@ const SCHEMA = {
   scrapflyAllowlist: { type: 'text', default: '', label: 'Scrapfly allowlist: the ONLY creators (ids or handles, one per line) the Scrapfly tier may spend credits on. Empty = Scrapfly never runs', group: 'sources' },
   scrapflyBudget: { type: 'int', default: 20, min: 0, max: 10000, label: 'Scrapfly: most requests per day (a clean read is 1 credit; an escalated read 25 to 80)', group: 'sources' },
   scrapflyMonthlyBudget: { type: 'int', default: 100, min: 0, max: 100000, label: 'Scrapfly: most requests per month (the FREE plan allows 1000 requests)', group: 'sources' },
-  scrapflyCreditBudget: { type: 'int', default: 30, min: 0, max: 1000000, label: 'Scrapfly: most credits per day. An escalation to 80 needs at least 80 here, so 30 means it never runs', group: 'sources' },
+  scrapflyCreditBudget: { type: 'int', default: 30, min: 0, max: 1000000, label: 'Scrapfly: most credits per day. The escalated tier (80 credits per page) only runs when this is at least 80; at 30 nothing escalates, and the run note says so', group: 'sources' },
   scrapflyMonthlyCreditBudget: { type: 'int', default: 120, min: 0, max: 1000000, label: 'Scrapfly: most credits per month (the FREE plan allows 1000 credits; keep it under what the account has left)', group: 'sources' },
   brightdataUnlockBudget: { type: 'int', default: 100, min: 0, max: 100000, label: 'Bright Data Unlocker: most unlocked requests per day (each one costs credit; 0 = none)', group: 'sources' },
   // --- AI (OpenAI by default, Claude with AI_PROVIDER=anthropic; needs OPENAI_API_KEY / ANTHROPIC_API_KEY on the host, inert without it) ---
