@@ -163,6 +163,9 @@ async function textSweep(settings, { force = false } = {}) {
   // It yields between batches: if an admin switches the filter off meanwhile (that request already re-showed everything),
   // stop instead of hiding more with the settings captured at the start.
   const stillOn = () => require('../settings').get().physiqueFilter === true;
+  // the body filter's settings as they are NOW: an admin may move the threshold while a batch yields, and a decision that
+  // compares a stored score with the threshold (a restore, a creator review) must use the new one, not this call's snapshot
+  const current = () => live({ ...settings, liveBody: true });
   let after = 0;
   // Only published items: one waiting in the review queue keeps its own state and reason, so switching the filter off later
   // can never publish something a human has not looked at.
@@ -203,7 +206,7 @@ async function textSweep(settings, { force = false } = {}) {
         if (textCheck(r.title, r.description, r.tags_text, r.community, r.author).heavy) continue;
         if (r.physique === APPROVED) continue;                         // an admin's approval is never touched
         if (r.physique === TEXT_SCORE) repo.media.setPhysique(r.id, null); // only the word marker is reset; a MEASURED score (the body sweep
-        publish(r.id, settings);                                           // replaces the marker) stays and still decides: `publish` re-applies it
+        publish(r.id, current());                                           // replaces the marker) stays and still decides: `publish` re-applies it
         if (repo.media.get(r.id).publish_state !== 'hidden') res.restored++;
       }
     })();
@@ -211,7 +214,7 @@ async function textSweep(settings, { force = false } = {}) {
   }
   if (!stillOn()) return res;
   for (const c of repo.db.prepare("SELECT id FROM creators WHERE status = 'active'").all()) {
-    if (reviewCreator(c.id, settings) === 'hidden') res.creators++;
+    if (reviewCreator(c.id, current()) === 'hidden') res.creators++;
   }
   for (const f of repo.db.prepare('SELECT id, target, label FROM feeds WHERE enabled = 1').all()) {
     const t = textCheck(f.target, f.label);

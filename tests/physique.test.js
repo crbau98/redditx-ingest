@@ -360,6 +360,19 @@ describe('body filter policy (model replaced by a fake)', () => {
     assert.equal(repo.media.get(heavy).publish_state, 'hidden'); assert.equal(repo.media.get(light).publish_state, 'published');
   });
 
+  test('the restore decision uses the threshold as it is NOW, not the sweep\'s starting snapshot', async () => {
+    fake({});
+    const id = repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: 'snap1', source_key: 'reddit:snap1:0', post_key: 'reddit:snap1', source_url: 'https://reddit.com/snap1',
+      media_type: 'image', media_url: 'https://i.redd.it/snap1.jpg', hash: 'h-snap1', publish_state: 'hidden', title: 'I am 60 days out from my first show', physique: 50, review_reason: 'physique:text:older:i am 60' });
+    const store = require('../src/settings');
+    const before = store.get().physiqueThreshold;
+    store.update({ physiqueFilter: true, physiqueThreshold: 40 });  // an admin lowered it; the sweep still holds `settings` (threshold 60)
+    try {
+      await physique.textSweep({ ...settings, physiqueThreshold: 60 }, { force: true });
+      assert.equal(repo.media.get(id).publish_state, 'hidden', 'measured 50 is over the current threshold 40, so it stays hidden');
+    } finally { store.update({ physiqueThreshold: before }); }
+  });
+
   test('an item the filter\'s off/on path left as "physique:101" (word marker, body reason) is re-read too; a person\'s hide is not', async () => {
     fake({});
     const base = (k, extra) => repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: k, source_key: `reddit:${k}:0`, post_key: `reddit:${k}`, source_url: `https://reddit.com/${k}`,
