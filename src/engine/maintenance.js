@@ -124,6 +124,7 @@ async function physiqueSweep({ limit = 12, settings } = {}) {
     repo.settings.set('physique_sweep_version', PHYSIQUE_SWEEP_VERSION); repo.settings.set('physique_sweep_seq', '0');
   }
   let after = parseInt(repo.settings.get('physique_sweep_seq') || '0', 10) || 0;
+  const startedAt = after;
   const rows = repo.db.prepare(`SELECT seq, id, creator_id, media_type, media_url, preview_url, thumbnail_url, publish_state, physique, review_reason, title, description, tags_text, community, author FROM media
     WHERE publish_state IN ('published','review','hidden') AND seq > ? ORDER BY seq LIMIT ?`).all(after, limit);
   if (!rows.length) { res.done = true; return res; }
@@ -136,12 +137,16 @@ async function physiqueSweep({ limit = 12, settings } = {}) {
     const now = settingsStore.get();
     if (!now.physiqueFilter) { res.stopped = true; break; }
     after = row.seq; res.checked++;
+    // The row as it is NOW: the model call above can take long enough for an admin to approve, reject, remove or block it, and
+    // the snapshot read before it must not undo that.
+    const cur = repo.db.prepare('SELECT publish_state, physique, review_reason FROM media WHERE id = ?').get(row.id);
+    if (!cur) continue;
     if (v.female) { repo.media.block(row.id, 'physique sweep: picture shows a woman', 'system'); res.removed++; continue; }
     if (v.status === 'error' || v.status === 'unavailable') { res.errors++; continue; }
     // A row hidden for its WORDS that the current word list no longer matches (the text sweep leaves it hidden and rewinds this
     // sweep to it): it is shown again only now, after a real measurement, with the stored verdict: hidden with a body reason if
     // heavy, published otherwise. No torso in view leaves it unmeasured, as the pipeline publishes any other such picture.
-    if (row.publish_state === 'hidden' && row.physique !== physique.APPROVED && /^physique:(text:|101$)/.test(row.review_reason || '')
+    if (cur.publish_state === 'hidden' && cur.physique !== physique.APPROVED && /^physique:(text:|101$)/.test(cur.review_reason || '')
         && !physique.textCheck(row.title, row.description, row.tags_text, row.community, row.author).heavy) {
       repo.media.setPhysique(row.id, v.physique == null ? null : v.physique);
       physique.publish(row.id, now);
@@ -149,15 +154,18 @@ async function physiqueSweep({ limit = 12, settings } = {}) {
       if (row.creator_id) creators.add(row.creator_id);
       continue;
     }
-    if (v.physique == null || row.physique === physique.APPROVED) continue; // an admin approved it over the body filter
+    if (v.physique == null || cur.physique === physique.APPROVED) continue; // an admin approved it over the body filter
     res.measured++;
     repo.media.setPhysique(row.id, v.physique);
-    const verdict = row.publish_state === 'published' ? physique.stateFor(v.physique, now) : null;
+    const verdict = cur.publish_state === 'published' ? physique.stateFor(v.physique, now) : null;
     if (verdict) { repo.media.setState(row.id, verdict.state, verdict.reason, { exact: true }); imagefilter.noteHeavy(); res.hidden++; }
     if (row.creator_id) creators.add(row.creator_id);
   }
   if (creators.size) { const now = settingsStore.get(); for (const id of creators) physique.reviewCreator(id, now); }
-  repo.settings.set('physique_sweep_seq', String(after));
+  // a text sweep may have moved the cursor BACK while this batch awaited the model (a rewind to rows it left for measuring):
+  // keep that lower value, the rows between are measured again on the next tick
+  const stored = parseInt(repo.settings.get('physique_sweep_seq') || '0', 10) || 0;
+  repo.settings.set('physique_sweep_seq', String(stored < startedAt ? stored : after));
   if (res.hidden || res.removed) events.log('OK', `Body sweep: ${res.measured} of ${res.checked} measured · ${res.hidden} hidden (heavy)${res.removed ? ` · ${res.removed} removed (women)` : ''}`);
   return res;
 }

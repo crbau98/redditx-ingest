@@ -453,6 +453,33 @@ describe('body filter policy (model replaced by a fake)', () => {
     repo.db.prepare('DELETE FROM media WHERE id IN (' + ids.map(() => '?').join(',') + ')').run(...ids); // leave the shared library as it was
   });
 
+  test('the body sweep keeps a cursor that was moved BACK while its batch awaited the model', async () => {
+    const id = repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: 'race1', source_key: 'reddit:race1:0', post_key: 'reddit:race1', source_url: 'https://reddit.com/race1',
+      media_type: 'image', media_url: 'https://i.redd.it/race1.jpg', preview_url: 'https://i.redd.it/race1.jpg', hash: 'h-race1', publish_state: 'published' });
+    const seq = repo.db.prepare('SELECT seq FROM media WHERE id = ?').get(id).seq;
+    repo.settings.set('physique_sweep_seq', String(seq - 1));
+    imagefilter._setAnalyzer(async () => { repo.settings.set('physique_sweep_seq', '3'); return { status: 'ok', faces: male, body: { decided: true, score: 5 } }; }); // a text sweep rewinds meanwhile
+    await maintenance.physiqueSweep({ limit: 1, settings });
+    assert.equal(repo.settings.get('physique_sweep_seq'), '3', 'the rewind was not overwritten by this batch\'s own position');
+    repo.settings.set('physique_sweep_seq', String(seq));
+  });
+
+  test('a row an admin changed while the model was working is not restored or overwritten from the stale snapshot', async () => {
+    const base = (k) => repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: k, source_key: `reddit:${k}:0`, post_key: `reddit:${k}`, source_url: `https://reddit.com/${k}`,
+      media_type: 'image', media_url: `https://i.redd.it/${k}.jpg`, preview_url: `https://i.redd.it/${k}.jpg`, hash: `h-${k}`, publish_state: 'hidden', title: 'I am 60 days out from my first show', physique: 101, review_reason: 'physique:text:older:i am 60' });
+    const approved = base('mid-approve'); const reported = base('mid-report');
+    const first = repo.db.prepare('SELECT MIN(seq) AS s FROM media WHERE id IN (?, ?)').get(approved, reported).s;
+    repo.settings.set('physique_sweep_seq', String(first - 1));
+    imagefilter._setAnalyzer(async (url) => {
+      if (url.includes('mid-approve')) { repo.media.setPhysique(approved, physique.APPROVED); repo.media.setState(approved, 'published', null, { exact: true }); }   // approved meanwhile
+      if (url.includes('mid-report')) repo.media.setState(reported, 'hidden', 'reported:spam', { exact: true });                                                 // taken down for another reason meanwhile
+      return { status: 'ok', faces: male, body: { decided: true, score: 5 } };
+    });
+    await maintenance.physiqueSweep({ limit: 500, settings });
+    assert.equal(repo.media.get(approved).physique, physique.APPROVED, 'an approval is not overwritten'); assert.equal(repo.media.get(approved).publish_state, 'published');
+    assert.equal(repo.media.get(reported).publish_state, 'hidden'); assert.equal(repo.media.get(reported).review_reason, 'reported:spam', 'and a hide for another reason is not republished');
+  });
+
   test('a stated age is still read when other fields follow it: "I\'m 58" then an author name', () => {
     for (const args of [["I'm 58", '', '', '', 'someauthor'], ["I'm 58", 'bio text', ['tag1', 'tag2'], 'community', 'author'], ['Age 52', null, null, 'r/fitness', 'x']]) {
       const r = physique.textCheck(...args);
