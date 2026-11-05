@@ -94,3 +94,25 @@ test('a hash the old sweep took from a borrowed poster is cleared (database and 
   assert.equal(get(again).phash, null, 'the sweep clears one it reaches');
   assert.equal(dedupe.check({ phash: H, mediaType: 'video' }).dup, null);
 });
+
+test('an RSS video (even a video-only entry, with no sibling row) is never hashed by the sweep: its poster is channel artwork', async () => {
+  reset();
+  const art = 'https://v.example/art.jpg';
+  const a = row({ platform: 'rss', post: 'rss:ep1', preview: art }); const b = row({ platform: 'rss', post: 'rss:ep2', preview: art });
+  await maintenance.hashSweep({ limit: 100, settings });
+  for (const id of [a, b]) { assert.equal(get(id).publish_state, 'published', 'no second episode is hidden as a duplicate'); assert.equal(get(id).phash, null); }
+  const own = row({ platform: 'reddit', post: 'reddit:x', preview: 'https://thumbs.example/own2.jpg' });
+  await maintenance.hashSweep({ limit: 100, settings });
+  assert.ok(get(own).phash, 'other platforms\' videos with a poster of their own are still hashed');
+});
+
+test('repair also drops the repaired ORIGINAL from an already-loaded dedupe index', () => {
+  reset();
+  const H = 'e'.repeat(32);
+  const orig = row({ preview: BANNER, phash: H }); const gone = row({ preview: BANNER, state: 'hidden', reason: `duplicate of ${orig}`, phash: H });
+  dedupe.load(); dedupe.remember(orig, H, { mediaType: 'video' });          // the index loaded before the repair
+  assert.ok(dedupe.check({ phash: H, mediaType: 'video' }).dup, 'the stale original is findable before');
+  maintenance.repairSharedPosterCollapse();
+  assert.equal(get(gone).publish_state, 'published');
+  assert.equal(dedupe.check({ phash: H, mediaType: 'video' }).dup, null, 'and not after: it cannot collapse later videos until a restart');
+});

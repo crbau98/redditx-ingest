@@ -431,12 +431,14 @@ function runningOn(platform) {
   return n;
 }
 const platformFull = (platform, cfg) => runningOn(platform) >= slotsFor(platform, cfg);
+/** The key a platform's HTTP calls are limited under (lib/limiter): the link-in-bio adapter reads through the shared `web` client. */
+const limiterKeyOf = (platform) => (platform === 'linkinbio' ? 'web' : platform);
 
 /** Platforms that still have a free slot and an open breaker. */
 function openPlatforms(cfg) {
   const open = new Set(Object.entries(breaker.snapshot()).filter(([, s]) => s.state === 'open').map(([p]) => p));
   // A platform the limiter is holding after a 429 gets no new run either: the call would only be refused (lib/limiter, maxWaitMs).
-  return { open, free: registry.list().map((a) => a.platform).filter((p) => !open.has(p) && !platformFull(p, cfg) && !limiter.coolingDown(p)) };
+  return { open, free: registry.list().map((a) => a.platform).filter((p) => !open.has(p) && !platformFull(p, cfg) && !limiter.coolingDown(limiterKeyOf(p))) };
 }
 
 function nextWork(cfg) {
@@ -448,7 +450,7 @@ function nextWork(cfg) {
     if (state.running.has(job.feedId)) { state.queue.splice(i, 1); i--; continue; }
     const feed = repo.feeds.get(job.feedId);
     if (!feed) { state.queue.splice(i, 1); i--; continue; }
-    if (platformFull(feed.platform, cfg) || limiter.coolingDown(feed.platform) || !breaker.canRun(feed.platform)) continue;
+    if (platformFull(feed.platform, cfg) || limiter.coolingDown(limiterKeyOf(feed.platform)) || !breaker.canRun(feed.platform)) continue;
     state.queue.splice(i, 1);
     return { feed, trigger: job.trigger, force: job.force, limit: job.limit, lane: 0 };
   }

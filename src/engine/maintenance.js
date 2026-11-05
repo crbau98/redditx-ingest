@@ -73,6 +73,7 @@ async function sweep({ probe = false, limit = 1_000_000 } = {}) {
     const isBroken = (c.permanent && f.consecutive_failures >= 3) || (f.consecutive_failures >= 5 && !c.transient);
     if (isBroken) {
       repo.feeds.update(f.id, { enabled: false });
+      repo.logAction('feed', f.id, 'sweep-disable', `${c.kind}, ${f.consecutive_failures} failures`, 'system'); // what the health report lists as switched off by the engine
       events.log("INFO", `Sweep: disabled failing feed ${f.platform}:${f.kind}:${f.target} (${f.consecutive_failures} failures, ${c.kind})`);
     }
   }
@@ -195,6 +196,9 @@ const siblingPoster = repo.db.prepare('SELECT 1 FROM media WHERE post_key = ? AN
  */
 function borrowedPoster(row) {
   if (row.media_type !== 'video' || !row.preview_url) return false;
+  // An RSS video's poster is the entry's media:thumbnail, often channel artwork reused by every entry, and a video-only entry has no sibling
+  // row to show it (the pipeline marks these posterShared, but that marker is not stored): the sweep never trusts them.
+  if (row.platform === 'rss') return true;
   if (/\/(?:banners|icons)\//.test(row.preview_url)) return true;
   return !!(row.post_key && siblingPoster.get(row.post_key, row.id, row.preview_url));
 }
@@ -251,6 +255,7 @@ function repairSharedPosterCollapse() {
     if (!o || o.media_type !== 'video' || !r.preview_url || o.preview_url !== r.preview_url) continue;
     repo.db.transaction(() => {
       repo.media.setPhash(r.id, null); repo.media.setPhash(o.id, null);
+      dedupe.forget(r.id); dedupe.forget(o.id); // the index may already be loaded: the stale entries must go from it too
       if (r.source_url) dropAlt.run(o.id, r.source_url);
       repo.media.setState(r.id, 'published', null, { exact: true });
     })();
@@ -267,7 +272,7 @@ function repairSharedPosterCollapse() {
  * @returns {Promise<{cleared: number}>}
  */
 async function clearBorrowedPosterHashes() {
-  const rows = repo.db.prepare("SELECT id, post_key, media_type, preview_url FROM media WHERE media_type = 'video' AND phash IS NOT NULL AND preview_url IS NOT NULL").all();
+  const rows = repo.db.prepare("SELECT id, platform, post_key, media_type, preview_url FROM media WHERE media_type = 'video' AND phash IS NOT NULL AND preview_url IS NOT NULL").all();
   let cleared = 0;
   for (let i = 0; i < rows.length; i += 500) {
     repo.db.transaction(() => {

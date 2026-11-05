@@ -93,6 +93,17 @@ describe('scheduler', () => {
     limiter.reset();
     assert.equal(engine._nextWork(cfg).feed.id, f.id);
   });
+
+  test('link-in-bio feeds read through the shared `web` client: a hold on `web` stops them too, a hold on `linkinbio` alone is not the limiter key', () => {
+    repo.db.prepare("DELETE FROM feeds").run();
+    const f = feed({ platform: 'linkinbio', kind: 'page', target: `${mock.url}/bio?n=${++n}`, intervalMin: 60 });
+    const cfg = { ...settingsStore.get(), schedulerEnabled: true };
+    assert.equal(engine._nextWork(cfg).feed.id, f.id, 'due and free: picked');
+    limiter.penalize('web', 10 * 60000);
+    assert.equal(engine._nextWork(cfg), null, 'the shared web limiter is cooling down: no link-in-bio run starts');
+    limiter.reset();
+    assert.equal(engine._nextWork(cfg).feed.id, f.id);
+  });
 });
 
 describe('a throttled feed', () => {

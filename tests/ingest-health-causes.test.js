@@ -79,6 +79,27 @@ test('feeds the engine switched off are listed with the reason, newest first, an
   assert.ok(totals.disabledByEngine >= 2);
 });
 
+test('a feed the library sweep switched off (it leaves last_error alone) is listed too, until a person changes it', () => {
+  const repoLocal = require('../src/db/repo');
+  const swept = feed('rss', { enabled: 0, fails: 4, lastError: 'HTTP 410 Gone for https://dead.example/a.xml', lastStatus: 'error' });
+  repoLocal.logAction('feed', swept.id, 'sweep-disable', 'not_found, 4 failures', 'system');
+  const before = sourcehealth.report();
+  assert.ok(before.disabled.some((d) => d.id === swept.id), 'listed although its last_error never says "disabled"');
+  const n = before.totals.disabledByEngine;
+  repoLocal.logAction('feed', swept.id, 'enable', 'I turned it back on and off', 'admin');
+  const after = sourcehealth.report();
+  assert.ok(!after.disabled.some((d) => d.id === swept.id), 'a person acted since: not the engine\'s any more');
+  assert.equal(after.totals.disabledByEngine, n - 1);
+});
+
+test('maintenance.sweep records the marker when it disables a failing feed', async () => {
+  const maintenance = require('../src/engine/maintenance');
+  const f = feed('rss', { enabled: 1, fails: 5, lastError: 'HTTP 410 Gone for https://dead.example/b.xml', lastStatus: 'error' });
+  await maintenance.sweep({ limit: 1 });
+  assert.equal(require('../src/db/repo').feeds.get(f.id).enabled, 0);
+  assert.ok(sourcehealth.report().disabled.some((d) => d.id === f.id), 'the report lists what the sweep switched off');
+});
+
 test('the admin API exposes it: /sources/health, and a cause on each feed and run row', async () => {
   const f = feed('mastodon', { fails: 2, lastError: 'HTTP 503 Service Unavailable for https://m.example/api', lastStatus: 'error' });
   run(f, 'error', 'HTTP 503 Service Unavailable for https://m.example/api');

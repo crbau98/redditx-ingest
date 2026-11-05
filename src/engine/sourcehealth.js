@@ -88,9 +88,12 @@ function report({ failingAfter = 3, staleDays = 3, deadDays = 30, deadMinRuns = 
       WHERE enabled = 1 AND consecutive_failures >= ? GROUP BY err`).all(failingAfter)) tally(failingByKind, kindOf(r.err) || 'other', r.n);
 
   // Feeds the engine (or the library sweep) switched off on its own, with why. A pause by a person leaves no such error.
-  const disabledRows = db.prepare(`SELECT * FROM feeds WHERE enabled = 0 AND last_error LIKE '%disabled%' AND consecutive_failures > 0
-      ORDER BY COALESCE(last_run_at, '') DESC LIMIT ?`).all(limit);
-  const disabledCount = db.prepare("SELECT COUNT(*) AS n FROM feeds WHERE enabled = 0 AND last_error LIKE '%disabled%' AND consecutive_failures > 0").get().n;
+  // The engine writes "... disabled" into last_error; the library sweep (maintenance.sweep) leaves last_error alone and logs a
+  // 'sweep-disable' action instead, so a feed counts when its LATEST action is that marker (a person's later enable or disable replaces it).
+  const ENGINE_OFF = `enabled = 0 AND consecutive_failures > 0 AND (last_error LIKE '%disabled%' OR
+      (SELECT action FROM moderation_actions a WHERE a.target_type = 'feed' AND a.target_id = CAST(feeds.id AS TEXT) ORDER BY a.id DESC LIMIT 1) = 'sweep-disable')`;
+  const disabledRows = db.prepare(`SELECT * FROM feeds WHERE ${ENGINE_OFF} ORDER BY COALESCE(last_run_at, '') DESC LIMIT ?`).all(limit);
+  const disabledCount = db.prepare(`SELECT COUNT(*) AS n FROM feeds WHERE ${ENGINE_OFF}`).get().n;
 
   // Items waiting for a human: how many, how old, and why. Nothing expires them, so a queue nobody reads only grows.
   const rq = db.prepare(`SELECT COUNT(*) AS n, MIN(ingested_at) AS oldest, SUM(CASE WHEN ingested_at < ? THEN 1 ELSE 0 END) AS stale
