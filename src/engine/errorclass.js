@@ -30,7 +30,7 @@ const BLOCK_TEXT = /bot[- ]?protection|bot[- ]?challenge|challeng|cloudflare|cap
 const PARSE_TEXT = /not a valid feed|invalid json|unexpected token|unexpected end|\bparse|malformed|not a feed|is a web page|returned no token|empty (?:response|body)|unexpected (?:response|html)|not (?:json|xml)/i;
 const TIMEOUT_TEXT = /timed? ?out|timeout|etimedout|too slow/i;
 const NETWORK_TEXT = /econnreset|econnrefused|enotfound|eai_again|epipe|eproxy|socket hang up|connection (?:aborted|reset|refused|closed)|getaddrinfo|unreachable|network|dns|tls|ssl|certificate|proxy/i;
-const SERVER_TEXT = /unavailable|bad gateway|gateway time-?out|temporarily|overloaded|internal server error/i;
+const SERVER_TEXT = /unavailable|gateway|gateway time-?out|temporarily|overloaded|internal server error/i;
 const CONFIG_TEXT = /not configured|no adapter|set [A-Z_]{4,}|is off\b|disabled in settings/i;
 
 function statusOf(err) {

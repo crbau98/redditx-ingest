@@ -55,7 +55,9 @@ router.post('/engine/pause', (req, res) => { engine.pause(); res.json({ ok: true
 router.post('/engine/resume', (req, res) => { engine.resume(); res.json({ ok: true }); });
 router.post('/engine/breakers/reset', (req, res) => { breaker.reset(); res.json({ ok: true }); });
 
-router.get('/runs', (req, res) => res.json(repo.runs.recent({ feedId: req.query.feedId, limit: int(req.query.limit, 1, 200, 60) })));
+// `error_kind`: why a run or feed failed (blocked / not_found / rate_limited / parse / timeout / network / server / config / other), see engine/errorclass
+const errorKind = (text) => (text ? require('../engine/errorclass').classify(text).kind : null);
+router.get('/runs', (req, res) => res.json(repo.runs.recent({ feedId: req.query.feedId, limit: int(req.query.limit, 1, 200, 60) }).map((r) => ({ ...r, error_kind: errorKind(r.error) }))));
 
 /* ----------------------------------------------------------------- sources */
 router.get('/sources', (req, res) => {
@@ -114,7 +116,8 @@ router.post('/ai/triage', async (req, res) => {
 /* ------------------------------------------------------------------- feeds */
 router.get('/feeds', (req, res) => {
   const { platform, kind, status, q, creatorId, enabled } = req.query;
-  res.json(repo.feeds.list({ platform, kind, status, q, creatorId, enabled, ...page(req, 500) }));
+  const out = repo.feeds.list({ platform, kind, status, q, creatorId, enabled, ...page(req, 500) });
+  res.json({ ...out, items: out.items.map((f) => ({ ...f, last_error_kind: errorKind(f.last_error) })) });
 });
 
 router.post('/feeds', (req, res) => {

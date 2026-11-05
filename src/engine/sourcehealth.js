@@ -10,16 +10,40 @@
  * Pure SQL over feeds and feed_runs; nothing is changed here (the panel pauses a feed through the normal feed edit).
  */
 const repo = require('../db/repo');
+const { classify, KINDS } = require('./errorclass');
 
 const DAY = 86400000;
 const iso = (ms) => new Date(ms).toISOString();
 
+const kindOf = (text) => (text ? classify(text).kind : null);
+const tally = (m, key, n = 1) => { m[key] = (m[key] || 0) + n; };
+
 function feedRow(f, extra = {}) {
   return {
+    errorKind: kindOf(f.last_error),
     id: f.id, platform: f.platform, kind: f.kind, target: f.target, label: f.label || f.target, creatorId: f.creator_id || null,
     trusted: !!f.trusted, origin: f.origin || null, lastRunAt: f.last_run_at || null, lastSuccessAt: f.last_success_at || null,
     failures: f.consecutive_failures || 0, lastError: f.last_error || null, itemsTotal: f.items_total || 0, ...extra,
   };
+}
+
+/**
+ * What went wrong in the runs of the last `days` days, by cause: { days, runs, total: {kind: n}, byPlatform: {platform: {kind: n}} }.
+ * Failed and skipped runs are classified from their stored message (engine/errorclass); a run that found nothing counts as `empty`.
+ * Runs are grouped by their message first, so the cost follows the number of distinct messages, not the number of runs.
+ */
+const CAUSE_GROUPS = 3000;
+function runCauses(now, days = 7) {
+  const rows = repo.db.prepare(`SELECT f.platform AS platform, r.status AS status, substr(COALESCE(r.error, ''), 1, 200) AS err, COUNT(*) AS n
+      FROM feed_runs r JOIN feeds f ON f.id = r.feed_id
+      WHERE r.started_at >= ? AND r.status IN ('error', 'skipped', 'empty')
+      GROUP BY f.platform, r.status, err ORDER BY n DESC LIMIT ?`).all(iso(now - days * DAY), CAUSE_GROUPS + 1);
+  const total = {}; const byPlatform = {}; let runs = 0;
+  for (const r of rows.slice(0, CAUSE_GROUPS)) {
+    const kind = r.status === 'empty' ? 'empty' : (classify(r.err).kind);
+    tally(total, kind, r.n); tally(byPlatform[r.platform] || (byPlatform[r.platform] = {}), kind, r.n); runs += r.n;
+  }
+  return { days, runs, kinds: [...KINDS, 'empty'], total, byPlatform, truncated: rows.length > CAUSE_GROUPS };
 }
 
 /**
@@ -51,9 +75,22 @@ function report({ failingAfter = 3, staleDays = 3, deadDays = 30, deadMinRuns = 
 
   const totals = db.prepare(`SELECT COUNT(*) AS feeds, SUM(enabled) AS enabled,
       SUM(CASE WHEN enabled = 1 AND last_run_at IS NULL THEN 1 ELSE 0 END) AS never FROM feeds`).get();
+
+  // Every enabled feed that is failing right now, by cause (the `failing` list above is capped at `limit`).
+  const failingByKind = {};
+  for (const r of db.prepare(`SELECT substr(COALESCE(last_error, ''), 1, 200) AS err, COUNT(*) AS n FROM feeds
+      WHERE enabled = 1 AND consecutive_failures >= ? GROUP BY err`).all(failingAfter)) tally(failingByKind, kindOf(r.err) || 'other', r.n);
+
+  // Feeds the engine (or the library sweep) switched off on its own, with why. A pause by a person leaves no such error.
+  const disabledRows = db.prepare(`SELECT * FROM feeds WHERE enabled = 0 AND last_error LIKE '%disabled%' AND consecutive_failures > 0
+      ORDER BY COALESCE(last_run_at, '') DESC LIMIT ?`).all(limit);
+  const disabledCount = db.prepare("SELECT COUNT(*) AS n FROM feeds WHERE enabled = 0 AND last_error LIKE '%disabled%' AND consecutive_failures > 0").get().n;
+
   return {
-    totals: { feeds: totals.feeds || 0, enabled: totals.enabled || 0, neverRun: totals.never || 0, failing: failing.length, stale: stale.length, dead: dead.length },
-    failing, stale, dead, top,
+    totals: { feeds: totals.feeds || 0, enabled: totals.enabled || 0, neverRun: totals.never || 0, failing: failing.length, stale: stale.length, dead: dead.length, disabledByEngine: disabledCount },
+    failing, stale, dead, top, failingByKind,
+    disabled: disabledRows.map((f) => feedRow(f)),
+    causes: runCauses(now),
     rules: { failingAfter, staleDays, deadDays, deadMinRuns },
   };
 }
