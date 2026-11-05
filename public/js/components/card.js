@@ -112,6 +112,10 @@ export function releaseCard(card) {
   stopPreview(media);
   if (io) io.unobserve(media);
   if (reliefIo) reliefIo.unobserve(media);
+  // A picture still on its way is abandoned with its card (the visitor changed filter or page, or scrolled far past
+  // it): dropping src/srcset cancels the request, so a superseded page does not keep taking bandwidth from the next one.
+  const img = media._img;
+  if (img && !media._loaded && !media._parked) img.removeAttribute('src');
 }
 
 /** One media card. `open(item)` is called when the media is activated. */
