@@ -205,3 +205,80 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .ring, .ring-item:hover .ring, .ring-item:active .ring { transition: none; transform: none; }
 }
+
+/* ==========================================================================
+   v7.1 Phone & PWA polish (loaded last; every rule is phone / touch scoped, desktop is unchanged)
+   Measured with `node scripts/ui-audit.js <url> --phone` (see UI_CHANGELOG.md for before / after).
+   ========================================================================== */
+
+/* No 300 ms / double-tap-zoom delay on controls; panning and pinching are untouched. */
+a, button, summary, label, select, input, [role='button'] { touch-action: manipulation; }
+
+/* Nested scrollers keep their own momentum: reaching their end never scrolls (or pull-to-refreshes) the page behind. */
+.lb, .lb-info, .lb-strip, .modal, .overlay, .palette-list, .suggest, .coll-pick { overscroll-behavior: contain; }
+.rail, .follow-rail, .filter-scroll, .active-filters, .related-rail, .lb-more-strip, .lb-collab-strip, .ps-pills, .ps-paid, .tabs, .heatmap, .free-on-row { overscroll-behavior-x: contain; }
+
+/* iOS zooms the page when a field under 16px takes focus, and never zooms back out. */
+@media (pointer: coarse), (max-width: 899px) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='button']):not([type='submit']):not([type='file']),
+  select, textarea, .input, .select, .input.sm, .select.sm, .input.lg { font-size: 16px; }
+}
+
+@media (max-width: 899px) {
+  /* Nothing is smaller than 12px (labels, badges, chips on pictures, tab labels). */
+  .bottomnav a, .lb-lab, .follow-new, .reel-act, .reel-handle, .reel-of-chip,
+  .badge, .badge.of, .badge.fansly, .badge.jff, .card-foot .badge.plat, .find-cand-sub .badge.plat, .pill, .card-badges .pill,
+  .fresh-mark, .creator-fresh, .card-why, .rise, .smart-chip .new, .free-on-label, .menu-group, .suggest-label, .chart-axis,
+  .card-meta, .density-s .card-meta, .lb-dock-handle, .hero-kicker, .search .kbd { font-size: 12px; }
+
+  /* The sticky filter bar tucks away while scrolling down and returns on the first scroll up (components/scroll-chrome.js). */
+  .filterbar { transition: transform var(--dur-base) var(--spring-glide), visibility 0s linear 0s; }
+  .filterbar.bar-hidden { transform: translateY(-100%); visibility: hidden; transition: transform var(--dur-base) var(--spring-glide), visibility 0s linear var(--dur-base); }
+
+  /* With the keyboard up the floating tab bar would sit on the field. */
+  html.typing .bottomnav, html.typing .fab { display: none; }
+
+  /* Long lists: rows far off-screen skip layout and paint (heights are the measured phone sizes). */
+  .creator-grid > .creator-card { content-visibility: auto; contain-intrinsic-size: auto 253px; }
+  .browse-grid > .browse-tile { content-visibility: auto; contain-intrinsic-size: auto 101px; }
+
+  /* Reels top row at 360-430px: title, OnlyFans chip, one "what plays" button and the mute button must fit. */
+  .reels-top { gap: 6px; padding-left: max(10px, env(safe-area-inset-left)); padding-right: max(10px, env(safe-area-inset-right)); }
+  .reels-top .reels-title { flex: 1 1 0; min-width: 0; }
+}
+@media (max-width: 480px) {
+  .reels-top .select, .reels-top .select.sm { display: none; }   /* v6 `.select.sm` re-showed it beside the "what plays" button */
+  .reels-tune { padding: 0 10px; min-width: 44px; }
+  .reels-tune-lab { display: none; }
+}
+
+/* The end of the page clears the floating tab bar (a short page's footer used to sit under it). */
+@media (max-width: 899px) { .footer { padding-bottom: calc(var(--bottomnav-h) + 24px + env(safe-area-inset-bottom)); } }
+
+/* A bottom sheet taller than the screen scrolls; its buttons stay in reach above the home indicator instead of
+   sitting in the scrolled-away padding. */
+@media (max-width: 640px) {
+  .overlay.sheet .modal .actions { position: sticky; bottom: env(safe-area-inset-bottom); z-index: 2; padding-top: 14px; background: linear-gradient(to bottom, transparent, var(--bg-elev) 14px); }
+}
+
+/* Short segmented buttons ("All") reach 44px wide too. */
+@media (pointer: coarse) { .seg button { min-width: 44px; } }
+
+/* The age gate's "leave" link is a real tap target. */
+.age-card a.leave { display: flex; align-items: center; justify-content: center; min-height: 44px; }
+
+/* iPhone landscape: the notch sits at the side, not on top. */
+@media (max-width: 899px) and (orientation: landscape) {
+  main, .appbar, .footer { padding-left: max(var(--pad), env(safe-area-inset-left)); padding-right: max(var(--pad), env(safe-area-inset-right)); }
+}
+
+/* ---------- "You're offline" (components/pwa.js) ---------- */
+.offline-pill {
+  position: fixed; z-index: 70; left: 50%; transform: translateX(-50%);
+  top: calc(var(--appbar-h) + 10px); max-width: calc(100vw - 32px);
+  display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 14px; border-radius: 999px;
+  background: var(--bg-elev); color: var(--text); border: 1px solid var(--line-strong); box-shadow: var(--shadow-2);
+  font-size: var(--t-xs); font-weight: 600; pointer-events: none;
+}
+.offline-pill svg { color: var(--warn); flex: none; }
+@media (max-width: 899px) { .offline-pill { top: calc(var(--appbar-h) + env(safe-area-inset-top) + 10px); } }
