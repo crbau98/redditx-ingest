@@ -323,6 +323,39 @@ describe('body filter policy (model replaced by a fake)', () => {
     assert.equal(repo.creators.get(c.id).status, 'active');
   });
 
+  test('the sweep SHOWS AGAIN what an earlier, broader list hid, keeps what still matches, and never undoes a person', async () => {
+    fake({});
+    const base = (k, extra) => repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: k, source_key: `reddit:${k}:0`, post_key: `reddit:${k}`, source_url: `https://reddit.com/${k}`,
+      media_type: 'image', media_url: `https://i.redd.it/${k}.jpg`, hash: `h-${k}`, publish_state: 'hidden', ...extra });
+    // hidden by the old rule for "I am 60 days out": the current rules do not match it, so it is shown again
+    const stale = base('stale1', { title: 'I am 60 days out from my first show', physique: 101, review_reason: "physique:text:older:i am 60" });
+    // still matches: stays hidden
+    const still = base('still1', { title: 'silver fox at the gym', physique: 101, review_reason: 'physique:text:older:silver fox' });
+    // hidden by a person for another reason: never touched, even though its words are harmless
+    const person = base('person1', { title: 'I am 60 days out from my first show', physique: null, review_reason: 'reported:spam' });
+    const r = await physique.textSweep(settings, { force: true });
+    assert.ok(r.restored >= 1, 'something was shown again');
+    assert.equal(repo.media.get(stale).publish_state, 'published'); assert.equal(repo.media.get(stale).physique, null, 'back to unmeasured, so reapply does not hide it again');
+    physique.reapply(settings);
+    assert.equal(repo.media.get(stale).publish_state, 'published', 'and it stays shown after the next boot');
+    assert.equal(repo.media.get(still).publish_state, 'hidden');
+    assert.equal(repo.media.get(person).publish_state, 'hidden'); assert.equal(repo.media.get(person).review_reason, 'reported:spam');
+  });
+
+  test('a feed this policy paused whose name no longer matches runs again, unless a person acted on it', async () => {
+    const ok = repo.feeds.upsert({ platform: 'reddit', kind: 'community', target: 'plainlifters', enabled: 0, trusted: 1, origin: 'admin' }).feed;
+    repo.logAction('feed', ok.id, 'physique-feed-off', 'body filter: "older:i am 60"', 'system');
+    const matches = repo.feeds.upsert({ platform: 'reddit', kind: 'community', target: 'gainerhub2', enabled: 0, trusted: 1, origin: 'admin' }).feed;
+    repo.logAction('feed', matches.id, 'physique-feed-off', 'body filter: "gainer"', 'system');
+    const touched = repo.feeds.upsert({ platform: 'reddit', kind: 'community', target: 'plainlifters2', enabled: 0, trusted: 1, origin: 'admin' }).feed;
+    repo.logAction('feed', touched.id, 'physique-feed-off', 'body filter: "older:i am 60"', 'system');
+    repo.logAction('feed', touched.id, 'disable', 'I turned it off', 'admin');
+    await physique.textSweep(settings, { force: true });
+    assert.equal(repo.feeds.get(ok.id).enabled, 1, 'no longer matches: runs again');
+    assert.equal(repo.feeds.get(matches.id).enabled, 0, 'still matches: stays paused');
+    assert.equal(repo.feeds.get(touched.id).enabled, 0, 'a person acted last: left alone');
+  });
+
   test('a post that calls its man older is excluded before any download, and a "daddy" post is not', async () => {
     let looked = 0;
     imagefilter._setAnalyzer(async () => { looked++; return { status: 'ok', faces: male, body: { decided: true, score: 0 } }; });

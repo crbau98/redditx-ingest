@@ -149,7 +149,7 @@ function publish(id, settings) {
   return repo.media.get(id).publish_state;
 }
 
-const TEXT_SWEEP_VERSION = '3'; // 2: bears, cubs, stocky, burly, ガチムチ ...  3: self-described older men (words and stated ages, lib/physique) // bump when the word list grows: stored items, creators and feeds are re-read once
+const TEXT_SWEEP_VERSION = '4'; // 2: bears, cubs, stocky, burly, ガチムチ ...  3: self-described older men  4: that rule made precise, and the sweep now also RESTORES what a broader earlier list hid // bump when the word list changes: stored items, creators and feeds are re-read once
 
 /**
  * Read stored items, creators and feeds against the physique word list. Items are hidden with TEXT_SCORE (so `reapply` can
@@ -157,7 +157,7 @@ const TEXT_SWEEP_VERSION = '3'; // 2: bears, cubs, stocky, burly, ガチムチ .
  * whenever the filter is switched on.
  */
 async function textSweep(settings, { force = false } = {}) {
-  const res = { items: 0, creators: 0, feeds: 0 };
+  const res = { items: 0, creators: 0, feeds: 0, restored: 0, feedsRestored: 0 };
   if (!enabled(settings)) return res;
   if (!force && repo.settings.get('physique_text_sweep_version') === TEXT_SWEEP_VERSION) return res;
   // It yields between batches: if an admin switches the filter off meanwhile (that request already re-showed everything),
@@ -185,6 +185,28 @@ async function textSweep(settings, { force = false } = {}) {
     await new Promise((r) => setImmediate(r)); // let requests breathe
   }
   if (!stillOn()) return res;
+  // Show again what an EARLIER, broader word list hid and the current one does not (version 3 hid "I'm 60 days out" as an
+  // age). Only items still hidden by this policy's own text reason, so a decision by a person is never undone; their stored
+  // score goes back to "unmeasured", otherwise `reapply` (score 101 >= threshold) would hide them again at the next boot.
+  const stale = repo.db.prepare(`SELECT seq, id, title, description, tags_text, community, author FROM media
+    WHERE publish_state = 'hidden' AND review_reason LIKE '${REASON}text:%' AND seq > ? ORDER BY seq LIMIT 500`);
+  after = 0;
+  for (;;) {
+    if (!stillOn()) return res;
+    const rows = stale.all(after);
+    if (!rows.length) break;
+    repo.db.transaction(() => {
+      for (const r of rows) {
+        after = r.seq;
+        if (textCheck(r.title, r.description, r.tags_text, r.community, r.author).heavy) continue;
+        repo.media.setPhysique(r.id, null);
+        repo.media.setState(r.id, 'published', null, { exact: true });
+        res.restored++;
+      }
+    })();
+    await new Promise((r) => setImmediate(r));
+  }
+  if (!stillOn()) return res;
   for (const c of repo.db.prepare("SELECT id FROM creators WHERE status = 'active'").all()) {
     if (reviewCreator(c.id, settings) === 'hidden') res.creators++;
   }
@@ -195,8 +217,18 @@ async function textSweep(settings, { force = false } = {}) {
     repo.logAction('feed', f.id, 'physique-feed-off', `body filter: "${t.rule.slice(REASON.length)}"`, 'system');
     res.feeds++;
   }
+  // a feed this policy paused whose name the current list no longer matches runs again, unless a person acted on it since
+  for (const f of repo.db.prepare(`SELECT f.id, f.target, f.label FROM feeds f WHERE f.enabled = 0 AND (SELECT action FROM moderation_actions a
+      WHERE a.target_type = 'feed' AND a.target_id = CAST(f.id AS TEXT) ORDER BY a.id DESC LIMIT 1) = 'physique-feed-off'`).all()) {
+    if (textCheck(f.target, f.label).heavy) continue;
+    repo.feeds.update(f.id, { enabled: true });
+    repo.logAction('feed', f.id, 'physique-feed-on', 'the word list no longer matches this feed', 'system');
+    res.feedsRestored++;
+  }
   repo.settings.set('physique_text_sweep_version', TEXT_SWEEP_VERSION);
-  if (res.items || res.creators || res.feeds) events.log('OK', `Body filter (words): ${res.items} item(s) hidden, ${res.creators} creator(s) hidden, ${res.feeds} feed(s) paused`);
+  if (res.items || res.creators || res.feeds || res.restored || res.feedsRestored) {
+    events.log('OK', `Body filter (words): ${res.items} item(s) hidden, ${res.creators} creator(s) hidden, ${res.feeds} feed(s) paused; shown again: ${res.restored} item(s), ${res.feedsRestored} feed(s)`);
+  }
   return res;
 }
 
