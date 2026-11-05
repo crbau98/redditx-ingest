@@ -16,27 +16,38 @@ const WRONG_PLATFORM = [
   { platform: 'misskey', host: 'gayfr.social', reason: 'gayfr.social is Mastodon: /api/users/show is 404' },
 ];
 
-const onHost = (h, want) => h === want || h.endsWith(`.${want}`);
-
-/** The host a feed target names: "user@host" for Mastodon/Misskey, a URL's hostname for web-style targets. */
-function hostOfTarget(target) {
-  const t = String(target || '').trim().replace(/^@/, '');
-  if (!/^https?:/i.test(t)) {
-    const at = t.lastIndexOf('@');
-    if (at > 0) return t.slice(at + 1).toLowerCase().replace(/\/.*$/, '');
-    return '';
-  }
-  try { return new URL(t).hostname.toLowerCase(); } catch { return ''; }
+/**
+ * The host a feed target names, in one form, for every caller: lower case, no scheme, no "user@" (Mastodon/Misskey
+ * "user@host" targets keep the host), no path, query or fragment, no port, no trailing dot. Accepts a scheme-less host
+ * with or without a port or path, and a leading "@". Returns '' when there is no host.
+ */
+function normalizeHost(target) {
+  let s = String(target || '').trim().toLowerCase().replace(/^@+/, '');
+  if (!s) return '';
+  s = s.replace(/^[a-z][a-z0-9+.-]*:\/\//, '');   // https:// and the like
+  const at = s.lastIndexOf('@');                    // user@host and user:pass@host: keep the host
+  if (at >= 0) s = s.slice(at + 1);
+  s = s.replace(/[/?#].*$/, '');                    // path, query, fragment
+  s = s.replace(/:\d*$/, '');                      // port (or a bare trailing colon)
+  s = s.replace(/\.+$/, '');                        // trailing dot(s): "nsfw.lgbt." is "nsfw.lgbt"
+  return s;
 }
 
-/** Why a feed on this platform/target must stay disabled, or null when it is fine. */
+/** True when host is the wanted host or one of its sub-domains ("feed.nsfw.lgbt"), never a look-alike ("notnsfw.lgbt"). */
+const onHost = (host, want) => host === want || host.endsWith(`.${want}`);
+
+/** The normalised host of a feed target. Kept under this name: callers and tests use it. */
+const hostOfTarget = (target) => normalizeHost(target);
+
+/** Why a feed on this platform/target must stay disabled, or null when it is fine. Every enable path asks this. */
 function deadReason(platform, target) {
-  const host = hostOfTarget(target);
+  const host = normalizeHost(target);
   if (!host) return null;
   const d = DEAD.find((x) => onHost(host, x.host));
   if (d) return d.reason;
-  const w = WRONG_PLATFORM.find((x) => x.platform === platform && onHost(host, x.host));
+  const plat = String(platform || '').trim().toLowerCase();
+  const w = WRONG_PLATFORM.find((x) => x.platform === plat && onHost(host, x.host));
   return w ? w.reason : null;
 }
 
-module.exports = { DEAD, WRONG_PLATFORM, hostOfTarget, deadReason };
+module.exports = { DEAD, WRONG_PLATFORM, normalizeHost, hostOfTarget, deadReason };
