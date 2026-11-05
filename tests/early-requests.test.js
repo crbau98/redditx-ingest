@@ -12,26 +12,52 @@ const esm = (file, bust = '') => import(`${pathToFileURL(path.join(PUBLIC_JS, fi
 
 describe('requests started while the page loads (theme-init.js + api.js)', () => {
   const themeInit = fs.readFileSync(path.join(PUBLIC_JS, 'theme-init.js'), 'utf8');
-  /** Run theme-init.js as the browser does, for an address, and report the early requests it started. */
-  const early = (hash, { fetchImpl } = {}) => {
+  const META = (gate) => JSON.stringify({ name: 'PRISM', ageGate: gate });
+  const VERIFIED = { enforce: true, verified: true };
+  /**
+   * Run theme-init.js as the browser does, for an address, and report the early requests it started. /api/meta answers
+   * with `gate`; the lists only start after that answer, so this waits for it.
+   */
+  const early = async (hash, { gate = VERIFIED, fetchImpl, storage } = {}) => {
     const started = [];
     const sandbox = {
-      location: { hash }, localStorage: undefined,
+      location: { hash }, localStorage: storage,
       document: { documentElement: { dataset: {} }, head: { appendChild() {} }, createElement: () => ({}), currentScript: null },
-      fetch: fetchImpl || ((url, opts) => { started.push({ url, opts }); return Promise.resolve({ ok: true, text: async () => '{}' }); }),
+      fetch: fetchImpl || ((url, opts) => { started.push({ url, opts }); return Promise.resolve({ ok: true, text: async () => (url === '/api/meta' ? META(gate) : '{}') }); }),
     };
     sandbox.window = sandbox;
     vm.runInNewContext(themeInit, sandbox);
+    await new Promise((r) => setImmediate(r)); // let the meta answer be read and the lists start
     return { urls: started.map((s) => s.url), opts: started.map((s) => s.opts), sandbox };
   };
 
-  test('home starts meta, discover and the first feed page; deep links only what their view needs', () => {
-    assert.deepEqual(early('').urls, ['/api/meta', '/api/discover', '/api/media?sort=recent&page=0&limit=36']);
-    assert.deepEqual(early('#/').urls, ['/api/meta', '/api/discover', '/api/media?sort=recent&page=0&limit=36']);
-    assert.deepEqual(early('#/explore?tag=gym').urls, ['/api/meta']);
-    assert.deepEqual(early('#/creator/abc').urls, ['/api/meta']);
-    assert.deepEqual(early('#/browse').urls, ['/api/meta', '/api/tags?limit=200', '/api/communities', '/api/platforms', '/api/topics', '/api/creators?onlyfans=1&limit=1', '/api/media?paid=onlyfans&limit=1', '/api/creators?paid=fansly&limit=1']);
-    assert.ok(early('#/').opts.every((o) => o.credentials === 'same-origin'));
+  test('meta always starts; once it says the visitor is through, home starts discover and the first feed page and deep links what their view needs', async () => {
+    assert.deepEqual((await early('')).urls, ['/api/meta', '/api/discover', '/api/media?sort=recent&page=0&limit=36']);
+    assert.deepEqual((await early('#/')).urls, ['/api/meta', '/api/discover', '/api/media?sort=recent&page=0&limit=36']);
+    assert.deepEqual((await early('#/explore')).urls, ['/api/meta'], 'Explore was measured with and without early requests: no difference beyond noise, so it asks for nothing early');
+    assert.deepEqual((await early('#/explore?tag=gym')).urls, ['/api/meta']);
+    assert.deepEqual((await early('#/creator/abc')).urls, ['/api/meta']);
+    assert.deepEqual((await early('#/browse')).urls, ['/api/meta', '/api/tags?limit=200', '/api/communities', '/api/platforms', '/api/topics', '/api/creators?onlyfans=1&limit=1', '/api/media?paid=onlyfans&limit=1', '/api/creators?paid=fansly&limit=1']);
+    assert.ok((await early('#/')).opts.every((o) => o.credentials === 'same-origin'));
+  });
+
+  test('a visitor who has not passed the age gate gets no list requests (they would be 403s and console errors)', async () => {
+    for (const hash of ['#/', '#/explore', '#/browse']) {
+      assert.deepEqual((await early(hash, { gate: { enforce: true, verified: false } })).urls, ['/api/meta'], hash);
+    }
+  });
+
+  test('with the gate switched off, or an old meta without it, the lists start', async () => {
+    assert.equal((await early('#/', { gate: { enforce: false, verified: true } })).urls.length, 3);
+    assert.equal((await early('#/', { gate: undefined })).urls.length, 3);
+  });
+
+  test('a failed or unreadable meta starts nothing else and throws nothing', async () => {
+    const rejecting = (url) => Promise.resolve({ ok: false, text: async () => '' }).then((r) => { void url; return r; });
+    const r = await early('#/', { fetchImpl: rejecting });
+    assert.equal(r.sandbox.__early['/api/discover'], undefined);
+    const garbage = await early('#/', { fetchImpl: () => Promise.resolve({ ok: true, text: async () => '<html>' }) });
+    assert.equal(garbage.sandbox.__early['/api/discover'], undefined);
   });
 
   test('the early URLs are exactly the ones the views build with api.js qs()', async () => {
@@ -40,12 +66,12 @@ describe('requests started while the page loads (theme-init.js + api.js)', () =>
       home: [`/api/media${qs({ sort: 'recent', page: 0, limit: 36 })}`],
       browse: [`/api/tags${qs({ limit: 200 })}`, `/api/creators${qs({ onlyfans: '1', limit: 1 })}`, `/api/media${qs({ paid: 'onlyfans', limit: 1 })}`, `/api/creators${qs({ paid: 'fansly', limit: 1 })}`],
     };
-    for (const u of built.home) assert.ok(early('#/').urls.includes(u), u);
-    for (const u of built.browse) assert.ok(early('#/browse').urls.includes(u), u);
+    for (const u of built.home) assert.ok((await early('#/')).urls.includes(u), u);
+    for (const u of built.browse) assert.ok((await early('#/browse')).urls.includes(u), u);
   });
 
-  test('a browser without fetch, or a throwing fetch, leaves the page untouched', () => {
-    assert.doesNotThrow(() => early('#/', { fetchImpl: () => { throw new Error('blocked'); } }));
+  test('a browser without fetch, or a throwing fetch, leaves the page untouched', async () => {
+    await assert.doesNotReject(early('#/', { fetchImpl: () => { throw new Error('blocked'); } }));
     const sandbox = { location: { hash: '#/' }, document: { documentElement: { dataset: {} } } };
     sandbox.window = sandbox;
     assert.doesNotThrow(() => vm.runInNewContext(themeInit, sandbox));
