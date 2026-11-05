@@ -23,6 +23,12 @@ test('classify: the status decides first, then the wording', () => {
   assert.equal(k('HTTP 404 for https://x/y'), 'not_found');
   assert.equal(k('User not found'), 'not_found');
   assert.equal(k('account suspended'), 'not_found');
+  assert.equal(k(Object.assign(new Error('user_banned'), { status: 403 })), 'not_found', 'a banned target beats the 403');
+  // a site-wide refusal says nothing about the target: it can recover, so it is a block and never ends the feed
+  for (const m of ['API access suspended', 'this IP is banned', 'Your IP address has been banned', 'application suspended by the platform', 'token suspended'])
+    assert.equal(k(m), 'blocked', m);
+  assert.equal(classify('API access suspended').permanent, false);
+  assert.equal(k(Object.assign(new Error('this IP is banned'), { status: 403 })), 'blocked');
   assert.equal(k('HTTP 403 for https://x/y'), 'blocked');
   assert.equal(k(Object.assign(new Error('Bot-protection page instead of JSON from u'), { code: 'BOT_CHALLENGE' })), 'blocked');
   assert.equal(k('mastodon.example requires sign-in for this request (HTTP 401)'), 'blocked');

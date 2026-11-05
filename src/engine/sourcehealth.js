@@ -89,9 +89,14 @@ function report({ failingAfter = 3, staleDays = 3, deadDays = 30, deadMinRuns = 
 
   // Feeds the engine (or the library sweep) switched off on its own, with why. A pause by a person leaves no such error.
   // The engine writes "... disabled" into last_error; the library sweep (maintenance.sweep) leaves last_error alone and logs a
-  // 'sweep-disable' action instead, so a feed counts when its LATEST action is that marker (a person's later enable or disable replaces it).
-  const ENGINE_OFF = `enabled = 0 AND consecutive_failures > 0 AND (last_error LIKE '%disabled%' OR
-      (SELECT action FROM moderation_actions a WHERE a.target_type = 'feed' AND a.target_id = CAST(feeds.id AS TEXT) ORDER BY a.id DESC LIMIT 1) = 'sweep-disable')`;
+  // 'sweep-disable' action instead. Either way a person who acted AFTER the engine's last run owns the state now: the stale
+  // last_error of a feed an admin re-enabled and later paused must not read as the engine's doing, so the last_error branch needs
+  // no admin enable/disable newer than the feed's last run, and the marker branch needs 'sweep-disable' to be the latest action.
+  const ENGINE_OFF = `enabled = 0 AND consecutive_failures > 0 AND (
+      (last_error LIKE '%disabled%' AND NOT EXISTS (SELECT 1 FROM moderation_actions p WHERE p.target_type = 'feed'
+         AND p.target_id = CAST(feeds.id AS TEXT) AND p.actor = 'admin' AND p.action IN ('enable', 'disable')
+         AND julianday(p.created_at) > julianday(COALESCE(feeds.last_run_at, '1970-01-01'))))
+      OR (SELECT action FROM moderation_actions a WHERE a.target_type = 'feed' AND a.target_id = CAST(feeds.id AS TEXT) ORDER BY a.id DESC LIMIT 1) = 'sweep-disable')`;
   const disabledRows = db.prepare(`SELECT * FROM feeds WHERE ${ENGINE_OFF} ORDER BY COALESCE(last_run_at, '') DESC LIMIT ?`).all(limit);
   const disabledCount = db.prepare(`SELECT COUNT(*) AS n FROM feeds WHERE ${ENGINE_OFF}`).get().n;
 

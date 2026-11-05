@@ -25,6 +25,9 @@ const TRANSIENT = new Set(['rate_limited', 'blocked', 'timeout', 'network', 'ser
 const PERMANENT = new Set(['not_found']);
 
 const NOT_FOUND_TEXT = /not found|target no longer exists|no longer exists|account suspended|suspended|user_banned|\bbanned\b|deactivated|channel is private|\bis private\b|quarantined|preview[ -]disabled|feed unavailable|no such user|does not exist|doesn't exist/i;
+// "API access suspended", "this IP is banned", "app suspended": the SITE refuses us. The target may well exist and access can come back,
+// so this is a block (transient), never a missing target. "account suspended" / "user banned" name the target and stay not_found.
+const SITEWIDE_BAN_TEXT = /\b(?:ip(?: address)?|api(?: access| key)?|access|app(?:lication)?|client|token|key|server|network|region|country)\b[^.\n]{0,40}\b(?:suspended|banned|blocked|restricted)\b|\b(?:suspended|banned)\b[^.\n]{0,25}\b(?:ip|api|access|app(?:lication)?|token|key)\b/i;
 const RATE_TEXT = /rate.?limit|too many requests|\b429\b|throttl|slow down|cooling down|flood.?wait|retry.?after/i;
 const BLOCK_TEXT = /bot[- ]?protection|bot[- ]?challenge|challeng|cloudflare|captcha|access denied|forbidden|requires sign-in|sign-in|login wall|walled|refuses? (?:this|prism)|\b(?:401|403|451)\b|unauthori[sz]ed/i;
 const PARSE_TEXT = /not a valid feed|invalid json|unexpected token|unexpected end|\bparse|malformed|not a feed|is a web page|returned no token|empty (?:response|body)|unexpected (?:response|html)|not (?:json|xml)/i;
@@ -57,6 +60,7 @@ function classify(err) {
   if (status === 404 || status === 410) return out('not_found');
   // "Service Unavailable" / "unavailable on every transport" are outages, not a missing target, and a "blocked host ... private
   // address" is a policy refusal: only phrases that say the target does not exist count.
+  if (SITEWIDE_BAN_TEXT.test(msg) && status < 500) return out('blocked');
   if (NOT_FOUND_TEXT.test(msg) && status < 500 && !/private address|resolves to a private/i.test(msg)) return out('not_found');
   if (code === 'BOT_CHALLENGE' || (err && typeof err === 'object' && err.authWall)) return out('blocked');
   if (status === 401 || status === 403 || status === 451) return out('blocked');

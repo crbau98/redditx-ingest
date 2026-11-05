@@ -92,6 +92,19 @@ test('a feed the library sweep switched off (it leaves last_error alone) is list
   assert.equal(after.totals.disabledByEngine, n - 1);
 });
 
+test('a stale "disabled" last_error does not make a feed the engine\'s once a person has paused it since', () => {
+  const repoLocal = require('../src/db/repo');
+  const engineOff = feed('rss', { enabled: 0, fails: 3, lastError: 'Not found (404) — disabled after 3 tries', lastStatus: 'error' });
+  const mine = feed('rss', { enabled: 0, fails: 3, lastError: 'Not found (404) — disabled after 3 tries', lastStatus: 'error' });
+  repoLocal.logAction('feed', mine.id, 'disable', 'admin', 'admin'); // re-enabled without resetting errors, then paused by hand
+  const rep = sourcehealth.report();
+  assert.ok(rep.disabled.some((d) => d.id === engineOff.id), 'the engine\'s own switch-off is listed');
+  assert.ok(!rep.disabled.some((d) => d.id === mine.id), 'a later admin action takes it out');
+  // and when the engine switches it off AGAIN afterwards (a newer last run), it is the engine\'s once more
+  repoLocal.db.prepare('UPDATE feeds SET last_run_at = ? WHERE id = ?').run(new Date(Date.now() + 60000).toISOString(), mine.id);
+  assert.ok(sourcehealth.report().disabled.some((d) => d.id === mine.id));
+});
+
 test('maintenance.sweep records the marker when it disables a failing feed', async () => {
   const maintenance = require('../src/engine/maintenance');
   const f = feed('rss', { enabled: 1, fails: 5, lastError: 'HTTP 410 Gone for https://dead.example/b.xml', lastStatus: 'error' });
