@@ -23,9 +23,11 @@ function feedRow(f, extra = {}) {
 }
 
 /**
- * @param {{failingAfter?: number, staleDays?: number, deadDays?: number, deadMinRuns?: number, limit?: number, now?: number}} opts
+ * `deadNeverWorked` / `deadSkipOrigins` / `deadSkipRetired` / `deadSkipTouchedSince` narrow the dead list IN SQL, before its LIMIT, so a long list of quiet feeds cannot crowd
+ * out the ones that qualify.
+ * @param {{failingAfter?: number, staleDays?: number, deadDays?: number, deadMinRuns?: number, limit?: number, now?: number, deadNeverWorked?: boolean, deadSkipOrigins?: string[], deadSkipRetired?: boolean, deadSkipTouchedSince?: string|null}} opts
  */
-function report({ failingAfter = 3, staleDays = 3, deadDays = 30, deadMinRuns = 8, limit = 40, now = Date.now() } = {}) {
+function report({ failingAfter = 3, staleDays = 3, deadDays = 30, deadMinRuns = 8, limit = 40, now = Date.now(), deadNeverWorked = false, deadSkipOrigins = [], deadSkipRetired = false, deadSkipTouchedSince = null } = {}) {
   const db = repo.db;
   const failing = db.prepare(`SELECT * FROM feeds WHERE enabled = 1 AND consecutive_failures >= ?
       ORDER BY consecutive_failures DESC, last_run_at DESC LIMIT ?`).all(failingAfter, limit).map((f) => feedRow(f));
@@ -37,9 +39,13 @@ function report({ failingAfter = 3, staleDays = 3, deadDays = 30, deadMinRuns = 
   const dead = db.prepare(`SELECT f.*, COUNT(r.id) AS runs, COALESCE(SUM(r.fetched), 0) AS fetched, COALESCE(SUM(r.blocked + r.skipped), 0) AS filtered
       FROM feeds f JOIN feed_runs r ON r.feed_id = f.id AND r.started_at >= @since AND r.status != 'running'
       WHERE f.enabled = 1 AND f.created_at < @since
+        AND (@never = 0 OR COALESCE(f.items_total, 0) = 0)
+        AND (f.origin IS NULL OR f.origin NOT IN (SELECT value FROM json_each(@skip)))
+        AND (@skipRetired = 0 OR NOT EXISTS (SELECT 1 FROM moderation_actions a WHERE a.target_type = 'feed' AND a.target_id = CAST(f.id AS TEXT) AND a.action = 'auto-retire'))
+        AND (@touched IS NULL OR NOT EXISTS (SELECT 1 FROM moderation_actions a WHERE a.target_type = 'feed' AND a.target_id = CAST(f.id AS TEXT) AND a.actor != 'system' AND a.created_at > @touched))
       GROUP BY f.id HAVING runs >= @minRuns AND COALESCE(SUM(r.added), 0) = 0
       ORDER BY runs DESC LIMIT @limit`)
-    .all({ since: iso(now - deadDays * DAY), minRuns: deadMinRuns, limit })
+    .all({ since: iso(now - deadDays * DAY), minRuns: deadMinRuns, limit, never: deadNeverWorked ? 1 : 0, skip: JSON.stringify(deadSkipOrigins), skipRetired: deadSkipRetired ? 1 : 0, touched: deadSkipTouchedSince })
     .map((f) => feedRow(f, { runs: f.runs, fetched: f.fetched, filtered: f.filtered,
       // fetched plenty but kept nothing: the gates reject it (wrong audience); fetched nothing: the source is quiet or gone
       why: f.fetched > 0 ? 'everything it found was filtered out' : 'it found nothing new' }));
@@ -59,37 +65,46 @@ function report({ failingAfter = 3, staleDays = 3, deadDays = 30, deadMinRuns = 
 }
 
 /* ------------------------------------------------------------------------------------------------ auto-retire */
-// Feeds that people made (origin admin / import) are never touched. Everything the app made itself (seed, discovered,
-// ingest, search, linked, expand, post, telegram-sync) is paused, not deleted, when it has clearly stopped working, so it
-// stops taking scheduler slots and clogging the failing / dead lists. A pause is one row in the action log and one click
-// to undo; an admin's later "enable" is respected for RESPECT_DAYS.
-const PERSONAL_ORIGINS = ['admin', 'import'];
-const RETIRE = { failingAfter: 20, notWorkingDays: 14, deadDays: 45, deadMinRuns: 12 };
+// Feeds a person made or joined (origin admin / import / telegram-sync) are never touched. Everything else the app made itself
+// (seed, discovered, ingest, search, linked, expand, post) is paused, not deleted, when it has clearly never worked, so it
+// stops taking scheduler slots and clogging the dead list. A pause is one row in the action log and one click to undo.
+//
+// Only ONE rule, on purpose: a feed that ran `deadMinRuns`+ times in `deadDays` and has NEVER added a single item. Others
+// were considered and dropped:
+//   - "failed N runs in a row": unreachable, the engine already disables a feed after 3 to 5 consecutive failures;
+//   - "added nothing lately": a quiet creator with a big library is healthy, so only feeds with items_total = 0 qualify;
+// and the window follows the run history that is really kept (keepRunHistoryDays, 30 by default, pruned beyond it): a longer
+// window would be fiction, and with under `minHistoryDays` kept there is too little to judge from, so nothing is retired.
+const PERSONAL_ORIGINS = ['admin', 'import', 'telegram-sync'];
+const RETIRE = { deadDays: 30, deadMinRuns: 12, minHistoryDays: 14 };
 const RESPECT_DAYS = 90;
 
 /**
- * Pause the app's own feeds that failed `failingAfter` runs in a row with no success for `notWorkingDays`, or that ran
- * `deadMinRuns`+ times in `deadDays` and added nothing. At most `max` per call, so a bad day cannot empty the library.
+ * Pause the app's own feeds that ran `deadMinRuns`+ times in `deadDays` and never added anything. A feed that was retired
+ * once and is enabled again is never retired a second time (someone turned it back on, that decision stands), and neither is
+ * one a person touched in the last RESPECT_DAYS. At most `max` per call, so a bad day cannot empty the library.
  * @returns {{paused: Array<{id: string, platform: string, target: string, why: string}>, skipped: number, capped: boolean}}
  */
 function retireDead({ now = Date.now(), max = 50, dryRun = false } = {}) {
-  const rep = report({ failingAfter: RETIRE.failingAfter, deadDays: RETIRE.deadDays, deadMinRuns: RETIRE.deadMinRuns, limit: 1000, now });
-  const why = new Map();
-  for (const f of rep.failing) {
-    if (!f.lastSuccessAt || f.lastSuccessAt < iso(now - RETIRE.notWorkingDays * DAY)) {
-      why.set(f.id, `failed ${f.failures} runs in a row, no success in ${RETIRE.notWorkingDays}+ days${f.lastError ? ` (${String(f.lastError).slice(0, 80)})` : ''}`);
-    }
-  }
-  for (const f of rep.dead) if (!why.has(f.id)) why.set(f.id, `${f.runs} runs in ${RETIRE.deadDays} days added nothing (${f.why})`);
-
   const out = { paused: [], skipped: 0, capped: false };
-  const lastAction = repo.db.prepare("SELECT action, actor, created_at FROM moderation_actions WHERE target_type = 'feed' AND target_id = ? ORDER BY id DESC LIMIT 1");
+  const kept = Number(require('../settings').get().keepRunHistoryDays) || RETIRE.deadDays;
+  const days = Math.min(RETIRE.deadDays, kept);
+  if (days < RETIRE.minHistoryDays) return { ...out, tooLittleHistory: kept }; // too little run history to tell "never worked" from "just started"
+  const rep = report({ deadDays: days, deadMinRuns: RETIRE.deadMinRuns, limit: 1000, now, deadNeverWorked: true, deadSkipOrigins: PERSONAL_ORIGINS,
+    deadSkipRetired: true, deadSkipTouchedSince: iso(now - RESPECT_DAYS * DAY) });
+  const why = new Map();
+  for (const f of rep.dead) {
+    if (f.itemsTotal === 0) why.set(f.id, `${f.runs} runs in ${days} days and it has never added anything (${f.why})`);
+  }
+
+  const retiredBefore = repo.db.prepare("SELECT 1 FROM moderation_actions WHERE target_type = 'feed' AND target_id = ? AND action = 'auto-retire' LIMIT 1");
+  const touchedByPerson = repo.db.prepare("SELECT 1 FROM moderation_actions WHERE target_type = 'feed' AND target_id = ? AND actor != 'system' AND created_at > ? LIMIT 1");
   for (const [id, reason] of why) {
     const feed = repo.feeds.get(id);
     if (!feed || !feed.enabled || PERSONAL_ORIGINS.includes(feed.origin)) { out.skipped++; continue; }
-    const last = lastAction.get(String(id));
-    // someone enabled it by hand not long ago: that decision stands
-    if (last && last.actor !== 'system' && last.created_at > iso(now - RESPECT_DAYS * DAY)) { out.skipped++; continue; }
+    // enabled although retired before = someone turned it back on (by any route, logged or not): it stays on
+    if (retiredBefore.get(String(id))) { out.skipped++; continue; }
+    if (touchedByPerson.get(String(id), iso(now - RESPECT_DAYS * DAY))) { out.skipped++; continue; }
     if (out.paused.length >= max) { out.capped = true; break; }
     if (!dryRun) {
       repo.feeds.update(id, { enabled: false });

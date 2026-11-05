@@ -97,7 +97,10 @@ function reapply(settings) {
   const res = { hidden: 0, restored: 0, creatorsHidden: 0, creatorsRestored: 0 };
   const toHide = on ? repo.db.prepare("SELECT id, physique FROM media WHERE publish_state = 'published' AND physique >= ?").all(thr) : [];
   const toShow = repo.db.prepare(`SELECT id FROM media WHERE publish_state = 'hidden' AND review_reason LIKE '${REASON}%'
-    AND (? = 0 OR physique IS NULL OR physique < ?)`).all(on ? 1 : 0, thr);
+    AND (? = 0 OR (review_reason NOT LIKE '${REASON}text:%' AND (physique IS NULL OR physique < ?)))`).all(on ? 1 : 0, thr);
+  // (a row hidden for its WORDS is not a score decision: the body sweep also measures hidden pictures and overwrites the marker
+  // with a real score, and a light one must not make it visible again while the words still match. Only switching the filter
+  // off, or the word sweep / body sweep restore paths that re-read the words, show it.)
   repo.db.transaction(() => {
     for (const r of toHide) { repo.media.setState(r.id, 'hidden', `${REASON}${r.physique}`, { exact: true }); res.hidden++; }
     for (const r of toShow) { repo.media.setState(r.id, 'published', null, { exact: true }); res.restored++; }
@@ -149,7 +152,7 @@ function publish(id, settings) {
   return repo.media.get(id).publish_state;
 }
 
-const TEXT_SWEEP_VERSION = '3'; // 2: bears, cubs, stocky, burly, ガチムチ ...  3: self-described older men (words and stated ages, lib/physique) // bump when the word list grows: stored items, creators and feeds are re-read once
+const TEXT_SWEEP_VERSION = '4'; // 2: bears, cubs, stocky, burly, ガチムチ ...  3: self-described older men  4: that rule made precise, and the sweep now also RESTORES what a broader earlier list hid // bump when the word list changes: stored items, creators and feeds are re-read once
 
 /**
  * Read stored items, creators and feeds against the physique word list. Items are hidden with TEXT_SCORE (so `reapply` can
@@ -157,36 +160,95 @@ const TEXT_SWEEP_VERSION = '3'; // 2: bears, cubs, stocky, burly, ガチムチ .
  * whenever the filter is switched on.
  */
 async function textSweep(settings, { force = false } = {}) {
-  const res = { items: 0, creators: 0, feeds: 0 };
+  const res = { items: 0, creators: 0, feeds: 0, restored: 0, feedsRestored: 0 };
   if (!enabled(settings)) return res;
   if (!force && repo.settings.get('physique_text_sweep_version') === TEXT_SWEEP_VERSION) return res;
   // It yields between batches: if an admin switches the filter off meanwhile (that request already re-showed everything),
   // stop instead of hiding more with the settings captured at the start.
   const stillOn = () => require('../settings').get().physiqueFilter === true;
+  // the body filter's settings as they are NOW: an admin may move the threshold while a batch yields, and a decision that
+  // compares a stored score with the threshold (a restore, a creator review) must use the new one, not this call's snapshot
+  const current = () => live({ ...settings, liveBody: true });
   let after = 0;
   // Only published items: one waiting in the review queue keeps its own state and reason, so switching the filter off later
   // can never publish something a human has not looked at.
-  const stmt = repo.db.prepare(`SELECT seq, id, title, description, tags_text, community, author FROM media
-    WHERE publish_state = 'published' AND (physique IS NULL OR physique >= 0) AND seq > ? ORDER BY seq LIMIT 500`);
+  // NOT INDEXED: walk the table in seq order and stop at the batch size. Left to itself the planner takes ix_media_state (it
+  // believes 'published' is selective) and sorts EVERY published row for EVERY batch: ~0.8 s per batch on 260k rows, 2 ms this way.
+  const stmt = repo.db.prepare(`SELECT seq, id, creator_id, title, description, tags_text, community, author FROM media NOT INDEXED
+    WHERE publish_state = 'published' AND (physique IS NULL OR physique >= 0) AND seq > ? ORDER BY seq LIMIT 100`);
+  // Hiding changes each affected creator's published counts. `refreshStats` recounts ALL of a creator's media (~4 ms on average,
+  // far more for a prolific one), and the hidden items are spread over thousands of creators, so doing it per item (or per batch)
+  // cost 41 s of a 67 s pass on 300k rows. Collect the creators and recount each ONCE, when the pass ends (also when it is cut short).
+  const touched = new Set();
+  const flushStats = async () => {
+    let n = 0;
+    for (const id of touched) { repo.creators.refreshStats(id); touched.delete(id); if (++n % 100 === 0) await new Promise((r) => setImmediate(r)); }
+  };
+  try {
+    for (;;) {
+      if (!stillOn()) return res;
+      const rows = stmt.all(after);
+      if (!rows.length) break;
+      repo.db.transaction(() => {
+        for (const r of rows) {
+          after = r.seq;
+          const t = textCheck(r.title, r.description, r.tags_text, r.community, r.author);
+          if (!t.heavy) continue;
+          repo.media.setPhysique(r.id, TEXT_SCORE);
+          repo.media.setState(r.id, 'hidden', `${REASON}text:${t.rule.slice(REASON.length)}`, { exact: true, deferStats: true });
+          if (r.creator_id) touched.add(r.creator_id);
+          res.items++;
+        }
+      })();
+      await new Promise((r) => setImmediate(r)); // let requests breathe
+    }
+  } finally { await flushStats(); }
+  if (!stillOn()) return res;
+  // Show again what an EARLIER, broader word list hid and the current one does not (version 3 hid "I'm 60 days out" as an
+  // age). Only items still hidden by this policy's own reason (the text reason, or the word marker 101 under a body reason, which is what the filter's off/on path leaves), so a decision by a person is never undone; the word marker (101) goes back to
+  // "unmeasured", otherwise `reapply` would hide them again at the next boot; a MEASURED score stays and still decides.
+  const stale = repo.db.prepare(`SELECT seq, id, physique, title, description, tags_text, community, author FROM media
+    WHERE publish_state = 'hidden' AND seq > ?
+      AND (review_reason LIKE '${REASON}text:%' OR (physique = ${TEXT_SCORE} AND review_reason LIKE '${REASON}%'))
+    ORDER BY seq LIMIT 500`);
+  after = 0;
+  let rewind = null; // lowest seq of a row whose word marker was reset to "unmeasured": the body sweep must look at it again
+  // applied after EVERY batch, so an early return (the filter switched off while a batch yields) cannot lose it
+  const applyRewind = () => {
+    if (rewind == null) return;
+    const cursor = parseInt(repo.settings.get('physique_sweep_seq') || '0', 10) || 0;
+    if (cursor >= rewind) { repo.settings.set('physique_sweep_seq', String(rewind - 1)); res.rewound = rewind - 1; }
+    rewind = null;
+  };
   for (;;) {
     if (!stillOn()) return res;
-    const rows = stmt.all(after);
+    const rows = stale.all(after);
     if (!rows.length) break;
     repo.db.transaction(() => {
       for (const r of rows) {
         after = r.seq;
-        const t = textCheck(r.title, r.description, r.tags_text, r.community, r.author);
-        if (!t.heavy) continue;
-        repo.media.setPhysique(r.id, TEXT_SCORE);
-        repo.media.setState(r.id, 'hidden', `${REASON}text:${t.rule.slice(REASON.length)}`, { exact: true });
-        res.items++;
+        if (textCheck(r.title, r.description, r.tags_text, r.community, r.author).heavy) continue;
+        if (r.physique === APPROVED) continue;                         // an admin's approval is never touched
+        if (r.physique === TEXT_SCORE) {
+          // A word-marker row has no measured score (an earlier version overwrote it), so it is NOT published here: it stays hidden
+          // and the body sweep, rewound to it below, measures it and restores it in the same step. If that sweep cannot run
+          // (switched off, no model, 0 per minute) the row simply stays hidden, which is the safe side.
+          rewind = rewind == null ? r.seq : Math.min(rewind, r.seq);
+          continue;
+        }
+        // a MEASURED score (the body sweep replaced the marker) stays and still decides: `publish` re-applies it
+        publish(r.id, current());
+        if (repo.media.get(r.id).publish_state !== 'hidden') res.restored++;
       }
     })();
-    await new Promise((r) => setImmediate(r)); // let requests breathe
+    applyRewind();
+    await new Promise((r) => setImmediate(r));
   }
   if (!stillOn()) return res;
+  let reviewed = 0;
   for (const c of repo.db.prepare("SELECT id FROM creators WHERE status = 'active'").all()) {
-    if (reviewCreator(c.id, settings) === 'hidden') res.creators++;
+    if (reviewCreator(c.id, current()) === 'hidden') res.creators++;
+    if (++reviewed % 100 === 0) { await new Promise((r) => setImmediate(r)); if (!stillOn()) return res; } // thousands of creators: let requests through
   }
   for (const f of repo.db.prepare('SELECT id, target, label FROM feeds WHERE enabled = 1').all()) {
     const t = textCheck(f.target, f.label);
@@ -195,8 +257,18 @@ async function textSweep(settings, { force = false } = {}) {
     repo.logAction('feed', f.id, 'physique-feed-off', `body filter: "${t.rule.slice(REASON.length)}"`, 'system');
     res.feeds++;
   }
+  // a feed this policy paused whose name the current list no longer matches runs again, unless a person acted on it since
+  for (const f of repo.db.prepare(`SELECT f.id, f.target, f.label FROM feeds f WHERE f.enabled = 0 AND (SELECT action FROM moderation_actions a
+      WHERE a.target_type = 'feed' AND a.target_id = CAST(f.id AS TEXT) ORDER BY a.id DESC LIMIT 1) = 'physique-feed-off'`).all()) {
+    if (textCheck(f.target, f.label).heavy) continue;
+    repo.feeds.update(f.id, { enabled: true });
+    repo.logAction('feed', f.id, 'physique-feed-on', 'the word list no longer matches this feed', 'system');
+    res.feedsRestored++;
+  }
   repo.settings.set('physique_text_sweep_version', TEXT_SWEEP_VERSION);
-  if (res.items || res.creators || res.feeds) events.log('OK', `Body filter (words): ${res.items} item(s) hidden, ${res.creators} creator(s) hidden, ${res.feeds} feed(s) paused`);
+  if (res.items || res.creators || res.feeds || res.restored || res.feedsRestored) {
+    events.log('OK', `Body filter (words): ${res.items} item(s) hidden, ${res.creators} creator(s) hidden, ${res.feeds} feed(s) paused; shown again: ${res.restored} item(s), ${res.feedsRestored} feed(s)`);
+  }
   return res;
 }
 
