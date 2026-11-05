@@ -57,15 +57,47 @@ function cohortWhere(hosts, cutoff) {
 // Pending confirmations first (one "gone" verdict, the hour has passed), then never-checked items, then the least
 // recently checked. Never-checked rows have no media_health row, so `h.verdict = 'gone'` is NULL for them; COALESCE
 // keeps them from sorting after stale ones.
+//
+// The work list is asked for in three tiers instead of one statement. One statement meant one sort of the WHOLE
+// published library (389k rows on the live database) into a temporary B-tree, on the main thread: 8-17 seconds,
+// every ten minutes, with the server unable to answer a request for the duration. The tiers ask three small
+// questions instead and each one stops at the batch size, so the cost follows the batch and not the library.
+//
+// The tiers are the same three groups the old ORDER BY expressed, in the same order, and they pick the same items
+// in the same order (tests/sweep-queues.test.js checks that against the old query, which is kept here as _OLD).
 const ORDER = "ORDER BY COALESCE(h.verdict = 'gone', 0) DESC, h.checked_at IS NOT NULL, h.checked_at ASC, m.hot DESC LIMIT @n";
 const DUE = `m.publish_state = 'published'
       AND (h.checked_at IS NULL OR h.checked_at < @stale OR (h.verdict = 'gone' AND h.checked_at < @confirm))`;
-/** Items due for a check, from the rot-host cohort or from everything else. */
-function dueRows({ cohort, hosts, cutoff, stale, confirm, n }) {
-  const c = cohortWhere(hosts, cutoff);
-  const scope = cohort ? c.sql : `NOT ${c.sql}`;
-  return repo.db.prepare(`SELECT m.id FROM media m LEFT JOIN media_health h ON h.media_id = m.id WHERE ${DUE} AND ${scope} ${ORDER}`)
-    .all({ ...c.params, stale, confirm, n });
+
+/**
+ * The items due for a check, in the order the old single statement produced them:
+ *   1. a "gone" verdict waiting for its second, spaced confirmation (oldest first);
+ *   2. never checked at all (hottest first);
+ *   3. checked before, but long enough ago to be worth another look (oldest check first).
+ * `scope` says which population to ask about: the rot-host cohort, or everything else.
+ */
+function dueRows({ scope, n, stale, confirm, params = {} }) {
+  const out = [];
+  const push = (rows) => { for (const r of rows) { if (out.length >= n) return; out.push(r.id); } };
+  // Tier 1: drive from media_health (a small table) rather than from media, so the join stays a lookup per row.
+  push(repo.db.prepare(`SELECT m.id FROM media_health h JOIN media m ON m.id = h.media_id
+      WHERE COALESCE(h.verdict = 'gone', 0) = 1 AND h.checked_at IS NOT NULL AND h.checked_at < @confirm
+        AND m.publish_state = 'published' AND ${scope}
+      ORDER BY h.checked_at ASC, m.hot DESC LIMIT @n`).all({ ...params, stale, confirm, n }));
+  if (out.length >= n) return out;
+  // Tier 2: never checked. ix_media_pub_hot walks the library in the order the old query sorted it, so the
+  // batch is found without sorting anything.
+  push(repo.db.prepare(`SELECT m.id FROM media m INDEXED BY ix_media_pub_hot
+      WHERE m.publish_state = 'published' AND ${scope}
+        AND NOT EXISTS (SELECT 1 FROM media_health h WHERE h.media_id = m.id AND h.checked_at IS NOT NULL)
+      ORDER BY m.hot DESC LIMIT @n`).all({ ...params, stale, confirm, n }));
+  if (out.length >= n) return out;
+  // Tier 3: checked before, long enough ago to look again (and not already answered for in tier 1).
+  push(repo.db.prepare(`SELECT m.id FROM media_health h JOIN media m ON m.id = h.media_id
+      WHERE h.checked_at < @stale AND COALESCE(h.verdict = 'gone', 0) = 0
+        AND m.publish_state = 'published' AND ${scope}
+      ORDER BY h.checked_at ASC, m.hot DESC LIMIT @n`).all({ ...params, stale, confirm, n }));
+  return out;
 }
 
 /** Classify a probe result: 'ok', 'gone' (really removed), or 'unknown' (can't tell — never acted on). */
@@ -150,8 +182,8 @@ async function sweep({ limit, cohortLimit, maxAgeDays = 14, probe = probeMedia, 
   const cutoff = new Date(Date.now() - maxAgeDays * 86400000).toISOString();
   const confirm = new Date(Date.now() - CONFIRM_AFTER_MS).toISOString();
   const out = { checked: 0, cohort: 0, gone: 0, hidden: 0, unknown: 0 };
-  const run = async (rows, counted) => {
-    for (const { id } of rows) {
+  const run = async (ids, counted) => {
+    for (const id of ids) {
       if (aborted()) break;
       const r = await check(id, { probe });
       if (!r) continue;
@@ -161,8 +193,9 @@ async function sweep({ limit, cohortLimit, maxAgeDays = 14, probe = probeMedia, 
       if (r.hidden) out.hidden++;
     }
   };
-  await run(dueRows({ cohort: true, hosts, cutoff, stale: cutoff, confirm, n: cn }), true);
-  await run(dueRows({ cohort: false, hosts, cutoff, stale: cutoff, confirm, n }), false);
+  const cohort = cohortWhere(hosts, cutoff);
+  await run(dueRows({ scope: cohort.sql, params: cohort.params, stale: cutoff, confirm, n: cn }), true);
+  await run(dueRows({ scope: `NOT ${cohort.sql}`, params: cohort.params, stale: cutoff, confirm, n }), false);
   if (out.hidden) events.log('INFO', `Link health: checked ${out.checked}, hid ${out.hidden} gone at source`);
   return out;
 }
@@ -185,4 +218,4 @@ function start() {
 }
 function stop() { stopFlag = true; clearInterval(timer); timer = null; }
 
-module.exports = { check, report, sweep, stats, classify, start, stop, rotHosts, CONFIRM_AFTER_MS };
+module.exports = { check, report, sweep, stats, classify, start, stop, rotHosts, CONFIRM_AFTER_MS, _dueRows: dueRows, _OLD: { ORDER, DUE } };
