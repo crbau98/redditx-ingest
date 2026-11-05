@@ -95,7 +95,11 @@ async function keep(item, { sourceKey, maxMb = 80, timeoutMs = 120000, open = ne
   try {
     if (!ok) return null;
     return await store.put(`v/${id.slice(0, 2)}/${id}.${EXT[stored] || 'mp4'}`, tmp, stored);
-  } catch { return null; } finally { fs.rm(tmp, { force: true }, () => {}); }
+  } catch { return null; } finally {
+    // awaited: the temp file is gone when keep() answers (it used to be removed in the background, so under load a caller, or a
+    // burst of keeps, saw the previous file still on disk; tests/v5-sources.test.js flaked on exactly that)
+    await fs.promises.rm(tmp, { force: true }).catch(() => {});
+  }
 }
 
 module.exports = { wanted, keep, expiring, sniff, REFRESHABLE };
