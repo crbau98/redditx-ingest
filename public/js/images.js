@@ -37,3 +37,12 @@ export function cardImage(item, { proxy, width = 0, viewport = 390, dpr = 1, isV
   const slot = (width > 0 ? width : railWidth(viewport)) * Math.min(Math.max(dpr, 1), DENSITY_CAP);
   return { src: proxy(slot <= THUMB_FIT_PX || !large ? item.thumb_url : large) };
 }
+
+/**
+ * The small picture of a post for tiles that are a few dozen CSS px wide (the viewer's filmstrip and dock, related rails,
+ * its blurred backdrop): the thumbnail when there is one, else the platform preview. Posts that came from a grid have
+ * already downloaded their thumbnail, so these tiles then cost no request at all.
+ */
+export function tileImage(item) {
+  return item.thumb_url || item.preview_url || item.thumbnail_url || (item.media_type === 'image' ? item.media_url : null);
+}

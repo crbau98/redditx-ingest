@@ -70,4 +70,24 @@ describe('thumbnail or preview for a grid card (images.js)', () => {
     assert.equal((masonry.match(/width: colWidth/g) || []).length, 2, 'both the first render and the restore of a parked card');
     assert.match(feed, /width: \(opts && opts\.width\) \|\| 0/);
   });
+
+  test('viewer tiles (filmstrip, dock, related, backdrop) use the thumbnail, so a post that came from a grid costs no new request', () => {
+    assert.equal(img.tileImage(item), 'https://cdn/t.webp');
+    assert.equal(img.tileImage({ ...item, thumb_url: null }), 'https://cdn/p.jpg');
+    assert.equal(img.tileImage({ ...item, thumb_url: null, preview_url: null, thumbnail_url: 'https://cdn/tn.jpg' }), 'https://cdn/tn.jpg');
+    assert.equal(img.tileImage({ media_type: 'image', media_url: 'https://cdn/m.jpg' }), 'https://cdn/m.jpg');
+    assert.equal(img.tileImage({ media_type: 'video', media_url: 'https://cdn/v.mp4' }), null);
+    const lb = fs.readFileSync(path.join(JS, 'components', 'lightbox.js'), 'utf8');
+    assert.equal((lb.match(/tileImage\(/g) || []).length, 5, 'dock, backdrop, filmstrip, related rail, more-from-creator strip');
+    assert.doesNotMatch(lb, /backgroundImage[^\n]*preview_url/, 'no tile asks for the full preview');
+  });
+
+  test('the viewer stage shows the cached thumbnail first, then the preview, then the full file', () => {
+    const lb = fs.readFileSync(path.join(JS, 'components', 'lightbox.js'), 'utf8');
+    assert.match(lb, /const first = ready \? it\.media_url : it\.thumb_url && it\.thumb_url !== sharp \? it\.thumb_url : sharp;/);
+    assert.match(lb, /const ready = warmed\.has\(it\.media_url\);/, 'a full file already loaded (the preloaded next item, the one just left) is shown at once');
+    assert.match(lb, /pre\.onload = \(\) => warmed\.add\(n\.media_url\);/);
+    assert.match(lb, /mid\.onload = \(\) => \{ if \(img\.isConnected\) img\.src = mid\.src; startFull\(\); \};/, 'the full file starts after the preview, not beside it');
+    assert.match(lb, /mid\.onerror = startFull;/, 'a failed preview still gets the full file');
+  });
 });
