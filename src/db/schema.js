@@ -800,7 +800,29 @@ function v21(db) {
   }
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21];
+/**
+ * v22: covering indexes for the read paths that scan the whole published library, measured on a 300k-media / 10k-creator copy.
+ * SQLite answers "COUNT(*) of the published library" (the list total, /api/stats, the per-platform counts) from
+ * ix_media_state, which holds no other column, so every one of the 260k rows costs a table lookup (~1 s). These two partial
+ * indexes hold exactly the columns those queries read, so they are index-only scans (~20-80 ms):
+ *   ix_media_pub_count  (platform, media_type, creator_id): list totals by type / platform, stats, platform counts;
+ *   ix_media_pub_comm   (community NOCASE, platform): community counts and the autocomplete's community prefix.
+ * Both are partial (published and not excluded: what every public query asks for), so they stay small, and
+ * CREATE INDEX IF NOT EXISTS adds them in place without rewriting the table (about 2 s for 400k rows). The queries
+ * name them with INDEXED BY: sqlite_stat1 makes the planner believe "publish_state = 'published'" is selective.
+ */
+function v22(db) {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS ix_media_pub_count ON media(platform, media_type, creator_id) WHERE publish_state = 'published' AND scope != 'excluded';
+    CREATE INDEX IF NOT EXISTS ix_media_pub_comm ON media(community COLLATE NOCASE, platform) WHERE publish_state = 'published' AND scope != 'excluded' AND community IS NOT NULL;
+  `);
+}
+
+// Index-only: adds no rows and changes none, so it cannot leave a foreign key dangling. migrate() skips the post-migration
+// foreign_key_check for it, which on a 400k-row library is a few seconds of boot time before the listener is up.
+v22.ddlOnly = true;
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });
@@ -812,7 +834,7 @@ function migrate(db) {
     for (let i = current; i < MIGRATIONS.length; i++) {
       const run = db.transaction(() => {
         MIGRATIONS[i](db);
-        const issues = db.pragma('foreign_key_check');
+        const issues = MIGRATIONS[i].ddlOnly ? [] : db.pragma('foreign_key_check');
         if (issues.length) throw new Error(`Migration ${i + 1} left ${issues.length} foreign-key violations`);
         db.pragma(`user_version = ${i + 1}`);
       });

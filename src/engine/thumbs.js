@@ -21,10 +21,12 @@ let sharpMod;
 function sharp() { if (sharpMod === undefined) { try { sharpMod = require('sharp'); } catch { sharpMod = null; } } return sharpMod; }
 
 const q = {
-  todo: repo.db.prepare(`SELECT id, media_type, media_url, preview_url, thumbnail_url, width FROM media
+  // INDEXED BY: the planner prefers ix_media_state and sorts every published row (~1 s per minute on 260k rows, 0.3 ms through
+  // the partial index that exists for exactly this query, schema v10)
+  todo: repo.db.prepare(`SELECT id, media_type, media_url, preview_url, thumbnail_url, width FROM media INDEXED BY ix_media_tint_todo
     WHERE tint IS NULL AND publish_state = 'published' ORDER BY seq DESC LIMIT ?`),
   save: repo.db.prepare('UPDATE media SET tint = @tint, thumb_url = COALESCE(@thumb_url, thumb_url) WHERE id = @id'),
-  left: repo.db.prepare("SELECT COUNT(*) AS n FROM media WHERE tint IS NULL AND publish_state = 'published'"),
+  left: repo.db.prepare("SELECT COUNT(*) AS n FROM media INDEXED BY ix_media_tint_todo WHERE tint IS NULL AND publish_state = 'published'"),
 };
 
 const hex = (n) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0');

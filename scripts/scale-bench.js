@@ -3,7 +3,7 @@
  * End-to-end latency and event-loop stalls of the PUBLIC read routes on a scaled database (scripts/seed-scale.js,
  * or a COPY of a real one), against the real server process (server.js: engine, warm-up, background jobs and all).
  *
- *     DB_PATH=/tmp/scale.db node scripts/scale-bench.js [--runs 30] [--settle 80] [--burst 20] [--out result.json]
+ *     DB_PATH=/tmp/scale.db node scripts/scale-bench.js [--runs 30] [--settle 80] [--burst 20] [--out result.json] [--only video,creators]
  *
  *   1. spawns `node --require scripts/loop-probe.js server.js` on a free port (scheduler off, no network needed);
  *   2. COLD: as soon as /api/health answers, one request to each route, in order (what the first visitors pay);
@@ -32,6 +32,7 @@ const RUNS = Number(opt('runs', 30));
 const SETTLE_S = Number(opt('settle', 80));
 const BURST_S = Number(opt('burst', 20));
 const OUT = opt('out', null);
+const ONLY = opt('only', null); // comma-separated substrings of route names: bench just those
 const ROOT = path.join(__dirname, '..');
 
 const freePort = () => new Promise((resolve) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
@@ -61,7 +62,10 @@ const pct = (a, p) => { const s = [...a].sort((x, y) => x - y); return s.length 
   const bootAt = Date.now();
   const child = spawn(process.execPath, ['--require', path.join(__dirname, 'loop-probe.js'), path.join(ROOT, 'server.js')], {
     cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, PORT: String(port), ADMIN_KEY: 'dev', NODE_ENV: 'development', PROBE_OUT: probeOut, SCHEDULER_ENABLED: 'false', HOST: '127.0.0.1' },
+    // VISUAL_EMBED_PER_MIN=1: the background embedder still ticks every minute (its query is part of what is measured), but with no
+    // network every picture "fails" at once, and a burst of 40 failure rows would invalidate the cached totals in the middle of a
+    // route's run. (Override with VISUAL_EMBED_PER_MIN=40 to see that too.)
+    env: { VISUAL_EMBED_PER_MIN: '1', ...process.env, PORT: String(port), ADMIN_KEY: 'dev', NODE_ENV: 'development', PROBE_OUT: probeOut, SCHEDULER_ENABLED: 'false', HOST: '127.0.0.1' },
   });
   let log = '';
   child.stdout.on('data', (d) => { log += d; }); child.stderr.on('data', (d) => { log += d; });
@@ -93,7 +97,8 @@ const pct = (a, p) => { const s = [...a].sort((x, y) => x - y); return s.length 
     ['communities', () => '/api/communities'],
     ['tags', (i) => `/api/tags?limit=${I([100, 60, 36], i)}`],
     ['recommend (no taste)', (i) => `/api/recommend?limit=18&seed=${1000 + i}`],
-    ['recommend (taste)', (i) => `/api/recommend?limit=18&seed=${1000 + i}&tags=${I(tags, i)}:3,${I(tags, i + 3)}:1.5&creators=${I(topCreators, i).id}:2`],
+    // a visitor's taste is stable, the home page asks with a fresh seed on every visit: 8 different visitors, a new seed each time
+    ['recommend (taste)', (i) => `/api/recommend?limit=18&seed=${1000 + i}&tags=${I(tags, i % 8)}:3,${I(tags, (i % 8) + 3)}:1.5&creators=${I(topCreators, i % 8).id}:2`],
     ['media default feed p0', (i) => `/api/media?limit=${I([36, 48], i)}`],
     ['media default feed p1+ (nocount)', (i) => `/api/media?limit=36&page=${1 + (i % 6)}&nocount=1`],
     ['media sort=recent', (i) => `/api/media?sort=recent&limit=36&page=${i % 4}`],
@@ -129,6 +134,7 @@ const pct = (a, p) => { const s = [...a].sort((x, y) => x - y); return s.length 
     ['stats', () => '/api/stats'],
   ];
 
+  if (ONLY) { const keep = ONLY.split(','); for (let i = R.length - 1; i >= 0; i--) if (!keep.some((k) => R[i][0].includes(k))) R.splice(i, 1); }
   const report = { dbBytes: fs.statSync(process.env.DB_PATH).size, runs: RUNS, settleS: SETTLE_S, burstS: BURST_S, firstHealthMs, cold: {}, warm: {}, burst: {} };
 
   // ---- cold: one request each, in order, straight after the first health answer
@@ -173,6 +179,7 @@ const pct = (a, p) => { const s = [...a].sort((x, y) => x - y); return s.length 
   const bad = Object.entries(report.cold).filter(([, v]) => v.status !== 200).map(([k, v]) => `${k}:${v.status}`);
   if (bad.length) report.coldNon200 = bad;
   kill();
+  if (process.env.BENCH_LOG) fs.writeFileSync(process.env.BENCH_LOG, log); // the server's own stdout/stderr, for diagnosis
   const json = JSON.stringify(report, null, 2);
   if (OUT) fs.writeFileSync(OUT, json);
   console.log(json);

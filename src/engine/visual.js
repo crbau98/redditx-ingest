@@ -209,7 +209,9 @@ function similarCreators(id, k = 24) {
 function pending(limit) {
   ensureTable();
   const retry = new Date(Date.now() - FAIL_RETRY_DAYS * 86400000).toISOString();
-  return db.prepare(`SELECT m.id, m.media_type, m.media_url, m.preview_url, m.thumbnail_url, m.source_url, m.creator_id, m.post_key FROM media m
+  // NOT INDEXED: walk the table newest first and stop at the first `limit` rows. Left to itself the planner takes
+  // ix_media_state and sorts every published row (about 2 s per minute on 260k rows, 0.3 s this way).
+  return db.prepare(`SELECT m.id, m.media_type, m.media_url, m.preview_url, m.thumbnail_url, m.source_url, m.creator_id, m.post_key FROM media m NOT INDEXED
       WHERE m.publish_state = 'published' AND m.scope != 'excluded'
         AND NOT EXISTS (SELECT 1 FROM media_embeddings e WHERE e.media_id = m.id AND (e.model = ? OR (e.model = 'fail' AND e.created_at > ?)))
       ORDER BY m.seq DESC LIMIT ?`).all(MODEL_ID, retry, limit);
@@ -264,4 +266,4 @@ function status() {
 /** Tests: forget the in-memory index and cached answers. */
 function _reset() { ix = null; profiles = null; cache.clear(); }
 
-module.exports = { similar, similarCreators, backfill, start, stop, status, ensureTable, _reset, _nearest: nearest, _index: index };
+module.exports = { similar, similarCreators, backfill, start, stop, status, ensureTable, _reset, _nearest: nearest, _index: index, _pending: pending };
