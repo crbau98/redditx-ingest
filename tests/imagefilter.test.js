@@ -100,12 +100,13 @@ describe('policy (model replaced by a fake)', () => {
       publish_state: 'published', posted_at: new Date().toISOString(),
     }, ['gay']);
     const bad = ins('https://i.redd.it/oldwoman.jpg'); const ok = ins('https://i.redd.it/oldman.jpg');
+    const badHash = repo.db.prepare('SELECT hash FROM media WHERE id = ?').get(bad).hash; // captured before removal clears it
     fake({ 'https://i.redd.it/oldwoman.jpg': faces(['female', 0.9]), 'https://i.redd.it/oldman.jpg': faces(['male', 0.9]) });
     const r = await maintenance.imageSweep({ limit: 100, settings });
     assert.ok(r.checked >= 2 && r.removed >= 1, JSON.stringify(r));
     assert.equal(repo.media.get(bad).publish_state, 'removed');
     assert.equal(repo.media.get(ok).publish_state, 'published');
-    assert.ok(repo.blocklist.has('hash', repo.db.prepare('SELECT hash FROM media WHERE id = ?').get(bad).hash));
+    assert.ok(repo.blocklist.has('hash', badHash));
     const again = await maintenance.imageSweep({ limit: 100, settings });
     assert.equal(again.checked, 0, 'the cursor moved past everything already checked');
   });

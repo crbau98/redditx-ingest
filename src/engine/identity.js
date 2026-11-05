@@ -27,6 +27,8 @@ const WEIGHTS = {
   'same-onlyfans': 4,  // both promote the same OnlyFans page
   'same-paid': 4,      // both promote the same Fansly / JustFor.Fans page
   'same-linkpage': 4,  // both use the same link-in-bio page
+  // two rows with the same handle: a candidate for the admin queue only. Never auto-merged (see mergeable).
+  'same-handle': 1,
   admin: 10,
 };
 /** Auto-merge needs this much evidence AND a shared name; without the name it always waits for the admin. */
@@ -176,8 +178,11 @@ function noteLink(x, y, ev, { autoMerge = true } = {}) {
 // Only two live creators merge on their own: folding a hidden (body filter, admin) creator into an active one would
 // republish what was hidden, and the reverse would pull a live creator off the site. Those pairs wait for the admin.
 const live = (id) => { const c = repo.creators.get(id); return !!c && c.status === 'active'; };
+// A shared handle is a reason to look, not proof: two different men can share one. A pair with the same handle
+// waits for the admin whatever else it has, and this is checked live, so it holds even before scan() notes it.
+const sameHandle = (x, y) => { const a = repo.creators.get(x); const b = repo.creators.get(y); return !!a && !!b && String(a.handle).toLowerCase() === String(b.handle).toLowerCase(); };
 const mergeable = (row) => settingsStore.get().identityAutoMerge !== false && row.status === 'pending' && row.strength >= AUTO_STRENGTH
-  && live(row.a_id) && live(row.b_id) && sameName(row.a_id, row.b_id);
+  && live(row.a_id) && live(row.b_id) && sameName(row.a_id, row.b_id) && !sameHandle(row.a_id, row.b_id);
 
 /**
  * Apply any auto-merge now due for this creator (applyProfile notes its evidence first with autoMerge off, so the
@@ -303,7 +308,7 @@ function pageKey(url) {
  * Pure SQL + JSON, a few ms per thousand creators.
  */
 function scan() {
-  const out = { aliases: 0, links: 0, merged: 0 };
+  const out = { aliases: 0, links: 0, merged: 0, handleCandidates: 0 };
   for (const f of db.prepare("SELECT creator_id, platform, target FROM feeds WHERE creator_id IS NOT NULL AND kind = 'user'").all()) {
     if (addAlias(f.creator_id, f.target, { platform: f.platform, source: 'account' })) out.aliases++;
   }
@@ -326,6 +331,20 @@ function scan() {
       if (k) note(`page:${k}`, 'same-linkpage', c.id);
     }
     for (const p of paid.findPaidHandles(c.bio).filter((p) => paid.SERVICES[p.service].trace)) notePaid(p.service, p.handle, c.id);
+  }
+  // Same handle on several creator rows (a man's accounts on different platforms, or two men with one name):
+  // each pair is noted for the admin with the handle as evidence. Never merged here.
+  const byHandle = db.prepare(`SELECT lower(handle) AS h, group_concat(id) AS ids, COUNT(*) AS n FROM creators
+    WHERE status != 'blocked' AND handle != '' GROUP BY lower(handle) HAVING COUNT(*) > 1 AND COUNT(*) <= 10`).all();
+  for (const { h, ids } of byHandle) {
+    const list = ids.split(',');
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        if (!repo.creators.get(list[i]) || !repo.creators.get(list[j])) continue;
+        const r = noteLink(list[i], list[j], { type: 'same-handle', detail: h }, { autoMerge: false });
+        if (r) out.handleCandidates = (out.handleCandidates || 0) + 1;
+      }
+    }
   }
   for (const [key, { type, ids }] of byKey) {
     if (ids.size < 2 || ids.size > 4) continue; // more than four creators on one page is an agency or a promo hub, not one man
