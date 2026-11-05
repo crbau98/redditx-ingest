@@ -86,9 +86,18 @@ function report({ failingAfter = 3, staleDays = 3, deadDays = 30, deadMinRuns = 
       ORDER BY COALESCE(last_run_at, '') DESC LIMIT ?`).all(limit);
   const disabledCount = db.prepare("SELECT COUNT(*) AS n FROM feeds WHERE enabled = 0 AND last_error LIKE '%disabled%' AND consecutive_failures > 0").get().n;
 
+  // Items waiting for a human: how many, how old, and why. Nothing expires them, so a queue nobody reads only grows.
+  const rq = db.prepare(`SELECT COUNT(*) AS n, MIN(ingested_at) AS oldest, SUM(CASE WHEN ingested_at < ? THEN 1 ELSE 0 END) AS stale
+      FROM media WHERE publish_state = 'review'`).get(iso(now - 7 * DAY));
+  const reviewQueue = {
+    total: rq.n || 0, olderThan7d: rq.stale || 0, oldestAt: rq.oldest || null,
+    byReason: db.prepare(`SELECT COALESCE(NULLIF(substr(review_reason, 1, 40), ''), 'unspecified') AS reason, COUNT(*) AS n FROM media
+        WHERE publish_state = 'review' GROUP BY reason ORDER BY n DESC LIMIT 12`).all(),
+  };
+
   return {
     totals: { feeds: totals.feeds || 0, enabled: totals.enabled || 0, neverRun: totals.never || 0, failing: failing.length, stale: stale.length, dead: dead.length, disabledByEngine: disabledCount },
-    failing, stale, dead, top, failingByKind,
+    failing, stale, dead, top, failingByKind, reviewQueue,
     disabled: disabledRows.map((f) => feedRow(f)),
     causes: runCauses(now),
     rules: { failingAfter, staleDays, deadDays, deadMinRuns },

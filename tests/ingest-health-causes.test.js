@@ -89,3 +89,15 @@ test('the admin API exposes it: /sources/health, and a cause on each feed and ru
   const runs = await (await fetch(`${base}/api/admin/runs?feedId=${f.id}`, { headers: ADMIN })).json();
   assert.equal(runs[0].error_kind, 'server');
 });
+
+test('the review queue is counted: how many wait, how long, and why', () => {
+  const ins = repo.db.prepare(`INSERT INTO media (id, platform, source_key, post_key, media_type, media_url, hash, publish_state, review_reason, ingested_at)
+    VALUES (?, 'rss', ?, ?, 'image', 'https://q.example/a.jpg', ?, 'review', ?, ?)`);
+  const add = (reason, msAgo) => { const id = crypto.randomUUID(); ins.run(id, `rss:rq${id}:0`, `rss:rq${id}`, id.replace(/-/g, ''), reason, iso(msAgo)); };
+  add('scope:unclear', 12 * DAY); add('scope:unclear', 1 * DAY); add('attribution:telegram-ambiguous', 2 * HOUR); add(null, 9 * DAY);
+  const { reviewQueue: q } = sourcehealth.report();
+  assert.equal(q.total, 4); assert.equal(q.olderThan7d, 2);
+  assert.ok(Date.parse(q.oldestAt) <= Date.now() - 11 * DAY);
+  const by = Object.fromEntries(q.byReason.map((r) => [r.reason, r.n]));
+  assert.equal(by['scope:unclear'], 2); assert.equal(by['attribution:telegram-ambiguous'], 1); assert.equal(by.unspecified, 1);
+});
