@@ -50,7 +50,7 @@ test('videos of one post that share its picture as poster are not collapsed eith
 
 test('a video with a poster of its own is still hashed, and a real duplicate still collapses', async () => {
   reset();
-  const a = row({ preview: 'https://thumbs.example/same.jpg' }); const b = row({ preview: 'https://thumbs.example/same.jpg' }); // different posts, same picture
+  const a = row({ platform: 'reddit', preview: 'https://thumbs.example/same.jpg' }); const b = row({ platform: 'reddit', preview: 'https://thumbs.example/same.jpg' }); // different posts, same picture
   await maintenance.hashSweep({ limit: 100, settings });
   assert.ok(get(a).phash, 'hashed');
   assert.equal(get(a).publish_state, 'published');
@@ -80,7 +80,7 @@ test('a hash the old sweep took from a borrowed poster is cleared (database and 
   const H = 'c'.repeat(32);
   const swept = row({ preview: BANNER, phash: H });                 // the sweep reaches this one
   const passed = row({ preview: BANNER, phash: H });                // a cursor that is already past it: only the one-off can reach it
-  const own = row({ preview: 'https://thumbs.example/own.jpg', phash: 'd'.repeat(32) }); // a poster of its own keeps its hash
+  const own = row({ platform: 'reddit', preview: 'https://thumbs.example/own.jpg', phash: 'd'.repeat(32) }); // a poster of its own keeps its hash
   dedupe.load(); dedupe.remember(swept, H, { mediaType: 'video' }); dedupe.remember(passed, H, { mediaType: 'video' });
   assert.ok(dedupe.check({ phash: H, mediaType: 'video' }).dup, 'the stale hash is findable before');
   repo.settings.set('hash_sweep_seq', String(repo.db.prepare('SELECT seq FROM media WHERE id = ?').get(passed).seq));
@@ -115,4 +115,13 @@ test('repair also drops the repaired ORIGINAL from an already-loaded dedupe inde
   maintenance.repairSharedPosterCollapse();
   assert.equal(get(gone).publish_state, 'published');
   assert.equal(dedupe.check({ phash: H, mediaType: 'video' }).dup, null, 'and not after: it cannot collapse later videos until a restart');
+});
+
+test('a Coomer post with a picture and several videos: the sibling rows have DIFFERENT post_keys, yet their shared picture is not hashed', async () => {
+  reset();
+  const poster = 'https://img.coomer.st/thumbnail/data/ab/cd/pic.jpg'; // the post's first picture, borrowed by every video of it
+  // real keys: coomer-<service>-<post>-<index> per attachment, so no two siblings share a post_key
+  const v1 = row({ post: 'coomer:coomer-onlyfans-777-1', preview: poster }); const v2 = row({ post: 'coomer:coomer-onlyfans-777-2', preview: poster });
+  await maintenance.hashSweep({ limit: 100, settings });
+  for (const id of [v1, v2]) { assert.equal(get(id).publish_state, 'published', 'the second video is not hidden as a duplicate of the first'); assert.equal(get(id).phash, null); }
 });

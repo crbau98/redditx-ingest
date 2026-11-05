@@ -18,15 +18,22 @@ const MULTI = new Set([
   'com.br', 'net.br', 'org.br', 'com.mx', 'com.ar', 'com.tr', 'com.tw', 'com.hk', 'com.sg', 'com.my', 'com.ph', 'com.ua', 'co.il', 'co.id', 'co.th',
   // shared hosting / CDN / app platforms: each subdomain belongs to someone else
   'github.io', 'gitlab.io', 'blogspot.com', 'wordpress.com', 'tumblr.com', 'herokuapp.com', 'netlify.app', 'vercel.app', 'pages.dev', 'workers.dev',
-  'web.app', 'firebaseapp.com', 'appspot.com', 'azurewebsites.net', 'cloudfront.net', 'amazonaws.com', 'r2.dev', 'fly.dev', 'onrender.com',
+  'web.app', 'firebaseapp.com', 'appspot.com', 'azurewebsites.net', 'cloudfront.net', 'r2.dev', 'fly.dev', 'onrender.com',
   'glitch.me', 'repl.co', 'myshopify.com', 'weebly.com', 'wixsite.com', 'substack.com',
 ]);
+// Object-storage and cloud endpoints where the tenant is a label BELOW a service/region part (`bucket.s3.us-east-1.amazonaws.com`,
+// `acct.blob.core.windows.net`): the registrable domain would be the service itself (`s3.amazonaws.com`) and every customer would be
+// one site, so on these the whole host is the site. (A path-style address, `s3.amazonaws.com/bucket/..`, keeps its tenant in the path,
+// which this host-only rule cannot see.)
+const WHOLE_HOST = ['amazonaws.com', 'amazonaws.com.cn', 'core.windows.net', 'digitaloceanspaces.com', 'backblazeb2.com', 'cloudflarestorage.com',
+  'storage.googleapis.com', 'googleusercontent.com', 'wasabisys.com', 'linodeobjects.com'];
 const SHORT_SECOND = new Set(['co', 'com', 'org', 'net', 'gov', 'edu', 'ac', 'or', 'ne', 'go', 'gob', 'mil', 'ltd', 'plc', 'sch', 'nom', 'info', 'biz']);
 
 /** The registrable domain of a host ("images.foo.co.uk" -> "foo.co.uk"), or null for an IP address or a name with no dot. */
 function registrableDomain(host) {
   const h = String(host || '').toLowerCase().replace(/\.$/, '');
   if (!h || !h.includes('.') || /^[\d.]+$/.test(h) || h.includes(':')) return null; // IPv4 / IPv6 / a bare name
+  if (WHOLE_HOST.some((w) => h === w || h.endsWith(`.${w}`))) return h;
   const labels = h.split('.');
   const last2 = labels.slice(-2).join('.');
   let suffixLabels = 1;

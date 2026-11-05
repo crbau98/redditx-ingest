@@ -64,3 +64,33 @@ test('a gif that is gone (404) is remembered as gone; a rate limit or an outage 
   await assert.rejects(r.resolve('https://www.redgifs.com/watch/busy'), /429/);
   assert.equal(apiCalls(), 3, 'a 429 is asked again');
 });
+
+test('callers resolving the same clip at the same moment share one lookup (the cache is empty until the first answer is back)', async () => {
+  respond = ok;
+  const r = rg();
+  const url = 'https://www.redgifs.com/watch/Crosspost';
+  const [a, b, c] = await Promise.all([r.resolve(url), r.resolve('https://www.redgifs.com/ifr/crosspost'), r.resolve(url)]);
+  assert.equal(apiCalls(), 1, 'one API call for three concurrent workers');
+  assert.equal(calls.filter((u) => u.includes('/v2/auth/temporary')).length, 1, 'and one authentication');
+  assert.deepEqual(a, b); assert.deepEqual(b, c);
+  assert.notEqual(a, b, 'each caller still gets its own copy');
+});
+
+test('a failed shared lookup fails every waiter, is not remembered when transient, and the next ask tries again', async () => {
+  let fail = true;
+  respond = (url) => { if (url.includes('/v2/auth/temporary')) return { token: 't' }; if (fail) throw Object.assign(new Error('HTTP 503'), { status: 503 }); return gif(url.split('/gifs/')[1]); };
+  const r = rg();
+  const settled = await Promise.allSettled([r.resolve('https://www.redgifs.com/watch/flaky'), r.resolve('https://www.redgifs.com/watch/flaky')]);
+  assert.deepEqual(settled.map((s) => s.status), ['rejected', 'rejected']);
+  assert.equal(apiCalls(), 1);
+  fail = false;
+  assert.ok(await r.resolve('https://www.redgifs.com/watch/flaky'), 'the failed lookup is not stuck in flight');
+  assert.equal(apiCalls(), 2);
+});
+
+test('{fresh: true} during a lookup under way makes its own call', async () => {
+  respond = ok;
+  const r = rg();
+  await Promise.all([r.resolve('https://www.redgifs.com/watch/dup'), r.resolve('https://www.redgifs.com/watch/dup', { fresh: true })]);
+  assert.equal(apiCalls(), 2);
+});

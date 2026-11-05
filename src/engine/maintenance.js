@@ -196,9 +196,12 @@ const siblingPoster = repo.db.prepare('SELECT 1 FROM media WHERE post_key = ? AN
  */
 function borrowedPoster(row) {
   if (row.media_type !== 'video' || !row.preview_url) return false;
-  // An RSS video's poster is the entry's media:thumbnail, often channel artwork reused by every entry, and a video-only entry has no sibling
-  // row to show it (the pipeline marks these posterShared, but that marker is not stored): the sweep never trusts them.
-  if (row.platform === 'rss') return true;
+  // These adapters never have a poster of the video itself, and the pipeline marks every such video posterShared at ingest, but that
+  // marker is not stored, so the sweep must know the platforms: an RSS video's poster is the entry's media:thumbnail (often channel
+  // artwork reused by every entry, with no sibling row to show it); a Coomer video borrows its post's first picture or the creator's
+  // banner, and the siblings of one post do NOT share a post_key (each attachment's source id ends in its own index), so a post with
+  // a picture and several videos cannot be recognised through post_key either.
+  if (row.platform === 'rss' || row.platform === 'coomer') return true;
   if (/\/(?:banners|icons)\//.test(row.preview_url)) return true;
   return !!(row.post_key && siblingPoster.get(row.post_key, row.id, row.preview_url));
 }

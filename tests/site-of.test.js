@@ -26,10 +26,31 @@ test('shared hosting and CDN suffixes: every customer is its own site', () => {
   assert.equal(siteOf('https://cdn.alice.github.io/a.png'), 'alice.github.io');
 });
 
+test('object-storage tenants below a service/region label are different sites (bucket-a vs bucket-b)', () => {
+  assert.notEqual(siteOf('https://bucket-a.s3.amazonaws.com/x.jpg'), siteOf('https://bucket-b.s3.amazonaws.com/x.jpg'));
+  assert.notEqual(siteOf('https://a.s3.us-east-1.amazonaws.com/x.jpg'), siteOf('https://b.s3.us-east-1.amazonaws.com/x.jpg'));
+  assert.notEqual(siteOf('https://acct1.blob.core.windows.net/c/x.jpg'), siteOf('https://acct2.blob.core.windows.net/c/x.jpg'));
+  assert.notEqual(siteOf('https://a.nyc3.digitaloceanspaces.com/x.jpg'), siteOf('https://b.nyc3.digitaloceanspaces.com/x.jpg'));
+  assert.equal(siteOf('https://bucket-a.s3.amazonaws.com/one.jpg'), siteOf('https://bucket-a.s3.amazonaws.com/two.jpg'), 'one bucket is one site');
+  assert.equal(registrableDomain('amazonaws.com'), 'amazonaws.com');
+});
+
 test('a country code with a short second label is a suffix even when it is not in the list', () => {
   assert.equal(registrableDomain('img.shop.co.zz'), 'shop.co.zz');
   assert.equal(registrableDomain('shop.co.zz'), 'shop.co.zz');
   assert.notEqual(registrableDomain('a.one.com.zz'), registrableDomain('a.two.com.zz'));
+});
+
+test('enrich: an avatar from another bucket of the same storage service does not replace the stored one', () => {
+  const { prepareEnv } = require('./helpers/mock');
+  prepareEnv();
+  const repo = require('../src/db/repo');
+  const c = repo.creators.create({ handle: 'bucketcheck', origin: 'admin' });
+  repo.creators.update(c.id, { avatarUrl: 'https://bucket-a.s3.amazonaws.com/old.jpg' });
+  repo.creators.enrich(c.id, { avatarUrl: 'https://bucket-b.s3.amazonaws.com/other.jpg' });
+  assert.equal(repo.creators.get(c.id).avatar_url, 'https://bucket-a.s3.amazonaws.com/old.jpg');
+  repo.creators.enrich(c.id, { avatarUrl: 'https://bucket-a.s3.amazonaws.com/new.jpg' });
+  assert.equal(repo.creators.get(c.id).avatar_url, 'https://bucket-a.s3.amazonaws.com/new.jpg');
 });
 
 test('no usable site for an address, a bare name or a bad URL; a trailing dot and case do not matter', () => {

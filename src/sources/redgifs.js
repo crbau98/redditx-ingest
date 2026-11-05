@@ -25,6 +25,7 @@ let cached = null;
 
 const RESOLVE_TTL_MS = 15 * 60 * 1000;
 const resolved = new Map(); // gif id -> { at, item | gone }
+const inflight = new Map(); // gif id -> the promise of the lookup being made right now (concurrent callers share it)
 function remember(id, v) {
   if (resolved.size >= 2000) for (const k of [...resolved.keys()].slice(0, 500)) resolved.delete(k);
   resolved.set(id, { at: Date.now(), ...v });
@@ -189,12 +190,20 @@ module.exports = {
     if (!id) return null;
     const hit = resolved.get(id);
     if (!fresh && hit && Date.now() - hit.at < RESOLVE_TTL_MS) { if (hit.gone) throw hit.gone; return hit.item ? { ...hit.item } : null; }
-    let item;
-    try { const json = await api(`/v2/gifs/${encodeURIComponent(id)}`); item = itemFromGif(json.gif || json, null); } catch (e) {
-      if (e && (e.status === 404 || e.status === 410)) remember(id, { gone: e });
-      throw e;
+    // Pipeline workers resolve in parallel: all of them miss the cache before the first answer is back, so each would queue its own
+    // authentication and lookup 2 s apart. A lookup already under way is joined instead (a refresh always makes its own).
+    let p = !fresh ? inflight.get(id) : null;
+    if (!p) {
+      p = (async () => {
+        try { const json = await api(`/v2/gifs/${encodeURIComponent(id)}`); const item = itemFromGif(json.gif || json, null); remember(id, { item }); return item; } catch (e) {
+          if (e && (e.status === 404 || e.status === 410)) remember(id, { gone: e });
+          throw e;
+        }
+      })();
+      inflight.set(id, p);
+      p.finally(() => { if (inflight.get(id) === p) inflight.delete(id); }).catch(() => {});
     }
-    remember(id, { item });
+    const item = await p;
     return item ? { ...item } : null;
   },
 
