@@ -204,11 +204,22 @@ function imageSweepProgress() {
   return { cursor, checkedUpTo: q('<='), remaining: q('>'), version: IMAGE_SWEEP_VERSION };
 }
 
-let sweepTimer = null; let sweepBusy = false; let sweepGaveUp = false;
+let sweepTimer = null; let sweepBusy = false; let sweepGaveUp = false; let lastRetire = 0;
+const RETIRE_EVERY_MS = 24 * 3600 * 1000;
+/** Once a day: pause the app's own feeds that have clearly stopped working (see sourcehealth.retireDead). */
+function retireDeadFeeds(now = Date.now()) {
+  if (now - lastRetire < RETIRE_EVERY_MS) return null;
+  lastRetire = now;
+  if (!settingsStore.get().autoRetireFeeds) return null;
+  const r = require('./sourcehealth').retireDead({ now });
+  if (r.paused.length) events.log('INFO', `Feeds paused (stopped working): ${r.paused.length}${r.capped ? ' (daily cap reached)' : ''} — ${r.paused.slice(0, 5).map((f) => `${f.platform}:${f.target}`).join(', ')}${r.paused.length > 5 ? ', …' : ''}. Admin → Sources lists them; enabling one keeps it on.`);
+  return r;
+}
 /** Slow background loop: a few items a minute, only while there is work and the model is usable. */
 function startImageSweep() {
   if (sweepTimer) return;
   sweepTimer = setInterval(async () => {
+    try { retireDeadFeeds(); } catch (e) { events.log('WARN', `Feed retirement: ${e.message}`); }
     if (sweepBusy) return;
     const s = settingsStore.get();
     if (!s.imageSweep || !s.imageSweepPerTick) return;
@@ -251,4 +262,4 @@ function startupSweepIfNeeded() {
   }, 1500).unref();
 }
 
-module.exports = { sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, physiqueSweep, physiqueSweepProgress, hashSweep, hashSweepProgress, startImageSweep, stopImageSweep };
+module.exports = { retireDeadFeeds, sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, physiqueSweep, physiqueSweepProgress, hashSweep, hashSweepProgress, startImageSweep, stopImageSweep };
