@@ -1,0 +1,196 @@
+/* ==========================================================================
+   v7 "Spectrum": mobile-first overhaul, loaded last in the cascade.
+
+   Direction
+   - A prism splits light into a spectrum, so the spectrum is PRISM's one structural device:
+     a five-hue ring around an avatar means "posted in the last 7 days". It carries information.
+   - Gradients are an accent, not the default (A1 Gallery: ~1 in 5 heroes, ~1 in 8 navs use one).
+     The primary button is flat, section icons stop glowing, the headline stops colouring one phrase.
+   - Phones get content in the first screen: a short masthead, a ring strip, creator rows instead of
+     650px-tall cards, 2-up Browse tiles.
+   - Cards keep the measured 16px median radius; borders do the separating, not shadows.
+   - Type is a 1.25 (major third) modular scale in rem, so the OS text-size setting applies where used.
+
+   Everything here is plain CSS layered on tokens.css / app.css / ux.css / v6.css. The infinite
+   animations rule still holds: nothing in this file loops, and the only transitions touch
+   transform / opacity / colour.
+   ========================================================================== */
+
+:root {
+  /* modular scale: base 1rem, ratio 1.25 */
+  --t-xs: .8rem;      /* 12.8 */
+  --t-sm: .875rem;    /* 14 */
+  --t-0: 1rem;        /* 16 */
+  --t-1: 1.25rem;     /* 20 */
+  --t-2: 1.5625rem;   /* 25 */
+  --t-3: 1.953rem;    /* 31 */
+  --t-4: 2.441rem;    /* 39 */
+  --t-5: 3.052rem;    /* 49 */
+  --pad: clamp(16px, 3vw, 32px);   /* 16px gutter on phones */
+  --au-r-media: 16px;
+  --au-r-panel: 22px;
+  /* the full visible spectrum, not the brand's pink-violet-amber blend */
+  --spectrum: conic-gradient(from 210deg, #8b5cf6, #ff5c8a, #ffb347, #34d399, #38bdf8, #8b5cf6);
+}
+
+/* ---------- foundations ---------- */
+html { -webkit-tap-highlight-color: transparent; }
+body {
+  /* one quiet wash at the top instead of two coloured aurora blobs */
+  background:
+    radial-gradient(1000px 420px at 50% -180px, color-mix(in srgb, var(--accent) 9%, transparent), transparent 70%),
+    var(--bg);
+  background-repeat: no-repeat;
+}
+.section-head h2 svg { filter: none; }              /* icons no longer glow */
+.section-head h2 { letter-spacing: -.02em; }
+
+/* gradients are an accent: the primary action is a flat, high-contrast fill */
+.btn.primary, .btn.primary:hover {
+  background-image: none;
+  background-color: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: none;
+}
+.btn.primary:hover { filter: brightness(1.1); }
+.brand span { background: none; color: var(--text); -webkit-text-fill-color: currentColor; }
+
+/* the intro picker is a panel, not a coloured banner */
+.intro-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--au-r-panel); }
+
+/* ---------- Home masthead ---------- */
+.hero { padding: 36px 0 6px; }
+.hero::before { opacity: .55; }
+.hero h1 { font-size: clamp(var(--t-3), 1.2rem + 3.4vw, 4rem); letter-spacing: -.04em; line-height: 1.02; }
+.hero h1 em {
+  font-style: normal; background: none; color: inherit; animation: none;
+  -webkit-background-clip: border-box; background-clip: border-box; -webkit-text-fill-color: currentColor;
+}
+.hero p.lead { color: var(--muted); }
+/* the counts are a plain sentence, not a pill */
+.hero-kicker {
+  background: none; border: 0; box-shadow: none; padding: 0; backdrop-filter: none; -webkit-backdrop-filter: none;
+  margin-bottom: 12px; color: var(--muted); font-size: var(--t-sm); font-weight: 500; letter-spacing: 0;
+}
+
+/* ---------- creator card: the avatar gets its own cell ----------
+   `.creator-head > div:not(.creator-actions)` (app.css) also matched the avatar <div> and outranked
+   `.creator-head > .avatar`, so on every card the avatar sat in the name cell under a 92% surface plate.
+   Same specificity as that rule, loaded later: the avatar goes back to its own column, with no plate. */
+.creator-head > div.avatar { grid-area: avatar; isolation: auto; }
+.creator-head > div.avatar::before { content: none; }
+
+/* ---------- Ring strip (creators as spectrum rings) ---------- */
+.ring-section { margin-top: 6px; }
+.ring-strip {
+  list-style: none; margin: 0 calc(var(--pad) * -1); padding: 6px var(--pad) 12px;
+  display: flex; gap: 14px; overflow-x: auto; scrollbar-width: none;
+  scroll-snap-type: x proximity; scroll-padding-inline: var(--pad); overscroll-behavior-x: contain;
+}
+.ring-strip::-webkit-scrollbar { display: none; }
+.ring-strip > li { flex: none; scroll-snap-align: start; }
+/* centred under the centred masthead when it fits; auto margins collapse to 0 when it scrolls, so nothing is cut off */
+@media (min-width: 640px) {
+  .ring-strip > li:first-child { margin-left: auto; }
+  .ring-strip > li:last-child { margin-right: auto; }
+}
+.ring-item { display: grid; justify-items: center; gap: 8px; width: 76px; min-height: 44px; color: var(--muted); font-size: var(--t-xs); text-align: center; border-radius: 16px; }
+.ring-item.following { color: var(--text); font-weight: 600; }
+.ring { display: grid; place-items: center; width: 72px; height: 72px; padding: 3px; border-radius: 50%; background: var(--line-strong); transition: transform var(--dur-base) var(--spring-snap); }
+.ring.fresh { background: var(--spectrum); }
+.ring .avatar { border: 3px solid var(--bg); }
+.ring-name { max-width: 76px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.25; }
+.ring-item:hover .ring { transform: scale(1.05); }
+.ring-item:active .ring { transform: scale(.94); }
+.ring-item:focus-visible { outline: 2px solid var(--focus); outline-offset: 4px; }
+.ring-item.add .ring { background: none; border: 2px dashed var(--line-strong); color: var(--muted); padding: 0; }
+.ring-item.add .ring svg { width: 24px; height: 24px; }
+
+/* filter row labels read as words, not tracked-out caps */
+.group-label, .filter-label { text-transform: none; letter-spacing: 0; font-size: var(--t-xs); font-weight: 600; }
+
+/* ---------- touch: every control 44px, tag chips included ---------- */
+@media (pointer: coarse) {
+  .tagcloud a, .tagcloud .chip, .chip.more { min-height: 44px; display: inline-flex; align-items: center; }
+  .reel-tag { min-width: 44px; }
+}
+
+/* ---------- phones ---------- */
+@media (max-width: 639px) {
+  main { padding-bottom: calc(var(--bottomnav-h) + 36px + env(safe-area-inset-bottom)); }
+  .appbar { gap: 8px; }
+
+  /* masthead: left-aligned, short, search first, actions as one swipeable row */
+  .hero { text-align: left; padding: 16px 0 4px; }
+  .hero::before, .hero::after { display: none; }
+  .hero-kicker { margin-bottom: 8px; }
+  .hero h1 { margin: 0; max-width: none; }
+  .hero p.lead { margin: 10px 0 0; max-width: none; font-size: var(--t-sm); line-height: 1.5; }
+  .hero-search { margin: 16px 0 0; max-width: none; }
+  .hero-search input { height: 52px; }
+  .hero-search .btn { height: 38px; }
+  .hero-actions {
+    flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; scrollbar-width: none;
+    margin: 12px calc(var(--pad) * -1) 0; padding: 0 var(--pad); scroll-snap-type: x proximity; scroll-padding-inline: var(--pad);
+  }
+  .hero-actions::-webkit-scrollbar { display: none; }
+  .hero-actions .btn { flex: none; scroll-snap-align: start; }
+  .hero-note { margin: 12px 0 0; text-align: left; }
+  .hero-chips { justify-content: flex-start; }
+
+  /* section heads: a one-line sub and a "see all" that never wraps */
+  .section { margin-top: 28px; }
+  .section-head { align-items: center; gap: 12px; margin-bottom: 12px; }
+  .section-head > div:first-child { min-width: 0; flex: 1; }
+  .section-head h2 { font-size: var(--t-1); gap: 8px; }
+  .section-head h2 svg { width: 18px; height: 18px; }
+  .section-head .sub { font-size: var(--t-xs); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .link-more { flex: none; white-space: nowrap; min-height: 44px; }
+
+  /* page heads: title, count, a two-line description */
+  .page-head { margin-bottom: 12px; }
+  .page-head h1 { font-size: var(--t-2); }
+  .page-head .sub { font-size: var(--t-sm); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .page-head .sub + .sub { display: none; }   /* Creators: the count stays, the long description waits for a wider screen */
+
+  /* Browse: 2-up tiles; the numbers fit their tile */
+  .browse-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .browse-tile { padding: 14px; border-radius: var(--au-r-media); min-height: 44px; }
+  .browse-tile .name { display: flex; align-items: center; gap: 6px; font-size: var(--t-sm); line-height: 1.25; }
+  .browse-tile .count { font-size: clamp(1.1rem, 5.2vw, 1.5rem); overflow-wrap: anywhere; }
+
+  /* Explore: a label and its chip row share one line (the rails carry inline padding from explore.js,
+     hence !important on the vertical padding only) */
+  .rail-group { display: flex; align-items: center; gap: 10px; }
+  .rail-group > .group-label { flex: none; }
+  .rail-group > :not(.group-label) { flex: 1 1 auto; min-width: 0; padding-top: 4px !important; padding-bottom: 4px !important; }
+
+  /* Creators: flat rows divided by hairlines (about 230px each, was about 650px) */
+  .creator-grid { grid-template-columns: 1fr; gap: 0; }
+  .creator-grid > .creator-card {
+    display: flex; flex-direction: column-reverse;      /* the picture strip reads after the name */
+    border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; padding: 12px 0; box-shadow: none;
+  }
+  .creator-grid > .creator-card:hover { transform: none; box-shadow: none; border-color: var(--line); }
+  .creator-grid > .creator-card .creator-thumbs { height: 64px; margin-top: 10px; grid-template-columns: repeat(3, 1fr); grid-template-rows: 1fr; gap: 6px; background: none; }
+  .creator-grid > .creator-card .creator-thumbs div { border-radius: 12px; }
+  .creator-grid > .creator-card .creator-thumbs div:first-child { grid-row: auto; }
+  .creator-grid > .creator-card .creator-body { margin-top: 0; padding: 0; }
+  .creator-grid > .creator-card .creator-head > .creator-meta::before,
+  .creator-grid > .creator-card .creator-head > div:not(.creator-actions)::before { display: none; }   /* no cover to read against */
+  .creator-grid > .creator-card .creator-body .avatar { border-color: var(--bg); }
+}
+
+/* ---------- light theme ---------- */
+:root[data-theme='light'] body {
+  background:
+    radial-gradient(1000px 420px at 50% -180px, color-mix(in srgb, var(--accent) 6%, transparent), transparent 70%),
+    var(--bg);
+  background-repeat: no-repeat;
+}
+:root[data-theme='light'] .btn.primary, :root[data-theme='light'] .btn.primary:hover { background-color: var(--accent); color: var(--accent-ink); }
+
+/* ---------- reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .ring, .ring-item:hover .ring, .ring-item:active .ring { transition: none; transform: none; }
+}

@@ -1,6 +1,18 @@
-# DESIGN.md — PRISM Lumen + Motion
+# DESIGN.md — PRISM Lumen + Motion, Spectrum layer (v7)
 
-World: dark cinematic base, gradient brand (`--accent` pink, `--accent-2` violet, `--accent-3` amber), image-first cards with captions over a static scrim, depth from light (`--hi`, `--raise`, `--ring`, `--scrim`) rather than borders.
+World: dark cinematic base, brand accent `--accent` pink with `--accent-2` violet and `--accent-3` amber, image-first cards with captions over a static scrim, depth from light (`--hi`, `--raise`, `--ring`, `--scrim`) rather than borders.
+
+## Spectrum layer (v7, `css/aurora.css`, loaded last)
+
+A prism splits light into a spectrum, so the spectrum is the one structural device.
+
+- **Spectrum ring** (`--spectrum`, five hues): a ring around an avatar means "posted in the last 7 days"; a plain hairline ring means quiet. It encodes information, so it is never used as decoration. `components/creator-ring.js` builds the Home strip (people you follow first).
+- **Gradients are an accent.** A1 Gallery measured them in about 1 in 5 heroes and 1 in 8 navs. Primary buttons are flat `--accent`, section icons do not glow, the headline does not colour one phrase, and the body wash is one quiet radial instead of two blobs.
+- **Phones are content-first.** Left-aligned masthead, one swipeable action row, a ring strip inside the first screen, flat creator rows instead of cover cards, 2-up Browse tiles, one-line section subs, Explore filter labels on the same line as their chips. Measured at 390×844 against the previous build: Home's first media or creator sits at y=477 (was y=1511) and 12 pictures or avatars are fully above the fold (was 0); Creators fits 2 cards in the first screen (was 1); Explore's first card is at y=336 (was y=397); Browse is 24% shorter (2598px vs 3418px).
+- **Type** is a 1.25 modular scale in `rem` (`--t-xs` … `--t-5`), so the OS text size applies to anything sized with it; `<meta name="text-scale">` opts in where supported. Space Grotesk + Inter stay.
+- **Shape**: media cards keep the measured 16px median radius (`--au-r-media`); panels use 22px (`--au-r-panel`); borders separate, shadows do not.
+- **Touch**: every interactive element is at least 44px on coarse pointers, including Browse tag chips (measured with Playwright at 390px: 0 under 44px on Home, Explore, Creators, Reels, Saved, Find, Browse).
+- No new infinite animation. The ring only transitions `transform` and is off for reduced motion.
 
 ## Tokens
 
