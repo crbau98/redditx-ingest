@@ -90,6 +90,19 @@ test('the admin API exposes it: /sources/health, and a cause on each feed and ru
   assert.equal(runs[0].error_kind, 'server');
 });
 
+test('warnings and errors survive INFO chatter: they have a log of their own, also over the admin API', async () => {
+  const events = require('../src/engine/events');
+  events.clearLogs();
+  events.log('ERR', 'rss/feed:https://x.example/a.xml: HTTP 403');
+  events.log('WARN', 'Media host cdn.example refuses this server');
+  for (let i = 0; i < 700; i++) events.log('INFO', `run ${i}`);
+  assert.ok(!events.getLogs(600).some((l) => l.level === 'ERR'), 'pushed out of the main log');
+  assert.deepEqual(events.getProblems().map((l) => l.level), ['ERR', 'WARN']);
+  const api = await (await fetch(`${base}/api/admin/logs?level=problems`, { headers: ADMIN })).json();
+  assert.equal(api.length, 2); assert.match(api[0].msg, /HTTP 403/);
+  assert.equal((await (await fetch(`${base}/api/admin/logs`, { headers: ADMIN })).json()).length, 300, 'the plain log is unchanged');
+});
+
 test('the review queue is counted: how many wait, how long, and why', () => {
   const ins = repo.db.prepare(`INSERT INTO media (id, platform, source_key, post_key, media_type, media_url, hash, publish_state, review_reason, ingested_at)
     VALUES (?, 'rss', ?, ?, 'image', 'https://q.example/a.jpg', ?, 'review', ?, ?)`);
