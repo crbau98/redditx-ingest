@@ -11,6 +11,7 @@
  *    and search hits for the creator's handle + paid slug + tags within feed caps and safety gates.
  */
 const repo = require('../db/repo');
+const config = require('../config');
 const settingsStore = require('../settings');
 const brave = require('../lib/brave');
 const imagefilter = require('../lib/imagefilter');
@@ -24,6 +25,19 @@ const { checkText } = require('../lib/safety');
 const { femaleCheck } = require('../lib/scope');
 
 const db = repo.db;
+
+/**
+ * A paid page is a public page too (owner decision 2026-11-05): register it as a web/page feed so
+ * its public media is read, instead of dropping the match because the page is a paid link-out.
+ * @returns {boolean} true when the URL was a paid service page.
+ */
+function readPaidPage(url, creatorId, origin) {
+  if (!require('../lib/paid').serviceOf(url)) return false;
+  try { require('./paidpage').registerPaidPage(url, { creatorId, origin }); }
+  catch (e) { events.log('WARN', `Could not register the paid page ${url}: ${e.message}`); }
+  return true;
+}
+
 const REF_PICTURES = 8;
 const HITS_PER_QUERY = 16;
 const PAGES_PER_CREATOR = 4;
@@ -96,7 +110,12 @@ async function seedCrawlCreator(creator, { maxPages = 2 } = {}) {
     try { host = new URL(url).hostname; } catch { continue; }
     if (hostBlocked(host)) continue;
     const spec = parseProfile(url);
-    if (!spec || spec.external || !spec.ingestable) continue;
+    if (!spec) continue;
+    if (spec.external || !spec.ingestable) {
+      // A paid page is a public page too: read it instead of dropping the match.
+      if (spec.external) readPaidPage(url, creator.id, 'image-match-crawl');
+      continue;
+    }
     if (existing.has(String(spec.target).toLowerCase())) continue;
     if (checkText(url, spec.target, spec.label).level === 'block') continue;
     if (femaleCheck(spec.target, spec.label).female) continue;
@@ -197,7 +216,7 @@ async function matchCreator(creator, { budget = 40, aborted = () => false, servi
         });
         if (!named) continue;
         const spec = parseProfile(pageUrl) || { platform: 'web', kind: 'page', target: pageUrl, ingestable: true, label: parsedUrl.host };
-        if (spec.external) continue;
+        if (spec.external) { readPaidPage(pageUrl, creator.id, 'image-match'); continue; }
         if (spec.platform === 'web') {
           try { if (!(await require('../sources/web').robotsAllows(pageUrl))) continue; } catch { continue; }
         }
@@ -216,7 +235,7 @@ async function matchCreator(creator, { budget = 40, aborted = () => false, servi
         const fv = faceMatch.evaluateCreatorFaceMatch(res.faces, creator.id, { named, refs: faceRefs });
         if (fv.verdict === 'confirmed') {
           const spec = parseProfile(pageUrl) || { platform: 'web', kind: 'page', target: pageUrl, ingestable: true, label: parsedUrl.host };
-          if (spec.external) continue;
+          if (spec.external) { readPaidPage(pageUrl, creator.id, 'image-match'); continue; }
           if (spec.platform === 'web') {
             try { if (!(await require('../sources/web').robotsAllows(pageUrl))) continue; } catch { continue; }
           }
@@ -254,6 +273,38 @@ async function matchCreator(creator, { budget = 40, aborted = () => false, servi
         }
       }
     }
+  }
+  // Reverse-image mirror candidates (Yandex's "sites" list for one of his public pictures). Review-queue rows only: a page that
+  // shows the same picture is a candidate for a human, never an automatic match. At most one lookup per creator per run.
+  try {
+    const yx = require('../lib/yandex');
+    if (config.yandexImages && refs.length) {
+      const ref = db.prepare(`SELECT id, media_url FROM media WHERE creator_id = ? AND publish_state = 'published'
+        AND media_url LIKE 'http%' AND media_url NOT LIKE '%' || ? || '%' ORDER BY COALESCE(posted_at, ingested_at) DESC LIMIT 1`)
+        .get(creator.id, config.storeHost);
+      if (ref && ref.media_url) {
+        const sites = await yx.cbirSites(ref.media_url, { count: 20 });
+        for (const site of sites) {
+          if (takedowns.checkUrl(site.pageUrl)) continue;
+          const paidPage = require('../engine/paidpage').paidPageUrl(site.pageUrl);
+          if (paidPage) require('../engine/paidpage').registerPaidPage(site.pageUrl, { creatorId: creator.id, origin: 'cbir' });
+          faceMatch.recordWebMatch({
+            creatorId: creator.id,
+            mediaId: ref.id,
+            pageUrl: site.pageUrl,
+            imageUrl: null,
+            title: site.title || site.source,
+            platform: 'web',
+            matchKind: 'cbir',
+            evidence: 'Yandex reverse-image: the same picture appears on this page (review before any link)',
+            status: 'review',
+          });
+          out.pages++;
+        }
+      }
+    }
+  } catch (e) {
+    events.log('WARN', `Reverse-image lookup skipped for creator ${creator.id}: ${e.message}`);
   }
   try {
     db.prepare("UPDATE creators SET last_monitored_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(creator.id);

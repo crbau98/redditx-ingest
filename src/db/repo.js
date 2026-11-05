@@ -1601,7 +1601,9 @@ const parseLead = (r) => {
 };
 const OF = 'OnlyFans';
 /** Canonical paid-page host per traced service, for owner matching and lead search queries. */
-const PAID_HOSTS = { 'OnlyFans': 'onlyfans.com', 'Fansly': 'fansly.com', 'JustFor.Fans': 'justfor.fans' };
+const PAID_HOSTS = { 'OnlyFans': 'onlyfans.com', 'Fansly': 'fansly.com', 'JustFor.Fans': 'justfor.fans',
+  'ManyVids': 'manyvids.com', 'LoyalFans': 'loyalfans.com', 'Fanvue': 'fanvue.com',
+  'FanCentro': 'fancentro.com', 'Clips4Sale': 'clips4sale.com', 'Patreon': 'patreon.com' };
 const onlyfans = {
   get(handle, service = OF) { return parseLead(db.prepare('SELECT * FROM onlyfans_leads WHERE service = ? AND handle = ?').get(service, String(handle))); },
   /**
@@ -1664,7 +1666,9 @@ const onlyfans = {
   ownerOf(handle, service = OF) {
     const host = PAID_HOSTS[service] || PAID_HOSTS[OF];
     const h = String(handle).toLowerCase().replace(/[\\%_]/g, (m) => `\\${m}`);
-    return db.prepare(`SELECT id, handle FROM creators WHERE status = 'active' AND links LIKE ? ESCAPE '\\' LIMIT 1`).get(`%${host}/${h}"%`) || null;
+    // The handle may sit behind a section segment (clips4sale.com/store/<handle>), so any path
+    // ending in the handle counts, on that host only.
+    return db.prepare(`SELECT id, handle FROM creators WHERE status = 'active' AND links LIKE ? ESCAPE '\\' LIMIT 1`).get(`%${host}/%${h}"%`) || null;
   },
   /** Creators with a paid page but few known accounts elsewhere, least recently searched first. */
   reachTargets(limit = 4, staleDays = 30, maxAccounts = 4, service = OF, keyPrefix = null) {

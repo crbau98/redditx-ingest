@@ -116,6 +116,9 @@ module.exports = {
   // Keyless Bing HTML search (default on: it is the provider that works without any API key). BING_SEARCH=0 turns it off.
   // Never on under test: unit tests must not reach the live web.
   bingEnabled: !isTest && !/^(0|false|no|off)$/i.test(String(env.BING_SEARCH ?? '1')),
+  // Yandex Images keyword search (lib/yandex.js). Default ON; YANDEX_IMAGES=0 switches it off. YANDEX_BASE_URL is for tests.
+  yandexImages: !isTest && !/^(0|false|no|off)$/i.test(String(env.YANDEX_IMAGES ?? '1')),
+  yandexBase: String(env.YANDEX_BASE_URL || 'https://yandex.com').trim(),
   searchProviders: list(env.SEARCH_PROVIDERS, ['keenable', 'brave', 'brightdata', 'bing', 'ddg', 'ddg-lite', 'searxng', 'claude']),
   // What Discover ranks results against: the intent steers it toward public creator pages and personal galleries.
   // Which model provider does the AI work (search reading, discovery queries, triage, profile reading): 'openai' (default)

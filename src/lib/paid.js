@@ -24,11 +24,12 @@ const SERVICES = {
   'OnlyFans': { hosts: ['onlyfans.com', 'only.fans'], trace: true },
   'Fansly': { hosts: ['fansly.com', 'fans.ly'], trace: true },
   'JustFor.Fans': { hosts: ['justfor.fans', 'justforfans.com'], trace: true },
-  'ManyVids': { hosts: ['manyvids.com'], trace: false },
-  'LoyalFans': { hosts: ['loyalfans.com'], trace: false },
-  'Fanvue': { hosts: ['fanvue.com'], trace: false },
-  'FanCentro': { hosts: ['fancentro.com'], trace: false },
-  'Clips4Sale': { hosts: ['clips4sale.com'], trace: false },
+  'ManyVids': { hosts: ['manyvids.com'], trace: true },
+  'LoyalFans': { hosts: ['loyalfans.com'], trace: true },
+  'Fanvue': { hosts: ['fanvue.com'], trace: true },
+  'FanCentro': { hosts: ['fancentro.com'], trace: true },
+  'Clips4Sale': { hosts: ['clips4sale.com'], trace: true },
+  'Patreon': { hosts: ['patreon.com'], trace: true },
 };
 
 const HOST2SERVICE = {};
@@ -44,10 +45,13 @@ function serviceOf(url) {
   return null;
 }
 
+/** Is this URL on a paid creator platform? */
+function isPaidPlatform(url) { return !!serviceOf(url); }
+
 // First path segments that are site pages, not people (shared by the handle-style services).
 const RESERVED = new Set(['login', 'signup', 'register', 'auth', 'about', 'help', 'faq', 'contact', 'blog', 'terms', 'privacy',
   'support', 'explore', 'search', 'home', 'feed', 'messages', 'notifications', 'settings', 'collections', 'videos', 'photos',
-  'models', 'creators', 'categories', 'tags', 'new', 'trending', 'popular', 'store', 'merch', 'gift', 'wallet', 'payouts']);
+  'pictures', 'clips', 'sale', 'models', 'creators', 'categories', 'tags', 'new', 'trending', 'popular', 'store', 'merch', 'gift', 'wallet', 'payouts']);
 const HANDLE = /^[A-Za-z0-9][A-Za-z0-9_.-]{1,40}$/;
 const NOT_HANDLES = new Set(['link', 'links', 'in', 'is', 'bio', 'below', 'above', 'free', 'now', 'here', 'the', 'my', 'and', 'on', 'at', 'for',
   'sale', 'off', 'promo', 'subscribe', 'sub', 'dm', 'dms', 'open', 'only', 'fansly', 'fansly.com', 'fans', 'justfor', 'justforfans', 'justfor.fans', 'jff',
@@ -90,7 +94,23 @@ function jffHandle(input) {
   return normal(parts[0]);
 }
 
-const PARSERS = { 'OnlyFans': ofHandle, 'Fansly': fanslyHandle, 'JustFor.Fans': jffHandle };
+/**
+ * A paid service whose page URL is /<handle>, with an optional section segment in front
+ * (ManyVids /model/<name>, Clips4Sale /store/<name>). The first segment that is not a
+ * site word is the handle.
+ */
+const SECTION_WORDS = new Set(['store', 'stores', 'model', 'models', 'user', 'users', 'profile', 'p', 'creator', 'creators']);
+function pathHandle(input) {
+  let url;
+  try { url = new URL(/^[a-z]+:\/\//i.test(input) ? input : `https://${input}`); } catch { return null; }
+  const parts = url.pathname.split('/').filter(Boolean).map((p) => { try { return decodeURIComponent(p); } catch { return p; } });
+  const name = parts.find((p) => !SECTION_WORDS.has(p.toLowerCase()));
+  return name ? normal(name) : null;
+}
+
+const PARSERS = { 'OnlyFans': ofHandle, 'Fansly': fanslyHandle, 'JustFor.Fans': jffHandle,
+  'ManyVids': pathHandle, 'LoyalFans': pathHandle, 'Fanvue': pathHandle, 'FanCentro': pathHandle, 'Clips4Sale': pathHandle,
+  'Patreon': pathHandle };
 
 /** Canonical handle for a paid page URL, or null for site pages / other services. */
 function paidHandle(service, url) {
@@ -103,11 +123,23 @@ const LINK_RES = {
   'OnlyFans': /(?:https?:\/\/)?(?:www\.)?(?:onlyfans\.com|only\.fans)\/[^\s<>"'`)\]}|,]+/gi,
   'Fansly': /(?:https?:\/\/)?(?:www\.)?(?:fansly\.com|fans\.ly)\/[^\s<>"'`)\]}|,]+/gi,
   'JustFor.Fans': /(?:https?:\/\/)?(?:www\.)?(?:justfor\.fans|justforfans\.com)\/[^\s<>"'`)\]}|,]+/gi,
+  'ManyVids': /(?:https?:\/\/)?(?:www\.)?manyvids\.com\/[^\s<>"'`)\]}|,]+/gi,
+  'LoyalFans': /(?:https?:\/\/)?(?:www\.)?loyalfans\.com\/[^\s<>"'`)\]}|,]+/gi,
+  'Fanvue': /(?:https?:\/\/)?(?:www\.)?fanvue\.com\/[^\s<>"'`)\]}|,]+/gi,
+  'FanCentro': /(?:https?:\/\/)?(?:www\.)?fancentro\.com\/[^\s<>"'`)\]}|,]+/gi,
+  'Clips4Sale': /(?:https?:\/\/)?(?:www\.)?clips4sale\.com\/[^\s<>"'`)\]}|,]+/gi,
+  'Patreon': /(?:https?:\/\/)?(?:www\.)?patreon\.com\/[^\s<>"'`)\]}|,]+/gi,
 };
 const PROSE_RES = {
   'OnlyFans': /\b(?:only\s?fans|onlyfans)\s*(?:[:=\-–—→>]|\bis\b)\s*@?([A-Za-z0-9][A-Za-z0-9_.-]{1,40})/gi,
   'Fansly': /\bfansly\s*(?:[:=\-–—→>]|\bis\b)\s*@?([A-Za-z0-9][A-Za-z0-9_.-]{1,40})/gi,
   'JustFor.Fans': /\b(?:justfor\.?fans|jff)\s*(?:[:=\-–—→>]|\bis\b)\s*@?([A-Za-z0-9][A-Za-z0-9_.-]{1,40})/gi,
+  'ManyVids': /\bmanyvids\s*(?:[:=\-–—→>]|\bis\b)\s*@?([A-Za-z0-9][A-Za-z0-9_.-]{1,40})/gi,
+  'LoyalFans': /\bloyalfans\s*(?:[:=\-–—→>]|\bis\b)\s*@?([A-Za-z0-9][A-Za-z0-9_.-]{1,40})/gi,
+  'Fanvue': /\bfanvue\s*(?:[:=\-–—→>]|\bis\b)\s*@?([A-Za-z0-9][A-Za-z0-9_.-]{1,40})/gi,
+  'FanCentro': /\bfancentro\s*(?:[:=\-–—→>]|\bis\b)\s*@?([A-Za-z0-9][A-Za-z0-9_.-]{1,40})/gi,
+  'Clips4Sale': /\bclips4sale\s*(?:[:=\-–—→>]|\bis\b)\s*@?([A-Za-z0-9][A-Za-z0-9_.-]{1,40})/gi,
+  'Patreon': /\bpatreon\s*(?:[:=\-–—→>]|\bis\b)\s*@?([A-Za-z0-9][A-Za-z0-9_.-]{1,40})/gi,
 };
 
 /**
@@ -178,12 +210,16 @@ function findPaidHandles(text) {
   return out;
 }
 
-const CANONICAL = { 'OnlyFans': (h) => `https://onlyfans.com/${h}`, 'Fansly': (h) => `https://fansly.com/${h}`, 'JustFor.Fans': (h) => `https://justfor.fans/${h}` };
-const PAID_HOSTS = { 'OnlyFans': 'onlyfans.com', 'Fansly': 'fansly.com', 'JustFor.Fans': 'justfor.fans' };
+const CANONICAL = { 'OnlyFans': (h) => `https://onlyfans.com/${h}`, 'Fansly': (h) => `https://fansly.com/${h}`, 'JustFor.Fans': (h) => `https://justfor.fans/${h}`,
+  'ManyVids': (h) => `https://manyvids.com/${h}`, 'LoyalFans': (h) => `https://loyalfans.com/${h}`, 'Fanvue': (h) => `https://fanvue.com/${h}`,
+  'FanCentro': (h) => `https://fancentro.com/${h}`, 'Clips4Sale': (h) => `https://clips4sale.com/store/${h}`, 'Patreon': (h) => `https://patreon.com/${h}` };
+const PAID_HOSTS = { 'OnlyFans': 'onlyfans.com', 'Fansly': 'fansly.com', 'JustFor.Fans': 'justfor.fans',
+  'ManyVids': 'manyvids.com', 'LoyalFans': 'loyalfans.com', 'Fanvue': 'fanvue.com',
+  'FanCentro': 'fancentro.com', 'Clips4Sale': 'clips4sale.com', 'Patreon': 'patreon.com' };
 /** Canonical page URL for a traced paid service, or null. */
 function pageUrl(service, handle) {
-  const host = PAID_HOSTS[service];
-  return host && handle ? `https://${host}/${String(handle).toLowerCase()}` : null;
+  const build = CANONICAL[service];
+  return build && handle ? build(String(handle).toLowerCase()) : null;
 }
 /** Does this text link the exact paid page (the profile-link proof)? */
 function pageLinked(service, text, handle) {
@@ -212,5 +248,5 @@ function creatorPaid(c) {
   return (Array.isArray(links) ? links : []).filter((l) => l && l.url && serviceOf(l.url) && l.service !== 'OnlyFans' && !/onlyfans\.com/i.test(l.url || ''));
 }
 
-module.exports = { isPathNotName, plausibleHandle, SERVICES, serviceOf, fanslyHandle, jffHandle, paidHandle, findPaidHandles, paidLink, creatorPaid, pageUrl, pageLinked, PAID_HOSTS,
+module.exports = { isPathNotName, plausibleHandle, SERVICES, serviceOf, isPaidPlatform, fanslyHandle, jffHandle, paidHandle, findPaidHandles, paidLink, creatorPaid, pageUrl, pageLinked, PAID_HOSTS,
   ofHandle, findOnlyFans, freeHint, ofLink, creatorOnlyFans };

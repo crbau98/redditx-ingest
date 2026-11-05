@@ -138,7 +138,9 @@ No system can enumerate "the whole web". PRISM grows its coverage in layers:
 | Web page | page | – (optional Browser4) | OpenGraph, `<video>`, linked images; honours `robots.txt`. JavaScript-built pages (SPAs, infinite scroll, lazy galleries) are read in a real browser when [Browser4](#browser4-rendering-javascript-built-pages) is enabled. |
 | Link-in-bio | page | – (optional Browser4) | Discovers a creator's other accounts; never yields media itself. Hubs built by JavaScript are read in the browser. |
 
-**Paid pages:** paid/subscription platforms (OnlyFans, Fansly, Patreon…) are kept as link-outs on creator profiles so fans can support the creator directly, and pages a creator names in a post or bio are read like any other public page. PRISM does not reproduce paid content it does not have a lawful path to; everything it does ingest still passes the safety, male-only and takedown gates before it is stored.
+**Paid pages:** paid/subscription platforms (OnlyFans, Fansly, Patreon…) are kept as link-outs on creator profiles so fans can support the creator directly, and a paid page named by a creator in a post or bio — or surfaced by a web or image search — is read like any other public page and can contribute media. PRISM never signs in as a subscriber, never reuses a borrowed session, and never defeats a paywall; what a platform serves publicly to any visitor is fair game from any host (paid pages, mirror sites, leak/tube-rip/file-locker hosts), and everything it does ingest still passes the safety, male-only and takedown gates before it is stored.
+
+**Age and consent interstitials:** an adult site may put one in front of its pages ("verify you are 18 or older and accept our terms"). PRISM has its own age gate, so it passes that interstitial with the site's own confirmation parameter (JustFor.Fans: `?TermsAgree=yes`) and reads the page behind it. This unlocks nothing else: a paywall, a login and the site's own identity check stay out of reach, and no credential or session of anyone is reused.
 
 ---
 
@@ -382,6 +384,10 @@ Set `SENTRY_DSN` to enable sampled reports for HTTP errors reaching the final ha
 
 PRISM does not defeat a refusal by itself. It does not solve challenges, does not use credentials, cookies or logins, and does not spend on a paid unblocker unless the operator has switched that tier on (`brightdataUnlocker`, and for Scrapfly `scrapflyUnlocker` plus the `scrapflyAllowlist` of creators it may spend on). When a page refuses PRISM, it is skipped or handed to a tier the operator enabled, and the run note says which tier acted.
 
+A paid creator platform that refuses PRISM is never handed to an unblocker, whatever the tiers are set to: the content there sits behind the platform's own gate, and spending credits to break a refusal is not something PRISM does on its own. The page stays a link-out and a read, and the run note says so.
+
+The render session (`BROWSER4_SESSION`, default `prism-ingest`) is a shared Chrome profile used for anonymous reading only. Nobody signs in in it: a login there would leave its cookies in every later render, including on paid hosts, and PRISM does not reuse anyone's session. Signed-in work happens elsewhere (Telegram's MTProto account, the operator's own browser).
+
 A browser user agent on a public page is not a defeat of a refusal. It is a normal read by a normal client, and it is allowed on one condition: robots.txt is honoured under the same identity. The robots.txt request carries the same user agent as the page request, so the robots PRISM obeys is the robots served to the identity it actually uses. A disallow under that identity skips the page. For GayForFans and JustTheGays this is the setting `gffBrowserAgent` (on by default). Off means PRISM's own agent for both robots and pages.
 
 ## Scrapfly unblocker (optional, paid)
@@ -399,3 +405,41 @@ It is a fallback only: the direct download and the local browser still come firs
   The run note shows the credits each unlock used.
 - Off: set `scrapflyUnlocker` to `off`, or unset the key.
 - Every URL passes the local gate (takedowns, private hosts, non-http(s), embedded credentials) before it leaves the machine.
+
+## Yandex Images (keyword discovery, flag `YANDEX_IMAGES`)
+
+`lib/yandex.js` runs Yandex Images keyword searches as the first image provider in `lib/brave.js` `images()`.
+
+- **Flag:** `YANDEX_IMAGES` (default **on**; `YANDEX_IMAGES=0` turns it off). `YANDEX_BASE_URL` is for tests only.
+- **Parser:** the results page carries its data in `data-state` / `data-bem` attributes as HTML-escaped JSON. We parse those
+  attributes, walk the JSON for objects with `origUrl` and `snippet.url`, drop censored and non-http results, and deduplicate by
+  page. We never parse the whole page as HTML and never regex the markup.
+- **Ingestion target:** the page (`snippet.url`). The index's copy of the picture (`origUrl`) is never requested, and no
+  third-party CDN is hotlinked. Results come back with `imageUrl: null`; the web adapter reads the page, so robots, takedowns,
+  the safety gate, the male-only scope gate and the review queue all run on what is read.
+- **Robots:** `yandex.com/robots.txt` disallows `/images/*`. The owner accepted this deviation on 2026-11-05 and approved shipping
+  the provider default-on. This is the only provider that fetches a path its robots disallows by default; set `YANDEX_IMAGES=0`
+  to stop it.
+- **CAPTCHA:** a CAPTCHA page starts a 30-minute cooldown on this provider only (its own limiter key). Other providers are not
+  affected. The reason is reported in `yandex.status()`.
+- **Reverse image (mirror candidates):** `cbirSites(imageUrl)` reads the imageview page, follows its "sites" tab link, and
+  returns the source pages (`li.CbirSites-Item` title links). Those are review-queue candidates; the caller decides, and nothing
+  is merged into a creator automatically. It is not yet called from the image-match pass.
+
+## Policy: paid pages, mirrors and leak hosts
+
+Owner decision, 2026-11-05 (verbatim, this is the standing rule):
+
+> Paid pages, mirror sites, leak/tube-rip/file-locker hosts and personal pages are all allowed extraction targets whenever the
+> platform serves the content publicly to any visitor — free posts, previews, teasers, public CDN assets. Owner decision
+> 2026-11-05: every one of those host classes is in scope. Still hard: no paywall or entitlement bypass, no signing in as a fan,
+> no borrowed session cookie or token, no private or subscriber-only content, and the safety gate, male-only scope gate and
+> takedowns (NCII reports included) run on every single item.
+
+In code: `src/sources/_policy.js` allows every host. When a search result is a paid page (`src/lib/paid.js`), discovery still
+records the lead and the traced creator link-out card, and also registers the page as a public web page feed, so anything the page
+serves publicly is read like any other page.
+
+Measured 2026-11-05 with plain GETs (no login): OnlyFans returns a 608-byte login shell with no media. JustFor.Fans redirects to
+an age-verification interstitial with no media; PRISM does not click through it. Fansly's homepage and a creator page both return
+the same 19 KB generic shell with no media.

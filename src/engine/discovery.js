@@ -354,7 +354,14 @@ async function braveTopics({ queries = 1, budget, aborted = () => false } = {}) 
     for (const r of results) {
       const svc = paid.serviceOf(r.url);
       const ph = svc ? paid.paidHandle(svc, r.url) : null;
-      if (svc && paid.SERVICES[svc] && paid.SERVICES[svc].trace && ph) { if (noteSearchedPaid(svc, ph, r)) found++; continue; }
+      if (svc && paid.SERVICES[svc] && paid.SERVICES[svc].trace && ph) {
+        // A paid page is a public page too: read it so its public media is ingested, and keep
+        // tracing it to his free public accounts as before.
+        try { require('./paidpage').registerPaidPage(r.url, { origin: 'search-paid' }); }
+        catch (err) { events.log('WARN', `Could not register the paid page ${r.url}: ${err.message}`); }
+        if (noteSearchedPaid(svc, ph, r)) found++;
+        continue;
+      }
       const specs = [parseProfile(r.url), ...extractLinks(`${r.description} ${r.title}`)];
       for (const spec of specs) if (consider(spec, 'search', q, { displayName: (r.title || '').split(/[(|•·-]/)[0].trim() || null, bio: r.description || null })) found++;
     }
@@ -363,10 +370,17 @@ async function braveTopics({ queries = 1, budget, aborted = () => false } = {}) 
   return { searched, found };
 }
 
+/** The word a search title is cut at, per service, so the name in front of it is the person's name. */
+const PAID_TITLE_CUT = {
+  'OnlyFans': 'only\\s*fans', 'Fansly': 'fansly', 'JustFor.Fans': '(?:justfor\\.?fans|jff)',
+  'ManyVids': 'manyvids', 'LoyalFans': 'loyalfans', 'Fanvue': 'fanvue', 'FanCentro': 'fancentro', 'Clips4Sale': 'clips4sale',
+  'Patreon': 'patreon',
+};
+
 /** A web search surfaced someone's paid page: its search snippet is their public bio. */
 function noteSearchedPaid(service, handle, r) {
   const title = (r.title || '').split(/\s*[[(|]/, 1)[0];
-  const cut = service === 'OnlyFans' ? 'only\\s*fans' : service === 'Fansly' ? 'fansly' : '(?:justfor\\.?fans|jff)';
+  const cut = PAID_TITLE_CUT[service] || 'only\\s*fans';
   const name = (title.match(new RegExp(`^[\\s\\S]*?(?=\\b${cut}\\b|$)`, 'i'))?.[0] || '').replace(/[-–—·:]+\s*$/, '').trim() || null;
   const bio = r.description || null;
   if (repo.onlyfans.ownerOf(handle, service)) return false;
@@ -951,7 +965,7 @@ async function onlyfansDiscovery({ leads = 10, reach = 4, searches = 4, budget, 
     if (accounts.length) out.found++;
     repo.onlyfans.update(lead.handle, { service: lead.service, status: accounts.length ? 'found' : 'searching', accounts: accounts.length ? accounts : lead.accounts, attempts: (lead.attempts || 0) + 1, checked_at: new Date().toISOString() });
   }
-  for (const service of ['OnlyFans', 'Fansly', 'JustFor.Fans']) {
+  for (const service of Object.keys(paid.SERVICES).filter((s) => paid.SERVICES[s].trace)) {
     const keyPrefix = service === 'OnlyFans' ? 'of.reach.' : `paid.reach.${service}.`;
     for (const t of repo.onlyfans.reachTargets(reach, 30, 4, service, keyPrefix)) {
       if (aborted()) break;

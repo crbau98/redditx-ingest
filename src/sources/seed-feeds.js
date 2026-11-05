@@ -74,7 +74,16 @@ function deriveFeeds(seed) {
     let text = c.bio || '';
     try { for (const l of JSON.parse(c.links || '[]')) text += ` ${l.url || ''}`; } catch { /* no links */ }
     for (const spec of extractLinks(text)) {
-      if (spec.external || spec.ingestable === false) continue;
+      if (spec.external) {
+        // A paid page is a public page too (owner decision 2026-11-05): seed the page itself, so the
+        // media the platform serves publicly is read like any other page.
+        const paid = require('../lib/paid');
+        const service = paid.serviceOf(spec.url || spec.target || '');
+        const handle = service ? paid.paidHandle(service, spec.url || spec.target) : null;
+        if (service && handle) add('web', 'page', paid.pageUrl(service, handle), c.id, spec.label || null);
+        continue;
+      }
+      if (spec.ingestable === false) continue;
       if (!LINK_FEEDS.has(`${spec.platform}/${spec.kind}`)) continue;
       add(spec.platform, spec.kind, spec.target, c.id, spec.label || null);
     }
