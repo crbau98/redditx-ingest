@@ -63,12 +63,17 @@ async function sweep({ probe = false, limit = 1_000_000 } = {}) {
     repo.blocklist.add('creator', `${f.platform}:${String(f.target).toLowerCase()}`, `scope sweep (feed): ${g.rule}`);
     res.femaleFeeds++;
   }
-    // Feeds with chronic consecutive failures or broken targets are disabled to keep scheduler clean.
+  // Feeds that can never work are switched off to keep the scheduler clean: the target is gone (404/410, suspended, private,
+  // 3+ failures) or the feed never answers with anything readable (5+). The LAST ERROR is classified (engine/errorclass), not
+  // pattern-matched: "Service Unavailable" is a 503 outage and "...1404.xml" a file name, and a rate limit, a challenge, a timeout
+  // or a dropped connection can pass, so those feeds keep backing off instead of being switched off for good.
+  const { classify } = require('./errorclass');
   for (const f of repo.db.prepare("SELECT id, platform, kind, target, label, consecutive_failures, last_error FROM feeds WHERE enabled = 1 AND consecutive_failures >= 3").all()) {
-    const isBroken = f.consecutive_failures >= 5 || (f.last_error && /not found|disabled|preview-disabled|suspended|banned|404|410|unavailable/i.test(f.last_error));
+    const c = classify(f.last_error || '');
+    const isBroken = (c.permanent && f.consecutive_failures >= 3) || (f.consecutive_failures >= 5 && !c.transient);
     if (isBroken) {
       repo.feeds.update(f.id, { enabled: false });
-      events.log("INFO", `Sweep: disabled failing feed ${f.platform}:${f.kind}:${f.target} (${f.consecutive_failures} failures)`);
+      events.log("INFO", `Sweep: disabled failing feed ${f.platform}:${f.kind}:${f.target} (${f.consecutive_failures} failures, ${c.kind})`);
     }
   }
 

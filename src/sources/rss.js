@@ -212,7 +212,7 @@ async function load(url, validators = {}) {
   if (res.status === 304) return { notModified: true };
   if (res.status >= 400) {
     const retryAfter = net.parseRetryAfter(res.headers['retry-after']);
-    if (res.status === 429) limiter.penalize(http.key, retryAfter || 30000);
+    if (res.status === 429) limiter.penalize(http.key, Math.min(retryAfter || 30000, require('./http').MAX_SHARED_HOLD_MS));
     throw new net.HttpError(`HTTP ${res.status} for ${url}`, { status: res.status, url, retryAfter });
   }
   return { text: decodeBody(res.body, res.headers['content-type']), url: res.url || url, headers: res.headers, ctype: res.headers['content-type'] };

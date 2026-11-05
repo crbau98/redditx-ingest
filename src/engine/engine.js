@@ -19,6 +19,8 @@ const { deriveFeeds } = require('../sources/seed-feeds');
 const settingsStore = require('../settings');
 const config = require('../config');
 const breaker = require('./breaker');
+const limiter = require('../lib/limiter');
+const { classify } = require('./errorclass');
 const events = require('./events');
 const { processItem } = require('./pipeline');
 const physique = require('./physique');
@@ -344,20 +346,31 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
       events.log('INFO', `${tag} skipped: ${e.message}`);
       return finish('skipped', { error: e.message });
     }
+    // The platform is cooling down after a 429 and the limiter refused to queue this call behind the hold (lib/limiter, maxWaitMs):
+    // nothing was sent, so this is no failure of the feed. Come back when the hold is over.
+    if (e.cooldown) {
+      breaker.release(feed.platform);
+      const wait = Math.max(e.retryAfter || 0, 60000) + Math.floor(Math.random() * 60000);
+      repo.feeds.finishRun(feed.id, { status: 'skipped', error: `rate limited: ${e.message}; trying again in ${Math.ceil(wait / 60000)} min`, failures: feed.consecutive_failures, nextRunAt: new Date(Date.now() + wait).toISOString() });
+      events.log('INFO', `${tag} skipped: ${e.message}`);
+      return finish('skipped', { error: e.message });
+    }
     const failures = (feed.consecutive_failures || 0) + 1;
     // One instance's gateway errors trip that host's breaker (after 2), not the whole platform's (after 4).
     if (host && breaker.isGateway(e)) {
       if (breaker.hostFailure(host, e)) events.log('WARN', `${tag}: ${host} keeps answering ${e.status}; skipping that host until ${new Date(breaker.hostOpenUntil(host)).toISOString()}`);
       breaker.release(feed.platform);
     } else breaker.failure(feed.platform, e);
-    const gone = e.status === 404 || e.status === 410;
-    const brokenTarget = /not found|target no longer exists|account suspended|user not found|user_banned|channel is private|preview disabled|preview-disabled|feed unavailable/i.test(e.message || "");
+    const cls = classify(e);
     repo.feeds.finishRun(feed.id, { status: 'error', error: e.message, failures, nextRunAt: computeNextRun(feed, failures, Math.max(e.retryAfter || 0, host ? Math.max(0, breaker.hostOpenUntil(host) - Date.now()) : 0)) });
-    if ((gone || brokenTarget) && failures >= 3) {
+    if (cls.permanent && failures >= 3) {
       repo.feeds.update(feed.id, { enabled: false });
-      repo.feeds.finishRun(feed.id, { status: 'error', error: `${gone ? `Not found (${e.status})` : "Target broken"} — disabled after ${failures} tries`, failures, nextRunAt: null });
-      events.log('WARN', `${tag} disabled: ${gone ? "target no longer exists" : e.message}`);
-    } else if (failures >= 5) {
+      repo.feeds.finishRun(feed.id, { status: 'error', error: `${e.status === 404 || e.status === 410 ? `Not found (${e.status})` : 'Target broken'} — disabled after ${failures} tries`, failures, nextRunAt: null });
+      events.log('WARN', `${tag} disabled: ${e.status === 404 || e.status === 410 ? 'target no longer exists' : e.message}`);
+    } else if (failures >= 5 && !cls.transient) {
+      // Only errors that say something about the feed itself end it (it answers, but never with anything readable). A rate limit,
+      // a 403/challenge, a timeout, a dropped connection or a 5xx can pass: those keep backing off (up to a day) and stay visible
+      // as failing in the source-health report; the auto-retire sweep pauses the app's own feeds that never recover.
       repo.feeds.update(feed.id, { enabled: false });
       repo.feeds.finishRun(feed.id, { status: 'error', error: `Chronic failure (${failures} consecutive errors: ${e.message}) — disabled`, failures, nextRunAt: null });
       events.log('WARN', `${tag} disabled: ${failures} consecutive failures`);
@@ -396,7 +409,8 @@ const platformFull = (platform, cfg) => runningOn(platform) >= slotsFor(platform
 /** Platforms that still have a free slot and an open breaker. */
 function openPlatforms(cfg) {
   const open = new Set(Object.entries(breaker.snapshot()).filter(([, s]) => s.state === 'open').map(([p]) => p));
-  return { open, free: registry.list().map((a) => a.platform).filter((p) => !open.has(p) && !platformFull(p, cfg)) };
+  // A platform the limiter is holding after a 429 gets no new run either: the call would only be refused (lib/limiter, maxWaitMs).
+  return { open, free: registry.list().map((a) => a.platform).filter((p) => !open.has(p) && !platformFull(p, cfg) && !limiter.coolingDown(p)) };
 }
 
 function nextWork(cfg) {
@@ -408,7 +422,7 @@ function nextWork(cfg) {
     if (state.running.has(job.feedId)) { state.queue.splice(i, 1); i--; continue; }
     const feed = repo.feeds.get(job.feedId);
     if (!feed) { state.queue.splice(i, 1); i--; continue; }
-    if (platformFull(feed.platform, cfg) || !breaker.canRun(feed.platform)) continue;
+    if (platformFull(feed.platform, cfg) || limiter.coolingDown(feed.platform) || !breaker.canRun(feed.platform)) continue;
     state.queue.splice(i, 1);
     return { feed, trigger: job.trigger, force: job.force, limit: job.limit, lane: 0 };
   }
