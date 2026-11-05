@@ -66,10 +66,25 @@ function cachedRead(key, run) {
   return promise;
 }
 
+/**
+ * An answer theme-init.js already asked for while the page was still loading (window.__early: url -> { at, p }, p
+ * resolving to the body text). Handed out once, and only while it is young; a failed or unparsable early request
+ * falls back to the normal one, which reports the error the usual way (including the age-gate retry).
+ */
+const EARLY_MAX_AGE_MS = 15000;
+function viaEarly(url, run) {
+  const early = typeof window !== 'undefined' && window.__early;
+  const hit = early && early[url];
+  if (!hit) return run();
+  delete early[url];
+  if (Date.now() - hit.at > EARLY_MAX_AGE_MS) return run();
+  return hit.p.then((text) => JSON.parse(text)).catch(() => run());
+}
+
 export function get(path, query, opts) {
   const url = `${path}${qs(query)}`;
   if ((opts && (opts.signal || opts.fresh)) || noCache.test(path)) return api(url, opts);
-  return cachedRead(url, () => api(url, opts)).then((d) => structuredClone(d));
+  return cachedRead(url, () => viaEarly(url, () => api(url, opts))).then((d) => structuredClone(d));
 }
 /**
  * A read that carries its question in a POST body (a follow list does not fit in a URL). Shares
@@ -87,7 +102,7 @@ export function prefetch(path, query) {
   if (conn && (conn.saveData || /(^|-)2g$|^3g$/.test(conn.effectiveType || ''))) return;
   const url = `${path}${qs(query)}`;
   if (noCache.test(path)) return;
-  cachedRead(url, () => api(url)).catch(() => {});
+  cachedRead(url, () => viaEarly(url, () => api(url))).catch(() => {});
 }
 export function clearApiCache() { cache.clear(); }
 // View pings and broken-media reports change nothing anyone sees; every other write may.

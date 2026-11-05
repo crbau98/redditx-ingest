@@ -1,4 +1,5 @@
 import { h, icon, proxied, fmt, avatar, toast } from '../dom.js';
+import { lazyBackground } from '../lazy-bg.js';
 import { platformLabel, platformColor, follows, bus } from '../store.js';
 import { href } from '../router.js';
 
@@ -102,7 +103,7 @@ export function creatorCard(c, { mini = false, badge = null, spotlight = false }
   },
   badge ? h('span', { class: 'rise' }, icon('trend', 'sm'), badge) : null,
   h('div', { class: 'creator-thumbs' },
-    thumbs.map((t) => h('div', { style: t ? { backgroundImage: `url("${proxied(t)}")` } : {} })),
+    thumbs.map((t) => lazyBackground(h('div'), t ? proxied(t) : null)), // only the tiles near the screen load (lazy-bg.js)
     freshMark),
   h('div', { class: 'creator-body' },
     h('div', { class: 'creator-head' },

@@ -57,6 +57,9 @@ function createApp() {
     windowMs: 60 * 1000, max: 400, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many requests, slow down' },
     skip: (req) => req.path === '/proxy' || req.path === '/hls' || req.path === '/stream' || req.path === '/health' || req.path.startsWith('/admin'),
   });
+  // The app's own scripts and styles (served from memory once compressed; the first request for a file reads it from disk): a
+  // ceiling far above any page load (about 70 modules) that still bounds a client hammering the route.
+  const assetLimiter = rateLimit({ windowMs: 60 * 1000, max: 6000, standardHeaders: true, legacyHeaders: false, message: 'Too many requests, slow down' });
   const mediaLimiter = rateLimit({ windowMs: 60 * 1000, max: 4000, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many media requests' } });
 
   if (process.env.DEMO_ART === '1' && !config.isProd) app.use('/demo', require('./routes/demo'));
@@ -77,13 +80,23 @@ function createApp() {
   const assets = require('./lib/assets');
   let built = null;
   const shell = () => (config.isProd && built ? built : (built = assets.build(pub)));
-  const sendShell = (req, res) => res.set({ 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' }).send(shell().html);
+  // The shell, the stylesheet bundle and the scripts of the current version are also kept Brotli/gzip-compressed (quality 11) in
+  // memory, filled in the background after boot (lib/assets.js); until a file is ready it takes the ordinary path below.
+  const compressed = assets.createCompressedStore();
+  app.locals.warmAssets = () => assets.warmCompressed(compressed, pub, shell());
+  if (config.isProd) setImmediate(() => { app.locals.warmAssets().catch(() => {}); });
+  const sendShell = (req, res) => {
+    if (compressed.send(req, res, `${shell().version}:shell`)) return undefined;
+    return res.set({ 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' }).send(shell().html);
+  };
   app.get(['/', '/index.html'], sendShell);
   // The stylesheets as one minified file (lib/assets.js), from memory.
   app.get('/v/:ver/css/bundle.css', (req, res) => {
     const current = req.params.ver === shell().version;
+    if (current && compressed.send(req, res, `${req.params.ver}/css/bundle.css`, { immutable: true })) return;
     res.set({ 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': current ? 'public, max-age=31536000, immutable' : 'no-cache' }).send(shell().css);
   });
+  app.use('/v/:ver', assetLimiter, assets.compressedStatic(pub, compressed, () => shell().version));
   app.use('/v/:ver', (req, res, next) => {
     // Current version: cache forever. An older version (a tab open across a deploy) still loads,
     // but must revalidate, since the files on disk are now the new ones.

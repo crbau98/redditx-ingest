@@ -5,6 +5,7 @@
  */
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('crypto');
 const { prepareEnv } = require('./helpers/mock');
 
 let server; let base; let repo; let engine; let sourcehealth;
@@ -16,10 +17,12 @@ const adm = async (path, o = {}) => {
 const DAY = 86400000;
 const iso = (msAgo) => new Date(Date.now() - msAgo).toISOString();
 let n = 0;
-const feed = (origin, { fails = 0, lastOk = iso(DAY) } = {}) => {
+const feed = (origin) => {
   const f = repo.feeds.upsert({ platform: 'reddit', kind: 'community', target: `retiredui${++n}`, origin, enabled: 1, trusted: 0 }).feed;
   repo.db.prepare('UPDATE feeds SET created_at = ?, last_run_at = ?, last_success_at = ?, consecutive_failures = ?, last_error = ? WHERE id = ?')
-    .run(iso(120 * DAY), iso(3600000), lastOk, fails, fails ? 'HTTP 403' : null, f.id);
+    .run(iso(120 * DAY), iso(3600000), iso(DAY), 0, null, f.id);
+  const insertRun = repo.db.prepare('INSERT INTO feed_runs (id, feed_id, started_at, finished_at, status) VALUES (?, ?, ?, ?, ?)');
+  for (let i = 0; i < 12; i++) insertRun.run(crypto.randomUUID(), f.id, iso(i * DAY), iso(i * DAY - 1000), 'empty');
   return f;
 };
 
@@ -41,9 +44,9 @@ test('needs the admin key', async () => {
 });
 
 test('lists feeds paused by auto-retire, with the reason and the time, newest first', async () => {
-  const a = feed('discovered', { fails: 25, lastOk: iso(30 * DAY) });
-  const b = feed('seed', { fails: 30, lastOk: iso(40 * DAY) });
-  const mine = feed('admin', { fails: 99, lastOk: iso(200 * DAY) });
+  const a = feed('discovered');
+  const b = feed('seed');
+  const mine = feed('admin');
   const r = sourcehealth.retireDead({ max: 1000 });
   assert.ok(r.paused.some((p) => p.id === a.id) && r.paused.some((p) => p.id === b.id));
 
@@ -54,13 +57,13 @@ test('lists feeds paused by auto-retire, with the reason and the time, newest fi
   assert.ok(!ids.includes(mine.id), 'a feed a person made is never auto-retired, so never listed');
   const row = out.json.items.find((x) => x.id === a.id);
   assert.equal(row.platform, 'reddit');
-  assert.match(row.why, /failed 25 runs in a row/);
+  assert.match(row.why, /12 runs in 30 days and it has never added anything/);
   assert.ok(row.retired_at && !Number.isNaN(Date.parse(row.retired_at)));
   assert.equal(out.json.total, out.json.items.length);
 });
 
 test('a feed the admin switched back on drops off the list', async () => {
-  const f = feed('discovered', { fails: 25, lastOk: iso(30 * DAY) });
+  const f = feed('discovered');
   sourcehealth.retireDead({ max: 1000 });
   assert.ok((await adm('/sources/retired')).json.items.some((x) => x.id === f.id));
   const on = await adm(`/feeds/${f.id}`, { method: 'PATCH', body: { enabled: true, resetErrors: true } });
@@ -70,7 +73,7 @@ test('a feed the admin switched back on drops off the list', async () => {
 });
 
 test('old retirements fall out of the window', async () => {
-  const f = feed('discovered', { fails: 25, lastOk: iso(30 * DAY) });
+  const f = feed('discovered');
   sourcehealth.retireDead({ max: 1000 });
   repo.db.prepare("UPDATE moderation_actions SET created_at = ? WHERE target_type = 'feed' AND target_id = ? AND action = 'auto-retire'").run(iso(20 * DAY), f.id);
   assert.ok(!(await adm('/sources/retired')).json.items.some((x) => x.id === f.id), 'default window is 14 days');
