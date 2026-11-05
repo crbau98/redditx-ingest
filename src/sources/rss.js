@@ -101,16 +101,18 @@ function parseFeed(text, baseUrl) {
       const content = e.children('content\\:encoded').first().text() || e.children('content').first().text()
         || e.children('description').first().text() || e.children('summary').first().text();
       const media = [];
+      const thumbs = [];
+      e.find('media\\:thumbnail').each((_, n) => { const u = absUrl($(n).attr('url'), baseUrl); if (u) thumbs.push(u); });
+      // a video enclosure has no poster of its own; the entry's media:thumbnail is it (PeerTube, WordPress video, podcasts)
+      const posterFor = (type) => (type === 'video' ? thumbs[0] || null : null);
       e.children('enclosure').each((_, n) => {
         const url = absUrl($(n).attr('url'), baseUrl); const type = $(n).attr('type') || '';
-        if (url && (/^(image|video)\//.test(type) || looksLikeDirectMedia(url))) media.push({ url, type: kindOf(url, type) });
+        if (url && (/^(image|video)\//.test(type) || looksLikeDirectMedia(url))) { const k = kindOf(url, type); media.push({ url, type: k, preview: posterFor(k) }); }
       });
       e.children('link[rel="enclosure"]').each((_, n) => {
         const url = absUrl($(n).attr('href'), baseUrl); const type = $(n).attr('type') || '';
-        if (url) media.push({ url, type: kindOf(url, type) });
+        if (url) { const k = kindOf(url, type); media.push({ url, type: k, preview: posterFor(k) }); }
       });
-      const thumbs = [];
-      e.find('media\\:thumbnail').each((_, n) => { const u = absUrl($(n).attr('url'), baseUrl); if (u) thumbs.push(u); });
       e.find('media\\:content').each((_, n) => {
         const url = absUrl($(n).attr('url'), baseUrl); const type = $(n).attr('type') || $(n).attr('medium') || '';
         if (!url) return;

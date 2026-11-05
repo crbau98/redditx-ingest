@@ -29,9 +29,14 @@ const RETRY_BASE_MS = 2 * 60 * 1000;
 const retry = new Map(); // id -> { tries, until }
 
 const q = {
-  todo: repo.db.prepare(`SELECT id, media_type, media_url, preview_url, thumbnail_url, width FROM media
+  todo: repo.db.prepare(`SELECT id, media_type, media_url, preview_url, thumbnail_url, width, height FROM media
     WHERE tint IS NULL AND publish_state = 'published' ORDER BY seq DESC LIMIT ?`),
-  save: repo.db.prepare('UPDATE media SET tint = @tint, thumb_url = COALESCE(@thumb_url, thumb_url) WHERE id = @id'),
+  // @w/@h only come for a picture (never a video: its poster is not its size) and only fill a size that is missing; a size a source
+  // reported is never replaced
+  save: repo.db.prepare(`UPDATE media SET tint = @tint, thumb_url = COALESCE(@thumb_url, thumb_url),
+    width = CASE WHEN @w IS NOT NULL AND (width IS NULL OR width <= 0 OR height IS NULL OR height <= 0) THEN @w ELSE width END,
+    height = CASE WHEN @h IS NOT NULL AND (width IS NULL OR width <= 0 OR height IS NULL OR height <= 0) THEN @h ELSE height END
+    WHERE id = @id`),
   left: repo.db.prepare("SELECT COUNT(*) AS n FROM media WHERE tint IS NULL AND publish_state = 'published'"),
 };
 
@@ -51,19 +56,23 @@ async function render(buf, { width = null, keepThumb = true } = {}) {
   // a picture already about thumbnail size is served as it is
   const meta = await sh(buf, { failOn: 'none' }).metadata().catch(() => ({}));
   const w = meta.width || width || 0;
-  return { tint, thumb: keepThumb && w > WIDTH * 1.4 ? small : null };
+  // EXIF orientation 5-8 turns the picture on its side: the size that matters is the displayed one
+  const turned = meta.orientation >= 5;
+  const size = meta.width && meta.height ? (turned ? { width: meta.height, height: meta.width } : { width: meta.width, height: meta.height }) : null;
+  return { tint, thumb: keepThumb && w > WIDTH * 1.4 ? small : null, size };
 }
 
 /** One item. Never throws; returns what was saved. */
 async function make(row, { fetch = net.fetchBuffer } = {}) {
   const url = imageUrlOf({ mediaType: row.media_type, mediaUrl: row.media_url, previewUrl: row.preview_url, thumbnailUrl: row.thumbnail_url });
-  let out = { tint: '', thumb_url: null };
+  let out = { tint: '', thumb_url: null, w: null, h: null };
   if (url) {
     try {
       const got = await fetch(url, { headers: { accept: 'image/avif,image/webp,image/*;q=0.8' }, timeout: 12000, maxBytes: MAX_BYTES, retries: 0 });
       if (got.status >= 400) throw new Error(`http ${got.status}`);
       const r = await render(got.buffer, { width: row.width, keepThumb: !!store.kind() });
       out.tint = r.tint;
+      if (row.media_type === 'image' && r.size) { out.w = r.size.width; out.h = r.size.height; }
       if (r.thumb) {
         const key = `th/${row.id.slice(0, 2)}/${row.id}.webp`;
         const saved = await store.put(key, r.thumb, 'image/webp');
@@ -78,7 +87,7 @@ async function make(row, { fetch = net.fetchBuffer } = {}) {
       }
     }
   }
-  q.save.run({ id: row.id, tint: out.tint, thumb_url: out.thumb_url });
+  q.save.run({ id: row.id, tint: out.tint, thumb_url: out.thumb_url, w: out.w, h: out.h });
   return out;
 }
 
@@ -112,7 +121,7 @@ async function sweep({ limit = 30, concurrency = 3, fetch, now = Date.now() } = 
   if (!networkDown) {
     for (const row of failed) {
       const tries = ((retry.get(row.id) || {}).tries || 0) + 1;
-      if (tries >= MAX_TRIES) { q.save.run({ id: row.id, tint: '', thumb_url: null }); retry.delete(row.id); res.given_up++; }
+      if (tries >= MAX_TRIES) { q.save.run({ id: row.id, tint: '', thumb_url: null, w: null, h: null }); retry.delete(row.id); res.given_up++; }
       else retry.set(row.id, { tries, until: now + RETRY_BASE_MS * 2 ** tries });
     }
   }

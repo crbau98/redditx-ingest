@@ -27,6 +27,11 @@ const REDGIFS_PAGE = /redgifs\.com\/(?:watch|ifr)\//i;
 const X_POST = /^https?:\/\/(?:www\.|mobile\.)?(?:x|twitter|fxtwitter|vxtwitter|fixupx)\.com\/[A-Za-z0-9_]{1,15}\/status\/\d+/i;
 const md5 = (s) => crypto.createHash('md5').update(s).digest('hex');
 
+/** A usable pixel size, or null. Adapters report 0, negatives, numeric strings, NaN and nonsense; none of it belongs in a row. */
+const dim = (v) => { const n = Math.round(Number(v)); return Number.isFinite(n) && n > 0 && n <= 20000 ? n : null; };
+/** A usable duration in seconds, or null. */
+const seconds = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 && n < 7 * 86400 ? n : null; };
+
 const cleanHandle = (a) => String(a || '').replace(/^[@/]+/, '').replace(/^u\//i, '').trim().slice(0, 80);
 
 const HOST_WINDOW_MS = 20 * 60 * 1000;
@@ -283,6 +288,12 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   if (!item.mediaUrl || !/^https?:\/\//i.test(item.mediaUrl)) return { outcome: 'skipped', reason: 'unusable url' };
   if (item.mediaType !== 'image' && item.mediaType !== 'video') return { outcome: 'skipped', reason: 'unknown type' };
 
+  // ---- 0b. already stored? (before anything touches the network) -------------------------
+  // The source key does not depend on what a link resolves to, so an item PRISM already holds is recognised here, before the RedGIFs
+  // / X lookup, the host probe and the reachability probe it would otherwise pay for on every re-read of its feed.
+  const sourceKey = `${platform}:${item.sourceId}:${item.position || 0}`;
+  if (repo.media.keyExists(sourceKey)) return { outcome: 'dupe' };
+
   // ---- 1. resolve indirect links (RedGIFs pages etc.) ------------------------
   if (item.resolve === 'redgifs' || REDGIFS_PAGE.test(item.mediaUrl)) {
     let resolved = null;
@@ -317,9 +328,10 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   if (tdHit) return { outcome: 'blocked', reason: 'takedown' };
 
   // ---- 3. blocklist -----------------------------------------------------------
-  const sourceKey = `${platform}:${item.sourceId}:${item.position || 0}`;
   const hash = md5(canonicalUrl(item.mediaUrl));
   if (repo.blocklist.has('hash', hash) || repo.blocklist.has('source_key', sourceKey)) return { outcome: 'blocked', reason: 'blocklisted' };
+  // the same file under a new key (a repost, a crosspost, another feed): known now that the link is resolved, still before any probe
+  if (repo.media.hashExists(hash)) return { outcome: 'dupe' };
 
   // A creator that is already hidden or blocked would be refused at step 7 anyway: refuse now, and let known male
   // creators / active paid-page leads carry their profile context into step 4 so short promo captions are not dropped.
@@ -450,9 +462,13 @@ async function processItemInner(rawItem, feed, adapter, settings) {
     faceList = ir.faceList || null;
   }
 
+  // sizes: both or neither (an aspect ratio needs both), whatever the adapter sent
+  const width = dim(item.width); const height = dim(item.height);
+  const size = width && height ? { width, height } : { width: null, height: null };
+
   // ---- 6c. perceptual duplicates -----------------------------------------------------
   if (phash) {
-    const d = dedupe.check({ phash, mediaType: item.mediaType, width: item.width, height: item.height }, { distance: settings.dedupeDistance == null ? 6 : settings.dedupeDistance });
+    const d = dedupe.check({ phash, mediaType: item.mediaType, width: size.width, height: size.height }, { distance: settings.dedupeDistance == null ? 6 : settings.dedupeDistance });
     if (d.blocked) return { outcome: 'blocked', reason: 'blocklisted (a picture that was removed)' };
     if (d.dup) {
       // Same picture, somewhere else: keep ONE item and remember where else it appeared.
@@ -511,9 +527,9 @@ async function processItemInner(rawItem, feed, adapter, settings) {
     thumbnail_url: item.thumbnailUrl || null,
     hls_url: item.hlsUrl || (isHls ? item.mediaUrl : null),
     has_audio: item.hasAudio ? 1 : 0,
-    width: Number.isFinite(item.width) ? Math.round(item.width) : null,
-    height: Number.isFinite(item.height) ? Math.round(item.height) : null,
-    duration: Number.isFinite(item.duration) ? item.duration : null,
+    width: size.width,
+    height: size.height,
+    duration: seconds(item.duration),
     score: Math.max(0, Math.round(item.score || 0)),
     hash,
     nsfw_level: item.nsfw === 'suggestive' ? 'suggestive' : 'explicit',
@@ -529,7 +545,7 @@ async function processItemInner(rawItem, feed, adapter, settings) {
     if (keptKey) require('../lib/objectstore').remove(keptKey).catch(() => {}); // the copy belongs to nobody
     return { outcome: 'dupe' };
   }
-  if (phash && (state === 'published' || state === 'review' || bodyVerdict)) dedupe.remember(mediaId, phash, { mediaType: item.mediaType, width: item.width, height: item.height });
+  if (phash && (state === 'published' || state === 'review' || bodyVerdict)) dedupe.remember(mediaId, phash, { mediaType: item.mediaType, width: size.width, height: size.height });
   if (faceList && faceList.length && state === 'published' && settings.faceMatch) {
     try { require('../lib/face-match').saveMediaFaces(mediaId, faceList); } catch { /* best effort */ }
   }
