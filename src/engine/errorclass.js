@@ -56,6 +56,7 @@ function classify(err) {
   if (err && typeof err === 'object' && err.skip) return out('config');
   if (err && typeof err === 'object' && (err.cooldown || err.rateLimited)) return out('rate_limited');
   if (status === 429) return out('rate_limited');
+  if (status === 408) return out('timeout'); // "Request Timeout": the server gave up waiting, the same request can work later
   // An answer that names the target as gone beats the status: Reddit says 403 for a banned account, Mastodon 410 for a moved one.
   if (status === 404 || status === 410) return out('not_found');
   // "Service Unavailable" / "unavailable on every transport" are outages, not a missing target, and a "blocked host ... private

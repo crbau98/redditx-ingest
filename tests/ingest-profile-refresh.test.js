@@ -90,6 +90,11 @@ test('feeds without a creator, and platforms where a profile read is not free, a
   assert.equal(due('bluesky'), true);
   assert.equal(due('telegram'), false, 'a Telegram profile read costs MTProto budget: only first/manual');
   assert.equal(due('coomer'), false, 'platforms that return the profile with every run need no extra read');
+  const dueKind = (platform, kind) => engine._profileDue({ platform, kind, creator_id: 'c', last_success_at: iso(DAY) }, { profiledAt: iso(90 * DAY) }, settingsStore.get(), 'schedule');
+  assert.equal(dueKind('peertube', 'channel'), true, 'a creator attached as a PeerTube channel is refreshed like a user');
+  assert.equal(dueKind('peertube', 'user'), true);
+  assert.equal(dueKind('peertube', 'search'), false, 'a search feed has no creator profile');
+  assert.equal(dueKind('mastodon', 'channel'), false, 'only PeerTube has the channel kind with a profile');
 });
 
 test('a refreshed profile replaces a stale avatar from the same site, fills blanks, and leaves other sites alone', async () => {

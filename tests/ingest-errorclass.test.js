@@ -29,6 +29,11 @@ test('classify: the status decides first, then the wording', () => {
     assert.equal(k(m), 'blocked', m);
   assert.equal(classify('API access suspended').permanent, false);
   assert.equal(k(Object.assign(new Error('this IP is banned'), { status: 403 })), 'blocked');
+  // the status alone decides: the message of a real 408 (HttpError: "HTTP 408 for <url>") does not say "timeout"
+  assert.equal(k('HTTP 408 for https://x/y'), 'timeout');
+  assert.equal(k(Object.assign(new Error('bad response'), { status: 408 })), 'timeout');
+  assert.equal(classify(Object.assign(new Error('bad response'), { status: 408 })).transient, true, 'a 408 never ends a feed');
+  assert.equal(classify(Object.assign(new Error('bad response'), { status: 408 })).permanent, false);
   assert.equal(k('HTTP 403 for https://x/y'), 'blocked');
   assert.equal(k(Object.assign(new Error('Bot-protection page instead of JSON from u'), { code: 'BOT_CHALLENGE' })), 'blocked');
   assert.equal(k('mastodon.example requires sign-in for this request (HTTP 401)'), 'blocked');

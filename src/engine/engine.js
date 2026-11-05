@@ -144,7 +144,9 @@ function profileDue(feed, cursor, cfg, trigger, now = Date.now()) {
   if (!feed.creator_id) return false;
   if (!feed.last_success_at || trigger === 'manual') return true;
   const days = cfg && cfg.profileRefreshDays;
-  if (!days || feed.kind !== 'user' || !PROFILE_REFRESH_PLATFORMS.has(feed.platform)) return false;
+  // a PeerTube creator is attached as a `channel` as often as a `user`, and its adapter reads the channel profile just as cheaply
+  const profileKind = feed.kind === 'user' || (feed.platform === 'peertube' && feed.kind === 'channel');
+  if (!days || !profileKind || !PROFILE_REFRESH_PLATFORMS.has(feed.platform)) return false;
   const c = cursor || {};
   const read = Date.parse(c.profiledAt); const tried = Date.parse(c.profileTryAt);
   if (Number.isFinite(tried) && now - tried < 86400000) return false;

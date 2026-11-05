@@ -8,7 +8,7 @@
 const repo = require('../db/repo');
 const events = require('./events');
 const { checkText } = require('../lib/safety');
-const { femaleCheck } = require('../lib/scope');
+const { femaleCheck, classify: classifyScope } = require('../lib/scope');
 const { hostBlocked, hostOf, isJunkTitle } = require('../lib/mediaurl');
 const { probeMedia } = require('./probe');
 const imagefilter = require('../lib/imagefilter');
@@ -242,30 +242,52 @@ async function hashSweep({ limit = 12, settings } = {}) {
 }
 
 /**
- * One-off repair for videos the hash sweep collapsed before it knew about borrowed posters: a Coomer video hidden as "duplicate of X"
- * where X is a video with the very same poster URL is a different video (the poster is shared), so it comes back, and the stale hash
- * of both is cleared. Nothing else is touched. Idempotent.
- * @returns {{restored: number}}
+ * Where does a video the old sweep hid come back to? The sweep hid items that were published OR waiting in the review queue, and
+ * overwrote the reason of the latter with "duplicate of ...", so what it was is not recorded. Rather than publish what may have been
+ * waiting for a person, the text gates are run again on what is stored: a safety "block" or a female / feminine scope verdict keeps
+ * it hidden; a safety "review" rule, feminine-adjacent wording, or a stored scope other than "in" sends it to the review queue
+ * (with the reason); only a row that passes every one is published.
+ * @returns {{state: 'published'|'review'|'hidden', reason: string|null}}
+ */
+function restoreVerdict(r) {
+  const saf = checkText(r.title, r.description, r.community, r.author, r.tags_text);
+  if (saf.level === 'block') return { state: 'hidden', reason: null };
+  const sc = classifyScope([r.title, r.description, r.community, r.author, r.tags_text], { trusted: true });
+  if (sc.scope === 'excluded') return { state: 'hidden', reason: null };
+  if (saf.level === 'review') return { state: 'review', reason: `safety:${saf.rule}` };
+  if (sc.femaleSoft) return { state: 'review', reason: `scope:${sc.rule}` };
+  if (r.scope && r.scope !== 'in') return { state: 'review', reason: `scope:${r.scope}` };
+  return { state: 'published', reason: null };
+}
+
+/**
+ * One-off repair for videos the hash sweep collapsed before it knew about borrowed posters: a Coomer or RSS video hidden as "duplicate
+ * of X" where X is a video with the very same poster URL is a different video (the poster is shared: a creator banner, a post's
+ * picture, channel artwork), so it comes back (see restoreVerdict for where to), and the stale hash of both is cleared. Nothing else
+ * is touched. Idempotent.
+ * @returns {{restored: number, toReview: number, kept: number}}
  */
 function repairSharedPosterCollapse() {
-  const rows = repo.db.prepare(`SELECT id, preview_url, review_reason, source_url FROM media
-    WHERE platform = 'coomer' AND media_type = 'video' AND publish_state = 'hidden' AND review_reason LIKE 'duplicate of %'`).all();
+  const rows = repo.db.prepare(`SELECT m.id, m.preview_url, m.review_reason, m.source_url, m.title, m.description, m.community, m.author, m.tags_text, m.scope FROM media m
+    WHERE m.platform IN ('coomer', 'rss') AND m.media_type = 'video' AND m.publish_state = 'hidden' AND m.review_reason LIKE 'duplicate of %'`).all();
   const orig = repo.db.prepare('SELECT id, media_type, preview_url FROM media WHERE id = ?');
   const dropAlt = repo.db.prepare('DELETE FROM media_alt_sources WHERE media_id = ? AND source_url = ?');
-  let restored = 0;
+  let restored = 0; let toReview = 0; let kept = 0;
   for (const r of rows) {
     const o = orig.get(String(r.review_reason).slice('duplicate of '.length).trim());
     if (!o || o.media_type !== 'video' || !r.preview_url || o.preview_url !== r.preview_url) continue;
+    const verdict = restoreVerdict(r);
     repo.db.transaction(() => {
       repo.media.setPhash(r.id, null); repo.media.setPhash(o.id, null);
       dedupe.forget(r.id); dedupe.forget(o.id); // the index may already be loaded: the stale entries must go from it too
       if (r.source_url) dropAlt.run(o.id, r.source_url);
-      repo.media.setState(r.id, 'published', null, { exact: true });
+      if (verdict.state === 'hidden') repo.media.setState(r.id, 'hidden', 'poster-collapse: kept hidden by the safety/scope gates', { exact: true });
+      else repo.media.setState(r.id, verdict.state, verdict.reason, { exact: true });
     })();
-    restored++;
+    if (verdict.state === 'published') restored++; else if (verdict.state === 'review') toReview++; else kept++;
   }
-  if (restored) events.log('OK', `Restored ${restored} video(s) the duplicate sweep had collapsed on a shared poster`);
-  return { restored };
+  if (restored || toReview) events.log('OK', `Restored ${restored} video(s) the duplicate sweep had collapsed on a shared poster${toReview ? `, ${toReview} more went to the review queue` : ''}`);
+  return { restored, toReview, kept };
 }
 
 /**

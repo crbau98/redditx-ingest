@@ -24,10 +24,10 @@ before(() => {
 });
 after(() => { imagefilter._reset(); });
 
-function row({ type = 'video', preview, post = `coomer:p${++n}`, state = 'published', reason = null, phash = null, platform = 'coomer' }) {
+function row({ type = 'video', preview, post = `coomer:p${++n}`, state = 'published', reason = null, phash = null, platform = 'coomer', title = null, scope = 'in' }) {
   const id = crypto.randomUUID();
-  repo.db.prepare(`INSERT INTO media (id, platform, source_key, post_key, media_type, media_url, preview_url, hash, publish_state, review_reason, phash, source_url)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, platform, `${post}:0:${id}`, post, type, `https://coomer.st/data/${id}.${type === 'video' ? 'mp4' : 'jpg'}`, preview, crypto.randomUUID().replace(/-/g, ''), state, reason, phash, `https://coomer.st/onlyfans/user/zedfit/${id}`);
+  repo.db.prepare(`INSERT INTO media (id, platform, source_key, post_key, media_type, media_url, preview_url, hash, publish_state, review_reason, phash, source_url, title, scope)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, platform, `${post}:0:${id}`, post, type, `https://coomer.st/data/${id}.${type === 'video' ? 'mp4' : 'jpg'}`, preview, crypto.randomUUID().replace(/-/g, ''), state, reason, phash, `https://coomer.st/onlyfans/user/zedfit/${id}`, title, scope);
   return id;
 }
 const get = (id) => repo.db.prepare('SELECT publish_state, review_reason, phash FROM media WHERE id = ?').get(id);
@@ -124,4 +124,33 @@ test('a Coomer post with a picture and several videos: the sibling rows have DIF
   const v1 = row({ post: 'coomer:coomer-onlyfans-777-1', preview: poster }); const v2 = row({ post: 'coomer:coomer-onlyfans-777-2', preview: poster });
   await maintenance.hashSweep({ limit: 100, settings });
   for (const id of [v1, v2]) { assert.equal(get(id).publish_state, 'published', 'the second video is not hidden as a duplicate of the first'); assert.equal(get(id).phash, null); }
+});
+
+test('repair: what may have been waiting for a person goes back to the review queue, not to published; a blocked text stays hidden', () => {
+  reset();
+  const orig = row({ preview: BANNER, phash: 'f'.repeat(32) });
+  const gone = (o = {}) => row({ preview: BANNER, state: 'hidden', reason: `duplicate of ${orig}`, ...o });
+  const clean = gone({ title: 'Leg day' });
+  const soft = gone({ title: 'freshman year workout' });        // a safety review rule: a human decides
+  const unsure = gone({ title: 'Leg day', scope: 'uncertain' });  // its stored scope verdict was "uncertain" (strict mode sent it to review)
+  const hard = gone({ title: 'minors only' });                     // a safety block rule: never comes back
+  const out = maintenance.repairSharedPosterCollapse();
+  assert.equal(get(clean).publish_state, 'published'); assert.equal(get(clean).review_reason, null);
+  assert.equal(get(soft).publish_state, 'review'); assert.match(get(soft).review_reason, /^safety:freshman/);
+  assert.equal(get(unsure).publish_state, 'review'); assert.equal(get(unsure).review_reason, 'scope:uncertain');
+  assert.equal(get(hard).publish_state, 'hidden'); assert.doesNotMatch(get(hard).review_reason, /^duplicate of /, 'and it is not picked up again');
+  assert.deepEqual([out.restored, out.toReview, out.kept], [1, 2, 1]);
+  assert.deepEqual(maintenance.repairSharedPosterCollapse(), { restored: 0, toReview: 0, kept: 0 }, 'idempotent');
+  for (const id of [clean, soft, unsure, hard]) assert.equal(get(id).phash, null);
+});
+
+test('repair: RSS videos the old sweep collapsed on repeated channel artwork come back too', () => {
+  reset();
+  const art = 'https://v.example/channel-art.jpg';
+  const orig = row({ platform: 'rss', post: 'rss:e1', preview: art, phash: '1'.repeat(32) });
+  const gone = row({ platform: 'rss', post: 'rss:e2', preview: art, state: 'hidden', reason: `duplicate of ${orig}`, phash: '1'.repeat(32) });
+  const real = row({ platform: 'rss', post: 'rss:e3', preview: 'https://v.example/other.jpg', state: 'hidden', reason: `duplicate of ${orig}` });
+  assert.equal(maintenance.repairSharedPosterCollapse().restored, 1);
+  assert.equal(get(gone).publish_state, 'published'); assert.equal(get(gone).phash, null);
+  assert.equal(get(real).publish_state, 'hidden', 'a different poster than the original is a real duplicate');
 });
