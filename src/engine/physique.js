@@ -172,24 +172,37 @@ async function textSweep(settings, { force = false } = {}) {
   let after = 0;
   // Only published items: one waiting in the review queue keeps its own state and reason, so switching the filter off later
   // can never publish something a human has not looked at.
-  const stmt = repo.db.prepare(`SELECT seq, id, title, description, tags_text, community, author FROM media
-    WHERE publish_state = 'published' AND (physique IS NULL OR physique >= 0) AND seq > ? ORDER BY seq LIMIT 500`);
-  for (;;) {
-    if (!stillOn()) return res;
-    const rows = stmt.all(after);
-    if (!rows.length) break;
-    repo.db.transaction(() => {
-      for (const r of rows) {
-        after = r.seq;
-        const t = textCheck(r.title, r.description, r.tags_text, r.community, r.author);
-        if (!t.heavy) continue;
-        repo.media.setPhysique(r.id, TEXT_SCORE);
-        repo.media.setState(r.id, 'hidden', `${REASON}text:${t.rule.slice(REASON.length)}`, { exact: true });
-        res.items++;
-      }
-    })();
-    await new Promise((r) => setImmediate(r)); // let requests breathe
-  }
+  // NOT INDEXED: walk the table in seq order and stop at the batch size. Left to itself the planner takes ix_media_state (it
+  // believes 'published' is selective) and sorts EVERY published row for EVERY batch: ~0.8 s per batch on 260k rows, 2 ms this way.
+  const stmt = repo.db.prepare(`SELECT seq, id, creator_id, title, description, tags_text, community, author FROM media NOT INDEXED
+    WHERE publish_state = 'published' AND (physique IS NULL OR physique >= 0) AND seq > ? ORDER BY seq LIMIT 100`);
+  // Hiding changes each affected creator's published counts. `refreshStats` recounts ALL of a creator's media (~4 ms on average,
+  // far more for a prolific one), and the hidden items are spread over thousands of creators, so doing it per item (or per batch)
+  // cost 41 s of a 67 s pass on 300k rows. Collect the creators and recount each ONCE, when the pass ends (also when it is cut short).
+  const touched = new Set();
+  const flushStats = async () => {
+    let n = 0;
+    for (const id of touched) { repo.creators.refreshStats(id); touched.delete(id); if (++n % 100 === 0) await new Promise((r) => setImmediate(r)); }
+  };
+  try {
+    for (;;) {
+      if (!stillOn()) return res;
+      const rows = stmt.all(after);
+      if (!rows.length) break;
+      repo.db.transaction(() => {
+        for (const r of rows) {
+          after = r.seq;
+          const t = textCheck(r.title, r.description, r.tags_text, r.community, r.author);
+          if (!t.heavy) continue;
+          repo.media.setPhysique(r.id, TEXT_SCORE);
+          repo.media.setState(r.id, 'hidden', `${REASON}text:${t.rule.slice(REASON.length)}`, { exact: true, deferStats: true });
+          if (r.creator_id) touched.add(r.creator_id);
+          res.items++;
+        }
+      })();
+      await new Promise((r) => setImmediate(r)); // let requests breathe
+    }
+  } finally { await flushStats(); }
   if (!stillOn()) return res;
   // Show again what an EARLIER, broader word list hid and the current one does not (version 3 hid "I'm 60 days out" as an
   // age). Only items still hidden by this policy's own reason (the text reason, or the word marker 101 under a body reason, which is what the filter's off/on path leaves), so a decision by a person is never undone; the word marker (101) goes back to
@@ -232,8 +245,10 @@ async function textSweep(settings, { force = false } = {}) {
     await new Promise((r) => setImmediate(r));
   }
   if (!stillOn()) return res;
+  let reviewed = 0;
   for (const c of repo.db.prepare("SELECT id FROM creators WHERE status = 'active'").all()) {
     if (reviewCreator(c.id, current()) === 'hidden') res.creators++;
+    if (++reviewed % 100 === 0) { await new Promise((r) => setImmediate(r)); if (!stillOn()) return res; } // thousands of creators: let requests through
   }
   for (const f of repo.db.prepare('SELECT id, target, label FROM feeds WHERE enabled = 1').all()) {
     const t = textCheck(f.target, f.label);

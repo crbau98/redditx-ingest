@@ -482,6 +482,22 @@ describe('body filter policy (model replaced by a fake)', () => {
     assert.equal(repo.media.get(reported).publish_state, 'hidden'); assert.equal(repo.media.get(reported).review_reason, 'reported:spam', 'and a hide for another reason is not republished');
   });
 
+  test('hiding many posts of one creator recounts that creator ONCE per pass, and the counts are right afterwards', async () => {
+    fake({});
+    const c = repo.creators.create({ handle: 'statsbatch', origin: 'admin' });
+    const ids = [];
+    for (let i = 0; i < 6; i++) ids.push(repo.media.insert({ feed_id: feed.id, creator_id: c.id, platform: 'reddit', source_id: `sb${i}`, source_key: `reddit:sb${i}:0`, post_key: `reddit:sb${i}`, source_url: `https://reddit.com/sb${i}`,
+      media_type: 'image', media_url: `https://i.redd.it/sb${i}.jpg`, hash: `h-sb${i}`, publish_state: 'published', title: i < 4 ? 'chubby gainer progress' : 'leg day' }));
+    repo.creators.refreshStats(c.id);
+    assert.equal(repo.creators.get(c.id).media_count, 6);
+    const real = repo.creators.refreshStats; let calls = 0;
+    repo.creators.refreshStats = (id) => { if (id === c.id) calls++; return real(id); };
+    try { await physique.textSweep(settings, { force: true }); } finally { repo.creators.refreshStats = real; }
+    assert.equal(calls, 1, 'four hidden posts, one recount');
+    assert.equal(repo.creators.get(c.id).media_count, 2, 'the two posts left published');
+    for (const id of ids.slice(0, 4)) assert.equal(repo.media.get(id).publish_state, 'hidden');
+  });
+
   test('a stated age is still read when other fields follow it: "I\'m 58" then an author name', () => {
     for (const args of [["I'm 58", '', '', '', 'someauthor'], ["I'm 58", 'bio text', ['tag1', 'tag2'], 'community', 'author'], ['Age 52', null, null, 'r/fitness', 'x']]) {
       const r = physique.textCheck(...args);
