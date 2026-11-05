@@ -67,9 +67,10 @@ function report({ failingAfter = 3, staleDays = 3, deadDays = 30, deadMinRuns = 
 // were considered and dropped:
 //   - "failed N runs in a row": unreachable, the engine already disables a feed after 3 to 5 consecutive failures;
 //   - "added nothing lately": a quiet creator with a big library is healthy, so only feeds with items_total = 0 qualify;
-// and the window is 30 days because run history is pruned at keepRunHistoryDays (30), so a longer window would be fiction.
+// and the window follows the run history that is really kept (keepRunHistoryDays, 30 by default, pruned beyond it): a longer
+// window would be fiction, and with under `minHistoryDays` kept there is too little to judge from, so nothing is retired.
 const PERSONAL_ORIGINS = ['admin', 'import', 'telegram-sync'];
-const RETIRE = { deadDays: 30, deadMinRuns: 12 };
+const RETIRE = { deadDays: 30, deadMinRuns: 12, minHistoryDays: 14 };
 const RESPECT_DAYS = 90;
 
 /**
@@ -79,13 +80,16 @@ const RESPECT_DAYS = 90;
  * @returns {{paused: Array<{id: string, platform: string, target: string, why: string}>, skipped: number, capped: boolean}}
  */
 function retireDead({ now = Date.now(), max = 50, dryRun = false } = {}) {
-  const rep = report({ deadDays: RETIRE.deadDays, deadMinRuns: RETIRE.deadMinRuns, limit: 1000, now });
+  const out = { paused: [], skipped: 0, capped: false };
+  const kept = Number(require('../settings').get().keepRunHistoryDays) || RETIRE.deadDays;
+  const days = Math.min(RETIRE.deadDays, kept);
+  if (days < RETIRE.minHistoryDays) return { ...out, tooLittleHistory: kept }; // too little run history to tell "never worked" from "just started"
+  const rep = report({ deadDays: days, deadMinRuns: RETIRE.deadMinRuns, limit: 1000, now });
   const why = new Map();
   for (const f of rep.dead) {
-    if (f.itemsTotal === 0) why.set(f.id, `${f.runs} runs in ${RETIRE.deadDays} days and it has never added anything (${f.why})`);
+    if (f.itemsTotal === 0) why.set(f.id, `${f.runs} runs in ${days} days and it has never added anything (${f.why})`);
   }
 
-  const out = { paused: [], skipped: 0, capped: false };
   const retiredBefore = repo.db.prepare("SELECT 1 FROM moderation_actions WHERE target_type = 'feed' AND target_id = ? AND action = 'auto-retire' LIMIT 1");
   const touchedByPerson = repo.db.prepare("SELECT 1 FROM moderation_actions WHERE target_type = 'feed' AND target_id = ? AND actor != 'system' AND created_at > ? LIMIT 1");
   for (const [id, reason] of why) {

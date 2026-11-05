@@ -206,6 +206,7 @@ function imageSweepProgress() {
 
 let sweepTimer = null; let sweepBusy = false; let sweepGaveUp = false;
 const RETIRE_EVERY_MS = 24 * 3600 * 1000;
+const RETIRE_RETRY_MS = 3600 * 1000;
 /**
  * Once a day (the time of the last run is stored, so a restart does not start a second round): pause the app's own feeds that
  * never worked (see sourcehealth.retireDead). Nothing is recorded while the setting is off, so switching it on runs it at once.
@@ -214,8 +215,16 @@ function retireDeadFeeds(now = Date.now()) {
   if (!settingsStore.get().autoRetireFeeds) return null;
   const last = Date.parse(repo.settings.get('auto_retire_last') || '') || 0;
   if (last <= now && now - last < RETIRE_EVERY_MS) return null; // (a stored time in the future, after a clock step, is stale)
-  repo.settings.set('auto_retire_last', new Date(now).toISOString());
-  const r = require('./sourcehealth').retireDead({ now });
+  let r;
+  try {
+    r = require('./sourcehealth').retireDead({ now });
+  } catch (e) {
+    // a failed pass is retried in an hour (not next minute, which would repeat a persistent error 1,440 times a day, and not
+    // tomorrow, which would let one transient database error switch the step off for a day)
+    repo.settings.set('auto_retire_last', new Date(now - RETIRE_EVERY_MS + RETIRE_RETRY_MS).toISOString());
+    throw e;
+  }
+  repo.settings.set('auto_retire_last', new Date(now).toISOString()); // recorded only once the pass has worked
   if (r.paused.length) events.log('INFO', `Feeds paused (stopped working): ${r.paused.length}${r.capped ? ' (daily cap reached)' : ''} — ${r.paused.slice(0, 5).map((f) => `${f.platform}:${f.target}`).join(', ')}${r.paused.length > 5 ? ', …' : ''}. Admin → Sources lists them; enabling one keeps it on.`);
   return r;
 }

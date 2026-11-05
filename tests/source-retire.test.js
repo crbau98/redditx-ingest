@@ -97,6 +97,34 @@ test('one call pauses at most `max` feeds, so a bad day cannot empty the library
   assert.equal(r.paused.length, 2); assert.equal(r.capped, true);
 });
 
+test('the window follows the run history that is really kept: under 14 days kept, nothing is retired; 14 days is enough', () => {
+  const f = feed('discovered', { runs: 14, items: 0 });
+  settingsStore.update({ keepRunHistoryDays: 3 });
+  try {
+    const r = sourcehealth.retireDead({ max: 1000 });
+    assert.equal(r.paused.length, 0); assert.equal(r.tooLittleHistory, 3, 'it says why'); assert.equal(enabled(f), 1);
+  } finally { settingsStore.update({ keepRunHistoryDays: 30 }); }
+  settingsStore.update({ keepRunHistoryDays: 14 });
+  try {
+    assert.ok(sourcehealth.retireDead({ max: 1000 }).paused.some((p) => p.id === f.id), 'the 14-day window still sees the 14 runs');
+  } finally { settingsStore.update({ keepRunHistoryDays: 30 }); }
+});
+
+test('a failed pass is retried in an hour: not tomorrow, and not on the very next minute', () => {
+  const sh = require('../src/engine/sourcehealth');
+  const real = sh.retireDead;
+  const T = Date.now() + 200 * DAY;
+  repo.settings.set('auto_retire_last', '');
+  sh.retireDead = () => { throw new Error('database is locked'); };
+  try {
+    assert.throws(() => maintenance.retireDeadFeeds(T), /database is locked/);
+    assert.equal(maintenance.retireDeadFeeds(T + 30 * 60000), null, 'half an hour later it is still waiting');
+  } finally { sh.retireDead = real; }
+  assert.ok(maintenance.retireDeadFeeds(T + 61 * 60000), 'an hour later it tries again, and works');
+  assert.equal(maintenance.retireDeadFeeds(T + 62 * 60000), null, 'and after a success it waits a day');
+  repo.settings.set('auto_retire_last', '');
+});
+
 test('the daily hook is stored (a restart does not run it twice), skips quietly while switched off, and runs at once when switched on', () => {
   const f = feed('discovered', { runs: 14, items: 0 });
   const set = (v) => settingsStore.update({ autoRetireFeeds: v });
