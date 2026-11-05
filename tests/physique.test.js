@@ -129,6 +129,7 @@ describe('older men: words and stated ages only', () => {
       // "I'm NN" followed by something other than an age
       "I'm 48 hours into fasting", 'I am 60 days out from my first show', "I'm 60 days into my cut", 'Im 46 days into keto', "I'm 45 days sober", "I'm 50 weeks out",
       "I'm 50 sets", "I'm 50 pounds down", "I'm 50/50", "I'm 70 percent there", 'Age: 45 days to go', 'turning 50 pages', 'im 50 Meter Becken', '27 | natural | I am 60 days out from my first show',
+      "I'm 50,000 followers strong", "I'm 45.5 kg down", 'Age: 45.5 days into prep', "I'm 60.5 kg",
       // somebody else, or a thing, not himself
       'my old man taught me to lift', 'Raised by my grandpa', 'My grandfather got me into lifting', 'Grandfather clock', 'gramps hoodie giveaway', 'Elderly care worker, 29',
       'Old Man Strength lifts', 'OldManStrength', 'Gray Fox Gaming', 'Grey fox sneakers', 'pensioner discount',
@@ -357,6 +358,19 @@ describe('body filter policy (model replaced by a fake)', () => {
     assert.ok(r.restored >= 1);
     physique.reapply(settings);
     assert.equal(repo.media.get(heavy).publish_state, 'hidden'); assert.equal(repo.media.get(light).publish_state, 'published');
+  });
+
+  test('an item the filter\'s off/on path left as "physique:101" (word marker, body reason) is re-read too; a person\'s hide is not', async () => {
+    fake({});
+    const base = (k, extra) => repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: k, source_key: `reddit:${k}:0`, post_key: `reddit:${k}`, source_url: `https://reddit.com/${k}`,
+      media_type: 'image', media_url: `https://i.redd.it/${k}.jpg`, hash: `h-${k}`, publish_state: 'hidden', title: 'I am 60 days out from my first show', ...extra });
+    const legacy = base('legacy101', { physique: 101, review_reason: 'physique:101' });
+    const person = base('person101', { physique: 101, review_reason: 'reported:spam' });
+    await physique.textSweep(settings, { force: true });
+    assert.equal(repo.media.get(legacy).publish_state, 'published'); assert.equal(repo.media.get(legacy).physique, null);
+    physique.reapply(settings);
+    assert.equal(repo.media.get(legacy).publish_state, 'published', 'and it stays shown');
+    assert.equal(repo.media.get(person).publish_state, 'hidden', 'a person\'s decision stands');
   });
 
   test('a feed this policy paused whose name no longer matches runs again, unless a person acted on it', async () => {

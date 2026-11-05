@@ -186,10 +186,12 @@ async function textSweep(settings, { force = false } = {}) {
   }
   if (!stillOn()) return res;
   // Show again what an EARLIER, broader word list hid and the current one does not (version 3 hid "I'm 60 days out" as an
-  // age). Only items still hidden by this policy's own text reason, so a decision by a person is never undone; the word marker (101) goes back to
+  // age). Only items still hidden by this policy's own reason (the text reason, or the word marker 101 under a body reason, which is what the filter's off/on path leaves), so a decision by a person is never undone; the word marker (101) goes back to
   // "unmeasured", otherwise `reapply` would hide them again at the next boot; a MEASURED score stays and still decides.
   const stale = repo.db.prepare(`SELECT seq, id, physique, title, description, tags_text, community, author FROM media
-    WHERE publish_state = 'hidden' AND review_reason LIKE '${REASON}text:%' AND seq > ? ORDER BY seq LIMIT 500`);
+    WHERE publish_state = 'hidden' AND seq > ?
+      AND (review_reason LIKE '${REASON}text:%' OR (physique = ${TEXT_SCORE} AND review_reason LIKE '${REASON}%'))
+    ORDER BY seq LIMIT 500`);
   after = 0;
   for (;;) {
     if (!stillOn()) return res;

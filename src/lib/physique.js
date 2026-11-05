@@ -173,7 +173,8 @@ const OLDER_WORDS = new RegExp([
 ].join('|'));
 const AGE_MIN = '(?:4[5-9]|[5-9]\\d)';
 // After "I'm 58" the clause must end or an age word must follow, so "I'm 60 days out", "I'm 50 sets", "I'm 50/50" are not ages.
-const AGE_END = '(?=\\s*(?:$|\\n|[,.;:!?|)\\]•·]|-\\s|and\\b|but\\b|with\\b|&|years?\\b|yrs?\\b|y[\\/ .]?o\\b|(?:male|man|guy|dad)\\b))';
+// A comma or full stop only ends the clause when no digit follows it: "I'm 50,000 followers strong" and "I'm 45.5 kg down" are quantities.
+const AGE_END = '(?=\\s*(?:$|\\n|[,.](?!\\d)|[;:!?|)\\]•·]|-\\s|and\\b|but\\b|with\\b|&|years?\\b|yrs?\\b|y[\\/ .]?o\\b|(?:male|man|guy|dad)\\b))';
 const OLDER_AGE = new RegExp([
   // "52yo", "52 y/o", "52 y o", "52 years old", "52-year-old", "52 yr old"
   `\\b${AGE_MIN}\\s*(?:y[\\/ .]?o|yrs?[- ]old|[- ]?years?[- ]?old)\\b`,
