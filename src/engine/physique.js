@@ -196,6 +196,7 @@ async function textSweep(settings, { force = false } = {}) {
       AND (review_reason LIKE '${REASON}text:%' OR (physique = ${TEXT_SCORE} AND review_reason LIKE '${REASON}%'))
     ORDER BY seq LIMIT 500`);
   after = 0;
+  let rewind = null; // lowest seq of a row whose word marker was reset to "unmeasured": the body sweep must look at it again
   for (;;) {
     if (!stillOn()) return res;
     const rows = stale.all(after);
@@ -205,12 +206,22 @@ async function textSweep(settings, { force = false } = {}) {
         after = r.seq;
         if (textCheck(r.title, r.description, r.tags_text, r.community, r.author).heavy) continue;
         if (r.physique === APPROVED) continue;                         // an admin's approval is never touched
-        if (r.physique === TEXT_SCORE) repo.media.setPhysique(r.id, null); // only the word marker is reset; a MEASURED score (the body sweep
-        publish(r.id, current());                                           // replaces the marker) stays and still decides: `publish` re-applies it
+        if (r.physique === TEXT_SCORE) {                                    // only the word marker is reset; a MEASURED score (the body sweep
+          repo.media.setPhysique(r.id, null);                               // replaces the marker) stays and still decides: `publish` re-applies it
+          rewind = rewind == null ? r.seq : Math.min(rewind, r.seq);        // and its measurement may have been overwritten by the marker earlier
+        }
+        publish(r.id, current());
         if (repo.media.get(r.id).publish_state !== 'hidden') res.restored++;
       }
     })();
     await new Promise((r) => setImmediate(r));
+  }
+  // The body sweep measures each row once per version, then moves its cursor on. A row whose measured score the word marker
+  // replaced may be behind that cursor, so a heavy picture would stay unmeasured (and visible) for good: move the cursor back to
+  // just before the lowest such row so the sweep measures them again.
+  if (rewind != null) {
+    const cursor = parseInt(repo.settings.get('physique_sweep_seq') || '0', 10) || 0;
+    if (cursor >= rewind) { repo.settings.set('physique_sweep_seq', String(rewind - 1)); res.rewound = rewind - 1; }
   }
   if (!stillOn()) return res;
   for (const c of repo.db.prepare("SELECT id FROM creators WHERE status = 'active'").all()) {

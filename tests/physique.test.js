@@ -386,6 +386,25 @@ describe('body filter policy (model replaced by a fake)', () => {
     assert.equal(repo.media.get(person).publish_state, 'hidden', 'a person\'s decision stands');
   });
 
+  test('a restored word-marker row is measured again: the body sweep cursor moves back to it, and never forward', async () => {
+    fake({});
+    const base = (k, extra) => repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: k, source_key: `reddit:${k}:0`, post_key: `reddit:${k}`, source_url: `https://reddit.com/${k}`,
+      media_type: 'image', media_url: `https://i.redd.it/${k}.jpg`, hash: `h-${k}`, publish_state: 'hidden', title: 'I am 60 days out from my first show', ...extra });
+    const id = base('rewind1', { physique: 101, review_reason: 'physique:text:older:i am 60' });
+    const seqOf = (i) => repo.db.prepare('SELECT seq FROM media WHERE id = ?').get(i).seq;
+    const seq = seqOf(id);
+    repo.settings.set('physique_sweep_seq', String(seq + 5000));            // the body sweep is already far past this row
+    const r = await physique.textSweep(settings, { force: true });
+    assert.equal(repo.media.get(id).publish_state, 'published');
+    assert.equal(repo.settings.get('physique_sweep_seq'), String(seq - 1), 'the cursor is just before the restored row');
+    assert.equal(r.rewound, seq - 1);
+    repo.settings.set('physique_sweep_seq', '0');                           // a cursor that has not reached it yet stays where it is
+    const id2 = base('rewind2', { physique: 101, review_reason: 'physique:text:older:i am 60' });
+    await physique.textSweep(settings, { force: true });
+    assert.equal(repo.settings.get('physique_sweep_seq'), '0');
+    assert.ok(seqOf(id2) > 0);
+  });
+
   test('a feed this policy paused whose name no longer matches runs again, unless a person acted on it', async () => {
     const ok = repo.feeds.upsert({ platform: 'reddit', kind: 'community', target: 'plainlifters', enabled: 0, trusted: 1, origin: 'admin' }).feed;
     repo.logAction('feed', ok.id, 'physique-feed-off', 'body filter: "older:i am 60"', 'system');
