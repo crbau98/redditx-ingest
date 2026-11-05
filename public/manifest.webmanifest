@@ -1,17 +1,28 @@
 {
+  "id": "/",
   "name": "PRISM",
   "short_name": "PRISM",
   "description": "Discover male creators across the web",
+  "lang": "en",
+  "dir": "ltr",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#09090d",
-  "theme_color": "#09090d",
+  "display_override": ["standalone", "minimal-ui"],
+  "background_color": "#0b0b0e",
+  "theme_color": "#0b0b0e",
+  "categories": ["entertainment", "social"],
   "icons": [
-    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
   ],
   "shortcuts": [
-    { "name": "Reels", "short_name": "Reels", "url": "/#/reels", "icons": [{ "src": "/favicon.svg", "sizes": "any" }] },
-    { "name": "Explore", "url": "/#/explore", "icons": [{ "src": "/favicon.svg", "sizes": "any" }] },
-    { "name": "Your library", "short_name": "Library", "url": "/#/saved", "icons": [{ "src": "/favicon.svg", "sizes": "any" }] }
+    { "name": "Top creators", "short_name": "Creators", "description": "OnlyFans-linked creators first", "url": "/#/creators", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }] },
+    { "name": "Following", "short_name": "Following", "description": "New from creators you follow", "url": "/#/following", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }] },
+    { "name": "Reels", "short_name": "Reels", "url": "/#/reels", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }] },
+    { "name": "Explore", "short_name": "Explore", "url": "/#/explore", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }] },
+    { "name": "Saved", "short_name": "Saved", "description": "Your saves, collections and history", "url": "/#/saved", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }] }
   ]
 }

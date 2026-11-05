@@ -5,6 +5,8 @@
     t = t ? JSON.parse(t) : 'dark';
     var light = t === 'light' || (t === 'auto' && window.matchMedia('(prefers-color-scheme: light)').matches);
     document.documentElement.dataset.theme = light ? 'light' : 'dark';
+    var tc = document.querySelector('meta[name="theme-color"]');
+    if (tc) tc.setAttribute('content', light ? '#f5f5f7' : '#0b0b0e'); // status bar / address bar follow the saved theme from the first paint
     var a = localStorage.getItem('prism.accent');
     a = a ? JSON.parse(a) : 'prism';
     if (/^(ocean|ember|forest|violet|mono)$/.test(a)) document.documentElement.dataset.accent = a;

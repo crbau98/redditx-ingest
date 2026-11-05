@@ -1,5 +1,33 @@
 # UI changelog
 
+## 2026-11-05 — "Phone & install": native-feeling phone UI, installable, offline-friendly
+
+Audited with `node scripts/ui-audit.js <url> --phone` (new): every public screen at 360x740, 390x844, 430x932, 768x1024 and 1280x800, dark and light, touch emulation, iPhone notch / home indicator simulated (47px / 34px). 84 screen views before and after, demo library, Chromium only.
+
+| Finding (phone screens, 60 of them) | Before | After | Fix |
+|---|---|---|---|
+| Text under 12px (tab labels 10.5px, badges 10.5-11.5px, chips on pictures, free-on / chart labels) | 55 screens (Explore 96 elements, Lightbox 101) | 0 | one 12px floor under 900px in `aurora.css`; two inline sizes in `card.js` / `creator.js` |
+| Form fields under 16px (iOS zooms the page on focus; header search was 14.5px, small inputs 13.5px) | 55 screens | 0 | `font-size: 16px` on touch / phone |
+| Content cut off at the side (Reels top row: order select and "what plays" button both showing, up to 67px past the edge at 390px) | 4 screens, 3 elements | 0 | v6 `.select.sm` had re-shown the select ux.css hides; title flexes; the button is icon-only at 480px and under |
+| Sticky chrome after scrolling (app bar + filter bar + tab bar, minus the OS safe areas) | 16 screens over 22% (Creators 40.1% of 360x740, 35.2% of 390x844; Explore 22.9-26.1%; Following 23.8-27.2%) | 0 over 22% (Creators 17.8% / 15.6%; Explore 17.8% / 15.6%) | the filter bar slides away while scrolling down and returns on the first scroll up (`components/scroll-chrome.js`, transform only) |
+| Pinned controls under the notch / home indicator | 2 (Display sheet's Done button, 811px of 844) | 0 | sheet buttons are sticky above the home indicator |
+| Content hidden under the tab bar at the end of a page | 6 (Find footer: 66px; Browse at 768) | 0 | footer clears the bar |
+| Targets under 44px | 6 (age-gate "leave" link 288x20; Reels "All" 36x44 at 768) | 0 | 44px link; 44px min width on coarse segments |
+| Sideways overflow | 0 | 0 | (already clean at all five widths) |
+| Display dialog checkbox labels shown in 12.5px UPPERCASE small caps | all | sentence case | `.display-row > label:not(.row)` (desktop too) |
+
+Also: `100vh` / `vh` heights get an `svh` / `dvh` line after them (body, main, sheets, palette, suggestions); `overscroll-behavior: contain` on the viewer, sheets, palette, suggestions and every nested horizontal scroller (Reels already had it); `touch-action: manipulation` on controls; `content-visibility: auto` + `contain-intrinsic-size` on creator rows (253px) and Browse tiles (101px), in addition to the card rule that already existed; the tab bar and the new-content pill yield to the keyboard (`html.typing`) and the viewport meta has `interactive-widget=resizes-content` (Android resizes the layout, iOS scrolls the field into view); iPhone landscape side insets on `main`, the app bar and the footer.
+
+Desktop 1280x800: sideways overflow 0 before and after; the only differences are the two inline 12px sizes (text under 12px: Explore 30 → 24 elements) and the age-gate link now 44px tall at every width.
+
+Checked and left alone: swipe left / right and swipe down in the viewer already existed (`lightbox.js`), now covered by a touch test; Reels already contains overscroll; reduced motion already stops every infinite animation (0 running on Home / Explore / Creators, 1 on Reels: the playback progress bar, which is functional); focus rings visible on 14 Tab stops per page in both themes; no `will-change` was added (none measured).
+
+**Install and offline (PWA).** Manifest: PNG icons (192, 512, separate maskable 512, apple-touch-icon 180; `scripts/make-icons.js` renders them from `favicon.svg`), `id` / `scope`, `display_override`, theme and background colour equal to `--bg`, `theme-color` follows the saved theme from first paint, shortcuts Top creators, Following, Reels, Explore, Saved. The phone menu offers **Install app** (Chrome / Edge / Android prompt) or **Add to Home Screen** steps (iOS Safari). Service worker `prism-shell-v9`: install precaches the shell and the hashed `/v/` files the page names; navigations are network-first with a 4 s timeout, then the cached shell, then `/offline.html`; **the content caches are opt-in and OFF by default** (Display > "Keep what I browse for offline use"; they would keep adult content on the device, which the old worker never did; turning it off, or "Clear history", deletes them): when on, public `GET /api` reads are stale-while-revalidate (60 s fresh, 24 h offline-only, 80 entries, emptied by any write) and `/api/proxy` pictures are cache-first (150 entries); admin, live stream, age, HLS, lookup, ranges and video are never cached. A pill says **You’re offline — showing saved** while the device is offline.
+
+Measured (4x CPU, 150 ms RTT, 1.6 Mbps, 390x844): cold loads are unchanged within run-to-run noise (Home, 7 alternating runs each: FCP 1104 → 1128 ms, LCP 3536 → 3208 ms, long-task time 551 → 506 ms, transferred 254 → 258 KB). A repeat Explore visit with the worker: 1698 → 1053 ms (median of 3; the worker's own requests are not throttled by that emulation, so indicative only). Offline cold start after one visit: before, Explore showed no shell and Creators the shell with no content; after, both show content with the pill. Not measurable here: pull-to-refresh, the on-screen keyboard, real notch devices, WebKit.
+
+**Verified:** full suite 1517 tests, 0 failures (new: `tests/phone-pwa.test.js` 27 tests: manifest, SHELL files, the worker run in a vm with an in-memory Cache API, no `vh` height without a `dvh` fallback; `tests/phone-pwa-browser.test.js` 8 browser tests with touch: filter bar hide / return, viewer swipes, offline pill, 16px fields, keyboard hides the tab bar, install entry, Reels at 360px, offline cold start). `node scripts/ui-audit.js <url> --phone --strict` exits 0.
+
 ## 2026-11-05 — "Top first": fewer sections, top OnlyFans creators in front
 
 - **Home has 8 blocks, was 16** (counted from `parts` in `home.js`): masthead, ring strip, the first-visit interest picker, **Top OnlyFans creators**, From creators you follow, Trending now, For you (once there is taste to learn from), Latest uploads. Removed because they were different cuts of the same data: Since your last visit, Your smart feeds, the "because you…" rails, Topics, Rising this week, Fresh clips, Browse by source, New on PRISM, and the tag chips under the hero. `home.js` is 181 lines, was 267.
