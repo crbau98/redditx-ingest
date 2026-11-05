@@ -87,6 +87,13 @@ function applyProfile(feed, profile, settings) {
     }
   }
   if (externals.length) repo.creators.enrich(creator.id, { links: externals });
+  // The paid page is a public page too: read it so the media the platform serves publicly is ingested
+  // like the rest of the library, while the page stays on the profile as a link-out card.
+  for (const e of externals) {
+    if (!e || !e.url || !e.service || !paid.SERVICES[e.service]) continue;
+    try { require('./paidpage').registerPaidPage(e.url, { creatorId: creator.id, origin: 'paid-page' }); }
+    catch (err) { events.log('WARN', `Could not register the paid page ${e.url}: ${err.message}`); }
+  }
   for (const e of externals) if (e.handle) repo.onlyfans.claim(e.handle, creator.id, e.service || 'OnlyFans');
   // Last, now nothing else will touch creator.id: merge him with any account the evidence says is the same man.
   const kept = require('./identity').settle(creator.id);

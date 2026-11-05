@@ -24,6 +24,19 @@ const { checkText } = require('../lib/safety');
 const { femaleCheck } = require('../lib/scope');
 
 const db = repo.db;
+
+/**
+ * A paid page is a public page too (owner decision 2026-11-05): register it as a web/page feed so
+ * its public media is read, instead of dropping the match because the page is a paid link-out.
+ * @returns {boolean} true when the URL was a paid service page.
+ */
+function readPaidPage(url, creatorId, origin) {
+  if (!require('../lib/paid').serviceOf(url)) return false;
+  try { require('./paidpage').registerPaidPage(url, { creatorId, origin }); }
+  catch (e) { events.log('WARN', `Could not register the paid page ${url}: ${e.message}`); }
+  return true;
+}
+
 const REF_PICTURES = 8;
 const HITS_PER_QUERY = 16;
 const PAGES_PER_CREATOR = 4;
@@ -96,7 +109,12 @@ async function seedCrawlCreator(creator, { maxPages = 2 } = {}) {
     try { host = new URL(url).hostname; } catch { continue; }
     if (hostBlocked(host)) continue;
     const spec = parseProfile(url);
-    if (!spec || spec.external || !spec.ingestable) continue;
+    if (!spec) continue;
+    if (spec.external || !spec.ingestable) {
+      // A paid page is a public page too: read it instead of dropping the match.
+      if (spec.external) readPaidPage(url, creator.id, 'image-match-crawl');
+      continue;
+    }
     if (existing.has(String(spec.target).toLowerCase())) continue;
     if (checkText(url, spec.target, spec.label).level === 'block') continue;
     if (femaleCheck(spec.target, spec.label).female) continue;
@@ -197,7 +215,7 @@ async function matchCreator(creator, { budget = 40, aborted = () => false, servi
         });
         if (!named) continue;
         const spec = parseProfile(pageUrl) || { platform: 'web', kind: 'page', target: pageUrl, ingestable: true, label: parsedUrl.host };
-        if (spec.external) continue;
+        if (spec.external) { readPaidPage(pageUrl, creator.id, 'image-match'); continue; }
         if (spec.platform === 'web') {
           try { if (!(await require('../sources/web').robotsAllows(pageUrl))) continue; } catch { continue; }
         }
@@ -216,7 +234,7 @@ async function matchCreator(creator, { budget = 40, aborted = () => false, servi
         const fv = faceMatch.evaluateCreatorFaceMatch(res.faces, creator.id, { named, refs: faceRefs });
         if (fv.verdict === 'confirmed') {
           const spec = parseProfile(pageUrl) || { platform: 'web', kind: 'page', target: pageUrl, ingestable: true, label: parsedUrl.host };
-          if (spec.external) continue;
+          if (spec.external) { readPaidPage(pageUrl, creator.id, 'image-match'); continue; }
           if (spec.platform === 'web') {
             try { if (!(await require('../sources/web').robotsAllows(pageUrl))) continue; } catch { continue; }
           }

@@ -188,7 +188,7 @@ function hasAdultCreatorLinks(item) {
   const paidHandles = paid.findPaidHandles(textBlob);
   if (paidHandles.length > 0) return true;
   for (const l of extractLinks(textBlob)) {
-    if (l.external && ["OnlyFans", "Fansly", "JustFor.Fans", "LoyalFans", "ManyVids", "Patreon", "SubscribeStar"].includes(l.service)) return true;
+    if (l.external && (paid.SERVICES[l.service] || ["Patreon", "SubscribeStar"].includes(l.service))) return true;
     if (l.platform === "linkinbio" || ["linktree", "beacons", "allmylinks", "campsite", "snipfeed", "solo.to"].includes(l.platform)) return true;
   }
   return false;

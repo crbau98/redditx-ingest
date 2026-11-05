@@ -48,7 +48,15 @@ const defaultInterval = (spec) => {
 function addSpec(spec, { creatorId = null, origin = 'admin', trusted, hint, bodyOverride = false } = {}) {
   if (typeof spec === 'string') spec = registry.parseInput(spec, hint);
   if (!spec) return { status: 'invalid', reason: 'Not a recognised handle, community or link' };
-  if (spec.external) return { status: 'external', spec };
+  if (spec.external) {
+    // A paid page is a public page too (owner decision 2026-11-05): read it so the media it serves
+    // publicly is ingested, and keep the link-out card on the profile.
+    if (spec.url) {
+      try { require('../engine/paidpage').registerPaidPage(spec.url, { creatorId, origin: `${origin}-paid-page` }); }
+      catch { /* best effort: the link-out card still shows */ }
+    }
+    return { status: 'external', spec };
+  }
   spec = require('./telegram-public').upgradeSpec(spec); // adult Telegram channels have no web preview: read them by username over MTProto when that works
   if (repo.blocklist.has('creator', `${spec.platform}:${String(spec.target).toLowerCase()}`)) {
     return { status: 'invalid', reason: 'This account is on the blocklist' };

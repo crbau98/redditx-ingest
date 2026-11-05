@@ -138,7 +138,9 @@ No system can enumerate "the whole web". PRISM grows its coverage in layers:
 | Web page | page | – (optional Browser4) | OpenGraph, `<video>`, linked images; honours `robots.txt`. JavaScript-built pages (SPAs, infinite scroll, lazy galleries) are read in a real browser when [Browser4](#browser4-rendering-javascript-built-pages) is enabled. |
 | Link-in-bio | page | – (optional Browser4) | Discovers a creator's other accounts; never yields media itself. Hubs built by JavaScript are read in the browser. |
 
-**Paid pages:** paid/subscription platforms (OnlyFans, Fansly, Patreon…) are kept as link-outs on creator profiles so fans can support the creator directly, and pages a creator names in a post or bio are read like any other public page. PRISM does not reproduce paid content it does not have a lawful path to; everything it does ingest still passes the safety, male-only and takedown gates before it is stored.
+**Paid pages:** paid/subscription platforms (OnlyFans, Fansly, Patreon…) are kept as link-outs on creator profiles so fans can support the creator directly, and a paid page named by a creator in a post or bio — or surfaced by a web or image search — is read like any other public page and can contribute media. PRISM never signs in as a subscriber, never reuses a borrowed session, and never defeats a paywall; what a platform serves publicly to any visitor is fair game from any host (paid pages, mirror sites, leak/tube-rip/file-locker hosts), and everything it does ingest still passes the safety, male-only and takedown gates before it is stored.
+
+**Age and consent interstitials:** an adult site may put one in front of its pages ("verify you are 18 or older and accept our terms"). PRISM has its own age gate, so it passes that interstitial with the site's own confirmation parameter (JustFor.Fans: `?TermsAgree=yes`) and reads the page behind it. This unlocks nothing else: a paywall, a login and the site's own identity check stay out of reach, and no credential or session of anyone is reused.
 
 ---
 
