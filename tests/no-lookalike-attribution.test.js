@@ -288,7 +288,7 @@ describe('schema: v17 is the Telegram migration, v18 is the look-alike retractio
     schema.MIGRATIONS[16](db); schema.MIGRATIONS[16](db); // twice: idempotent
     assert.ok(db.prepare('PRAGMA table_info(creators)').all().some((c) => c.name === 'bio_source'));
     assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'telegram_text'").get());
-    assert.equal(schema.MIGRATIONS.length, 21);
+    assert.ok(schema.MIGRATIONS.length >= 21, 'v17 and v18 sit at indexes 16 and 17; later migrations are appended');
     db.close();
   });
 });

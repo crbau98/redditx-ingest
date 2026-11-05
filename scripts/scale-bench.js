@@ -3,7 +3,7 @@
  * End-to-end latency and event-loop stalls of the PUBLIC read routes on a scaled database (scripts/seed-scale.js,
  * or a COPY of a real one), against the real server process (server.js: engine, warm-up, background jobs and all).
  *
- *     DB_PATH=/tmp/scale.db node scripts/scale-bench.js [--runs 30] [--settle 80] [--burst 20] [--out result.json] [--only video,creators]
+ *     DB_PATH=/tmp/scale.db node scripts/scale-bench.js [--runs 30] [--settle 80] [--burst 20] [--out result.json] [--only video,creators] [--views 4]
  *
  *   1. spawns `node --require scripts/loop-probe.js server.js` on a free port (scheduler off, no network needed);
  *   2. COLD: as soon as /api/health answers, one request to each route, in order (what the first visitors pay);
@@ -32,6 +32,7 @@ const RUNS = Number(opt('runs', 30));
 const SETTLE_S = Number(opt('settle', 80));
 const BURST_S = Number(opt('burst', 20));
 const OUT = opt('out', null);
+const VIEWS = Number(opt('views', 0)); // viewers' POST /api/media/:id/view per second, running through the warm and burst phases (each is a write on the server's connection)
 const ONLY = opt('only', null); // comma-separated substrings of route names: bench just those
 const ROOT = path.join(__dirname, '..');
 
@@ -82,6 +83,7 @@ const pct = (a, p) => { const s = [...a].sort((x, y) => x - y); return s.length 
   const ro = new Database(process.env.DB_PATH, { readonly: true, fileMustExist: true });
   const topCreators = ro.prepare("SELECT id, handle FROM creators WHERE status = 'active' AND media_count > 0 ORDER BY media_count DESC LIMIT 60").all();
   const midCreators = ro.prepare("SELECT id FROM creators WHERE status = 'active' AND media_count BETWEEN 5 AND 40 LIMIT 60").all().map((r) => r.id);
+  const viewIds = ro.prepare("SELECT id FROM media WHERE publish_state = 'published' LIMIT 300").all().map((r) => r.id);
   const ofCreators = ro.prepare("SELECT id FROM creators WHERE status = 'active' AND media_count > 3 AND links GLOB '*onlyfans.com/[A-Za-z0-9]*' LIMIT 40").all().map((r) => r.id);
   const communities = ro.prepare("SELECT community FROM media WHERE community IS NOT NULL GROUP BY community ORDER BY COUNT(*) DESC LIMIT 30").all().map((r) => r.community);
   ro.close();
@@ -135,6 +137,9 @@ const pct = (a, p) => { const s = [...a].sort((x, y) => x - y); return s.length 
   ];
 
   if (ONLY) { const keep = ONLY.split(','); for (let i = R.length - 1; i >= 0; i--) if (!keep.some((k) => R[i][0].includes(k))) R.splice(i, 1); }
+  let viewing = true; let viewsSent = 0;
+  const post = (p) => new Promise((resolve) => { const req = http.request({ host: '127.0.0.1', port, path: p, method: 'POST', agent: agentFor(Math.floor(hits++ / 150) + 500), headers: { cookie: 'prism_age=1', 'content-length': 0 } }, (res) => { res.resume(); res.on('end', resolve); }); req.on('error', resolve); req.end(); });
+  const viewer = async () => { for (let i = 0; viewing && VIEWS > 0; i++) { await post(`/api/media/${viewIds[i % viewIds.length]}/view`); viewsSent++; await sleep(1000 / VIEWS); } };
   const report = { dbBytes: fs.statSync(process.env.DB_PATH).size, runs: RUNS, settleS: SETTLE_S, burstS: BURST_S, firstHealthMs, cold: {}, warm: {}, burst: {} };
 
   // ---- cold: one request each, in order, straight after the first health answer
@@ -147,6 +152,7 @@ const pct = (a, p) => { const s = [...a].sort((x, y) => x - y); return s.length 
 
   // ---- warm: varied parameters, one keep-alive connection, sequential
   const warmStart = Date.now() - bootAt;
+  const viewerDone = viewer();
   for (const [name, mk] of R) {
     const ms = []; let bad = 0; let bytes = 0;
     for (let i = 1; i <= RUNS; i++) { const r = await get(mk(i)); ms.push(r.ms); bytes = Math.max(bytes, r.bytes); if (r.status !== 200) bad++; }
@@ -164,6 +170,7 @@ const pct = (a, p) => { const s = [...a].sort((x, y) => x - y); return s.length 
     while (Date.now() < until) { const [, mk] = R[i % R.length]; const r = await get(mk(100 + i)); lat.push(r.ms); n++; i++; }
   }));
   const burstEnd = Date.now() - bootAt;
+  viewing = false; await viewerDone; report.viewsSent = viewsSent;
   report.burst = { requests: n, p50: pct(lat, 0.5), p95: pct(lat, 0.95), max: pct(lat, 1) };
 
   // ---- event loop, from the in-process probe (offsets: seconds since the server process started ≈ since bootAt)
