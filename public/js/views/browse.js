@@ -72,7 +72,7 @@ export async function browse(root) {
         h('div', null,
           h('h2', null, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), 'OnlyFans & Creator Networks'),
           h('div', { class: 'sub' }, 'Verified male creators with independent subscription pages')),
-        h('a', { class: 'link-more', href: href('/creators', { paid: 'onlyfans' }) }, 'All OnlyFans creators', icon('chev-r', 'sm'))),
+        h('a', { class: 'link-more', href: href('/creators', { paid: 'onlyfans' }), 'aria-label': 'See all OnlyFans creators' }, 'See all', icon('chev-r', 'sm'))),
       h('div', { class: 'browse-grid' },
         h('a', { class: 'browse-tile of-tile', href: href('/creators', { paid: 'onlyfans' }) },
           h('div', { class: 'name' }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), 'OnlyFans Stars'),

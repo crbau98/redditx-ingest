@@ -9,6 +9,7 @@ import { openLightbox, surpriseMe } from '../components/ondemand.js';
 import { smartSearch } from '../smart.js';
 import { attachSuggest } from '../components/suggest.js';
 import { topicCards, becauseRails } from '../components/topics.js';
+import { creatorRing } from '../components/creator-ring.js';
 
 /** "For you": a rail ranked from this device's taste, with the taste shown (and editable) right there. */
 async function forYouSection(open) {
@@ -162,7 +163,7 @@ export async function home(root) {
   // One calm hero: the promise, one search box, three actions. Counts live in the kicker once (no second stats row),
   // the featured creators have their own section below, and nothing here animates or loads WebGL.
   const copy = h('div', { class: 'hero-copy' },
-    h('div', { class: 'hero-kicker' }, h('span', { class: 'live-dot' }), `${fmt.num(s.total)} photos & videos · ${fmt.num(s.creators)} creators · ${data.platforms.length} sources`),
+    h('div', { class: 'hero-kicker' }, h('span', { class: 'live-dot' }), `${fmt.num(s.total)} posts from ${fmt.num(s.creators)} creators across ${data.platforms.length} sources`),
     h('h1', null, 'The Master Index for ', h('em', null, 'Gay OnlyFans & Male Creators')),
     h('p', { class: 'lead' }, 'Follow gay male creators across OnlyFans, GayForFans, Bluesky, Reddit and X in one place. Public posts only; paid pages link out.'),
     h('div', { class: 'hero-search' }, icon('search', 'lg'), input, h('button', { class: 'btn primary', onclick: go }, 'Search')),
@@ -189,6 +190,9 @@ export async function home(root) {
   const fromFollowed = await followedP; // the rail is optional: a failed request leaves it empty
 
   const parts = [hero];
+  // Content in the first screen: creators as rings, people you follow first, a spectrum ring if he posted this week.
+  const ring = creatorRing([...(data.topCreators || []), ...(data.rising || []), ...(data.newCreators || [])], { label: 'Creators' });
+  if (ring) parts.push(ring);
   // Fetched in parallel with the rest of the page; slotted in when ready.
   const picker = interestPicker(data.tags, async () => { const sec = await forYouSection(open); if (picker.isConnected) { if (sec) picker.replaceWith(sec); else picker.remove(); } });
   const since = await sinceP;

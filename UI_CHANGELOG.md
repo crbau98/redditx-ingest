@@ -1,5 +1,19 @@
 # UI changelog
 
+## 2026-11-05 — "Spectrum": mobile-first overhaul
+
+- **New stylesheet `css/aurora.css`** (last in the bundle, precached by `sw.js`, `prism-shell-v8`). The older sheets are untouched, so the CSS guard tests still read exactly what they did before.
+- **Home on a phone:** the masthead is left-aligned and short, the three actions are one swipeable row, and a ring strip of creators sits inside the first screen. Before, the whole first screen was centred text and the interest picker slid under the tab bar. The counts are a plain sentence ("124 posts from 12 creators across 5 sources"), not a dot-joined pill.
+- **Ring strip** (`components/creator-ring.js`): spectrum ring = posted this week, plain ring = quiet; people you follow come first; a dashed "Find" ring at the end.
+- **Creators on a phone:** flat rows divided by hairlines instead of cover cards (253px each, was 317px), and the long description under the count waits for a wider screen. The first card now starts at y=207 (was y=334) and two fit in the first screen (was one).
+- **Bug fix, every viewport:** on creator cards the avatar was placed in the *name* grid cell under a 92% surface plate. `.creator-head > div:not(.creator-actions)` also matched the avatar `<div>` and outranked `.creator-head > .avatar`. Avatars now sit in their own column.
+- **Browse on a phone:** 2-up tiles with numbers sized to fit, and the page is 24% shorter (2598px, was 3418px). The "All OnlyFans creators" link no longer wraps to three lines: it reads "See all" and keeps the full accessible name. Tag chips are 44px tall on touch (were 34px).
+- **Explore on a phone:** each filter label shares a line with its chips and is sentence case; the first card starts at y=336 (was y=397).
+- **How these were measured:** Playwright at 390×844, identical probes against untouched `main` and this branch on the same demo database.
+- **Gradient restraint:** flat primary button, no glow on section icons, wordmark and headline are one colour, one body wash.
+- **Accessibility and contrast:** primary button text is `--accent-ink` on `--accent` (6.5:1 dark, 5.9:1 light).
+- **Verified:** `scripts/ui-audit.js` over 37 page views (desktop light and dark, phone, admin): 0 errors, 0 sideways scrolling, 0 accessibility findings. Browser e2e 11/11. The full suite has 21 backend failures that are identical on untouched `main` (ingest adapters, Telegram, thumbnails).
+
 ## 2026-11-04 — "Quiet": remove decorative clutter, one calm hero, a clearer creator graph
 
 - **Deleted, not gated:** WebGL prism backdrop (`prism-bg.js`), 3D orbit (`orbit.js`), pointer card tilt/glare (`initTilt`), the 3D galaxy map (`views/galaxy.js`), the GPU probe (`gpuTier`) and the `ambientFx` display setting. `/galaxy` now lands on Creators. About 34 KB of JS and ~120 lines of CSS gone; no WebGL context is created on any page.
