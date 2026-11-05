@@ -23,11 +23,11 @@ function feedRow(f, extra = {}) {
 }
 
 /**
- * `deadNeverWorked` / `deadSkipOrigins` narrow the dead list IN SQL, before its LIMIT, so a long list of quiet feeds cannot crowd
+ * `deadNeverWorked` / `deadSkipOrigins` / `deadSkipRetired` / `deadSkipTouchedSince` narrow the dead list IN SQL, before its LIMIT, so a long list of quiet feeds cannot crowd
  * out the ones that qualify.
- * @param {{failingAfter?: number, staleDays?: number, deadDays?: number, deadMinRuns?: number, limit?: number, now?: number, deadNeverWorked?: boolean, deadSkipOrigins?: string[]}} opts
+ * @param {{failingAfter?: number, staleDays?: number, deadDays?: number, deadMinRuns?: number, limit?: number, now?: number, deadNeverWorked?: boolean, deadSkipOrigins?: string[], deadSkipRetired?: boolean, deadSkipTouchedSince?: string|null}} opts
  */
-function report({ failingAfter = 3, staleDays = 3, deadDays = 30, deadMinRuns = 8, limit = 40, now = Date.now(), deadNeverWorked = false, deadSkipOrigins = [] } = {}) {
+function report({ failingAfter = 3, staleDays = 3, deadDays = 30, deadMinRuns = 8, limit = 40, now = Date.now(), deadNeverWorked = false, deadSkipOrigins = [], deadSkipRetired = false, deadSkipTouchedSince = null } = {}) {
   const db = repo.db;
   const failing = db.prepare(`SELECT * FROM feeds WHERE enabled = 1 AND consecutive_failures >= ?
       ORDER BY consecutive_failures DESC, last_run_at DESC LIMIT ?`).all(failingAfter, limit).map((f) => feedRow(f));
@@ -41,9 +41,11 @@ function report({ failingAfter = 3, staleDays = 3, deadDays = 30, deadMinRuns = 
       WHERE f.enabled = 1 AND f.created_at < @since
         AND (@never = 0 OR COALESCE(f.items_total, 0) = 0)
         AND (f.origin IS NULL OR f.origin NOT IN (SELECT value FROM json_each(@skip)))
+        AND (@skipRetired = 0 OR NOT EXISTS (SELECT 1 FROM moderation_actions a WHERE a.target_type = 'feed' AND a.target_id = CAST(f.id AS TEXT) AND a.action = 'auto-retire'))
+        AND (@touched IS NULL OR NOT EXISTS (SELECT 1 FROM moderation_actions a WHERE a.target_type = 'feed' AND a.target_id = CAST(f.id AS TEXT) AND a.actor != 'system' AND a.created_at > @touched))
       GROUP BY f.id HAVING runs >= @minRuns AND COALESCE(SUM(r.added), 0) = 0
       ORDER BY runs DESC LIMIT @limit`)
-    .all({ since: iso(now - deadDays * DAY), minRuns: deadMinRuns, limit, never: deadNeverWorked ? 1 : 0, skip: JSON.stringify(deadSkipOrigins) })
+    .all({ since: iso(now - deadDays * DAY), minRuns: deadMinRuns, limit, never: deadNeverWorked ? 1 : 0, skip: JSON.stringify(deadSkipOrigins), skipRetired: deadSkipRetired ? 1 : 0, touched: deadSkipTouchedSince })
     .map((f) => feedRow(f, { runs: f.runs, fetched: f.fetched, filtered: f.filtered,
       // fetched plenty but kept nothing: the gates reject it (wrong audience); fetched nothing: the source is quiet or gone
       why: f.fetched > 0 ? 'everything it found was filtered out' : 'it found nothing new' }));
@@ -88,7 +90,8 @@ function retireDead({ now = Date.now(), max = 50, dryRun = false } = {}) {
   const kept = Number(require('../settings').get().keepRunHistoryDays) || RETIRE.deadDays;
   const days = Math.min(RETIRE.deadDays, kept);
   if (days < RETIRE.minHistoryDays) return { ...out, tooLittleHistory: kept }; // too little run history to tell "never worked" from "just started"
-  const rep = report({ deadDays: days, deadMinRuns: RETIRE.deadMinRuns, limit: 1000, now, deadNeverWorked: true, deadSkipOrigins: PERSONAL_ORIGINS });
+  const rep = report({ deadDays: days, deadMinRuns: RETIRE.deadMinRuns, limit: 1000, now, deadNeverWorked: true, deadSkipOrigins: PERSONAL_ORIGINS,
+    deadSkipRetired: true, deadSkipTouchedSince: iso(now - RESPECT_DAYS * DAY) });
   const why = new Map();
   for (const f of rep.dead) {
     if (f.itemsTotal === 0) why.set(f.id, `${f.runs} runs in ${days} days and it has never added anything (${f.why})`);

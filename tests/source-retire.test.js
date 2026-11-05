@@ -107,6 +107,21 @@ test('quiet feeds with MORE runs cannot crowd a never-worked feed out of the can
   assert.equal(enabled(never), 0);
 });
 
+test('protected feeds (retired before and re-enabled, or touched by a person) cannot crowd the candidate list either', () => {
+  const ins = repo.db.prepare('INSERT INTO feed_runs (id, feed_id, started_at, finished_at, status, fetched, added) VALUES (?, ?, ?, ?, ?, ?, ?)');
+  repo.db.transaction(() => {
+    for (let i = 0; i < 1005; i++) {
+      const p = feed('seed', { runs: 0, items: 0 }); // never worked, more runs than the candidate below, but protected
+      for (let k = 0; k < 20; k++) ins.run(crypto.randomUUID(), p.id, iso(k * DAY + HOUR), iso(k * DAY), 'empty', 0, 0);
+      repo.logAction('feed', p.id, i % 2 ? 'auto-retire' : 'enable', 'earlier', i % 2 ? 'system' : 'admin');
+    }
+  })();
+  const open = feed('discovered', { runs: 12, items: 0 });
+  const r = sourcehealth.retireDead({ max: 1000 });
+  assert.ok(r.paused.some((p) => p.id === open.id), 'the untouched never-worked feed is still found');
+  assert.equal(enabled(open), 0);
+});
+
 test('one call pauses at most `max` feeds, so a bad day cannot empty the library', () => {
   for (let i = 0; i < 5; i++) feed('discovered', { runs: 14, items: 0 });
   const r = sourcehealth.retireDead({ max: 2 });
