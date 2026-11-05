@@ -20,6 +20,14 @@ const MAX_BYTES = 15 * 1024 * 1024;
 let sharpMod;
 function sharp() { if (sharpMod === undefined) { try { sharpMod = require('sharp'); } catch { sharpMod = null; } } return sharpMod; }
 
+// An item whose picture cannot be read right now (a dead host answering 5xx, a timeout) used to stay at the head of this
+// newest-first queue and be retried every minute for ever: with `thumbnailsPerMinute` of them, nothing behind them was ever
+// served. They now wait (4, 8, 16 min) and are given up on (tint '' = unreadable) after MAX_TRIES. State is in memory: a
+// restart simply starts counting again.
+const MAX_TRIES = 4;
+const RETRY_BASE_MS = 2 * 60 * 1000;
+const retry = new Map(); // id -> { tries, until }
+
 const q = {
   todo: repo.db.prepare(`SELECT id, media_type, media_url, preview_url, thumbnail_url, width FROM media
     WHERE tint IS NULL AND publish_state = 'published' ORDER BY seq DESC LIMIT ?`),
@@ -63,17 +71,26 @@ async function make(row, { fetch = net.fetchBuffer } = {}) {
       }
     } catch (e) {
       // a passing error (timeout, 5xx, rate limit) leaves the item for a later round; a picture that cannot be read is marked
-      if (!/^http 4(?!29)\d\d$|unsupported image|Input buffer|corrupt|bad seek/i.test(String(e.message || e))) return null;
+      if (!/^http 4(?!29)\d\d$|unsupported image|Input buffer|corrupt|bad seek/i.test(String(e.message || e))) {
+        // remember how it failed (sweep tells "the network is down" from "this host is dead" with it)
+        row.failure = { http: /^http \d{3}$/i.test(String(e.message || e)), host: (() => { try { return new URL(url).hostname; } catch { return ''; } })() };
+        return null;
+      }
     }
   }
   q.save.run({ id: row.id, tint: out.tint, thumb_url: out.thumb_url });
   return out;
 }
 
-/** One round: up to `limit` items, newest first, `concurrency` pictures in flight (they wait on the network). */
-async function sweep({ limit = 30, concurrency = 3, fetch } = {}) {
-  const res = { checked: 0, tinted: 0, thumbs: 0, retry: 0 };
-  const rows = q.todo.all(limit);
+/**
+ * One round: up to `limit` items, newest first, `concurrency` pictures in flight (they wait on the network).
+ * Items that failed lately are skipped until their wait is over (the page is read deeper by that many rows, so they never
+ * take the places of items behind them). `now` is for tests.
+ */
+async function sweep({ limit = 30, concurrency = 3, fetch, now = Date.now() } = {}) {
+  const res = { checked: 0, tinted: 0, thumbs: 0, retry: 0, given_up: 0 };
+  const rows = q.todo.all(limit + retry.size).filter((row) => { const w = retry.get(row.id); return !w || w.until <= now; }).slice(0, limit);
+  const failed = [];
   let i = 0;
   const take = async () => {
     while (i < rows.length) {
@@ -81,16 +98,30 @@ async function sweep({ limit = 30, concurrency = 3, fetch } = {}) {
       res.checked++;
       let r = null;
       try { r = await make(row, fetch ? { fetch } : {}); } catch { r = null; }
-      if (!r) { res.retry++; continue; }
+      if (!r) { res.retry++; failed.push(row); continue; }
+      retry.delete(row.id);
       if (r.tint) res.tinted++;
       if (r.thumb_url) res.thumbs++;
     }
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, rows.length)) }, take));
+  // A round where nothing could be read, with no server answering at all (no HTTP status) from at least two different hosts, says
+  // the network is down, not that these pictures are bad: nobody's tries are used. A dead host answering 5xx still counts.
+  const hosts = new Set(failed.filter((r) => r.failure && !r.failure.http).map((r) => r.failure.host));
+  const networkDown = res.checked >= 3 && res.retry === res.checked && hosts.size >= 2 && failed.every((r) => r.failure && !r.failure.http);
+  if (!networkDown) {
+    for (const row of failed) {
+      const tries = ((retry.get(row.id) || {}).tries || 0) + 1;
+      if (tries >= MAX_TRIES) { q.save.run({ id: row.id, tint: '', thumb_url: null }); retry.delete(row.id); res.given_up++; }
+      else retry.set(row.id, { tries, until: now + RETRY_BASE_MS * 2 ** tries });
+    }
+  }
+  // forget waits of items that are no longer in the queue (published state changed, removed)
+  if (retry.size > 5000) for (const k of [...retry.keys()].slice(0, retry.size - 5000)) retry.delete(k);
   return res;
 }
 
-function progress() { return { remaining: q.left.get().n }; }
+function progress() { return { remaining: q.left.get().n, waiting: retry.size }; }
 
 let timer = null; let busy = false; let failures = 0; let wait = 0;
 function start() {
