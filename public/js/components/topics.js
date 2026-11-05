@@ -3,6 +3,7 @@ import { get } from '../api.js';
 import { href } from '../router.js';
 import { tastes, history as viewHistory } from '../store.js';
 import { mediaCard } from './card.js';
+import { lazyBackground } from '../lazy-bg.js';
 
 /**
  * Topics: clusters of tags that keep showing up together in the library (e.g. "Gym & muscle"),
@@ -16,7 +17,7 @@ export async function topicCards({ limit = 10 } = {}) {
     const q = { anytags: t.tags.join(','), label: t.title };
     const tiles = t.previews.slice(0, 4);
     return h('a', { class: 'topic-card', href: href('/explore', q), style: { '--i': i }, 'aria-label': `${t.title}: ${t.count} items` },
-      h('div', { class: `topic-mosaic n${tiles.length}` }, tiles.map((src) => h('span', { class: 'tile', style: { backgroundImage: `url("${proxied(src)}")` } }))),
+      h('div', { class: `topic-mosaic n${tiles.length}` }, tiles.map((src) => lazyBackground(h('span', { class: 'tile' }), proxied(src)))),
       h('div', { class: 'topic-body' },
         h('div', { class: 'topic-title' }, t.title),
         h('div', { class: 'topic-tags' }, t.tags.slice(0, 4).map((x) => h('span', null, `#${x}`))),
