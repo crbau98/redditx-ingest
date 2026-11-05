@@ -179,6 +179,9 @@ function entryToItems(entry, feed, ctx = {}) {
       mediaType: m.type,
       mediaUrl: m.url,
       previewUrl: m.preview || (m.type === 'image' ? m.url : null),
+      // a video's poster here is the entry's media:thumbnail, often a channel or podcast artwork reused by every entry: it says nothing
+      // about WHICH video this is, so the pipeline must not take its perceptual hash as the video's (it would drop the second one)
+      ...(m.type === 'video' && m.preview ? { posterShared: true } : {}),
       width: m.width || null,
       height: m.height || null,
       altText: m.alt || null,

@@ -83,3 +83,18 @@ test('RSS: a video enclosure takes the entry\'s media:thumbnail as its poster (i
   assert.equal(clip.previewUrl, 'https://v.example/posters/1.jpg');
   assert.equal(photo.previewUrl, 'https://v.example/files/2.jpg', 'a photo is its own preview');
 });
+
+test('RSS: a video whose poster is the entry\'s media:thumbnail is marked posterShared (channel artwork is reused by every entry)', () => {
+  const rss = require('../src/sources/rss');
+  const xml = `<?xml version="1.0"?><rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/"><channel><title>Podcast</title>
+    <item><title>Ep 1</title><link>https://v.example/w/1</link><guid>1</guid><enclosure url="https://v.example/files/1.mp4" type="video/mp4" length="1"/><media:thumbnail url="https://v.example/art.jpg"/></item>
+    <item><title>Ep 2</title><link>https://v.example/w/2</link><guid>2</guid><enclosure url="https://v.example/files/2.mp4" type="video/mp4" length="1"/><media:thumbnail url="https://v.example/art.jpg"/></item>
+    <item><title>Photo</title><link>https://v.example/w/3</link><guid>3</guid><enclosure url="https://v.example/files/3.jpg" type="image/jpeg" length="1"/></item>
+    <item><title>No poster</title><link>https://v.example/w/4</link><guid>4</guid><enclosure url="https://v.example/files/4.mp4" type="video/mp4" length="1"/></item></channel></rss>`;
+  const parsed = rss.parseFeed(xml, 'https://v.example/feed.xml');
+  const items = parsed.entries.flatMap((e) => rss.entryToItems(e, parsed));
+  const by = (u) => items.find((i) => i.mediaUrl.endsWith(u));
+  assert.equal(by('1.mp4').posterShared, true); assert.equal(by('2.mp4').posterShared, true);
+  assert.equal(by('3.jpg').posterShared, undefined, 'a photo is its own picture: hashed as before');
+  assert.equal(by('4.mp4').posterShared, undefined, 'no poster, nothing borrowed');
+});

@@ -71,6 +71,30 @@ test('a round where nothing at all can be read (the network is down) does not us
   for (const id of ids) assert.match(tint(id), /^#[0-9a-f]{6}$/);
 });
 
+test('several dead hosts look like an outage, but their items still WAIT so the ones behind them are served, without spending tries', async () => {
+  repo.db.prepare('DELETE FROM media').run();
+  const good = [1, 2, 3].map((i) => item(`https://good.example/${i}.jpg`));
+  const dead = ['https://expired-a.example/1.jpg', 'https://expired-b.example/2.jpg', 'https://expired-c.example/3.jpg'].map((u) => item(u)); // newer than the good ones
+  const fetch = async (url) => { if (/expired/.test(url)) throw new Error('getaddrinfo ENOTFOUND expired.example'); return { status: 200, buffer: GOOD }; };
+  const now = Date.now();
+  const first = await thumbs.sweep({ limit: 3, fetch, now });
+  assert.equal(first.retry, 3, 'the whole page failed: a suspected outage');
+  assert.equal(first.given_up, 0, 'and nobody is given up on');
+  const second = await thumbs.sweep({ limit: 3, fetch, now });
+  for (const id of good) assert.match(tint(id), /^#[0-9a-f]{6}$/, 'the items behind them are served by the next round, not starved');
+  assert.equal(second.checked, 3);
+  for (const id of dead) assert.equal(tint(id), null, 'the dead ones are still waiting, not given up on');
+});
+
+test('an item that sits through many suspected outages is eventually treated as failing for itself', async () => {
+  repo.db.prepare('DELETE FROM media').run();
+  const dead = ['https://expired-a.example/1.jpg', 'https://expired-b.example/2.jpg', 'https://expired-c.example/3.jpg'].map((u) => item(u));
+  const fetch = async () => { throw new Error('getaddrinfo ENOTFOUND expired.example'); };
+  let now = Date.now();
+  for (let i = 0; i < 40; i++) { now += 60 * MIN; await thumbs.sweep({ limit: 3, fetch, now }); }
+  for (const id of dead) assert.equal(tint(id), '', 'given up in the end: the outage rounds are capped');
+});
+
 test('a picture that is gone for good (404, not an image) is marked at once, as before', async () => {
   repo.db.prepare('DELETE FROM media').run();
   const gone = item('https://gone.example/a.jpg'); const junk = item('https://junk.example/b.jpg');

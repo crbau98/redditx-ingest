@@ -25,6 +25,7 @@ function sharp() { if (sharpMod === undefined) { try { sharpMod = require('sharp
 // served. They now wait (4, 8, 16 min) and are given up on (tint '' = unreadable) after MAX_TRIES. State is in memory: a
 // restart simply starts counting again.
 const MAX_TRIES = 4;
+const OUTAGE_ROUNDS = 6; // suspected-outage rounds an item may wait through without spending a try
 const RETRY_BASE_MS = 2 * 60 * 1000;
 const retry = new Map(); // id -> { tries, until }
 
@@ -123,12 +124,18 @@ async function sweep({ limit = 30, concurrency = 3, fetch, now = Date.now() } = 
   // the network is down, not that these pictures are bad: nobody's tries are used. A dead host answering 5xx still counts.
   const hosts = new Set(failed.filter((r) => r.failure && !r.failure.http).map((r) => r.failure.host));
   const networkDown = res.checked >= 3 && res.retry === res.checked && hosts.size >= 2 && failed.every((r) => r.failure && !r.failure.http);
-  if (!networkDown) {
-    for (const row of failed) {
-      const tries = ((retry.get(row.id) || {}).tries || 0) + 1;
-      if (tries >= MAX_TRIES) { q.save.run({ id: row.id, tint: '', thumb_url: null, w: null, h: null }); retry.delete(row.id); res.given_up++; }
-      else retry.set(row.id, { tries, until: now + RETRY_BASE_MS * 2 ** tries });
+  // In a suspected outage the items still WAIT (otherwise the next round picks the same newest rows again and everything behind
+  // them starves: several expired domains look exactly like a network outage), but the wait does not use up their tries. It is
+  // capped: an item that has sat through OUTAGE_ROUNDS suspected outages is treated as failing for itself.
+  for (const row of failed) {
+    const cur = retry.get(row.id) || {};
+    if (networkDown) {
+      const outages = (cur.outages || 0) + 1;
+      if (outages <= OUTAGE_ROUNDS) { retry.set(row.id, { tries: cur.tries || 0, outages, until: now + RETRY_BASE_MS * 2 ** Math.min(outages, 4) }); continue; }
     }
+    const tries = (cur.tries || 0) + 1;
+    if (tries >= MAX_TRIES) { q.save.run({ id: row.id, tint: '', thumb_url: null, w: null, h: null }); retry.delete(row.id); res.given_up++; }
+    else retry.set(row.id, { tries, outages: cur.outages || 0, until: now + RETRY_BASE_MS * 2 ** tries });
   }
   // forget waits of items that are no longer in the queue (published state changed, removed)
   if (retry.size > 5000) for (const k of [...retry.keys()].slice(0, retry.size - 5000)) retry.delete(k);

@@ -248,7 +248,7 @@ const creators = {
     const validName = displayName && !/^(?:untitled|sin t[íi]tulo|unbenannt|sans titre)$/i.test(String(displayName).trim());
     if (validName && (!c.display_name || c.display_name === c.handle)) patch.displayName = displayName;
     if (bio && !c.bio) patch.bio = bio;
-    const siteOf = (u) => { try { return new URL(u).hostname.toLowerCase().split('.').slice(-2).join('.'); } catch { return null; } };
+    const { siteOf } = require('../lib/site'); // the registrable domain, not the last two labels (`co.uk`, `github.io` are not sites)
     const better = (now, stored) => !!now && (!stored || (now !== stored && siteOf(now) && siteOf(now) === siteOf(stored)));
     if (better(avatarUrl, c.avatar_url)) patch.avatarUrl = avatarUrl;
     if (better(bannerUrl, c.banner_url)) patch.bannerUrl = bannerUrl;
