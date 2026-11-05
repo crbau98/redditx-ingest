@@ -220,7 +220,7 @@ export async function render(root) {
     wmHost.replaceChildren(h('details', { class: 'panel', open: rev.length > 0 ? true : null, style: { marginTop: '14px' } },
       h('summary', null, h('b', null, 'Visual & Face Match Queue'), h('span', { class: 'muted', style: { marginLeft: '10px', fontSize: '13px' } },
         `${rev.length} awaiting review · ${conf.length} recent confirmed matches`)),
-      h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Matches found via perceptual hash, video keyframes, seeded link crawl, or opt-in local face similarity. Face matches without corroborating handle/text on the page wait here for human review.'),
+      h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Matches found via perceptual hash, video keyframes, reverse-image search (the same picture elsewhere on the web), seeded link crawl, or opt-in local face similarity. Face matches without corroborating handle/text on the page wait here for human review.'),
       table([
         { label: 'Creator', render: (m) => h('a', { href: `#/creator/${m.creator_id}`, style: { fontWeight: 600 } }, m.creator_name || `@${m.creator_handle}`) },
         { label: 'Web page', render: (m) => h('a', { href: m.page_url, target: '_blank', rel: 'noopener noreferrer nofollow', class: 'truncate', style: { maxWidth: '280px', display: 'inline-block' } }, m.title || m.page_url) },
