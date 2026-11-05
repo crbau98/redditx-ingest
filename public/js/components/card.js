@@ -3,6 +3,7 @@ import { h, icon, proxied, fmt, avatar } from '../dom.js';
 import { favorites, history as viewHistory, prefs, platformLabel, platformColor, bus } from '../store.js';
 import { parse, href } from '../router.js';
 import { rememberFlip, heartBurst } from './fx.js';
+import { cardImage } from '../images.js';
 
 /* ---- hover / in-view video previews ------------------------------------
  * Only a couple of <video> elements are ever alive at once, so a grid of
@@ -84,11 +85,9 @@ const reliefIo = 'IntersectionObserver' in window
         const img = media._img;
         if (img && media._loaded && !media._parked) {
           img.removeAttribute('src');
-          if (media._srcset) img.removeAttribute('srcset');
           media._parked = true;
         }
       } else if (media._parked && media._img) {
-        if (media._srcset) media._img.srcset = media._srcset;
         media._img.src = media._src;
         media._parked = false;
       }
@@ -116,17 +115,15 @@ export function releaseCard(card) {
 }
 
 /** One media card. `open(item)` is called when the media is activated. */
+// `width`: the CSS width the card is laid out at, when the caller knows it (masonry columns); without it the card is a rail card.
 // `eager: true` is only the first viewport row (one card per column). Everything else stays lazy
 // at the default fetch priority so a long page does not compete with that first row.
-export function mediaCard(item, { open, compact = false, why = null, eager = false } = {}) {
+export function mediaCard(item, { open, compact = false, why = null, eager = false, width = 0 } = {}) {
   const ratio = item.width && item.height ? Math.min(Math.max(item.width / item.height, 0.55), 1.9) : 0.8;
   const isVideo = item.media_type === 'video';
-  // Grids load the small thumbnail build when it exists (engine/thumbs.js, ~360px WebP),
-  // pairing it with the platform preview at 2x when distinct. The full file only loads in the viewer.
-  const raw1x = item.thumb_url || item.preview_url || item.thumbnail_url || (!isVideo ? item.media_url : null);
-  const raw2x = item.thumb_url ? (item.preview_url || item.thumbnail_url || null) : null;
-  const src = raw1x ? proxied(raw1x) : null;
-  const srcset = src && raw2x && raw2x !== raw1x ? `${src} 1x, ${proxied(raw2x)} 2x` : null;
+  // Grids load the small thumbnail build when it exists (engine/thumbs.js, ~360px WebP) and take the platform
+  // preview only where the thumbnail would have to be stretched (see images.js). The full file only loads in the viewer.
+  const { src } = cardImage(item, { proxy: proxied, width, viewport: window.innerWidth, dpr: window.devicePixelRatio || 1, isVideo });
 
   const here = parse();
   const media = h('a', { class: 'card-media', href: href(here.path, { ...Object.fromEntries(here.query), m: item.id }), style: { aspectRatio: String(ratio) }, 'aria-label': item.title || 'Open media' });
@@ -137,8 +134,8 @@ export function mediaCard(item, { open, compact = false, why = null, eager = fal
   const ph = h('div', { class: 'ph', style: item.tint && /^#[0-9a-f]{6}$/i.test(item.tint) ? { background: item.tint } : { '--h': String(hue) } });
   media.appendChild(ph);
   if (src) {
-    const img = h('img', { class: 'loading', alt: item.title || '', loading: eager ? 'eager' : 'lazy', fetchpriority: eager ? 'high' : 'auto', decoding: 'async', src, srcset });
-    media._img = img; media._src = src; media._srcset = srcset;
+    const img = h('img', { class: 'loading', alt: item.title || '', loading: eager ? 'eager' : 'lazy', fetchpriority: eager ? 'high' : 'auto', decoding: 'async', src });
+    media._img = img; media._src = src;
     // The placeholder's shimmer stops as soon as the image is in: a grid of finished cards must not
     // keep animating underneath (it repainted every visible card, every frame, forever).
     img.addEventListener('load', () => { media._loaded = true; img.classList.remove('loading'); ph.classList.add('done'); });

@@ -47,7 +47,7 @@ export function createMasonry({ density = 'm', render }) {
 
   function restore(shell, { focus = false } = {}) {
     if (!shell.isConnected || !shell.classList.contains('card-parked') || !shell._masonryItem) return;
-    const fresh = render(shell._masonryItem, cur, { eager: false });
+    const fresh = render(shell._masonryItem, cur, { eager: false, width: colWidth });
     fresh.style.containIntrinsicSize = shell.style.containIntrinsicSize;
     tag(fresh, shell._masonryItem, shell._est);
     if (windowIo) windowIo.unobserve(shell);
@@ -141,7 +141,7 @@ export function createMasonry({ density = 'm', render }) {
         tag(card, item, est);
         card.addEventListener('focus', () => restore(card, { focus: true }));
       } else {
-        card = render(item, cur, { eager });
+        card = render(item, cur, { eager, width: colWidth });
         card.style.containIntrinsicSize = `auto ${Math.round(est)}px`;
         tag(card, item, est);
         if (arrive && staggerN < STAGGER_CAP) {
