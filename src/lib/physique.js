@@ -154,22 +154,57 @@ const HEAVY_WORDS = /\b(?:chub|chubs|chubz|chunky|chunk|husky|portly|pudgy|tubby
 // Bears glued into handles and community names ("gaybear", "bearsgonewild", "musclebearsam"), never "beard".
 const GLUED_BEAR = /(?:gay|muscle|polar|chub|teddy|fat|big|daddy|hairy)bears?(?!d)|bears?(?:gonewild|cubs?|chasers?|week|daddy|daddies|ofinstagram)|cubbears?|bearcubs?/;
 
+/* ---------------------------------------------------------------------------------- older men (words only) */
+// Only what an item or a profile says about itself: a word ("silver fox", "grandpa", "older men") or a stated age of
+// OLDER_MIN_AGE or more ("52yo", "I'm 58", "in my 50s"). There is deliberately NO visual age estimate: guessing a man's age
+// from his face is unreliable and is not something this app does. "daddy" alone is not matched (it is a pet name at any age),
+// and neither is "mature content", "18+", "over 50 videos" or "60 kg". Whole words only, so Goldman or Holderman never match.
+const OLDER_MIN_AGE = 45;
+const OLDER_GLUED = ['silverfox', 'silverdaddy', 'silverdaddies', 'greydaddy', 'graydaddy', 'greydaddies', 'graydaddies', 'grandpa', 'grandad', 'granddad'];
+const OLDER_WORDS = new RegExp([
+  '\\bsilver (?:foxe?s?|daddy|daddies)\\b', '\\b(?:grey|gray) (?:daddy|daddies|fox)\\b',
+  '\\b(?:grandpas?|grandad|granddad|grandfather|gramps|elderly|geriatric|pensioner)\\b',
+  '\\b(?:older|old|mature) (?:men|man|guys?|daddy|daddies|gentlem[ae]n)\\b',
+  '\\b(?:oldermen|olderman|oldmen|oldman|maturemen|matureman)\\b',
+].join('|'));
+const AGE_MIN = '(?:4[5-9]|[5-9]\\d)';
+const OLDER_AGE = new RegExp([
+  // "52yo", "52 y/o", "52 years old", "52-year-old", "52 yr old"
+  `\\b${AGE_MIN}\\s*(?:y\\/?o|y\\.o\\.?|yrs?[- ]old|[- ]?years?[- ]?old)\\b`,
+  // "age 55", "aged: 58", "I'm 52", "im 52" (not "I'm 60 kg", "I'm 50% done", "I'm 55+ videos")
+  `\\b(?:age|aged|i['’]?m|i am|turning)\\s*:?\\s*${AGE_MIN}\\b(?!\\s*(?:%|\\+|k\\b|m\\b|cm|kg|lbs?|["'’]|in\\b|inch|ft\\b|secs?|mins?|reps?|videos?|vids?|pics?|photos?|posts?|clips?))`,
+  // "in my 50s", "late 40s", "mid-60s"
+  `\\bin my (?:50|60|70|80)['’]?s\\b`, `\\b(?:late|mid)[- ]?(?:40|50|60|70)['’]?s\\b`,
+].join('|'));
+
+/** Does the text say its owner is an older man? @returns {string|null} the rule that matched, without a prefix */
+function olderCheck(t) {
+  for (const w of OLDER_GLUED) if (t.includes(w)) return `older:${w}`;
+  const w = t.match(OLDER_WORDS);
+  if (w) return `older:${w[0]}`;
+  const a = t.match(OLDER_AGE);
+  return a ? `older:${a[0].trim()}` : null;
+}
+
 /**
- * Does the text describe a heavy body / a chub community? Use it for titles, tags, handles, bios and channel names.
- * @returns {{heavy: boolean, rule: string|null}}
+ * Does the text describe a heavy body, a chub community, or a man who calls himself older? Use it for titles, tags, handles,
+ * bios and channel names. `kind` says which ('heavy' or 'older'); both hide the same reversible way.
+ * @returns {{heavy: boolean, rule: string|null, kind: string|null}}
  */
 function textCheck(...texts) {
   const flat = [].concat(texts).flat(Infinity).filter(Boolean).map(String);
   const variants = [flat.join(' \n '), flat.map((s) => s.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ')).join(' \n ')].map(normalize);
   for (const t of variants) {
     if (!t) continue;
-    for (const w of HEAVY_SUBSTR) if (t.includes(w)) return { heavy: true, rule: `physique:${w.trim()}` };
+    for (const w of HEAVY_SUBSTR) if (t.includes(w)) return { heavy: true, rule: `physique:${w.trim()}`, kind: 'heavy' };
     const g = t.match(GLUED_BEAR);
-    if (g) return { heavy: true, rule: `physique:${g[0]}` };
+    if (g) return { heavy: true, rule: `physique:${g[0]}`, kind: 'heavy' };
     const m = t.match(HEAVY_WORDS);
-    if (m) return { heavy: true, rule: `physique:${m[0]}` };
+    if (m) return { heavy: true, rule: `physique:${m[0]}`, kind: 'heavy' };
+    const o = olderCheck(t);
+    if (o) return { heavy: true, rule: `physique:${o}`, kind: 'older' };
   }
-  return { heavy: false, rule: null };
+  return { heavy: false, rule: null, kind: null };
 }
 
-module.exports = { measure, textCheck, segmentsCross, ANCHORS: { WS, WL } };
+module.exports = { measure, textCheck, segmentsCross, OLDER_MIN_AGE, ANCHORS: { WS, WL } };

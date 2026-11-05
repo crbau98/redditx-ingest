@@ -1,5 +1,12 @@
 'use strict';
 const BACKFILL_PAGES = 2; // extra pages of a creator's older GIFs per run
+// RedGIFs throttling (429): a platform-wide hold of 10 minutes after a 429 (a longer Retry-After still wins), and
+// 30 minutes when another 429 lands within 10 minutes of the last one. Calls are spaced 2 s apart.
+const REDGIFS_MIN_INTERVAL_MS = 2000;
+const REDGIFS_PENALTY = { ms: 10 * 60 * 1000, repeatMs: 30 * 60 * 1000, repeatWindowMs: 10 * 60 * 1000 };
+// Creator (user) feeds ask for 40 GIFs a page: the extra 40 per call were mostly items already ingested, and the request was heavier.
+const REDGIFS_USER_PAGE_CAP = 40;
+const REDGIFS_PAGE_CAP = 80;
 /**
  * RedGIFs adapter (public v2 API with a temporary guest token).
  *
@@ -10,7 +17,7 @@ const BACKFILL_PAGES = 2; // extra pages of a creator's older GIFs per run
  * Searches are untrusted: items must carry a male signal, see lib/scope.
  */
 const config = require('../config');
-const http = require('./http').forPlatform('redgifs', 700);
+const http = require('./http').forPlatform('redgifs', REDGIFS_MIN_INTERVAL_MS, { penalty: REDGIFS_PENALTY });
 const { toIso, clip } = require('./util');
 
 const base = config.baseUrls.redgifs;
@@ -148,6 +155,9 @@ async function lookupUser(username) {
 }
 
 module.exports = {
+  REDGIFS_MIN_INTERVAL_MS,
+  REDGIFS_PENALTY,
+  REDGIFS_USER_PAGE_CAP,
   searchCreators,
   nicheCreators,
   tallyCreators,
@@ -169,7 +179,7 @@ module.exports = {
   },
 
   async fetch(feed, ctx) {
-    const count = Math.min(ctx.limit || 40, 80);
+    const count = Math.min(ctx.limit || 40, feed.kind === 'user' ? REDGIFS_USER_PAGE_CAP : REDGIFS_PAGE_CAP);
     const cursor = ctx.cursor || {};
     let path;
     if (feed.kind === 'user') path = `/v2/users/${encodeURIComponent(feed.target)}/search?order=recent&count=${count}`;

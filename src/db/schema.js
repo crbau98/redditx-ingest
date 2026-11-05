@@ -800,8 +800,42 @@ function v21(db) {
   }
 }
 
+// Removed media kept its embeddings, hashes and URLs. Keep each removed item's hashes in the blocklists
+// (they are what stops a re-upload), then clear the identifiers. Only publish_state = 'removed' rows change.
+function v22(db) {
+  db.exec(`INSERT OR IGNORE INTO phash_blocklist (phash, reason)
+    SELECT phash, COALESCE(review_reason, 'removed') FROM media WHERE publish_state = 'removed' AND phash IS NOT NULL`);
+  db.exec(`INSERT OR IGNORE INTO blocklist (type, value, reason)
+    SELECT 'hash', lower(hash), review_reason FROM media
+    WHERE publish_state = 'removed' AND hash NOT LIKE 'purged:%'`);
+  if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'media_embeddings'").get()) {
+    db.exec("DELETE FROM media_embeddings WHERE media_id IN (SELECT id FROM media WHERE publish_state = 'removed')");
+  }
+  db.exec(`UPDATE media SET phash = NULL, hash = 'purged:' || id, media_url = '', preview_url = NULL,
+    thumbnail_url = NULL, thumb_url = NULL, hls_url = NULL, tint = NULL
+    WHERE publish_state = 'removed' AND hash NOT LIKE 'purged:%'`);
+}
+
+// Counters drifted: creators.media_count and friends were only refreshed by some writers, and tags.usage_count
+// was bumped by hand. Keep tags.usage_count equal to its media_tags rows with triggers (so every writer,
+// including cascades, is covered), then recompute both once for rows that are already wrong.
+function v23(db) {
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS trg_media_tags_insert AFTER INSERT ON media_tags
+    BEGIN UPDATE tags SET usage_count = usage_count + 1 WHERE id = NEW.tag_id; END;
+    CREATE TRIGGER IF NOT EXISTS trg_media_tags_delete AFTER DELETE ON media_tags
+    BEGIN UPDATE tags SET usage_count = usage_count - 1 WHERE id = OLD.tag_id; END;
+  `);
+  db.exec('UPDATE tags SET usage_count = (SELECT COUNT(*) FROM media_tags mt WHERE mt.tag_id = tags.id)');
+  db.exec(`UPDATE creators SET
+      media_count = (SELECT COUNT(*) FROM media m WHERE m.creator_id = creators.id AND m.publish_state = 'published'),
+      video_count = (SELECT COUNT(*) FROM media m WHERE m.creator_id = creators.id AND m.publish_state = 'published' AND m.media_type = 'video'),
+      total_score = (SELECT COALESCE(SUM(m.score), 0) FROM media m WHERE m.creator_id = creators.id AND m.publish_state = 'published'),
+      last_media_at = (SELECT MAX(m.posted_at) FROM media m WHERE m.creator_id = creators.id AND m.publish_state = 'published')`);
+}
+
 /**
- * v22: covering indexes for the read paths that scan the whole published library, measured on a 300k-media / 10k-creator copy.
+ * v24: covering indexes for the read paths that scan the whole published library, measured on a 300k-media / 10k-creator copy.
  * SQLite answers "COUNT(*) of the published library" (the list total, /api/stats, the per-platform counts) from
  * ix_media_state, which holds no other column, so every one of the 260k rows costs a table lookup (~1 s). These two partial
  * indexes hold exactly the columns those queries read, so they are index-only scans (~20-80 ms):
@@ -811,7 +845,7 @@ function v21(db) {
  * CREATE INDEX IF NOT EXISTS adds them in place without rewriting the table (about 2 s for 400k rows). The queries
  * name them with INDEXED BY: sqlite_stat1 makes the planner believe "publish_state = 'published'" is selective.
  */
-function v22(db) {
+function v24(db) {
   db.exec(`
     CREATE INDEX IF NOT EXISTS ix_media_pub_count ON media(platform, media_type, creator_id) WHERE publish_state = 'published' AND scope != 'excluded';
     CREATE INDEX IF NOT EXISTS ix_media_pub_comm ON media(community COLLATE NOCASE, platform) WHERE publish_state = 'published' AND scope != 'excluded' AND community IS NOT NULL;
@@ -820,9 +854,10 @@ function v22(db) {
 
 // Index-only: adds no rows and changes none, so it cannot leave a foreign key dangling. migrate() skips the post-migration
 // foreign_key_check for it, which on a 400k-row library is a few seconds of boot time before the listener is up.
-v22.ddlOnly = true;
+v24.ddlOnly = true;
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22];
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

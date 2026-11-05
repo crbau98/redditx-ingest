@@ -28,6 +28,8 @@ const http = require('./http').forPlatform('gff', 900);
 const { clip, toIso, isChallengeText } = require('./util');
 const { robotsAllows } = require('./web');
 const settingsStore = require('../settings');
+const scrapfly = require('../lib/scrapfly');
+const { checkHtmlOptOut } = require('../lib/takedowns');
 const { cleanDisplayName } = require('../lib/links');
 
 const PAGE_VIDEOS = 14;   // video pages read per run (each is one full page fetch)
@@ -103,6 +105,40 @@ function challengeError() {
   return e;
 }
 
+/**
+ * A performer page that answered with a bot check or a refusal, read through the Scrapfly tier instead - only when the tier is
+ * on (scrapflyUnlocker) and this feed belongs to an allowlisted creator. Returns the page, {optedOut}, or null (not used, or it
+ * failed for a reason the caller should treat as the challenge). The cost goes into the run notes; opt-outs still win.
+ */
+async function unlockPerformer(url, feed, notes) {
+  let cfg = {};
+  try { cfg = settingsStore.get(); } catch { cfg = {}; }
+  if (cfg.scrapflyUnlocker !== 'fallback' || !scrapfly.configured() || !scrapfly.allowedFor(feed)) return null;
+  try {
+    const r = await scrapfly.read(url, {
+      allowed: true,
+      host: new URL(url).hostname.toLowerCase(),
+      parse: (html) => {
+        const opt = checkHtmlOptOut(String(html), {}, 200);
+        if (opt && opt.optedOut) return { optedOut: true, reason: opt.reason, videos: [] };
+        return performerPage(String(html));
+      },
+      count: (pg) => (pg.optedOut ? 0 : pg.videos.length),
+    });
+    if (r.value && r.value.optedOut) {
+      notes.push(`Skipped page (${r.value.reason || 'opted out'})`);
+      return { optedOut: true };
+    }
+    notes.push(`Scrapfly Unblocker read the performer page (${r.cost} credits)`);
+    return r.value;
+  } catch (e) {
+    // Our own limits (not allowed, caps, account) leave the challenge path as it was; a real failure is noted and does the same.
+    if (e.escalationRefused || (e.cost && !e.skip)) notes.push(`Scrapfly Unblocker: ${e.message}${e.cost ? ` (${e.cost} credits spent)` : ''}`);
+    else if (!e.skip && !e.budget && !e.ours) notes.push(`Scrapfly Unblocker: ${e.message}`);
+    return null;
+  }
+}
+
 function isBlockedStatus(status) {
   return status === 403 || status === 503 || status === 520 || status === 524;
 }
@@ -175,6 +211,7 @@ function performerPage(html) {
 
 module.exports = {
   _identity: identity,
+  _unlockPerformer: unlockPerformer,
   _pageHeaders: pageHeaders,
   platform: 'gff',
   label: 'GayForFans',
@@ -288,7 +325,11 @@ module.exports = {
         if (isChallengeText(html)) throw challengeError();
         return performerPage(String(html));
       } catch (e) {
-        if (isBlockedStatus(e.status) || isChallengeText(e.body)) throw challengeError();
+        if (isBlockedStatus(e.status) || isChallengeText(e.body)) {
+          const unlocked = await unlockPerformer(url, feed, notes);
+          if (unlocked) return unlocked.optedOut ? null : unlocked;
+          throw challengeError();
+        }
         if (e.status === 404) return null;
         throw e;
       }

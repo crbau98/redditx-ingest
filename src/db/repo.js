@@ -35,7 +35,6 @@ const tagQ = {
   insert: db.prepare('INSERT OR IGNORE INTO tags (name, category) VALUES (?, ?)'),
   byName: db.prepare('SELECT id FROM tags WHERE name = ?'),
   link: db.prepare('INSERT OR IGNORE INTO media_tags (media_id, tag_id, source) VALUES (?, ?, ?)'),
-  bump: db.prepare('UPDATE tags SET usage_count = usage_count + 1 WHERE id = ?'),
   forMedia: db.prepare('SELECT t.name, t.category FROM tags t JOIN media_tags mt ON mt.tag_id = t.id WHERE mt.media_id = ? ORDER BY t.name'),
   setText: db.prepare('UPDATE media SET tags_text = ? WHERE id = ?'),
 };
@@ -53,7 +52,8 @@ function addTags(mediaId, names, source = 'ingest') {
   for (const name of clean) {
     tagQ.insert.run(name, 'general');
     const tag = tagQ.byName.get(name);
-    if (tag && tagQ.link.run(mediaId, tag.id, source).changes) tagQ.bump.run(tag.id);
+    // tags.usage_count is kept by the media_tags triggers (schema v23), so the link itself is enough
+    if (tag) tagQ.link.run(mediaId, tag.id, source);
   }
   const all = tagQ.forMedia.all(mediaId).map((t) => t.name);
   tagQ.setText.run(all.join(' '), mediaId);
@@ -89,6 +89,42 @@ const blocklist = {
   list(page = 0, limit = 100) { return { items: blockQ.list.all(limit, page * limit), total: blockQ.count.get().c, page, limit }; },
   remove(id) { return blockQ.remove.run(id).changes > 0; },
 };
+
+/* ------------------------------------------------- removed content: identifiers */
+const hasTable = (name) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
+/**
+ * Remove the content identifiers of media that is 'removed': face and visual embeddings, the perceptual
+ * and exact hashes, and every URL. The rows, their publish state, review reason and all blocklists stay,
+ * so an item stays removed and can never be re-imported. Only 'removed' rows are touched; a published
+ * row given here is skipped by the SQL, not by the caller.
+ */
+function purgeRemovedContent(ids) {
+  const all = [...new Set(ids.filter(Boolean))];
+  let purged = 0;
+  for (let i = 0; i < all.length; i += 500) {
+    const chunk = all.slice(i, i + 500);
+    const ph = chunk.map(() => '?').join(',');
+    const gone = db.prepare(`SELECT id FROM media WHERE publish_state = 'removed' AND id IN (${ph})`).all(...chunk).map((r) => r.id);
+    if (!gone.length) continue;
+    const gph = gone.map(() => '?').join(',');
+    if (hasTable('media_embeddings')) db.prepare(`DELETE FROM media_embeddings WHERE media_id IN (${gph})`).run(...gone);
+    // hash and media_url are NOT NULL, and hash is UNIQUE: they get placeholders that no real hash or URL equals
+    db.prepare(`UPDATE media SET phash = NULL, hash = 'purged:' || id, media_url = '', preview_url = NULL,
+      thumbnail_url = NULL, thumb_url = NULL, hls_url = NULL, tint = NULL,
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE publish_state = 'removed' AND id IN (${gph})`).run(...gone);
+    purged += gone.length;
+  }
+  return purged;
+}
+/** Purge every removed item of one creator (a block or takedown may leave older removed rows behind). */
+const purgeRemovedFor = (creatorId) => purgeRemovedContent(db.prepare("SELECT id FROM media WHERE creator_id = ? AND publish_state = 'removed'").all(creatorId).map((r) => r.id));
+/** Keep a removed item's hashes blocked before its identifiers are cleared. Idempotent. */
+function rememberRemovedHashes(creatorId, reason) {
+  for (const m of db.prepare("SELECT hash, phash FROM media WHERE creator_id = ? AND publish_state = 'removed'").all(creatorId)) {
+    if (m.hash && !String(m.hash).startsWith('purged:')) blocklist.add('hash', m.hash, reason);
+    if (m.phash) db.prepare('INSERT OR IGNORE INTO phash_blocklist (phash, reason) VALUES (?, ?)').run(m.phash, reason || null);
+  }
+}
 
 /* ------------------------------------------------------------ moderation log */
 const logQ = db.prepare('INSERT INTO moderation_actions (target_type, target_id, action, reason, actor) VALUES (?, ?, ?, ?, ?)');
@@ -310,6 +346,8 @@ const creators = {
     db.transaction(() => {
       db.prepare("UPDATE creators SET status = 'blocked', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(id);
       db.prepare("UPDATE media SET publish_state = 'removed', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE creator_id = ? AND publish_state != 'removed'").run(id);
+      rememberRemovedHashes(id, reason);
+      purgeRemovedFor(id);
       db.prepare('UPDATE feeds SET enabled = 0 WHERE creator_id = ?').run(id);
       blocklist.add('creator', id, reason);
       for (const f of creatorQ.feedsOf.all(id)) blocklist.add('creator', `${f.platform}:${String(f.target).toLowerCase()}`, reason);
@@ -1143,6 +1181,8 @@ const media = {
         throw e;
       }
       if (tags.length) addTags(id, tags, 'ingest');
+      // a new row changes its creator's counts (media_count, video_count, total_score, last_media_at)
+      if (row.creator_id) creatorQ.stats.run({ id: row.creator_id });
       hosts.add(row.media_url, row.preview_url, row.thumbnail_url, row.hls_url);
       return id;
     });
@@ -1187,6 +1227,7 @@ const media = {
       if (m.source_key) blocklist.add('source_key', m.source_key, reason);
       // the same picture re-uploaded anywhere else stays blocked too
       if (m.phash) db.prepare('INSERT OR IGNORE INTO phash_blocklist (phash, reason) VALUES (?, ?)').run(m.phash, reason || null);
+      purgeRemovedContent([id]);
       logAction('media', id, 'block', reason, actor);
       if (m.creator_id) creators.refreshStats(m.creator_id);
     })();
@@ -1612,7 +1653,9 @@ const parseLead = (r) => {
 };
 const OF = 'OnlyFans';
 /** Canonical paid-page host per traced service, for owner matching and lead search queries. */
-const PAID_HOSTS = { 'OnlyFans': 'onlyfans.com', 'Fansly': 'fansly.com', 'JustFor.Fans': 'justfor.fans' };
+const PAID_HOSTS = { 'OnlyFans': 'onlyfans.com', 'Fansly': 'fansly.com', 'JustFor.Fans': 'justfor.fans',
+  'ManyVids': 'manyvids.com', 'LoyalFans': 'loyalfans.com', 'Fanvue': 'fanvue.com',
+  'FanCentro': 'fancentro.com', 'Clips4Sale': 'clips4sale.com', 'Patreon': 'patreon.com' };
 const onlyfans = {
   get(handle, service = OF) { return parseLead(db.prepare('SELECT * FROM onlyfans_leads WHERE service = ? AND handle = ?').get(service, String(handle))); },
   /**
@@ -1675,7 +1718,9 @@ const onlyfans = {
   ownerOf(handle, service = OF) {
     const host = PAID_HOSTS[service] || PAID_HOSTS[OF];
     const h = String(handle).toLowerCase().replace(/[\\%_]/g, (m) => `\\${m}`);
-    return db.prepare(`SELECT id, handle FROM creators WHERE status = 'active' AND links LIKE ? ESCAPE '\\' LIMIT 1`).get(`%${host}/${h}"%`) || null;
+    // The handle may sit behind a section segment (clips4sale.com/store/<handle>), so any path
+    // ending in the handle counts, on that host only.
+    return db.prepare(`SELECT id, handle FROM creators WHERE status = 'active' AND links LIKE ? ESCAPE '\\' LIMIT 1`).get(`%${host}/%${h}"%`) || null;
   },
   /** Creators with a paid page but few known accounts elsewhere, least recently searched first. */
   reachTargets(limit = 4, staleDays = 30, maxAccounts = 4, service = OF, keyPrefix = null) {
@@ -1886,6 +1931,9 @@ const takedowns = {
         purgedMedia++;
       }
 
+      // blocked creators' older removed rows: keep their hashes blocked, then clear the identifiers
+      for (const cid of blockedCreatorIds) { rememberRemovedHashes(cid, why); purgeRemovedFor(cid); }
+      purgeRemovedContent(removedMediaIds);
       for (const cid of affectedCreators) {
         creatorQ.stats.run({ id: cid });
       }

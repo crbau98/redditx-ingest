@@ -56,29 +56,29 @@ before(() => {
 const plainCount = (extra = '', args = []) => db.prepare(`SELECT COUNT(*) AS n FROM media m WHERE m.publish_state = 'published' AND m.scope != 'excluded'
   AND (m.creator_id IS NULL OR m.creator_id NOT IN (SELECT id FROM creators WHERE status != 'active')) ${extra}`).get(...args).n;
 
-describe('schema v22: covering indexes for the whole-library scans', () => {
+describe('schema v24: covering indexes for the whole-library scans', () => {
   test('a fresh database has both, as partial indexes (published and not excluded only)', () => {
     for (const name of ['ix_media_pub_count', 'ix_media_pub_comm']) {
       const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?").get(name);
       assert.ok(row, `${name} exists`);
       assert.match(row.sql, /WHERE publish_state = 'published' AND scope != 'excluded'/, `${name} is partial`);
     }
-    assert.ok(MIGRATIONS.length >= 22);
+    assert.ok(MIGRATIONS.length >= 24);
   });
 
-  test('on a v21 database it only adds the indexes: no row is touched, and running it again changes nothing', () => {
+  test('on a v23 database it only adds the indexes: no row is touched, and running it again changes nothing', () => {
     const d = new Database(':memory:');
     d.pragma('foreign_keys = OFF');
-    for (let i = 0; i < 21; i++) MIGRATIONS[i](d);
-    d.pragma('user_version = 21');
+    for (let i = 0; i < 23; i++) MIGRATIONS[i](d);
+    d.pragma('user_version = 23');
     d.prepare("INSERT INTO media (id, platform, media_type, media_url, hash) VALUES ('m1', 'reddit', 'image', 'https://x/1.jpg', 'h1')").run();
     const before = d.prepare('SELECT COUNT(*) AS n, total_changes() AS c FROM media').get();
-    assert.deepEqual(migrate(d), { from: 21, to: MIGRATIONS.length });
+    assert.deepEqual(migrate(d), { from: 23, to: MIGRATIONS.length });
     for (const name of ['ix_media_pub_count', 'ix_media_pub_comm']) assert.ok(d.prepare("SELECT 1 FROM sqlite_master WHERE name = ?").get(name));
     assert.equal(d.prepare('SELECT COUNT(*) AS n FROM media').get().n, before.n);
     assert.equal(d.prepare('SELECT total_changes() AS c').get().c, before.c, 'creating the indexes rewrites no row');
     assert.deepEqual(migrate(d), { from: MIGRATIONS.length, to: MIGRATIONS.length });
-    MIGRATIONS[21](d); // CREATE INDEX IF NOT EXISTS: safe to repeat
+    MIGRATIONS[23](d); // CREATE INDEX IF NOT EXISTS: safe to repeat
   });
 });
 

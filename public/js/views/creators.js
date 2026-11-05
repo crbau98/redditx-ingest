@@ -54,9 +54,9 @@ export async function creators(root, { query }) {
     type: 'button',
     class: `chip${isAll ? ' on' : ''}`,
     'aria-pressed': String(isAll),
-    title: 'Show all creators',
+    title: 'Top creators: OnlyFans pages first, then everyone else by posts',
     onclick: () => { search.value = ''; navigate('/creators', {}, { replace: true }); },
-  }, icon('users', 'sm'), 'All');
+  }, icon('flame', 'sm'), 'Top');
 
   const followingChip = h('button', {
     type: 'button',
@@ -72,31 +72,7 @@ export async function creators(root, { query }) {
     'aria-pressed': String(f.paid === 'onlyfans'),
     title: 'Only creators with an OnlyFans linkout',
     onclick: () => set({ paid: f.paid === 'onlyfans' ? '' : 'onlyfans' }),
-  }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), 'OnlyFans');
-
-  const topRatedChip = h('button', {
-    type: 'button',
-    class: `chip${f.sort === 'score' ? ' on' : ''}`,
-    'aria-pressed': String(f.sort === 'score'),
-    title: 'Sort by highest rated creator content',
-    onclick: () => set({ sort: f.sort === 'score' ? 'media' : 'score' }),
-  }, icon('flame', 'sm'), 'Top Rated');
-
-  const mostPostsChip = h('button', {
-    type: 'button',
-    class: `chip${f.sort === 'media' && !isAll ? ' on' : ''}`,
-    'aria-pressed': String(f.sort === 'media' && !isAll),
-    title: 'Sort by post tally',
-    onclick: () => set({ sort: 'media' }),
-  }, icon('grid', 'sm'), 'Most Posts');
-
-  const recentChip = h('button', {
-    type: 'button',
-    class: `chip${f.sort === 'recent' ? ' on' : ''}`,
-    'aria-pressed': String(f.sort === 'recent'),
-    title: 'Sort by recently active creators',
-    onclick: () => set({ sort: f.sort === 'recent' ? 'media' : 'recent' }),
-  }, icon('clock', 'sm'), 'Recently Active');
+  }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), 'OnlyFans only');
 
   const newChip = h('button', {
     type: 'button',
@@ -104,7 +80,15 @@ export async function creators(root, { query }) {
     'aria-pressed': String(f.sort === 'new'),
     title: 'Sort by newly discovered creators',
     onclick: () => set({ sort: f.sort === 'new' ? 'media' : 'new' }),
-  }, icon('sparkle', 'sm'), 'Newest');
+  }, icon('sparkle', 'sm'), 'New');
+
+  // The other sorts live in the Filters panel as one menu instead of three more chips.
+  const sortSel = h('select', {
+    class: 'select sm',
+    style: { width: 'auto' },
+    'aria-label': 'Sort creators',
+    onchange: (e) => set({ sort: e.target.value }),
+  }, SORTS.map(([v, l]) => h('option', { value: v, selected: f.sort === v }, l)));
 
   const platSel = h('select', {
     class: 'select sm',
@@ -130,8 +114,8 @@ export async function creators(root, { query }) {
   }, 'Clear all') : null;
 
   // Secondary disclosure for Source and Activity
-  const moreFilters = [field('Source', platSel), field('Activity', freshSel)].filter(Boolean);
-  const activeExtraCount = (f.platform ? 1 : 0) + (f.fresh ? 1 : 0);
+  const moreFilters = [field('Sort', sortSel), field('Source', platSel), field('Activity', freshSel)].filter(Boolean);
+  const activeExtraCount = (f.platform ? 1 : 0) + (f.fresh ? 1 : 0) + (f.sort !== 'media' && f.sort !== 'new' ? 1 : 0);
   const filtersDisclosure = (() => {
     let open = window.matchMedia('(min-width: 900px)').matches && activeExtraCount > 0;
     const panel = h('div', { class: 'filter-more', hidden: !open }, moreFilters);
@@ -163,19 +147,15 @@ export async function creators(root, { query }) {
         )
       ),
       h('div', { class: 'row wrap' },
-        h('button', { type: 'button', class: 'btn primary sm', onclick: () => runInlineLookup(search.value.trim()) }, icon('search', 'sm'), 'Look up on web'),
-        h('a', { class: 'btn sm ghost', href: href('/find', f.q ? { q: f.q } : {}) }, 'Full lookup')
+        h('button', { type: 'button', class: 'btn primary sm', onclick: () => runInlineLookup(search.value.trim()) }, icon('search', 'sm'), 'Look up on web')
       )
     ),
     h('div', { class: 'filterbar creator-filters', role: 'toolbar', 'aria-label': 'Creator filters' },
       h('div', { class: 'filter-scroll' },
         search,
         allChip,
-        followingChip,
         ofChip,
-        topRatedChip,
-        mostPostsChip,
-        recentChip,
+        followingChip,
         newChip,
         ...filtersDisclosure,
         clearBtn

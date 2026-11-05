@@ -179,13 +179,15 @@ describe('reports and takedowns', () => {
   });
   test('admin resolves: remove blocklists permanently; restore republishes', async () => {
     const a = seed(); const b = seed();
+    const aHash = repo.db.prepare('SELECT hash FROM media WHERE id=?').get(a.id).hash; // captured before removal clears it
     const ra = (await call('/api/report', { method: 'POST', body: { kind: 'copyright', mediaId: a.id } })).json.id;
     const rb = (await call('/api/report', { method: 'POST', body: { kind: 'underage', mediaId: b.id } })).json.id;
     const open = (await adm('/reports')).json;
     assert.equal(open.items[0].kind, 'underage', 'safety reports sort first');
     assert.equal((await adm(`/reports/${ra}/resolve`, { method: 'POST', body: { action: 'remove' } })).status, 200);
     assert.equal(repo.media.get(a.id).publish_state, 'removed');
-    assert.ok(repo.blocklist.has('hash', repo.db.prepare('SELECT hash FROM media WHERE id=?').get(a.id).hash));
+    assert.ok(repo.blocklist.has('hash', aHash));
+    assert.match(repo.db.prepare('SELECT hash FROM media WHERE id=?').get(a.id).hash, /^purged:/);
     assert.equal((await adm(`/reports/${rb}/resolve`, { method: 'POST', body: { action: 'restore', note: 'false alarm' } })).status, 200);
     assert.equal(repo.media.get(b.id).publish_state, 'published');
     assert.equal((await adm(`/reports/${rb}/resolve`, { method: 'POST', body: { action: 'nonsense' } })).status, 400);

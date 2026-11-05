@@ -18,6 +18,8 @@ const { extractLinks } = require('../lib/links');
 const { hostOf, hostBlocked, looksLikeDirectMedia, looksLikeVideo } = require('../lib/mediaurl');
 const { checkHtmlOptOut } = require('../lib/takedowns');
 const render = require('../lib/render'); // Browser4 or Playwright (RENDER_ENGINE)
+const agegate = require('../lib/agegate');
+const paid = require('../lib/paid');
 const brightdata = require('../lib/brightdata');
 const scrapfly = require('../lib/scrapfly');
 const settingsStore = require('../settings');
@@ -494,6 +496,9 @@ const REFUSED_STATUS = new Set([403, 429, 503]);
  */
 async function unlockedRead(feed, need) {
   const cfg = settingsStore.get();
+  // A paid platform that refuses us is not ours to unblock: that would spend credits to break a refusal
+  // on a host whose content sits behind its own gate. The page stays a link-out and a note explains why.
+  if (paid.isPaidPlatform(feed.target)) return { skipped: 'paid platform: PRISM does not spend credits to break a refusal here' };
   const bdOn = cfg.brightdataUnlocker === 'fallback' && !!cfg.brightdataUnlockBudget && (brightdata.unlockerConfigured() || (brightdata.browserConfigured() && render.enabled()));
   const scrapOn = cfg.scrapflyUnlocker === 'fallback' && scrapfly.configured() && scrapfly.allowedFor(feed);
   if (!bdOn && !scrapOn) return null;
@@ -582,10 +587,11 @@ async function fetchHtmlWithMeta(targetUrl, maxBytes = 3_000_000) {
       html: res.body.toString('utf8'),
       headers: res.headers || {},
       status: res.status || 200,
+      url: res.url || targetUrl, // the URL we ended up on, after redirects
     };
   } catch (e) {
     if (e && Number(e.status) === 451) {
-      return { html: '', headers: {}, status: 451 };
+      return { html: '', headers: {}, status: 451, url: targetUrl };
     }
     throw e;
   }
@@ -602,14 +608,26 @@ const webAdapter = {
 
   async fetch(feed, ctx) {
     if (!(await robotsAllows(feed.target))) throw Object.assign(new Error('Blocked by robots.txt'), { skip: true });
-    const { html, headers, status } = await fetchHtmlWithMeta(feed.target, 3_000_000);
-    let page = extractPage(html, feed.target, { headers, status });
-    let via = 'html';
+    let { html, headers, status, url: finalUrl } = await fetchHtmlWithMeta(feed.target, 3_000_000);
     const notes = []; // problems and limits (the engine keeps notes[0] as the feed's last_error)
     const info = [];  // what went well (the engine logs it)
+    // An age/consent interstitial in front of the page (JustFor.Fans): pass it with the site's own
+    // confirmation parameter and read the page behind it (owner decision 2026-11-05).
+    let readTarget = feed.target;
+    const confirmed = agegate.confirmFor(feed.target, finalUrl, html);
+    if (confirmed) {
+      const again = await fetchHtmlWithMeta(confirmed, 3_000_000);
+      if (again.status < 400) {
+        readTarget = confirmed;
+        html = again.html; headers = again.headers; status = again.status; finalUrl = again.url || confirmed;
+        info.push('passed the age/consent interstitial');
+      }
+    }
+    let page = extractPage(html, readTarget, { headers, status });
+    let via = 'html';
     let refused = REFUSED_STATUS.has(status);
     if (!page.optedOut && status < 400) {
-      const b = await browserRead(feed, page, 'media');
+      const b = await browserRead({ ...feed, target: readTarget }, page, 'media');
       const engine = engineLabel();
       if (b && b.skipped) info.push(`${engine} not used: ${b.skipped}`);
       else if (b && b.error) { notes.push(`${engine}: ${b.error.message}`); if (b.error.challenge) refused = true; }

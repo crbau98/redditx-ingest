@@ -46,9 +46,10 @@ const SCHEMA = {
   imageSweep: { type: 'bool', default: true, label: 'Re-check the existing library (women in pictures, duplicate pictures) in the background', group: 'safety' },
   imageSweepPerTick: { type: 'int', default: 12, min: 0, max: 200, label: 'Items re-checked per minute by the image sweep', group: 'safety' },
   // --- body filter (v4.14) ---
-  physiqueFilter: { type: 'bool', default: true, label: 'Body filter: show only fit / athletic bodies — hides heavy or very large builds (on-device pose + silhouette, and words like "chubby", "gainer", "dad bod")', group: 'safety' },
+  physiqueFilter: { type: 'bool', default: true, label: 'Body filter: show only fit / athletic bodies — hides heavy or very large builds (on-device pose + silhouette, and words like "chubby", "gainer", "dad bod") and men who call themselves older (words like "silver fox" or a stated age of 45+; words only, never a guess from a face). Hidden, not deleted: switching it off shows everything again', group: 'safety' },
   physiqueThreshold: { type: 'int', default: 45, min: 20, max: 95, label: 'Body filter: heaviness score (0 = lean … 100 = very large) at which a picture is hidden — lower = stricter. Hidden, not deleted: moving it re-applies to the whole library', group: 'safety' },
   physiqueCreatorShare: { type: 'int', default: 30, min: 0, max: 100, label: 'Body filter: hide a creator (and pause their feeds) when this % of their measured pictures are hidden (at least 3 measured; 0 = never)', group: 'safety' },
+  autoRetireFeeds: { type: 'bool', default: true, label: 'Pause feeds the app made itself (seeds, discovered, linked) once they have clearly stopped working — 20 failed runs in a row with no success for 14 days, or 12+ runs in 45 days that added nothing. Never touches feeds you added or imported; paused, not deleted, and one click to turn back on', group: 'sources' },
   // --- discovery (v4.3) ---
   autoDiscover: { type: 'bool', default: true, label: 'Discover new creators automatically (mentions, follow graphs, web search)', group: 'discovery' },
   discoveryIntervalMin: { type: 'int', default: 60, min: 15, max: 1440, label: 'Discovery runs every (minutes)', group: 'discovery' },
@@ -58,8 +59,8 @@ const SCHEMA = {
   braveDailyBudget: { type: 'int', default: 40, min: 0, max: 2000, label: 'Metered web searches per day (Brave + Keenable + Bright Data budget; 0 = free search only — SearXNG, Bing, DuckDuckGo, and discovery then searches MORE per run)', group: 'discovery' },
   discoveryQueries: {
     type: 'text', group: 'discovery', label: 'Web-search topics (one per line; rotated, one per run)',
-    default: ['gay male model bluesky', 'male fitness model onlyfans x.com', 'gay creator linktree 18+', 'muscle model telegram channel', 'gay twink creator redgifs', 'muscle daddy creator onlyfans bluesky', 'gay amateur couple onlyfans twitter', 'male model throne wishlist',
-      'gay bodybuilder creator linktree', 'hairy gay creator onlyfans', 'gay jock creator link in bio', 'gay otter creator bluesky 18+', 'gay daddy creator mastodon nsfw', 'gay content creator tumblr nsfw', 'gay muscle videos peertube',
+    default: ['gay male model bluesky', 'male fitness model onlyfans x.com', 'gay creator linktree 18+', 'muscle model telegram channel', 'gay twink creator redgifs', 'muscle model creator onlyfans bluesky', 'gay amateur couple onlyfans twitter', 'male model throne wishlist',
+      'gay bodybuilder creator linktree', 'hairy gay creator onlyfans', 'gay jock creator link in bio', 'gay otter creator bluesky 18+', 'gay athlete creator mastodon nsfw', 'gay content creator tumblr nsfw', 'gay muscle videos peertube',
       'gay porn star official links', 'gay amateur creator allmylinks', 'gay athlete creator beacons.ai', 'gay fitness creator beacons.ai', 'ゲイ 筋肉 クリエイター', 'ゲイ 細マッチョ リンク', 'gay cam model linktree', 'male nude model portfolio',
       // OnlyFans / Fansly / JustFor.Fans pages in search results become leads (their snippet is the public bio); fit / athletic first
       'site:onlyfans.com gay muscle', 'site:onlyfans.com male fitness model', 'site:onlyfans.com gay athlete', 'site:onlyfans.com gay jock', 'site:onlyfans.com free gay',
@@ -73,6 +74,8 @@ const SCHEMA = {
   // --- link health (v4.8) ---
   linkHealth: { type: 'bool', default: true, label: 'Check media at the source and hide what has been removed there', group: 'maintenance' },
   linkHealthPerSweep: { type: 'int', default: 40, min: 0, max: 500, label: 'Items re-checked every 10 minutes', group: 'maintenance' },
+  linkHealthCohortPerSweep: { type: 'int', default: 200, min: 0, max: 500, label: 'Items from the rot hosts below re-checked every 10 minutes (their own rate; the other items keep linkHealthPerSweep)', group: 'maintenance' },
+  linkHealthRotHosts: { type: 'text', default: 'i.redd.it\npreview.redd.it', label: 'Hosts where media is known to disappear at the source (one per line). Their items are checked as a cohort, whatever their age', group: 'maintenance' },
   creatorSeeds: {
     type: 'text', group: 'discovery', label: 'Creators to find by name (one per line: a name, @handle or profile link). Each is looked up across every platform PRISM reads and his verified public accounts are followed; re-checked monthly',
     // empty under test: a lookup reaches every platform, which tests must not do by accident
@@ -115,7 +118,7 @@ const SCHEMA = {
   scrapflyAllowlist: { type: 'text', default: '', label: 'Scrapfly allowlist: the ONLY creators (ids or handles, one per line) the Scrapfly tier may spend credits on. Empty = Scrapfly never runs', group: 'sources' },
   scrapflyBudget: { type: 'int', default: 20, min: 0, max: 10000, label: 'Scrapfly: most requests per day (a clean read is 1 credit; an escalated read 25 to 80)', group: 'sources' },
   scrapflyMonthlyBudget: { type: 'int', default: 100, min: 0, max: 100000, label: 'Scrapfly: most requests per month (the FREE plan allows 1000 requests)', group: 'sources' },
-  scrapflyCreditBudget: { type: 'int', default: 30, min: 0, max: 1000000, label: 'Scrapfly: most credits per day. An escalation to 80 needs at least 80 here, so 30 means it never runs', group: 'sources' },
+  scrapflyCreditBudget: { type: 'int', default: 30, min: 0, max: 1000000, label: 'Scrapfly: most credits per day. The escalated tier (80 credits per page) only runs when this is at least 80; at 30 nothing escalates, and the run note says so', group: 'sources' },
   scrapflyMonthlyCreditBudget: { type: 'int', default: 120, min: 0, max: 1000000, label: 'Scrapfly: most credits per month (the FREE plan allows 1000 credits; keep it under what the account has left)', group: 'sources' },
   brightdataUnlockBudget: { type: 'int', default: 100, min: 0, max: 100000, label: 'Bright Data Unlocker: most unlocked requests per day (each one costs credit; 0 = none)', group: 'sources' },
   // --- AI (OpenAI by default, Claude with AI_PROVIDER=anthropic; needs OPENAI_API_KEY / ANTHROPIC_API_KEY on the host, inert without it) ---

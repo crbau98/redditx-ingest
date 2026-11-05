@@ -75,11 +75,13 @@ describe('migration from a real v3 database', () => {
   });
   test('the safety sweep retro-blocks legacy content that predates the gate', async () => {
     assert.equal(repo.media.get('m5').publish_state, 'published', 'old rows are untouched by the migration itself');
+    const legacyHash = repo.media.get('m5').hash;
     const { sweep } = require('../src/engine/maintenance');
     const r = await sweep();
     assert.ok(r.blocked >= 1);
     assert.equal(repo.media.get('m5').publish_state, 'removed');
-    assert.ok(repo.blocklist.has('hash', repo.media.get('m5').hash), 'and it can never be re-imported');
+    assert.ok(repo.blocklist.has('hash', legacyHash), 'and it can never be re-imported');
+    assert.match(repo.media.get('m5').hash, /^purged:/, 'its identifiers are cleared once removed');
   });
   test('opening again is a no-op', () => {
     const { migrate, MIGRATIONS } = require('../src/db/schema');

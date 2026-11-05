@@ -14,6 +14,10 @@ A prism splits light into a spectrum, so the spectrum is the one structural devi
 - **Touch**: every interactive element is at least 44px on coarse pointers, including Browse tag chips (measured with Playwright at 390px: 0 under 44px on Home, Explore, Creators, Reels, Saved, Find, Browse).
 - No new infinite animation. The ring only transitions `transform` and is off for reduced motion.
 
+## Information architecture (top first)
+
+The job is to find the top OnlyFans creators fast. Home is, in order: masthead, ring strip, Top OnlyFans creators, follows, trending, For you, latest uploads. Creators opens on **Top** (OnlyFans-linked first), with **OnlyFans only**, **Following** and **New** beside it; other sorts live in Filters. A section earns its place only if it answers a different question from another one; the rest were cut. No number on a page may be typed in by hand: Browse tiles are live counts or absent.
+
 ## Tokens
 
 - Type: Inter (UI) + Space Grotesk (display), self-hosted, Latin-1 subset, preloaded.

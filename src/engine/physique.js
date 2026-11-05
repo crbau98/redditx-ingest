@@ -149,7 +149,7 @@ function publish(id, settings) {
   return repo.media.get(id).publish_state;
 }
 
-const TEXT_SWEEP_VERSION = '2'; // 2: bears, cubs, stocky, burly, ガチムチ ... // bump when the word list grows: stored items, creators and feeds are re-read once
+const TEXT_SWEEP_VERSION = '3'; // 2: bears, cubs, stocky, burly, ガチムチ ...  3: self-described older men (words and stated ages, lib/physique) // bump when the word list grows: stored items, creators and feeds are re-read once
 
 /**
  * Read stored items, creators and feeds against the physique word list. Items are hidden with TEXT_SCORE (so `reapply` can

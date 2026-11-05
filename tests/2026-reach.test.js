@@ -111,7 +111,19 @@ before(async () => {
   limiter.schedule = (key, ms, fn) => fn();
   websearch = require('../src/lib/websearch');
   brave = require('../src/lib/brave');
-  gff = require('../src/sources/gff');
+  // The performer-directory tests must not touch the live sites (a datacenter or CI address gets a bot check, which the
+  // adapter rightly reports as a challenge). The repo's hermetic pattern: stub the HTTP client and robots.txt before the
+  // adapter is first loaded, send the two directory hosts to the local mock, then put both back.
+  const httpMod = require('../src/sources/http');
+  const webMod = require('../src/sources/web');
+  const realForPlatform = httpMod.forPlatform; const realRobots = webMod.robotsAllows;
+  httpMod.forPlatform = (name, ...rest) => {
+    const real = realForPlatform(name, ...rest);
+    if (name !== 'gff') return real;
+    return { ...real, text: (url, opts) => real.text(String(url).replace(/^https:\/\/(?:www\.)?(?:justthegays\.tv|gayforfans\.com)/, mock.url), opts) };
+  };
+  webMod.robotsAllows = async () => true;
+  try { gff = require('../src/sources/gff'); } finally { httpMod.forPlatform = realForPlatform; webMod.robotsAllows = realRobots; }
   links = require('../src/lib/links');
   lookup = require('../src/engine/lookup');
 });

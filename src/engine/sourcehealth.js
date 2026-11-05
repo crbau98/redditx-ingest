@@ -58,4 +58,46 @@ function report({ failingAfter = 3, staleDays = 3, deadDays = 30, deadMinRuns = 
   };
 }
 
-module.exports = { report };
+/* ------------------------------------------------------------------------------------------------ auto-retire */
+// Feeds that people made (origin admin / import) are never touched. Everything the app made itself (seed, discovered,
+// ingest, search, linked, expand, post, telegram-sync) is paused, not deleted, when it has clearly stopped working, so it
+// stops taking scheduler slots and clogging the failing / dead lists. A pause is one row in the action log and one click
+// to undo; an admin's later "enable" is respected for RESPECT_DAYS.
+const PERSONAL_ORIGINS = ['admin', 'import'];
+const RETIRE = { failingAfter: 20, notWorkingDays: 14, deadDays: 45, deadMinRuns: 12 };
+const RESPECT_DAYS = 90;
+
+/**
+ * Pause the app's own feeds that failed `failingAfter` runs in a row with no success for `notWorkingDays`, or that ran
+ * `deadMinRuns`+ times in `deadDays` and added nothing. At most `max` per call, so a bad day cannot empty the library.
+ * @returns {{paused: Array<{id: string, platform: string, target: string, why: string}>, skipped: number, capped: boolean}}
+ */
+function retireDead({ now = Date.now(), max = 50, dryRun = false } = {}) {
+  const rep = report({ failingAfter: RETIRE.failingAfter, deadDays: RETIRE.deadDays, deadMinRuns: RETIRE.deadMinRuns, limit: 1000, now });
+  const why = new Map();
+  for (const f of rep.failing) {
+    if (!f.lastSuccessAt || f.lastSuccessAt < iso(now - RETIRE.notWorkingDays * DAY)) {
+      why.set(f.id, `failed ${f.failures} runs in a row, no success in ${RETIRE.notWorkingDays}+ days${f.lastError ? ` (${String(f.lastError).slice(0, 80)})` : ''}`);
+    }
+  }
+  for (const f of rep.dead) if (!why.has(f.id)) why.set(f.id, `${f.runs} runs in ${RETIRE.deadDays} days added nothing (${f.why})`);
+
+  const out = { paused: [], skipped: 0, capped: false };
+  const lastAction = repo.db.prepare("SELECT action, actor, created_at FROM moderation_actions WHERE target_type = 'feed' AND target_id = ? ORDER BY id DESC LIMIT 1");
+  for (const [id, reason] of why) {
+    const feed = repo.feeds.get(id);
+    if (!feed || !feed.enabled || PERSONAL_ORIGINS.includes(feed.origin)) { out.skipped++; continue; }
+    const last = lastAction.get(String(id));
+    // someone enabled it by hand not long ago: that decision stands
+    if (last && last.actor !== 'system' && last.created_at > iso(now - RESPECT_DAYS * DAY)) { out.skipped++; continue; }
+    if (out.paused.length >= max) { out.capped = true; break; }
+    if (!dryRun) {
+      repo.feeds.update(id, { enabled: false });
+      repo.logAction('feed', id, 'auto-retire', reason, 'system');
+    }
+    out.paused.push({ id, platform: feed.platform, target: feed.target, why: reason });
+  }
+  return out;
+}
+
+module.exports = { report, retireDead, RETIRE };
