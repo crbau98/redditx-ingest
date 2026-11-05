@@ -166,3 +166,16 @@ details.panel[open] > summary::before { transform: rotate(90deg); }
 .adm-details > summary:hover { color: var(--text); }
 .adm-details[open] > summary { border-bottom: 1px solid var(--line); }
 .adm-details .kpis { padding: 0 18px 18px; }
+
+/* Review queue: sections by hold kind, and the evidence line on each card. Same tokens as the rest of admin. */
+.review-groups { gap: 24px; }
+.review-group { display: grid; gap: 10px; min-width: 0; }
+.review-group-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.review-group-head h2 { margin: 0; }
+.review-group-note { margin: 0; font-size: 13px; }
+.review-why { font-size: 12.5px; line-height: 1.4; color: var(--text-2); }
+.review-ev { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 12px; }
+.review-tags { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-src { font-size: 12px; }
+.review-keys { font-size: 12.5px; margin-top: 6px; }
+.mod-card:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }

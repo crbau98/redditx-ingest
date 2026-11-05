@@ -702,3 +702,5 @@ body.reels-mode { background: var(--bg); }
 .rail-group { margin-top: 8px; }
 .rail-group .group-label { padding-left: 2px; }
 .filter-label { flex: none; align-self: center; margin-right: 6px; }
+/* The hidden attribute must win over the display set on these groups and chips (their own display rules would otherwise show them). */
+.group[hidden], .rail-group[hidden], .conn-strip[hidden], .conn-chip[hidden] { display: none !important; }
