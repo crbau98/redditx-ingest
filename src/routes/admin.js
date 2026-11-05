@@ -66,6 +66,17 @@ router.get('/sources', (req, res) => {
 });
 /** Feed-level health: failing, stale, dead (ran often, added nothing in a month) and top feeds. */
 router.get('/sources/health', (req, res) => res.json({ ...require('../engine/sourcehealth').report(), thumbnails: require('../engine/thumbs').progress() }));
+/** Feeds the app paused on its own (auto-retire) and that are still paused, newest first. The overview offers one tap to turn one back on. */
+router.get('/sources/retired', (req, res) => {
+  const days = int(req.query.days, 1, 90, 14);
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const rows = repo.db.prepare(`SELECT f.id, f.platform, f.kind, f.target, f.label, f.origin, f.last_error, a.created_at AS retired_at, a.reason AS why
+    FROM feeds f JOIN moderation_actions a ON a.target_type = 'feed' AND a.target_id = f.id
+    WHERE f.enabled = 0 AND a.action = 'auto-retire' AND a.created_at >= ?
+      AND a.id = (SELECT MAX(id) FROM moderation_actions WHERE target_type = 'feed' AND target_id = f.id)
+    ORDER BY a.created_at DESC`).all(since);
+  res.json({ days, total: rows.length, items: rows.slice(0, 50) });
+});
 
 /* ---------------------------------------------------------------- browser4 */
 router.get('/browser4', async (req, res) => {
