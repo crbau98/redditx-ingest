@@ -19,10 +19,13 @@ const identity = require('../engine/identity');
 const browser4 = require('../lib/browser4');
 const brightdata = require('../lib/brightdata');
 const expand = require('../engine/expand');
-const { adminRateLimit, adminCredentialAuth } = require('../middleware/auth');
+const { adminRateLimit, adminCredentialAuth, adminKeyValid } = require('../middleware/auth');
 
 const router = express.Router();
-router.use(adminRateLimit, adminCredentialAuth);
+// The brute-force guard counts every request that does not finish with a success. The live event stream never finishes (it ends when
+// the page is left), so each visit to a screen that listens to it used up one of the 20 attempts: 21 page changes in ten minutes locked
+// the owner out. A stream that already carries the right key has nothing to guess, so it skips the guard; a wrong key still counts.
+router.use((req, res, next) => (req.path === '/stream' && adminKeyValid(req) ? next() : adminRateLimit(req, res, next)), adminCredentialAuth);
 
 const int = repo.clampInt;
 const page = (req, max = 200) => ({ page: int(req.query.page, 0, 100000, 0), limit: int(req.query.limit, 1, max, 50) });
@@ -66,6 +69,17 @@ router.get('/sources', (req, res) => {
 });
 /** Feed-level health: failing, stale, dead (ran often, added nothing in a month) and top feeds. */
 router.get('/sources/health', (req, res) => res.json({ ...require('../engine/sourcehealth').report(), thumbnails: require('../engine/thumbs').progress() }));
+/** Feeds the app paused on its own (auto-retire) and that are still paused, newest first. The overview offers one tap to turn one back on. */
+router.get('/sources/retired', (req, res) => {
+  const days = int(req.query.days, 1, 90, 14);
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const rows = repo.db.prepare(`SELECT f.id, f.platform, f.kind, f.target, f.label, f.origin, f.last_error, a.created_at AS retired_at, a.reason AS why
+    FROM feeds f JOIN moderation_actions a ON a.target_type = 'feed' AND a.target_id = f.id
+    WHERE f.enabled = 0 AND a.action = 'auto-retire' AND a.created_at >= ?
+      AND a.id = (SELECT MAX(id) FROM moderation_actions WHERE target_type = 'feed' AND target_id = f.id)
+    ORDER BY a.created_at DESC`).all(since);
+  res.json({ days, total: rows.length, items: rows.slice(0, 50) });
+});
 
 /* ---------------------------------------------------------------- browser4 */
 router.get('/browser4', async (req, res) => {

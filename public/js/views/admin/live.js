@@ -3,7 +3,7 @@ import { adminGet, adminPost, adminDelete, streamAdmin } from '../../api.js';
 import { pageHead, table, platBadge, statusDot } from './ui.js';
 
 export async function render(root) {
-  const consoleEl = h('div', { class: 'console', role: 'log', 'aria-live': 'off' });
+  const consoleEl = h('div', { class: 'console', role: 'log', 'aria-live': 'off', 'aria-label': 'Ingestion log', tabindex: '0' });
   const runsHost = h('div');
   let follow = true; let level = 'ALL'; let paused = false;
   const buffer = [];
@@ -12,7 +12,7 @@ export async function render(root) {
   const line = (e) => h('div', { class: `ln ${e.level}` }, h('span', { class: 'ts' }, new Date(e.ts).toLocaleTimeString()), h('span', { class: 'lv' }, e.level), e.msg);
   const draw = () => { consoleEl.replaceChildren(...buffer.filter((e) => level === 'ALL' || e.level === level || (level === 'PROBLEMS' && ['WARN', 'ERR'].includes(e.level))).slice(-400).map(line)); if (follow) consoleEl.scrollTop = consoleEl.scrollHeight; };
 
-  const lvSel = h('select', { class: 'select sm', style: { width: 'auto' }, onchange: (e) => { level = e.target.value; draw(); } }, [['ALL', 'All'], ['PROBLEMS', 'Warnings & errors'], ['OK', 'Added'], ['INFO', 'Info']].map(([v, l]) => h('option', { value: v }, l)));
+  const lvSel = h('select', { class: 'select sm', 'aria-label': 'Which log lines to show', style: { width: 'auto' }, onchange: (e) => { level = e.target.value; draw(); } }, [['ALL', 'All'], ['PROBLEMS', 'Warnings & errors'], ['OK', 'Added'], ['INFO', 'Info']].map(([v, l]) => h('option', { value: v }, l)));
   const pauseBtn = h('button', { class: 'btn sm', onclick: () => { paused = !paused; pauseBtn.replaceChildren(icon(paused ? 'play' : 'pause', 'sm'), paused ? 'Resume' : 'Pause'); } }, icon('pause', 'sm'), 'Pause');
   root.append(pageHead('Live log', 'A real-time view of what the ingestion engine is doing.',
     lvSel, pauseBtn, h('button', { class: 'btn sm', onclick: async () => { await adminDelete('/logs'); buffer.length = 0; draw(); } }, icon('trash', 'sm'), 'Clear')),
@@ -24,8 +24,8 @@ export async function render(root) {
   async function loadRuns() {
     const runs = await adminGet('/runs', { limit: 25 });
     runsHost.replaceChildren(table([
-      { label: '', width: '14px', render: (r) => statusDot(r.status) },
-      { label: 'Feed', render: (r) => h('div', { class: 'row' }, platBadge(r.platform), h('span', { class: 'truncate', style: { maxWidth: '240px' } }, r.label || r.target)) },
+      { label: '', srLabel: 'Status', width: '14px', cell: 'check', render: (r) => statusDot(r.status) },
+      { label: 'Feed', cell: 'title', render: (r) => h('div', { class: 'row' }, platBadge(r.platform), h('span', { class: 'truncate', style: { maxWidth: '240px' } }, r.label || r.target)) },
       { label: 'When', render: (r) => fmt.ago(r.started_at) },
       { label: 'Fetched', class: 'num', render: (r) => r.fetched },
       { label: 'Added', class: 'num', render: (r) => (r.added ? h('b', { style: { color: 'var(--good)' } }, `+${r.added}`) : '0') },
@@ -34,8 +34,8 @@ export async function render(root) {
       { label: 'Blocked', class: 'num', render: (r) => r.blocked || '' },
       { label: 'Via', render: (r) => h('span', { class: 'sub' }, r.via || '') },
       { label: 'Time', render: (r) => (r.duration_ms ? fmt.ms(r.duration_ms) : '…') },
-      { label: 'Error', render: (r) => (r.error ? h('span', { class: 'sub', style: { color: 'var(--bad)' }, title: r.error }, r.error.slice(0, 60)) : '') },
-    ], runs, { empty: 'No runs yet — press “Sync everything now” on the Overview.' }));
+      { label: 'Error', cell: 'wide', render: (r) => (r.error ? h('span', { class: 'a-err', title: r.error }, r.error.slice(0, 80)) : '') },
+    ], runs, { label: 'Recent runs', empty: 'No runs yet. Press “Sync now” on the Overview.' }));
   }
   await loadRuns();
 
