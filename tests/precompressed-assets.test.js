@@ -111,7 +111,7 @@ describe('pre-compressed app shell and scripts', () => {
     fs.writeFileSync(path.join(dir, 'js', 'lazy.js'), source);
     const store = assets.createCompressedStore();
     const mini = express();
-    mini.use('/v/:ver', assets.compressedStatic(dir, store, () => 'v1'));
+    mini.use('/v/:ver', require('express-rate-limit')({ windowMs: 60 * 1000, max: 1000 }), assets.compressedStatic(dir, store, () => 'v1'));
     mini.use((req, res) => res.status(200).set('X-Path', 'ordinary').send('ordinary'));
     const srv = mini.listen(0); await new Promise((r) => srv.once('listening', r));
     const get = (p) => new Promise((resolve) => http.get(`http://127.0.0.1:${srv.address().port}${p}`, { headers: { 'accept-encoding': 'br' } }, (res) => { const c = []; res.on('data', (d) => c.push(d)); res.on('end', () => resolve({ headers: res.headers, body: Buffer.concat(c) })); }));
@@ -138,3 +138,8 @@ describe('pre-compressed app shell and scripts', () => {
   });
 });
 
+test('the route that reads files for the compressed store is rate-limited in the real app (CodeQL js/missing-rate-limiting)', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'src', 'app.js'), 'utf8');
+  assert.match(app, /const assetLimiter = rateLimit\(/);
+  assert.match(app, /app\.use\('\/v\/:ver', assetLimiter, assets\.compressedStatic\(/);
+});
