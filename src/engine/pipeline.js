@@ -449,15 +449,16 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   let phash = null;
   let physiqueScore = null;
   let faceList = null;
-  if (wantFaces || wantHash || wantBody) {
-    const ir = await imagefilter.checkItem(item, { threshold: (settings.imageFilterThreshold || 50) / 100, faces: wantFaces, hash: wantHash, body: wantBody });
+  if (wantFaces || (wantHash && !item.posterShared) || wantBody) {
+    // a poster the source borrowed (shared with other items) says who is in the video but not which video it is: no perceptual hash from it
+    const ir = await imagefilter.checkItem(item, { threshold: (settings.imageFilterThreshold || 50) / 100, faces: wantFaces, hash: wantHash && !item.posterShared, body: wantBody });
     if (ir.female) {
       repo.blocklist.add('hash', hash, 'image filter: female face');
       dedupe.blockHash(ir.phash, 'image filter: female face'); // the same picture under another URL is refused without another look
       noteImageStrike(item, feed);
       return { outcome: 'excluded', reason: 'image:female-face' };
     }
-    phash = wantHash ? ir.phash : null;
+    phash = wantHash && !item.posterShared ? ir.phash : null;
     physiqueScore = ir.physique;
     faceList = ir.faceList || null;
   }
