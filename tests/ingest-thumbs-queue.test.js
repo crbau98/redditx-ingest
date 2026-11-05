@@ -27,6 +27,8 @@ function item(url) {
     VALUES (?, 'rss', ?, ?, 'image', ?, ?, 'published', 500, 300)`).run(id, `rss:t${++n}:0`, `rss:t${n}`, url, crypto.createHash('md5').update(url + n).digest('hex'));
   return id;
 }
+// compare the parsed host, not a URL prefix
+const isDead = (url) => new URL(url).hostname === 'dead.example';
 const tint = (id) => repo.db.prepare('SELECT tint FROM media WHERE id = ?').get(id).tint;
 
 test('items that keep failing do not hold the queue: the rest of the library is served, and the failing ones are given up on', async () => {
@@ -36,7 +38,7 @@ test('items that keep failing do not hold the queue: the rest of the library is 
   const calls = new Map();
   const fetch = async (url) => {
     calls.set(url, (calls.get(url) || 0) + 1);
-    if (url.startsWith('https://dead.example')) throw new Error('http 503');
+    if (isDead(url)) throw new Error('http 503');
     return { status: 200, buffer: GOOD };
   };
   let now = Date.now();
@@ -44,13 +46,13 @@ test('items that keep failing do not hold the queue: the rest of the library is 
   assert.equal(good.filter((id) => tint(id) === null).length, 6, 'round one: the dead ones took the whole page');
   await thumbs.sweep({ limit: 30, fetch, now });
   for (const id of good) assert.match(tint(id), /^#[0-9a-f]{6}$/, 'round two reaches the readable items behind them');
-  const secondRoundDead = [...calls.entries()].filter(([u]) => u.startsWith('https://dead.example')).map(([, c]) => c);
+  const secondRoundDead = [...calls.entries()].filter(([u]) => isDead(u)).map(([, c]) => c);
   assert.ok(secondRoundDead.every((c) => c === 1), 'a failed item waits before it is tried again');
 
   // time passes: they are retried with growing gaps, then given up on (tint "" = unreadable), never for ever
   for (let i = 0; i < 12; i++) { now += 20 * MIN; await thumbs.sweep({ limit: 30, fetch, now }); }
   for (const id of dead) assert.equal(tint(id), '', 'given up');
-  assert.ok([...calls.entries()].filter(([u]) => u.startsWith('https://dead.example')).every(([, c]) => c <= 4), 'at most four tries each');
+  assert.ok([...calls.entries()].filter(([u]) => isDead(u)).every(([, c]) => c <= 4), 'at most four tries each');
   const before = calls.size;
   now += 24 * 60 * MIN;
   const r = await thumbs.sweep({ limit: 30, fetch, now });
