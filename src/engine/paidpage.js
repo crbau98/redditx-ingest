@@ -15,6 +15,8 @@
  *
  *   paidPageUrl(url)        {service, handle, url} for a paid service page, or null
  *   registerPaidPage(url)   register that page as a web/page feed, so the web adapter reads it
+ *   registerPaidMirror(service, handle)  the creator's public mirror page, which is where the content
+ *                          actually is when the platform itself serves a login shell
  */
 const repo = require('../db/repo');
 const paid = require('../lib/paid');
@@ -30,6 +32,16 @@ function paidPageUrl(url) {
   return { service, handle, url: paid.pageUrl(service, handle) };
 }
 
+/**
+ * The paid services the public mirror (coomer.st) carries, and the segment it uses for each.
+ * The mirror serves the same creator's posts on its own public API - no login, no credits - so it
+ * is the free way to pull a creator in when the platform itself answers with a login shell.
+ */
+const MIRROR_SERVICES = {
+  'OnlyFans': 'onlyfans', 'Fansly': 'fansly', 'JustFor.Fans': 'justforfans',
+  'Patreon': 'patreon', 'SubscribeStar': 'subscribestar', 'GD': 'gd',
+};
+
 /** How many paid pages one creator may have read. A creator has one or two; the cap stops a noisy profile from eating the feed budget. */
 const MAX_PAID_PAGES_PER_CREATOR = 3;
 
@@ -43,6 +55,10 @@ function registerPaidPage(url, { creatorId = null, origin = 'paid-page', trusted
   const page = paidPageUrl(url);
   if (!page) return null;
   if (takedowns.checkUrl(page.url)) return null;
+  // The platform itself often answers with a login shell (OnlyFans: a 17 KB app shell, Fansly: the same
+  // generic shell), so the page feed can be empty. The creator's public mirror page is where the content
+  // actually is, and it costs nothing: register it alongside.
+  registerPaidMirror(page.service, page.handle);
   const existing = repo.feeds.find('web', 'page', page.url);
   if (existing) {
     if (creatorId && !existing.creator_id) repo.feeds.update(existing.id, { creatorId });
@@ -61,4 +77,29 @@ function registerPaidPage(url, { creatorId = null, origin = 'paid-page', trusted
   return r.feed || null;
 }
 
-module.exports = { paidPageUrl, registerPaidPage };
+/**
+ * Register the creator's public mirror page (coomer.st) as a coomer feed, so the content that the paid
+ * platform does not serve to an anonymous reader still reaches the library - free, no login, no credits.
+ * The mirror is a public host the owner put in scope on 2026-11-05; the item still passes the safety,
+ * male-only scope and takedown gates, and the identity engine merges it with the creator it belongs to.
+ * @returns {object|null} the feed row, or null when the service has no mirror or the handle is taken down
+ */
+function registerPaidMirror(service, handle) {
+  const segment = MIRROR_SERVICES[service];
+  if (!segment) return null;
+  const h = String(handle || '').toLowerCase();
+  if (!h) return null;
+  const target = `${segment}/${h}`;
+  if (takedowns.checkHandle(h, 'coomer')) return null;
+  const existing = repo.feeds.find('coomer', 'user', target);
+  if (existing) return existing;
+  const cfg = settingsStore.get();
+  if (repo.feeds.countEnabled() >= cfg.maxFeeds) return null;
+  const r = repo.feeds.upsert({
+    platform: 'coomer', kind: 'user', target, label: `${h} (${segment} on Coomer)`,
+    creatorId: null, trusted: 0, origin: 'paid-mirror', intervalMin: 240, runNow: true,
+  });
+  return r.feed || null;
+}
+
+module.exports = { paidPageUrl, registerPaidPage, registerPaidMirror, MIRROR_SERVICES };

@@ -125,3 +125,31 @@ test('the seed derives a page feed for a creator whose paid page is in his links
   assert.equal(page.target, 'https://fansly.com/renogold');
   assert.equal(page.creator_id, 'c1');
 });
+
+test('a paid page also registers the creator\'s public mirror page, free of charge', () => {
+  const { registerPaidMirror } = require('../src/engine/paidpage');
+  // The platform itself answers with a login shell, so the content comes from the public mirror.
+  const feed = registerPaidPage('https://onlyfans.com/mirrored', { origin: 'test' });
+  assert.ok(feed, 'the page feed');
+  const mirror = repo.feeds.find('coomer', 'user', 'onlyfans/mirrored');
+  assert.ok(mirror, 'the mirror feed for the same creator');
+  assert.equal(mirror.platform, 'coomer');
+  assert.equal(mirror.kind, 'user');
+  assert.equal(mirror.target, 'onlyfans/mirrored');
+  assert.equal(mirror.origin, 'paid-mirror');
+  // Idempotent.
+  registerPaidMirror('OnlyFans', 'mirrored');
+  const mirrors = repo.feeds.list({ platform: 'coomer', limit: 50 }).items.filter((f) => f.target === 'onlyfans/mirrored');
+  assert.equal(mirrors.length, 1, 'the mirror feed is not registered twice');
+});
+
+test('each mirrored service uses its own mirror segment, and an unmirrored one has none', () => {
+  const { registerPaidMirror } = require('../src/engine/paidpage');
+  assert.ok(registerPaidMirror('Fansly', 'segfansly'), 'fansly');
+  assert.ok(registerPaidMirror('JustFor.Fans', 'segjff'), 'justforfans');
+  assert.equal(registerPaidMirror('ManyVids', 'segmv'), null, 'ManyVids has no public mirror');
+  const targets = repo.feeds.list({ platform: 'coomer', limit: 50 }).items.map((f) => f.target);
+  assert.ok(targets.includes('fansly/segfansly'));
+  assert.ok(targets.includes('justforfans/segjff'));
+  assert.equal(targets.includes('manyvids/segmv'), false);
+});
