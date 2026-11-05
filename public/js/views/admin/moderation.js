@@ -2,7 +2,7 @@ import { h, icon, fmt, proxied, emptyState, toast } from '../../dom.js';
 import { adminGet, adminPost } from '../../api.js';
 import { href } from '../../router.js';
 import { pageHead, act, platBadge, thumbOf, openModal, undoToast, bulkBar, loadingState, errorState } from './ui.js';
-import { holdOf, undoPlan, selectionSummary, groupByHoldReason } from './logic.js';
+import { holdOf, undoPlan, selectionSummary, sendBackBody } from './logic.js';
 
 export { holdOf };
 
@@ -109,14 +109,10 @@ export function confirmBatch(action, items) {
 
 /**
  * Put items back where they came from: approve, hide and remove all return to the review queue, each with the hold reason it was
- * waiting under (the queue groups by it, and an approval names the safety rule it overrides). Takes the items (or their ids, which
- * come back as an unclassified hold); items are sent back in one request per reason because the bulk endpoint takes one reason.
+ * waiting under (the queue groups by it, and an approval names the safety rule it overrides), in ONE atomic request. Takes the items
+ * (or their ids, which come back as an unclassified hold).
  */
-export async function sendBackToReview(items) {
-  let last = null;
-  for (const { reason, ids } of groupByHoldReason(items)) last = await adminPost('/media/bulk', { ids, action: 'flag', reason });
-  return last;
-}
+export async function sendBackToReview(items) { return adminPost('/media/bulk', sendBackBody(items)); }
 
 export async function render(root) {
   const host = h('div', { class: 'stack' });

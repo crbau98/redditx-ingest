@@ -24,19 +24,19 @@ export function holdOf(reason) {
  * a block adds the item to the blocklist for good, so it has no undo and always asks first.
  */
 /**
- * Items to send back to the review queue, grouped by the hold reason each one was waiting under (ids alone, or items without a
- * reason, fall under 'undo'): the bulk endpoint takes one reason per request, and the queue groups and words its confirmations by it.
- * @returns {Array<{reason: string, ids: string[]}>}
+ * The request body that sends items back to the review queue in ONE request: each item under the hold reason it was waiting under
+ * (`reasons`, by id), so the queue still groups them and an approval still names the safety rule it overrides, and one transaction
+ * on the server, so a failure leaves nothing half undone. Ids alone, or items without a reason, fall under 'undo'.
  */
-export function groupByHoldReason(items) {
-  const by = new Map();
+export function sendBackBody(items) {
+  const ids = []; const reasons = {};
   for (const it of items || []) {
     const obj = it && typeof it === 'object';
-    const reason = (obj && it.review_reason) || 'undo';
-    if (!by.has(reason)) by.set(reason, []);
-    by.get(reason).push(obj ? it.id : it);
+    const id = obj ? it.id : it;
+    ids.push(id);
+    if (obj && it.review_reason) reasons[id] = it.review_reason;
   }
-  return [...by].map(([reason, ids]) => ({ reason, ids }));
+  return { ids, action: 'flag', reason: 'undo', reasons };
 }
 
 export function undoPlan(action) {
