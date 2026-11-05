@@ -1,7 +1,7 @@
 import { h, icon, fmt, toast, confirmDialog, openModal, avatar, debounce } from '../../dom.js';
 import { adminGet, adminPost, adminPatch } from '../../api.js';
 import { parse, navigate, href } from '../../router.js';
-import { table, pager, platBadge, pageHead, act } from './ui.js';
+import { table, pager, platBadge, pageHead, act, undoToast, searchBox, loadingState, errorState } from './ui.js';
 
 function addCreatorDialog(onDone) {
   const name = h('input', { class: 'input', placeholder: 'Display name (optional)', autofocus: true });
@@ -120,20 +120,49 @@ async function duplicatesDialog(onDone) {
   const m = openModal({ title: 'Possible duplicate creators', sub: 'Grouped by a shared link or profile picture, matching or nearly matching handles, or the same name with similar posts. Each row says why. Only merge if it is really the same person.', wide: true, body, actions: [h('button', { class: 'btn', onclick: () => m.close() }, 'Close')] });
 }
 
+/** Block takes his media down and blocklists his accounts, so it asks first. Restore only lets him back in. */
+async function blockCreator(c, onDone) {
+  const name = c.display_name || c.handle;
+  if (!(await confirmDialog(`${name}'s media is taken down, his feeds stop and his accounts are blocklisted so nothing is re-imported. Restore later only lets him back in: media that was removed does not come back. To keep everything, hide him instead.`, { title: `Block ${name}?`, confirmLabel: 'Block', danger: true }))) return false;
+  const r = await act(null, () => adminPost(`/creators/${c.id}/block`, { reason: 'admin' }), `${name} blocked`);
+  if (r) onDone();
+  return !!r;
+}
+
+/** Hide keeps everything but takes him off the site; undo (or Restore) puts him back. */
+async function hideCreator(c, onDone) {
+  const name = c.display_name || c.handle;
+  const r = await act(null, () => adminPatch(`/creators/${c.id}`, { status: 'hidden' }));
+  if (r === undefined) return;
+  undoToast(`${name} is hidden from the site`, async () => { await adminPatch(`/creators/${c.id}`, { status: 'active' }); onDone(); });
+  onDone();
+}
+
+async function restoreCreator(c, onDone) {
+  const r = await act(null, () => adminPost(`/creators/${c.id}/restore`), `${c.display_name || c.handle} restored`);
+  if (r) onDone();
+}
+
 async function detailDialog(id, onDone) {
   const c = await adminGet(`/creators/${id}`);
+  const away = c.status === 'blocked' || c.status === 'hidden';
   const m = openModal({
     title: c.display_name || c.handle, sub: `@${c.handle} · ${c.media_count} published · ${c.status}`, wide: true,
     body: h('div', { class: 'stack' },
-      c.bio ? h('p', { class: 'muted' }, c.bio) : null,
-      h('div', null, h('div', { class: 'muted', style: { fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', marginBottom: '8px' } }, 'Accounts & feeds'),
-        c.feeds.length ? h('div', { class: 'stack', style: { gap: '6px' } }, c.feeds.map((f) => h('div', { class: 'run-live' }, platBadge(f.platform), h('span', { class: 'grow truncate' }, `${f.kind}: ${f.label || f.target}`), h('span', { class: 'muted' }, f.enabled ? (f.last_status || 'pending') : 'off')))) : h('p', { class: 'muted' }, 'No feeds.')),
-      (c.links || []).length ? h('div', { class: 'linkrow' }, c.links.map((l) => h('a', { class: 'linkchip ext', href: l.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, icon('link', 'sm'), l.label || l.service))) : null),
+      c.bio ? h('p', { class: 'a-note' }, c.bio) : null,
+      h('div', null, h('h4', { class: 'a-note', style: { fontWeight: 700, textTransform: 'uppercase', marginBottom: '8px' } }, 'Accounts and feeds'),
+        c.feeds.length ? h('div', { class: 'stack', style: { gap: '6px' } }, c.feeds.map((f) => h('div', { class: 'a-run' }, platBadge(f.platform), h('span', { class: 'grow truncate' }, `${f.kind}: ${f.label || f.target}`), h('span', { class: 'muted' }, f.enabled ? (f.last_status || 'pending') : 'off')))) : h('p', { class: 'a-note' }, 'No feeds.')),
+      (c.links || []).length ? h('div', { class: 'linkrow' }, c.links.map((l) => h('a', { class: 'linkchip ext', href: l.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, icon('link', 'sm'), l.label || l.service))) : null,
+      h('div', { class: 'row wrap' },
+        h('a', { class: 'btn', href: href(`/creator/${c.id}`), onclick: () => m.close() }, 'Public page'),
+        h('button', { class: 'btn', type: 'button', onclick: (e) => act(e.currentTarget, () => adminPost('/engine/run', { feedIds: c.feeds.map((f) => f.id), force: true }), 'Sync queued') }, icon('refresh', 'sm'), 'Sync accounts'),
+        h('button', { class: 'btn', type: 'button', title: 'Search the web and every platform for more accounts of this person', onclick: () => { m.close(); findCreatorDialog(onDone, { query: c.display_name || c.handle, creatorId: c.id }); } }, icon('search', 'sm'), 'Find more accounts'),
+        h('button', { class: 'btn', type: 'button', onclick: () => { m.close(); mergeDialog(c, onDone); } }, 'Merge into another…'))),
     actions: [
-      h('button', { class: 'btn', onclick: () => m.close() }, 'Close'),
-      h('a', { class: 'btn', href: href(`/creator/${c.id}`), onclick: () => m.close() }, 'Public page'),
-      h('button', { class: 'btn', onclick: (e) => act(e.currentTarget, () => adminPost('/engine/run', { feedIds: c.feeds.map((f) => f.id), force: true }), 'Sync queued') }, icon('refresh', 'sm'), 'Sync accounts'),
-      h('button', { class: 'btn', title: 'Search the web and every platform for more accounts of this person', onclick: () => { m.close(); findCreatorDialog(onDone, { query: c.display_name || c.handle, creatorId: c.id }); } }, icon('search', 'sm'), 'Find more accounts'),
+      h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Close'),
+      away ? h('button', { class: 'btn good', type: 'button', onclick: async () => { m.close(); await restoreCreator(c, onDone); } }, 'Restore')
+        : h('button', { class: 'btn', type: 'button', onclick: async () => { m.close(); await hideCreator(c, onDone); } }, 'Hide from the site'),
+      c.status === 'blocked' ? null : h('button', { class: 'btn danger', type: 'button', onclick: async () => { m.close(); await blockCreator(c, onDone); } }, 'Block…'),
     ],
   });
 }
@@ -142,29 +171,30 @@ export async function render(root) {
   const q = parse().query;
   const f = { q: q.get('q') || '', page: parseInt(q.get('page') || '0', 10), sort: q.get('sort') || 'recent' };
   const set = (patch) => navigate('/admin/creators', { ...f, ...patch }, { replace: true });
-  const search = h('input', { class: 'input sm', type: 'search', 'aria-label': 'Search creators', placeholder: 'Search creators…', value: f.q, style: { maxWidth: '240px' } });
-  search.addEventListener('input', debounce(() => set({ q: search.value.trim(), page: 0 }), 350));
-  const sort = h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Sort creators', onchange: (e) => set({ sort: e.target.value, page: 0 }) }, [['recent', 'Recently active'], ['media', 'Most posts'], ['new', 'Newest'], ['name', 'A–Z']].map(([v, l]) => h('option', { value: v, selected: f.sort === v }, l)));
-  const host = h('div');
-  const dupBtn = h('button', { class: 'btn sm', hidden: true, onclick: () => duplicatesDialog(load) }, icon('users', 'sm'), 'Possible duplicates');
-  root.append(pageHead('Creators', 'People, not just feeds. Add a creator once and PRISM follows all of their public accounts.', h('button', { class: 'btn', onclick: () => findCreatorDialog(load) }, icon('search', 'sm'), 'Find a creator'), h('button', { class: 'btn primary', onclick: () => addCreatorDialog(load) }, icon('plus', 'sm'), 'Add creator')), h('div', { class: 'toolbar' }, search, sort, dupBtn), host);
-  adminGet('/creators-duplicates').then((g) => { if (g.length) { dupBtn.hidden = false; dupBtn.lastChild.textContent = ` ${g.length} possible duplicate${g.length === 1 ? '' : 's'}`; dupBtn.replaceChildren(icon('users', 'sm'), `${g.length} possible duplicate${g.length === 1 ? '' : 's'}`); } }).catch(() => {});
+  const sort = h('select', { class: 'select sm', 'aria-label': 'Sort creators', onchange: (e) => set({ sort: e.target.value, page: 0 }) }, [['recent', 'Recently active'], ['media', 'Most posts'], ['new', 'Newest'], ['name', 'A–Z']].map(([v, l]) => h('option', { value: v, selected: f.sort === v }, l)));
+  const host = h('div', { class: 'stack' });
+  const dupBtn = h('button', { class: 'btn sm', type: 'button', hidden: true, onclick: () => duplicatesDialog(load) }, icon('users', 'sm'), 'Possible duplicates');
+  root.append(pageHead('Creators', 'People, not just feeds. Add a creator once and PRISM follows all of their public accounts.',
+    h('button', { class: 'btn', type: 'button', onclick: () => findCreatorDialog(load) }, icon('search', 'sm'), 'Find a creator'),
+    h('button', { class: 'btn primary', type: 'button', onclick: () => addCreatorDialog(load) }, icon('plus', 'sm'), 'Add creator')),
+  h('div', { class: 'a-toolbar' }, h('div', { class: 'a-toolbar-row' }, searchBox({ value: f.q, placeholder: 'Search creators…', label: 'Search creators', onInput: (v) => set({ q: v, page: 0 }) }), sort, dupBtn)), host);
+  adminGet('/creators-duplicates').then((g) => { if (g.length) { dupBtn.hidden = false; dupBtn.replaceChildren(icon('users', 'sm'), `${g.length} possible duplicate${g.length === 1 ? '' : 's'}`); } }).catch(() => {});
 
   async function load() {
-    const r = await adminGet('/creators', { q: f.q, page: f.page, sort: f.sort, limit: 40 });
+    host.replaceChildren(loadingState('Loading creators'));
+    let r;
+    try { r = await adminGet('/creators', { q: f.q, page: f.page, sort: f.sort, limit: 40 }); } catch (e) { host.replaceChildren(errorState(e.message, load)); return; }
     host.replaceChildren(table([
-      { label: 'Creator', render: (c) => h('div', { class: 'row' }, avatar(c, 36), h('div', null, h('div', { style: { fontWeight: 600 } }, c.display_name || c.handle), h('div', { class: 'sub' }, `@${c.handle}`))) },
-      { label: 'Status', render: (c) => h('span', { class: `badge ${c.status === 'active' ? 'good' : c.status === 'blocked' ? 'bad' : 'warn'}` }, c.status) },
+      { label: 'Creator', cell: 'title', render: (c) => h('div', { class: 'row' }, avatar(c, 40), h('div', { style: { minWidth: 0 } }, h('div', { class: 'a-title' }, h('span', { class: 'name' }, c.display_name || c.handle), h('span', { class: `badge ${c.status === 'active' ? 'good' : c.status === 'blocked' ? 'bad' : 'warn'}` }, c.status)), h('div', { class: 'a-sub' }, `@${c.handle}`))) },
       { label: 'Posts', class: 'num', render: (c) => fmt.int(c.media_count) },
-      { label: 'Origin', render: (c) => h('span', { class: 'sub' }, c.origin) },
+      { label: 'Origin', render: (c) => h('span', { class: 'a-sub' }, c.origin) },
       { label: 'Active', render: (c) => (c.last_media_at ? fmt.ago(c.last_media_at) : '—') },
-      { label: '', render: (c) => h('div', { class: 'actions' },
-        h('button', { class: 'btn sm', onclick: () => detailDialog(c.id, load) }, 'Details'),
-        h('button', { class: 'btn sm ghost', onclick: () => mergeDialog(c, load) }, 'Merge'),
+      { label: '', srLabel: 'Actions', cell: 'actions', render: (c) => h('div', { class: 'actions' },
+        h('button', { class: 'btn sm', type: 'button', 'aria-label': `Details for ${c.display_name || c.handle}`, onclick: () => detailDialog(c.id, load) }, 'Details'),
         c.status === 'blocked' || c.status === 'hidden'
-          ? h('button', { class: 'btn sm good', onclick: (e) => act(e.currentTarget, async () => { await adminPost(`/creators/${c.id}/restore`); load(); }, 'Restored') }, 'Restore')
-          : h('button', { class: 'btn sm danger', onclick: async () => { if (await confirmDialog(`Hides all of ${c.display_name || c.handle}'s media, stops their feeds and blocklists the accounts so nothing is re-imported.`, { title: 'Block this creator?', confirmLabel: 'Block', danger: true })) { await adminPost(`/creators/${c.id}/block`, { reason: 'admin' }); load(); } } }, 'Block')) },
-    ], r.items, { empty: 'No creators yet.' }), pager({ page: r.page, limit: r.limit, total: r.total, onPage: (p) => set({ page: p }) }));
+          ? h('button', { class: 'btn sm good', type: 'button', onclick: () => restoreCreator(c, load) }, 'Restore')
+          : h('button', { class: 'btn sm', type: 'button', title: 'Take him off the site; keeps everything, one tap to undo', onclick: () => hideCreator(c, load) }, 'Hide')) },
+    ], r.items, { label: 'Creators', empty: f.q ? 'No creators match.' : 'No creators yet. Add one above.' }), pager({ page: r.page, limit: r.limit, total: r.total, onPage: (p) => set({ page: p }) }));
   }
   await load();
 }
