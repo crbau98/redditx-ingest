@@ -23,6 +23,13 @@ const { toIso, clip } = require('./util');
 const base = config.baseUrls.redgifs;
 let cached = null;
 
+const RESOLVE_TTL_MS = 15 * 60 * 1000;
+const resolved = new Map(); // gif id -> { at, item | gone }
+function remember(id, v) {
+  if (resolved.size >= 2000) for (const k of [...resolved.keys()].slice(0, 500)) resolved.delete(k);
+  resolved.set(id, { at: Date.now(), ...v });
+}
+
 async function authHeaders() {
   if (!cached || Date.now() > cached.expires) {
     const res = await http.json(`${base}/v2/auth/temporary`, { headers: { origin: 'https://www.redgifs.com' }, retries: 1 });
@@ -171,11 +178,24 @@ module.exports = {
   profileFromUser,
   isConfigured: () => ({ ok: true }),
 
-  async resolve(url) {
+  /**
+   * One gif by its page or embed link. The answer is remembered for RESOLVE_TTL_MS: the same clip is linked from many posts
+   * (crossposts, several communities in one run) and every lookup is a call 2 s apart and a 429 risk. A gif that is gone (404/410)
+   * is remembered as gone; a rate limit or an outage is not. `{ fresh: true }` (the playback refresh: the stored link stopped
+   * working) always asks again and replaces what is remembered.
+   */
+  async resolve(url, { fresh = false } = {}) {
     const id = idFromUrl(url);
     if (!id) return null;
-    const json = await api(`/v2/gifs/${encodeURIComponent(id)}`);
-    return itemFromGif(json.gif || json, null);
+    const hit = resolved.get(id);
+    if (!fresh && hit && Date.now() - hit.at < RESOLVE_TTL_MS) { if (hit.gone) throw hit.gone; return hit.item ? { ...hit.item } : null; }
+    let item;
+    try { const json = await api(`/v2/gifs/${encodeURIComponent(id)}`); item = itemFromGif(json.gif || json, null); } catch (e) {
+      if (e && (e.status === 404 || e.status === 410)) remember(id, { gone: e });
+      throw e;
+    }
+    remember(id, { item });
+    return item ? { ...item } : null;
   },
 
   async fetch(feed, ctx) {
