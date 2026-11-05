@@ -467,15 +467,17 @@ describe('body filter policy (model replaced by a fake)', () => {
   test('a row an admin changed while the model was working is not restored or overwritten from the stale snapshot', async () => {
     const base = (k) => repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: k, source_key: `reddit:${k}:0`, post_key: `reddit:${k}`, source_url: `https://reddit.com/${k}`,
       media_type: 'image', media_url: `https://i.redd.it/${k}.jpg`, preview_url: `https://i.redd.it/${k}.jpg`, hash: `h-${k}`, publish_state: 'hidden', title: 'I am 60 days out from my first show', physique: 101, review_reason: 'physique:text:older:i am 60' });
-    const approved = base('mid-approve'); const reported = base('mid-report');
-    const first = repo.db.prepare('SELECT MIN(seq) AS s FROM media WHERE id IN (?, ?)').get(approved, reported).s;
+    const approved = base('mid-approve'); const reported = base('mid-report'); const retitled = base('mid-title');
+    const first = repo.db.prepare('SELECT MIN(seq) AS s FROM media WHERE id IN (?, ?, ?)').get(approved, reported, retitled).s;
     repo.settings.set('physique_sweep_seq', String(first - 1));
     imagefilter._setAnalyzer(async (url) => {
       if (url.includes('mid-approve')) { repo.media.setPhysique(approved, physique.APPROVED); repo.media.setState(approved, 'published', null, { exact: true }); }   // approved meanwhile
       if (url.includes('mid-report')) repo.media.setState(reported, 'hidden', 'reported:spam', { exact: true });                                                 // taken down for another reason meanwhile
+      if (url.includes('mid-title')) repo.db.prepare('UPDATE media SET title = ? WHERE id = ?').run('chubby gainer progress', retitled);                  // its words changed to something the policy really matches
       return { status: 'ok', faces: male, body: { decided: true, score: 5 } };
     });
     await maintenance.physiqueSweep({ limit: 500, settings });
+    assert.equal(repo.media.get(retitled).publish_state, 'hidden', 'the text is re-read after the model call, so changed words are judged');
     assert.equal(repo.media.get(approved).physique, physique.APPROVED, 'an approval is not overwritten'); assert.equal(repo.media.get(approved).publish_state, 'published');
     assert.equal(repo.media.get(reported).publish_state, 'hidden'); assert.equal(repo.media.get(reported).review_reason, 'reported:spam', 'and a hide for another reason is not republished');
   });

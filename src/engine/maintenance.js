@@ -139,7 +139,7 @@ async function physiqueSweep({ limit = 12, settings } = {}) {
     after = row.seq; res.checked++;
     // The row as it is NOW: the model call above can take long enough for an admin to approve, reject, remove or block it, and
     // the snapshot read before it must not undo that.
-    const cur = repo.db.prepare('SELECT publish_state, physique, review_reason FROM media WHERE id = ?').get(row.id);
+    const cur = repo.db.prepare('SELECT publish_state, physique, review_reason, title, description, tags_text, community, author FROM media WHERE id = ?').get(row.id);
     if (!cur) continue;
     if (v.female) { repo.media.block(row.id, 'physique sweep: picture shows a woman', 'system'); res.removed++; continue; }
     if (v.status === 'error' || v.status === 'unavailable') { res.errors++; continue; }
@@ -147,7 +147,7 @@ async function physiqueSweep({ limit = 12, settings } = {}) {
     // sweep to it): it is shown again only now, after a real measurement, with the stored verdict: hidden with a body reason if
     // heavy, published otherwise. No torso in view leaves it unmeasured, as the pipeline publishes any other such picture.
     if (cur.publish_state === 'hidden' && cur.physique !== physique.APPROVED && /^physique:(text:|101$)/.test(cur.review_reason || '')
-        && !physique.textCheck(row.title, row.description, row.tags_text, row.community, row.author).heavy) {
+        && !physique.textCheck(cur.title, cur.description, cur.tags_text, cur.community, cur.author).heavy) {
       repo.media.setPhysique(row.id, v.physique == null ? null : v.physique);
       physique.publish(row.id, now);
       res.restored = (res.restored || 0) + 1;
