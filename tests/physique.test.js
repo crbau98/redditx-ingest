@@ -112,6 +112,24 @@ describe('physique words', () => {
   });
 });
 
+describe('older men: words and stated ages only', () => {
+  test('a man who calls himself older, or states an age of 45 or more, is matched', () => {
+    for (const t of ['silver fox', '#silverdaddy', 'GreyDaddy', 'Grandpa', 'older men', 'Mature Men', '#oldman', '52yo', '52 y/o', '52 years old', '52-year-old', 'Age: 55', 'aged 58', "I'm 58", 'im 47', 'in my 50s', 'late 40s', 'mid-60s', 'Looking good at 61 yrs old']) {
+      const r = textCheck(t);
+      assert.equal(r.heavy, true, t); assert.equal(r.kind, 'older', t); assert.match(r.rule, /^physique:older:/, t);
+    }
+  });
+  test('look-alikes, younger stated ages and plain "daddy" are not matched', () => {
+    for (const t of ['Goldman', 'Holderman', 'age 24', "I'm 24", '24yo', '31 y/o', '44 years of age', 'turning 25', 'age 18', '19yo', 'in my 20s', '18+ only', 'mature content',
+      '50 years of experience', "I'm 60 kg", "I'm 50% done", 'over 50 videos', 'sugar daddy', 'gym daddy', 'daddy', 'old school gym', 'Old Spice', 'Class of 2010', 'gay muscle jock'])
+      assert.equal(textCheck(t).heavy, false, t);
+  });
+  test('the rule is words only: it never reads a picture, and the age line is a constant', () => {
+    assert.equal(require('../src/lib/physique').OLDER_MIN_AGE, 45);
+    assert.equal(textCheck('silver fox').kind, 'older'); assert.equal(textCheck('chubby').kind, 'heavy');
+  });
+});
+
 /* ------------------------------------------------------------------ policy */
 let mock; let imagefilter; let repo; let pipeline; let maintenance; let physique; let feed; let n = 0;
 const assets = (f) => path.join(__dirname, '..', 'node_modules', '@vladmandic', 'human', 'assets', f);
@@ -291,6 +309,25 @@ describe('body filter policy (model replaced by a fake)', () => {
     for (const id of ids) assert.equal(repo.media.get(id).publish_state, 'hidden');
     physique.reapply(settings);
     assert.equal(repo.creators.get(c.id).status, 'active');
+  });
+
+  test('a post that calls its man older is excluded before any download, and a "daddy" post is not', async () => {
+    let looked = 0;
+    imagefilter._setAnalyzer(async () => { looked++; return { status: 'ok', faces: male, body: { decided: true, score: 0 } }; });
+    const r = await pipeline.processItem(item({ title: 'Silver fox at the gym' }), feed, null, settings);
+    assert.equal(r.outcome, 'excluded'); assert.match(r.reason, /^physique:older:silver fox/);
+    assert.equal(looked, 0, 'the picture was never fetched');
+    assert.equal((await pipeline.processItem(item({ title: 'gym daddy leg day' }), feed, null, settings)).outcome, 'added', '"daddy" alone is not about age');
+  });
+
+  test('a creator whose profile says he is older is hidden, and shown again when the filter is switched off', () => {
+    const c = repo.creators.create({ handle: 'foxsam', origin: 'admin' });
+    const f = repo.feeds.upsert({ platform: 'reddit', kind: 'user', target: 'foxsam', creatorId: c.id, enabled: 1, trusted: 1, origin: 'admin' }).feed;
+    const r = require('../src/engine/creators').applyProfile(repo.feeds.get(f.id), { displayName: 'Sam', bio: '54yo, lifting since 90s' }, settings);
+    assert.equal(r.hidden, true); assert.equal(repo.creators.get(c.id).status, 'hidden');
+    physique.reapply({ ...settings, physiqueFilter: false });
+    assert.equal(repo.creators.get(c.id).status, 'active', 'reversible: it only undoes its own decision');
+    assert.equal(repo.feeds.get(f.id).enabled, 1);
   });
 
   test('a refreshed profile that now reads chub hides the creator', () => {

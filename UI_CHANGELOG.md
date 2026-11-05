@@ -1,5 +1,14 @@
 # UI changelog
 
+## 2026-11-05 — "Top first": fewer sections, top OnlyFans creators in front
+
+- **Home has 8 blocks, was 16** (counted from `parts` in `home.js`): masthead, ring strip, the first-visit interest picker, **Top OnlyFans creators**, From creators you follow, Trending now, For you (once there is taste to learn from), Latest uploads. Removed because they were different cuts of the same data: Since your last visit, Your smart feeds, the "because you…" rails, Topics, Rising this week, Fresh clips, Browse by source, New on PRISM, and the tag chips under the hero. `home.js` is 181 lines, was 267.
+- **Creators has four views, was eight chips:** **Top** (the default; OnlyFans-linked creators first, then everyone by posts, which is what the server already sorted by), **OnlyFans only**, **Following**, **New**. "All" and "Most Posts" were the same default; Top Rated, Recently Active and the sort options now live in one Sort menu inside Filters. On a phone the search sits on its own row so all four views are visible without swiping. The "Full lookup" button went (Find is in the footer and the lookup button stays).
+- **Browse shows real numbers.** The five tiles said `285+`, `25.9K+`, `Full-Screen`, `Active` and `1,300+`: marketing text, not data. They are now live counts (OnlyFans creators, OnlyFans posts, Fansly creators), and a tile with no real count is left out.
+- **Creator profile on a phone:** 62px less bare picture above the name, so the bio and stats start sooner. **Reels:** the one-time hint no longer wraps over the Save button.
+- **Demo data:** `scripts/seed-demo.js` links OnlyFans with the creator's handle (it used a bare `https://onlyfans.com/`, which the server rightly does not count as a page), so the demo shows the OnlyFans-first experience.
+- **Verified:** `scripts/ui-audit.js` over 37 page views: 0 errors, 0 sideways scrolling, 0 accessibility findings; browser e2e 11/11; front-end guard tests 107/107; on a phone in both themes 0 targets under 44px and 0 overflow.
+
 ## 2026-11-05 — "Spectrum": mobile-first overhaul
 
 - **New stylesheet `css/aurora.css`** (last in the bundle, precached by `sw.js`, `prism-shell-v8`). The older sheets are untouched, so the CSS guard tests still read exactly what they did before.
