@@ -23,6 +23,22 @@ export function holdOf(reason) {
  * How to take back a bulk moderation action. Approve, hide and remove all go back to the review queue ("flag");
  * a block adds the item to the blocklist for good, so it has no undo and always asks first.
  */
+/**
+ * Items to send back to the review queue, grouped by the hold reason each one was waiting under (ids alone, or items without a
+ * reason, fall under 'undo'): the bulk endpoint takes one reason per request, and the queue groups and words its confirmations by it.
+ * @returns {Array<{reason: string, ids: string[]}>}
+ */
+export function groupByHoldReason(items) {
+  const by = new Map();
+  for (const it of items || []) {
+    const obj = it && typeof it === 'object';
+    const reason = (obj && it.review_reason) || 'undo';
+    if (!by.has(reason)) by.set(reason, []);
+    by.get(reason).push(obj ? it.id : it);
+  }
+  return [...by].map(([reason, ids]) => ({ reason, ids }));
+}
+
 export function undoPlan(action) {
   if (action === 'approve' || action === 'hide' || action === 'reject') return { undoAction: 'flag', verb: { approve: 'Published', hide: 'Hidden', reject: 'Removed' }[action] };
   return null;

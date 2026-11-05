@@ -48,7 +48,7 @@ export async function reels(root, { query }) {
     h('button', { class: `chip sm of-pill${f.paid === 'onlyfans' ? ' on' : ''}`, 'aria-pressed': String(f.paid === 'onlyfans'), title: f.paid === 'onlyfans' ? 'Showing OnlyFans creators only — tap for all' : 'Filter Reels to OnlyFans creators', onclick: () => set({ paid: f.paid === 'onlyfans' ? '' : 'onlyfans' }) }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), 'OnlyFans'),
     h('select', { class: 'select sm', 'aria-label': 'Order', onchange: (e) => set({ sort: e.target.value }) }, SORTS.map(([v, l]) => h('option', { value: v, selected: f.sort === v }, l))),
     // narrow phones: the type switch and order don't fit beside the title, so one button opens both
-    h('button', { class: 'btn sm ghost reels-tune', 'aria-label': 'Choose what plays', 'aria-haspopup': 'dialog', onclick: openTune }, icon('sliders', 'sm'), (SORTS.find((x) => x[0] === f.sort) || [])[1] || 'Order'),
+    h('button', { class: 'btn sm ghost reels-tune', 'aria-label': 'Choose what plays', 'aria-haspopup': 'dialog', onclick: openTune }, icon('sliders', 'sm'), h('span', { class: 'reels-tune-lab' }, (SORTS.find((x) => x[0] === f.sort) || [])[1] || 'Order')),
     muteBtn);
   function openTune() {
     let m;

@@ -34,6 +34,15 @@ describe('review queue', () => {
     assert.equal(L.undoPlan('nonsense'), null);
     assert.equal(L.undoPlan('approve').verb, 'Published');
   });
+  test('undo sends items back with the hold reason each was waiting under, one group per reason (ids alone fall under "undo")', () => {
+    const items = [{ id: 'a', review_reason: 'safety: age-claim' }, { id: 'b', review_reason: 'scope:unclear' }, { id: 'c', review_reason: 'safety: age-claim' }, { id: 'd', review_reason: null }];
+    assert.deepEqual(L.groupByHoldReason(items), [
+      { reason: 'safety: age-claim', ids: ['a', 'c'] }, { reason: 'scope:unclear', ids: ['b'] }, { reason: 'undo', ids: ['d'] }]);
+    assert.deepEqual(L.groupByHoldReason(['x', 'y']), [{ reason: 'undo', ids: ['x', 'y'] }]);
+    assert.deepEqual(L.groupByHoldReason([]), []);
+    // and the queue words an undone safety hold the way it did before
+    assert.equal(L.holdOf(L.groupByHoldReason(items)[0].reason).rule, 'age-claim');
+  });
   test('in the media browser an action is undone by returning the items to the state they were in', () => {
     assert.equal(L.undoActionFor('published'), 'approve');
     assert.equal(L.undoActionFor('review'), 'flag');

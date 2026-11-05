@@ -53,7 +53,15 @@ function allowedFor(feed) {
   if (feed.target && /^https?:\/\//i.test(String(feed.target))) {
     let path = '';
     try { path = new URL(String(feed.target)).pathname.toLowerCase(); } catch { path = ''; }
-    for (const entry of list) if (entry.length >= 6 && path.includes(entry)) return true;
+    // Whole path segments only: the entry must be a segment, or start a segment and be followed by '-', '_' or '.'.
+    // A substring anywhere in the path ('twinks' inside 'twinksandpics') must not spend credits on someone else's page.
+    const segments = path.split('/').filter(Boolean);
+    for (const entry of list) {
+      if (entry.length < 6) continue;
+      for (const seg of segments) {
+        if (seg === entry || (seg.startsWith(entry) && /^[-_.]/.test(seg.slice(entry.length)))) return true;
+      }
+    }
   }
   return false;
 }
