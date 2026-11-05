@@ -40,6 +40,7 @@ const PAID = {
   fancentro: { words: ['fancentro'], label: 'FanCentro', host: 'fancentro.com' },
   fanvue: { words: ['fanvue'], label: 'Fanvue', host: 'fanvue.com' },
   clips4sale: { words: ['clips4sale', 'c4s'], label: 'Clips4Sale', host: 'clips4sale.com' },
+  patreon: { words: ['patreon'], label: 'Patreon', host: 'patreon.com' },
 };
 // Build words, used when the library has no tag of that name: they filter to pictures the
 // physique model measured as lean or athletic.
