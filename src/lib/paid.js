@@ -45,6 +45,9 @@ function serviceOf(url) {
   return null;
 }
 
+/** Is this URL on a paid creator platform? */
+function isPaidPlatform(url) { return !!serviceOf(url); }
+
 // First path segments that are site pages, not people (shared by the handle-style services).
 const RESERVED = new Set(['login', 'signup', 'register', 'auth', 'about', 'help', 'faq', 'contact', 'blog', 'terms', 'privacy',
   'support', 'explore', 'search', 'home', 'feed', 'messages', 'notifications', 'settings', 'collections', 'videos', 'photos',
@@ -245,5 +248,5 @@ function creatorPaid(c) {
   return (Array.isArray(links) ? links : []).filter((l) => l && l.url && serviceOf(l.url) && l.service !== 'OnlyFans' && !/onlyfans\.com/i.test(l.url || ''));
 }
 
-module.exports = { isPathNotName, plausibleHandle, SERVICES, serviceOf, fanslyHandle, jffHandle, paidHandle, findPaidHandles, paidLink, creatorPaid, pageUrl, pageLinked, PAID_HOSTS,
+module.exports = { isPathNotName, plausibleHandle, SERVICES, serviceOf, isPaidPlatform, fanslyHandle, jffHandle, paidHandle, findPaidHandles, paidLink, creatorPaid, pageUrl, pageLinked, PAID_HOSTS,
   ofHandle, findOnlyFans, freeHint, ofLink, creatorOnlyFans };

@@ -384,6 +384,10 @@ Set `SENTRY_DSN` to enable sampled reports for HTTP errors reaching the final ha
 
 PRISM does not defeat a refusal by itself. It does not solve challenges, does not use credentials, cookies or logins, and does not spend on a paid unblocker unless the operator has switched that tier on (`brightdataUnlocker`, and for Scrapfly `scrapflyUnlocker` plus the `scrapflyAllowlist` of creators it may spend on). When a page refuses PRISM, it is skipped or handed to a tier the operator enabled, and the run note says which tier acted.
 
+A paid creator platform that refuses PRISM is never handed to an unblocker, whatever the tiers are set to: the content there sits behind the platform's own gate, and spending credits to break a refusal is not something PRISM does on its own. The page stays a link-out and a read, and the run note says so.
+
+The render session (`BROWSER4_SESSION`, default `prism-ingest`) is a shared Chrome profile used for anonymous reading only. Nobody signs in in it: a login there would leave its cookies in every later render, including on paid hosts, and PRISM does not reuse anyone's session. Signed-in work happens elsewhere (Telegram's MTProto account, the operator's own browser).
+
 A browser user agent on a public page is not a defeat of a refusal. It is a normal read by a normal client, and it is allowed on one condition: robots.txt is honoured under the same identity. The robots.txt request carries the same user agent as the page request, so the robots PRISM obeys is the robots served to the identity it actually uses. A disallow under that identity skips the page. For GayForFans and JustTheGays this is the setting `gffBrowserAgent` (on by default). Off means PRISM's own agent for both robots and pages.
 
 ## Scrapfly unblocker (optional, paid)
