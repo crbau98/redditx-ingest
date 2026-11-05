@@ -34,6 +34,13 @@ describe('review queue', () => {
     assert.equal(L.undoPlan('nonsense'), null);
     assert.equal(L.undoPlan('approve').verb, 'Published');
   });
+  test('in the media browser an action is undone by returning the items to the state they were in', () => {
+    assert.equal(L.undoActionFor('published'), 'approve');
+    assert.equal(L.undoActionFor('review'), 'flag');
+    assert.equal(L.undoActionFor('hidden'), 'hide');
+    assert.equal(L.undoActionFor('removed'), 'reject');
+    assert.equal(L.undoActionFor('all'), null);
+  });
   test('selection summary counts the kinds', () => {
     const items = [{ review_reason: 'safety: x' }, { review_reason: 'scope:unclear' }, { review_reason: 'scope:unclear' }, { review_reason: 'physique:heavy' }];
     assert.equal(L.selectionSummary(items), '4 selected · 1 safety · 2 male focus unclear');

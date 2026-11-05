@@ -28,6 +28,14 @@ export function undoPlan(action) {
   return null;
 }
 
+/**
+ * In the media browser every selected item is in the same library state, so undoing a bulk action means sending the items back
+ * to that state: published → approve, review → flag, hidden → hide, removed → reject. Unknown states cannot be undone.
+ */
+export function undoActionFor(priorState) {
+  return { published: 'approve', review: 'flag', hidden: 'hide', removed: 'reject' }[priorState] || null;
+}
+
 /** "3 selected · 2 safety · 1 male focus unclear" for the bulk bar. */
 export function selectionSummary(items) {
   const n = items.length;
