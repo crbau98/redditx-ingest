@@ -28,16 +28,45 @@ const q = {
     ON CONFLICT(media_id) DO UPDATE SET reports = @reports, last_report = @last_report, checked_at = @checked_at,
       verdict = @verdict, http_status = @http_status, gone_streak = @gone_streak`),
   media: repo.db.prepare('SELECT id, media_url, preview_url, media_type, hls_url, publish_state FROM media WHERE id = ?'),
-  // Pending confirmations first (one "gone" verdict, the hour has passed), then never-checked
-  // items, then the least recently checked. Never-checked rows have no media_health row, so
-  // `h.verdict = 'gone'` is NULL for them; COALESCE keeps them from sorting after stale ones.
-  due: repo.db.prepare(`SELECT m.id FROM media m LEFT JOIN media_health h ON h.media_id = m.id
-    WHERE m.publish_state = 'published'
-      AND (h.checked_at IS NULL OR h.checked_at < @stale OR (h.verdict = 'gone' AND h.checked_at < @confirm))
-    ORDER BY COALESCE(h.verdict = 'gone', 0) DESC, h.checked_at IS NOT NULL, h.checked_at ASC, m.hot DESC LIMIT @n`),
   stats: repo.db.prepare(`SELECT COUNT(*) AS checked, SUM(verdict = 'gone') AS gone, SUM(reports) AS reports,
     SUM(CASE WHEN verdict = 'gone' AND checked_at >= ? THEN 1 ELSE 0 END) AS gone7d FROM media_health`),
 };
+
+/**
+ * Hosts whose media is known to disappear at the source (the linkHealthRotHosts setting). Their items form a cohort
+ * with its own rate and ignore the age rule: a reddit post deleted two years ago is still shown as a broken image.
+ * Only well-formed hostnames are kept, so a typo in the setting cannot widen the query.
+ */
+function rotHosts() {
+  return String(settingsStore.get().linkHealthRotHosts || '').split(/[\s,]+/)
+    .map((h) => h.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, ''))
+    .filter((h) => /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(h));
+}
+
+/** SQL that matches items whose media or preview URL is on one of the hosts (validated above, so no escaping needed). */
+function cohortWhere(hosts, cutoff) {
+  if (!hosts.length) return { sql: '0', params: {} };
+  // only items older than the window: recent items on these hosts stay in the live sweep at its own rate.
+  // COALESCE: a NULL preview_url would make NOT (...) NULL, and the general pass would silently lose the row
+  const parts = hosts.map((_, i) => `(m.media_url LIKE @h${i} OR COALESCE(m.preview_url, '') LIKE @h${i})`);
+  const params = { cutoff };
+  hosts.forEach((h, i) => { params[`h${i}`] = `%://${h}/%`; });
+  return { sql: `(m.posted_at < @cutoff AND (${parts.join(' OR ')}))`, params };
+}
+
+// Pending confirmations first (one "gone" verdict, the hour has passed), then never-checked items, then the least
+// recently checked. Never-checked rows have no media_health row, so `h.verdict = 'gone'` is NULL for them; COALESCE
+// keeps them from sorting after stale ones.
+const ORDER = "ORDER BY COALESCE(h.verdict = 'gone', 0) DESC, h.checked_at IS NOT NULL, h.checked_at ASC, m.hot DESC LIMIT @n";
+const DUE = `m.publish_state = 'published'
+      AND (h.checked_at IS NULL OR h.checked_at < @stale OR (h.verdict = 'gone' AND h.checked_at < @confirm))`;
+/** Items due for a check, from the rot-host cohort or from everything else. */
+function dueRows({ cohort, hosts, cutoff, stale, confirm, n }) {
+  const c = cohortWhere(hosts, cutoff);
+  const scope = cohort ? c.sql : `NOT ${c.sql}`;
+  return repo.db.prepare(`SELECT m.id FROM media m LEFT JOIN media_health h ON h.media_id = m.id WHERE ${DUE} AND ${scope} ${ORDER}`)
+    .all({ ...c.params, stale, confirm, n });
+}
 
 /** Classify a probe result: 'ok', 'gone' (really removed), or 'unknown' (can't tell — never acted on). */
 function classify(p) {
@@ -112,22 +141,28 @@ function report(id) {
   return { ok: true, checking: !!willCheck };
 }
 
-/** Background pass: re-check the least recently checked items, a few at a time. */
-async function sweep({ limit, maxAgeDays = 14, probe = probeMedia, aborted = () => false } = {}) {
+/** Background pass: the rot-host cohort at its own rate, then everything else at linkHealthPerSweep. */
+async function sweep({ limit, cohortLimit, maxAgeDays = 14, probe = probeMedia, aborted = () => false } = {}) {
   const s = settingsStore.get();
   const n = limit || s.linkHealthPerSweep;
+  const cn = cohortLimit ?? s.linkHealthCohortPerSweep;
+  const hosts = rotHosts();
   const cutoff = new Date(Date.now() - maxAgeDays * 86400000).toISOString();
-  const out = { checked: 0, gone: 0, hidden: 0, unknown: 0 };
   const confirm = new Date(Date.now() - CONFIRM_AFTER_MS).toISOString();
-  for (const { id } of q.due.all({ stale: cutoff, confirm, n })) {
-    if (aborted()) break;
-    const r = await check(id, { probe });
-    if (!r) continue;
-    out.checked++;
-    if (r.verdict === 'gone') out.gone++;
-    if (r.verdict === 'unknown') out.unknown++;
-    if (r.hidden) out.hidden++;
-  }
+  const out = { checked: 0, cohort: 0, gone: 0, hidden: 0, unknown: 0 };
+  const run = async (rows, counted) => {
+    for (const { id } of rows) {
+      if (aborted()) break;
+      const r = await check(id, { probe });
+      if (!r) continue;
+      out.checked++; if (counted) out.cohort++;
+      if (r.verdict === 'gone') out.gone++;
+      if (r.verdict === 'unknown') out.unknown++;
+      if (r.hidden) out.hidden++;
+    }
+  };
+  await run(dueRows({ cohort: true, hosts, cutoff, stale: cutoff, confirm, n: cn }), true);
+  await run(dueRows({ cohort: false, hosts, cutoff, stale: cutoff, confirm, n }), false);
   if (out.hidden) events.log('INFO', `Link health: checked ${out.checked}, hid ${out.hidden} gone at source`);
   return out;
 }
@@ -150,4 +185,4 @@ function start() {
 }
 function stop() { stopFlag = true; clearInterval(timer); timer = null; }
 
-module.exports = { check, report, sweep, stats, classify, start, stop, CONFIRM_AFTER_MS };
+module.exports = { check, report, sweep, stats, classify, start, stop, rotHosts, CONFIRM_AFTER_MS };
