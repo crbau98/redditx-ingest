@@ -98,7 +98,8 @@ const CHECKS = (touch) => {
 async function audit(browser, view, label, route, { admin = false } = {}) {
   const ctx = await browser.newContext({ ...view, name: undefined, touch: undefined });
   if (admin) await ctx.addCookies([{ name: 'prism_age', value: '1', url: BASE }]).catch(() => {}); // a fast loop must not depend on clicking the age gate in time
-  if (admin) await ctx.addInitScript((t) => { try { localStorage.setItem('prism.theme', t); } catch { /* storage blocked */ } }, view.colorScheme || 'dark');
+  // the app stores its settings JSON-encoded, so the theme is '"light"' and not 'light'
+  if (admin) await ctx.addInitScript((t) => { try { localStorage.setItem('prism.theme', JSON.stringify(t)); } catch { /* storage blocked */ } }, view.colorScheme || 'dark');
   await ctx.addInitScript(() => {
     try { new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__lcp = e.startTime; }).observe({ type: 'largest-contentful-paint', buffered: true }); } catch { /* not supported */ }
   });
