@@ -97,7 +97,10 @@ function reapply(settings) {
   const res = { hidden: 0, restored: 0, creatorsHidden: 0, creatorsRestored: 0 };
   const toHide = on ? repo.db.prepare("SELECT id, physique FROM media WHERE publish_state = 'published' AND physique >= ?").all(thr) : [];
   const toShow = repo.db.prepare(`SELECT id FROM media WHERE publish_state = 'hidden' AND review_reason LIKE '${REASON}%'
-    AND (? = 0 OR physique IS NULL OR physique < ?)`).all(on ? 1 : 0, thr);
+    AND (? = 0 OR (review_reason NOT LIKE '${REASON}text:%' AND (physique IS NULL OR physique < ?)))`).all(on ? 1 : 0, thr);
+  // (a row hidden for its WORDS is not a score decision: the body sweep also measures hidden pictures and overwrites the marker
+  // with a real score, and a light one must not make it visible again while the words still match. Only switching the filter
+  // off, or the word sweep / body sweep restore paths that re-read the words, show it.)
   repo.db.transaction(() => {
     for (const r of toHide) { repo.media.setState(r.id, 'hidden', `${REASON}${r.physique}`, { exact: true }); res.hidden++; }
     for (const r of toShow) { repo.media.setState(r.id, 'published', null, { exact: true }); res.restored++; }
@@ -197,7 +200,6 @@ async function textSweep(settings, { force = false } = {}) {
     ORDER BY seq LIMIT 500`);
   after = 0;
   let rewind = null; // lowest seq of a row whose word marker was reset to "unmeasured": the body sweep must look at it again
-  let deferred = 0;  // marker rows left hidden because nothing would re-measure them (see below)
   // applied after EVERY batch, so an early return (the filter switched off while a batch yields) cannot lose it
   const applyRewind = () => {
     if (rewind == null) return;
@@ -214,16 +216,14 @@ async function textSweep(settings, { force = false } = {}) {
         after = r.seq;
         if (textCheck(r.title, r.description, r.tags_text, r.community, r.author).heavy) continue;
         if (r.physique === APPROVED) continue;                         // an admin's approval is never touched
-        if (r.physique === TEXT_SCORE) {                                    // only the word marker is reset; a MEASURED score (the body sweep
-          // replaces the marker) stays and still decides: `publish` re-applies it. A marker row has no score, and its measurement may
-          // have been overwritten by the marker earlier, so it is measured again by the body sweep: if that sweep cannot run
-          // (switched off, or 0 per minute) nothing would, and a heavy picture would stay visible for good, so it stays hidden
-          // for now and the whole pass runs again at the next start instead of being marked done.
-          const now = require('../settings').get();
-          if (!now.imageSweep || !now.imageSweepPerTick) { deferred++; continue; }
-          repo.media.setPhysique(r.id, null);
+        if (r.physique === TEXT_SCORE) {
+          // A word-marker row has no measured score (an earlier version overwrote it), so it is NOT published here: it stays hidden
+          // and the body sweep, rewound to it below, measures it and restores it in the same step. If that sweep cannot run
+          // (switched off, no model, 0 per minute) the row simply stays hidden, which is the safe side.
           rewind = rewind == null ? r.seq : Math.min(rewind, r.seq);
+          continue;
         }
+        // a MEASURED score (the body sweep replaced the marker) stays and still decides: `publish` re-applies it
         publish(r.id, current());
         if (repo.media.get(r.id).publish_state !== 'hidden') res.restored++;
       }
@@ -250,8 +250,7 @@ async function textSweep(settings, { force = false } = {}) {
     repo.logAction('feed', f.id, 'physique-feed-on', 'the word list no longer matches this feed', 'system');
     res.feedsRestored++;
   }
-  if (deferred) { res.deferred = deferred; events.log('INFO', `Body filter (words): ${deferred} item(s) with no measured picture stay hidden until the image sweep is on; this pass runs again at the next start`); }
-  else repo.settings.set('physique_text_sweep_version', TEXT_SWEEP_VERSION);
+  repo.settings.set('physique_text_sweep_version', TEXT_SWEEP_VERSION);
   if (res.items || res.creators || res.feeds || res.restored || res.feedsRestored) {
     events.log('OK', `Body filter (words): ${res.items} item(s) hidden, ${res.creators} creator(s) hidden, ${res.feeds} feed(s) paused; shown again: ${res.restored} item(s), ${res.feedsRestored} feed(s)`);
   }

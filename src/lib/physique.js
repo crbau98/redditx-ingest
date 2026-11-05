@@ -212,11 +212,14 @@ function textCheck(...texts) {
   }
   // A man's own words about his age are read one field at a time: `normalize` collapses whitespace, so a joined string has no
   // field boundary left and "I'm 58" followed by an author name would no longer end its clause.
+  // and one LINE at a time too ("I'm 58\nfitness creator" is a bio with two lines)
   for (const f of flat) {
-    for (const t of [normalize(f), normalize(split(f))]) {
-      if (!t) continue;
-      const o = olderCheck(t);
-      if (o) return { heavy: true, rule: `physique:${o}`, kind: 'older' };
+    for (const line of f.split(/\r?\n|\r|\u2028|\u2029/)) {
+      for (const t of [normalize(line), normalize(split(line))]) {
+        if (!t) continue;
+        const o = olderCheck(t);
+        if (o) return { heavy: true, rule: `physique:${o}`, kind: 'older' };
+      }
     }
   }
   return { heavy: false, rule: null, kind: null };

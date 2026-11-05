@@ -324,19 +324,24 @@ describe('body filter policy (model replaced by a fake)', () => {
     assert.equal(repo.creators.get(c.id).status, 'active');
   });
 
-  test('the sweep SHOWS AGAIN what an earlier, broader list hid, keeps what still matches, and never undoes a person', async () => {
-    fake({});
+  test('the sweep SHOWS AGAIN what an earlier, broader list hid (after the body sweep measures it), keeps what still matches, and never undoes a person', async () => {
     const base = (k, extra) => repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: k, source_key: `reddit:${k}:0`, post_key: `reddit:${k}`, source_url: `https://reddit.com/${k}`,
-      media_type: 'image', media_url: `https://i.redd.it/${k}.jpg`, hash: `h-${k}`, publish_state: 'hidden', ...extra });
+      media_type: 'image', media_url: `https://i.redd.it/${k}.jpg`, preview_url: `https://i.redd.it/${k}.jpg`, hash: `h-${k}`, publish_state: 'hidden', ...extra });
     // hidden by the old rule for "I am 60 days out": the current rules do not match it, so it is shown again
     const stale = base('stale1', { title: 'I am 60 days out from my first show', physique: 101, review_reason: "physique:text:older:i am 60" });
+    const staleHeavy = base('stale2', { title: 'I am 60 days out from my first show', physique: 101, review_reason: "physique:text:older:i am 60" });
     // still matches: stays hidden
     const still = base('still1', { title: 'silver fox at the gym', physique: 101, review_reason: 'physique:text:older:silver fox' });
     // hidden by a person for another reason: never touched, even though its words are harmless
     const person = base('person1', { title: 'I am 60 days out from my first show', physique: null, review_reason: 'reported:spam' });
-    const r = await physique.textSweep(settings, { force: true });
-    assert.ok(r.restored >= 1, 'something was shown again');
-    assert.equal(repo.media.get(stale).publish_state, 'published'); assert.equal(repo.media.get(stale).physique, null, 'back to unmeasured, so reapply does not hide it again');
+    fake({ 'https://i.redd.it/stale1.jpg': 10, 'https://i.redd.it/stale2.jpg': 88, 'https://i.redd.it/still1.jpg': 10, 'https://i.redd.it/person1.jpg': 10 });
+    await physique.textSweep(settings, { force: true });
+    assert.equal(repo.media.get(stale).publish_state, 'hidden', 'not shown on the strength of words alone: it has no measured picture yet');
+    const r = await maintenance.physiqueSweep({ limit: 500, settings });  // the text sweep rewound it to these rows
+    assert.ok(r.restored >= 2, JSON.stringify(r));
+    assert.equal(repo.media.get(stale).publish_state, 'published'); assert.equal(repo.media.get(stale).physique, 10);
+    assert.equal(repo.media.get(staleHeavy).publish_state, 'hidden', 'a heavy picture stays hidden, now for the body reason');
+    assert.equal(repo.media.get(staleHeavy).physique, 88); assert.equal(repo.media.get(staleHeavy).review_reason, 'physique:88');
     physique.reapply(settings);
     assert.equal(repo.media.get(stale).publish_state, 'published', 'and it stays shown after the next boot');
     assert.equal(repo.media.get(still).publish_state, 'hidden');
@@ -374,19 +379,20 @@ describe('body filter policy (model replaced by a fake)', () => {
   });
 
   test('an item the filter\'s off/on path left as "physique:101" (word marker, body reason) is re-read too; a person\'s hide is not', async () => {
-    fake({});
     const base = (k, extra) => repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: k, source_key: `reddit:${k}:0`, post_key: `reddit:${k}`, source_url: `https://reddit.com/${k}`,
-      media_type: 'image', media_url: `https://i.redd.it/${k}.jpg`, hash: `h-${k}`, publish_state: 'hidden', title: 'I am 60 days out from my first show', ...extra });
+      media_type: 'image', media_url: `https://i.redd.it/${k}.jpg`, preview_url: `https://i.redd.it/${k}.jpg`, hash: `h-${k}`, publish_state: 'hidden', title: 'I am 60 days out from my first show', ...extra });
     const legacy = base('legacy101', { physique: 101, review_reason: 'physique:101' });
     const person = base('person101', { physique: 101, review_reason: 'reported:spam' });
+    fake({ 'https://i.redd.it/legacy101.jpg': 12, 'https://i.redd.it/person101.jpg': 12 });
     await physique.textSweep(settings, { force: true });
-    assert.equal(repo.media.get(legacy).publish_state, 'published'); assert.equal(repo.media.get(legacy).physique, null);
+    await maintenance.physiqueSweep({ limit: 500, settings });
+    assert.equal(repo.media.get(legacy).publish_state, 'published'); assert.equal(repo.media.get(legacy).physique, 12);
     physique.reapply(settings);
     assert.equal(repo.media.get(legacy).publish_state, 'published', 'and it stays shown');
     assert.equal(repo.media.get(person).publish_state, 'hidden', 'a person\'s decision stands');
   });
 
-  test('a restored word-marker row is measured again: the body sweep cursor moves back to it, and never forward', async () => {
+  test('a word-marker row is measured again: the body sweep cursor moves back to it, and never forward', async () => {
     fake({});
     const base = (k, extra) => repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: k, source_key: `reddit:${k}:0`, post_key: `reddit:${k}`, source_url: `https://reddit.com/${k}`,
       media_type: 'image', media_url: `https://i.redd.it/${k}.jpg`, hash: `h-${k}`, publish_state: 'hidden', title: 'I am 60 days out from my first show', ...extra });
@@ -395,8 +401,8 @@ describe('body filter policy (model replaced by a fake)', () => {
     const seq = seqOf(id);
     repo.settings.set('physique_sweep_seq', String(seq + 5000));            // the body sweep is already far past this row
     const r = await physique.textSweep(settings, { force: true });
-    assert.equal(repo.media.get(id).publish_state, 'published');
-    assert.equal(repo.settings.get('physique_sweep_seq'), String(seq - 1), 'the cursor is just before the restored row');
+    assert.equal(repo.media.get(id).publish_state, 'hidden', 'still hidden until it is measured');
+    assert.equal(repo.settings.get('physique_sweep_seq'), String(seq - 1), 'the cursor is just before the row');
     assert.equal(r.rewound, seq - 1);
     repo.settings.set('physique_sweep_seq', '0');                           // a cursor that has not reached it yet stays where it is
     const id2 = base('rewind2', { physique: 101, review_reason: 'physique:text:older:i am 60' });
@@ -405,26 +411,28 @@ describe('body filter policy (model replaced by a fake)', () => {
     assert.ok(seqOf(id2) > 0);
   });
 
-  test('a marker row is NOT published while nothing could measure it again (image sweep off or 0 per minute), and the pass is not marked done', async () => {
-    fake({});
+  test('a marker row stays hidden whenever no measurement happens (sweep off, no model, a failed analysis) and no torso in view shows it as unmeasured', async () => {
     const store = require('../src/settings');
     const base = (k) => repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: k, source_key: `reddit:${k}:0`, post_key: `reddit:${k}`, source_url: `https://reddit.com/${k}`,
-      media_type: 'image', media_url: `https://i.redd.it/${k}.jpg`, hash: `h-${k}`, publish_state: 'hidden', title: 'I am 60 days out from my first show', physique: 101, review_reason: 'physique:text:older:i am 60' });
-    const id = base('defer1');
-    repo.settings.set('physique_text_sweep_version', '');
-    for (const off of [{ imageSweep: false }, { imageSweepPerTick: 0 }]) {
-      const before = { imageSweep: store.get().imageSweep, imageSweepPerTick: store.get().imageSweepPerTick };
-      store.update(off);
-      try {
-        const r = await physique.textSweep(settings, { force: true });
-        assert.equal(repo.media.get(id).publish_state, 'hidden', `still hidden with ${JSON.stringify(off)}`);
-        assert.equal(repo.media.get(id).physique, 101); assert.ok(r.deferred >= 1);
-        assert.notEqual(repo.settings.get('physique_text_sweep_version'), '4', 'not marked done, so the next start tries again');
-      } finally { store.update(before); }
+      media_type: 'image', media_url: `https://i.redd.it/${k}.jpg`, preview_url: `https://i.redd.it/${k}.jpg`, hash: `h-${k}`, publish_state: 'hidden', title: 'I am 60 days out from my first show', physique: 101, review_reason: 'physique:text:older:i am 60' });
+    const id = base('nomodel1');
+    await physique.textSweep(settings, { force: true });
+    // the model is missing or fails: the analysis returns an error / unavailable, so nothing is measured and nothing is shown
+    for (const status of ['unavailable', 'error']) {
+      imagefilter._setAnalyzer(async () => ({ status }));
+      await physique.textSweep(settings, { force: true });
+      await maintenance.physiqueSweep({ limit: 500, settings });
+      assert.equal(repo.media.get(id).publish_state, 'hidden', status); assert.equal(repo.media.get(id).physique, 101);
     }
-    await physique.textSweep(settings, { force: true });              // sweep on again: now it is restored and queued for measuring
-    assert.equal(repo.media.get(id).publish_state, 'published');
-    assert.equal(repo.settings.get('physique_text_sweep_version'), '4');
+    // the image sweep is switched off: the body sweep is never run by the timer, and the text sweep alone shows nothing
+    const was = store.get().imageSweep; store.update({ imageSweep: false });
+    try { await physique.textSweep(settings, { force: true }); } finally { store.update({ imageSweep: was }); }
+    assert.equal(repo.media.get(id).publish_state, 'hidden');
+    // a picture with no torso in view is a real analysis: it is shown, unmeasured, like any other such picture
+    fake({});
+    await physique.textSweep(settings, { force: true });
+    await maintenance.physiqueSweep({ limit: 500, settings });
+    assert.equal(repo.media.get(id).publish_state, 'published'); assert.equal(repo.media.get(id).physique, null);
   });
 
   test('the cursor rewind is kept when the filter is switched off between restore batches', async () => {
@@ -435,12 +443,13 @@ describe('body filter policy (model replaced by a fake)', () => {
       media_type: 'image', media_url: `https://i.redd.it/bt${i}.jpg`, hash: `h-bt${i}`, publish_state: 'hidden', title: 'I am 60 days out from my first show', physique: 101, review_reason: 'physique:text:older:i am 60' }));
     const lowest = repo.db.prepare('SELECT MIN(seq) AS s FROM media WHERE id IN (' + ids.map(() => '?').join(',') + ')').get(...ids).s;
     const far = String(lowest + 100000);
-    repo.settings.set('physique_sweep_seq', far);
+    repo.settings.set('physique_sweep_seq', far); repo.settings.set('physique_text_sweep_version', '');
     const realSI = global.setImmediate;
-    const restoredAny = () => repo.db.prepare("SELECT 1 FROM media WHERE id = ? AND publish_state = 'published'").get(ids[0]);
-    global.setImmediate = (fn, ...a) => { if (restoredAny() && store.get().physiqueFilter) store.update({ physiqueFilter: false }); return realSI(fn, ...a); }; // off right after the first restore batch
+    // off right after the first restore batch (once the cursor has moved), i.e. between two batches
+    global.setImmediate = (fn, ...a) => { if (repo.settings.get('physique_sweep_seq') !== far && store.get().physiqueFilter) store.update({ physiqueFilter: false }); return realSI(fn, ...a); };
     try { await physique.textSweep(settings, { force: true }); } finally { global.setImmediate = realSI; store.update({ physiqueFilter: true }); }
     assert.equal(repo.settings.get('physique_sweep_seq'), String(lowest - 1), 'the first batch\'s rewind was applied before the abort');
+    assert.notEqual(repo.settings.get('physique_text_sweep_version'), '4', 'and the pass really was cut short (not marked done)');
     repo.db.prepare('DELETE FROM media WHERE id IN (' + ids.map(() => '?').join(',') + ')').run(...ids); // leave the shared library as it was
   });
 
@@ -450,6 +459,13 @@ describe('body filter policy (model replaced by a fake)', () => {
       assert.equal(r.heavy, true, JSON.stringify(args)); assert.equal(r.kind, 'older');
     }
     for (const args of [["I'm 60 days out", 'prep', '', '', 'author'], ["I'm 50,000 followers strong", 'x', '', '', 'author']]) assert.equal(physique.textCheck(...args).heavy, false, JSON.stringify(args));
+  });
+
+  test('a stated age on its own LINE inside one field is read ("I\'m 58\\nfitness creator"), and a line that continues the number is not', () => {
+    for (const bio of ["I'm 58\nfitness creator", "fitness creator\nAge: 58\nDM for collabs", "I'm 58\r\nlifting", "I'm 58\u2028coach"]) {
+      assert.equal(physique.textCheck('title', bio).heavy, true, JSON.stringify(bio));
+    }
+    for (const bio of ["I'm 60 days out\nfitness creator", "I'm 58 kg\nfitness creator"]) assert.equal(physique.textCheck('title', bio).heavy, false, JSON.stringify(bio));
   });
 
   test('a feed this policy paused whose name no longer matches runs again, unless a person acted on it', async () => {
