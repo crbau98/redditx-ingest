@@ -117,3 +117,25 @@ describe('requests started while the page loads (theme-init.js + api.js)', () =>
 
   });
 });
+
+describe('the early URLs and the views that consume them stay in step', () => {
+  // theme-init.js hard-codes the first screen's URLs (it runs before any module). If a view asks for something else, the early
+  // answer is never used (a wasted request per visit, and no error). These checks fail loudly when that drifts.
+  const view = (f) => fs.readFileSync(path.join(PUBLIC_JS, 'views', f), 'utf8');
+  const themeInit = fs.readFileSync(path.join(PUBLIC_JS, 'theme-init.js'), 'utf8');
+  test('home asks for the discover payload and the first feed page exactly as theme-init.js starts them', () => {
+    const home = view('home.js');
+    assert.match(themeInit, /\/api\/discover/); assert.match(themeInit, /\/api\/media\?sort=recent&page=0&limit=36/);
+    assert.match(home, /get\('\/api\/discover'\)/, 'views/home.js changed its discover request: update theme-init.js');
+    assert.match(home, /prefetch\('\/api\/media', \{ sort: 'recent', page: 0, limit: 36 \}\)/, 'views/home.js changed its first feed page: update theme-init.js');
+  });
+  test('browse asks for the seven reads theme-init.js starts for it', () => {
+    const browse = view('browse.js');
+    for (const [early, needle] of [
+      ['/api/tags?limit=200', "get('/api/tags', { limit: 200 })"], ['/api/communities', "get('/api/communities')"], ['/api/platforms', "get('/api/platforms')"],
+      ['/api/creators?onlyfans=1&limit=1', "get('/api/creators', { onlyfans: '1', limit: 1 })"], ['/api/media?paid=onlyfans&limit=1', "get('/api/media', { paid: 'onlyfans', limit: 1 })"],
+      ['/api/creators?paid=fansly&limit=1', "get('/api/creators', { paid: 'fansly', limit: 1 })"],
+    ]) { assert.ok(themeInit.includes(early), `theme-init.js starts ${early}`); assert.ok(browse.includes(needle), `views/browse.js changed ${needle}: update theme-init.js`); }
+    assert.ok(fs.readFileSync(path.join(PUBLIC_JS, 'components', 'topics.js'), 'utf8').includes("get('/api/topics')"), 'topics.js changed its request: update theme-init.js');
+  });
+});
