@@ -26,7 +26,7 @@ before(async () => {
     '/r/laddertest/hot.rss': () => ({ headers: { 'content-type': 'application/atom+xml' }, body: atom }),
     '/r/archonly/top.json': () => ({ status: 403, json: {} }), '/r/archonly/hot.json': () => ({ status: 403, json: {} }),
     '/r/archonly/top.rss': () => ({ status: 403, body: 'no' }), '/r/archonly/hot.rss': () => ({ status: 403, body: 'no' }),
-    '/api/posts/search': (req, res, url) => (url.searchParams.get('subreddit') === 'mixedfail' ? { status: 500, json: {} } : { json: url.searchParams.get('subreddit') === 'banned' ? { data: [] } : archive }),
+    '/api/posts/search': (req, res, url) => (url.searchParams.get('subreddit') === 'mixedfail' ? { status: 500, json: {} } : { json: ['banned', 'laddertest', 'edge404'].includes(url.searchParams.get('subreddit')) ? { data: [] } : archive }),
     '/r/mixedfail/top.json': () => { state.mixed = (state.mixed || 0) + 1; return { status: state.mixed === 1 ? 404 : 403, json: {} }; }, '/r/mixedfail/hot.json': () => ({ status: 403, json: {} }),
     '/r/mixedfail/top.rss': () => ({ status: 429, body: 'slow down' }), '/r/mixedfail/hot.rss': () => ({ status: 429, body: 'slow down' }),
     '/r/edge404/top.json': () => ({ status: 403, json: {} }), '/r/edge404/hot.json': () => ({ status: 403, json: {} }),
@@ -39,7 +39,7 @@ before(async () => {
 after(async () => { await mock.close(); });
 
 describe('reddit transport ladder', () => {
-  test('falls back from blocked JSON to RSS and still yields media', async () => {
+  test('an empty archive falls through to RSS, which still yields media', async () => {
     const reddit = require('../src/sources/reddit');
     const r = await reddit.fetch({ kind: 'community', target: 'laddertest' }, { cursor: {}, limit: 25, aborted: () => false });
     assert.equal(r.via, 'rss');

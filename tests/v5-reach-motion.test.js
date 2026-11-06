@@ -183,7 +183,7 @@ describe('redgifs keeps in-scope image posts and profile links', () => {
 
 describe('seed version 9 uses real adapter kinds', () => {
   test('every seed is a kind its adapter implements, and none point at a paywalled host', () => {
-    assert.equal(registry.SEED_VERSION, 13);
+    assert.equal(registry.SEED_VERSION, 14);
     const targets = new Set(registry.SEEDS.map((s) => `${s.platform}:${s.kind}:${s.target}`));
     assert.ok(!targets.has('coomer:search:gay daddy'), 'the older-men keyword feed is no longer seeded');
     assert.ok(registry.RETIRED_SEEDS.some((s) => s.platform === 'coomer' && s.target === 'gay daddy'), 'and existing databases switch it off');
