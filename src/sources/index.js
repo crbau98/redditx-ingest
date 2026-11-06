@@ -20,6 +20,7 @@ const adapters = [
   require('./gff'),
   require('./xhamster'),
   require('./pornhub'),
+  require('./boyfriendtv'),
   webAdapter,
   linkInBioAdapter,
 ];
@@ -37,7 +38,7 @@ const resolvers = [
  * 404) on many instances, and from discovery (Admin → Discovery), which searches for real communities itself.
  * Every untrusted (tag / search) seed carries unmistakable male wording: items must read male-focused to publish.
  */
-const SEED_VERSION = 13; // 13: the Coomer "gay daddy" keyword feed is retired (fit, younger-reading creators first)
+const SEED_VERSION = 14; // 14: BoyfriendTV catalogue feed (RSS + sitemap walk on the .in mirror, capped per day)
 const seeds = (platform, kind, targets, extra) => targets.map((target) => ({ platform, kind, target, ...extra }));
 const SEEDS = [
   ...seeds('reddit', 'community', ['gaybrosgonewild', 'vlinesabsanddick', 'gaynsfw', 'twinks', 'massivecocks', 'gaymuscle',
@@ -57,6 +58,9 @@ const SEEDS = [
   // must read male-focused, lib/scope). Creator `user` feeds are added by discovery when a traced paid page
   // exists there, which is what pulls a popular creator's whole page in automatically.
   ...seeds('coomer', 'search', ['gay muscle', 'gay jock', 'gay twink', 'gay otter', 'gay hunk', 'gay couple', 'gay athlete', 'gay porn star', 'gay muscle for hire'], { trusted: false, intervalMin: 360 }),
+  // BoyfriendTV — the site's own catalogue, walked slowly from its RSS and CDN sitemap on the .in mirror
+  // (the .com is behind Cloudflare). Gay by definition, so trusted; the caps live in settings.
+  { platform: 'boyfriendtv', kind: 'catalog', target: 'https://www.boyfriendtv.in/', trusted: true, intervalMin: 240 },
   // Telegram public feeds: retired from seeds because preview is disabled by Telegram; use MTProto joined channels
 ];
 
