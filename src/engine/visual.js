@@ -277,7 +277,15 @@ function status() {
   return { model: MODEL_ID, embedded: done, indexed: ix ? ix.n : null, ...counters, perMinute: PER_TICK };
 }
 
+/**
+ * Build the in-memory index once, at boot (called from the warm-up after the first health answer), so the first
+ * "More like this" visitor does not pay the cold build. Measured on 150k media / 51.6k vectors on the same
+ * machine: cold build 333 ms, first similar request 477 ms, second 42 ms. Revisit moving this to the aggregate worker
+ * only if production vectors pass about 150k.
+ */
+function warmIndex() { try { return index().n; } catch (e) { return 0; } }
+
 /** Tests: forget the in-memory index and cached answers. */
 function _reset() { ix = null; profiles = null; cache.clear(); }
 
-module.exports = { similar, similarCreators, backfill, start, stop, status, ensureTable, _reset, _nearest: nearest, _index: index, _pending: pending, _MODEL_ID: MODEL_ID };
+module.exports = { similar, similarCreators, backfill, start, stop, status, ensureTable, warmIndex, _reset, _nearest: nearest, _index: index, _pending: pending, _MODEL_ID: MODEL_ID };

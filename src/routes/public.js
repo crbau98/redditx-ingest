@@ -118,7 +118,8 @@ function warm() {
   primeSnapshots(); // the library-wide aggregates, on the worker thread, before any visitor asks
   // Statement prep is the expensive part of SQLite's first run of a query shape (~0.4 s here):
   // touching the hot list queries once at boot keeps the first page load fast for real users.
-  const queue = [...prep, ...warmers];
+  // the visual index is built once here, after the first health answer, so the first 'More like this' visitor does not pay it
+  const queue = [...prep, ...warmers, () => require('../engine/visual').warmIndex()];
   const next = () => { const g = queue.shift(); if (!g) return; try { g(); } catch (e) { console.error('[warm]', e.message); } setImmediate(next); };
   setImmediate(next);
 }

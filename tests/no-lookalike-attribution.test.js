@@ -140,9 +140,10 @@ describe('no code path attributes by visual similarity', () => {
     assert.ok(!/repo\.(feeds|creators|identity|candidates)\.\w+\(/.test(src.replace(/repo\.(feeds|creators)\.(get|list|find)\w*\(/g, '')), 'no repo mutation call');
   });
 
-  test('the public routes only READ it: similar() and similarCreators() for display', () => {
+  test('the public routes only READ it: similar(), similarCreators() for display and the read-only index warm-up', () => {
     const uses = [...code(path.join(SRC, 'routes', 'public.js')).matchAll(/require\('\.\.\/engine\/visual'\)\.(\w+)/g)].map((m) => m[1]).sort();
-    assert.deepEqual([...new Set(uses)], ['similar', 'similarCreators']);
+    // warmIndex: the boot warm-up builds the same in-memory index once, read-only (no writes, no attribution)
+    assert.deepEqual([...new Set(uses)], ['similar', 'similarCreators', 'warmIndex']);
   });
 
   test('the look-alike setting and its admin control are gone', () => {
