@@ -386,6 +386,11 @@ module.exports = { _viaWebSearch: viaWebSearch,
   intervalMin: { user: 240, search: 180 },
   apiState, parseApi, parseLegacyTweet, parseSyndication, parseEmbedTweet, postsInResults, embedToken, fetchTweet, usage, webUsage,
   isConfigured(kind) {
+    // With no token the keyless route is the only one, and it needs web searches. At 0 the adapter has no way to read a
+    // feed at all, so say so and let the engine skip the feed instead of spending a syndication request on a 429 every run.
+    if (!config.creds.xBearer && !webBudget()) {
+      return { ok: false, note: 'X is off: no X_BEARER_TOKEN, and X web searches per day is 0 (Settings) — keyless X has no other route' };
+    }
     if (config.creds.xBearer && apiParked()) {
       const web = require('../lib/websearch').configured();
       if (kind === 'search' && !web) return { ok: false, note: `${apiState.reason} — search needs a working token or web search` };

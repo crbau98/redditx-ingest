@@ -1,5 +1,10 @@
 # UI changelog
 
+## 2026-11-06 — Sources: the free tiers are on the panel, and the engine line tells the truth
+
+- **Chrome (CDP), Jina Reader and the captcha solver are named on Admin → Sources**, with the price of each ("free", "tokens today") and the reason when one is off (no Chrome on the host, `CHALLENGE_BROWSER=1`, `jinaReader` / `captchaSolver` setting, `CAPSOLVER_API_KEY`). Before, only Browser4, Playwright and Bright Data were listed, so three tiers that now act on a refused page were invisible.
+- **The "Pages built by JavaScript are read with" line names Chrome over CDP** when `RENDER_ENGINE` resolves to the new engine; it used to say Browser4 for anything that was not Playwright.
+
 ## 2026-11-05 — "Needs attention": the admin console, rebuilt around the owner's jobs
 
 - **Overview answers "what is broken?" without a click.** Only queues with something in them, worst first (reports, failing feeds, review, feeds the app paused, same-person links, new creators). Failing feeds are expanded in place with the error in plain words and one tap to fix: *Retry*, *Pause* or *Check keys*, chosen from the error (`explainFeedError`). Feeds the app switched off on its own (`GET /api/admin/sources/retired`, new) are listed with *Turn back on*; before, nothing in the console listed them. The header line carries the throughput ("+462 items in 24h"); a card compares it with the day before.

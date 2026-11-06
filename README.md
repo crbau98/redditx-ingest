@@ -245,9 +245,9 @@ Reader: …", "Bright Data Web Unlocker: …", "Scrapfly Unblocker: …", "… n
    flagging (the 2026 benchmark of stealth tools against 31 live Cloudflare targets put only a raw-CDP driver at 28/31).
    It waits out a managed challenge and hands back the finished DOM for the same `extractPage`, so robots.txt, opt-outs,
    takedowns and every later gate behave identically. Every request still goes through PRISM's guard proxy.
-   *Needs a browser on the host:* the Docker image installs Alpine's `chromium` (`CHROME_PATH=/usr/bin/chromium-browser`,
-   `CHALLENGE_BROWSER=1`); on a Mac, Chrome is found in `/Applications`. `CHALLENGE_BROWSER=0` or `challengeBrowser=off`
-   disables it. `CHROME_HEADED=1` shows the window; `CHROME_TIMEOUT_MS`, `CHROME_CHALLENGE_WAIT_MS` (15 s) and
+   *Needs a browser on the host and `CHALLENGE_BROWSER=1`.* The Docker image sets both (`apk add chromium`,
+   `CHROME_PATH=/usr/bin/chromium-browser`); on a Mac, set `CHALLENGE_BROWSER=1` and Chrome is found in `/Applications`
+   (`CHROME_PATH` points elsewhere if it is not). `CHALLENGE_BROWSER=0` or `challengeBrowser=off` disables it. `CHROME_HEADED=1` shows the window; `CHROME_TIMEOUT_MS`, `CHROME_CHALLENGE_WAIT_MS` (15 s) and
    `CHROME_IDLE_MS` (4 min, then the browser closes) tune it.
 3. **Jina Reader** (`lib/jina.js`, setting `jinaReader`, default `fallback`, free and keyless). `r.jina.ai` renders the page
    from Jina's own addresses, so a site that refuses PRISM's address often answers there. It never sees a paid platform and

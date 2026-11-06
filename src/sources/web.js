@@ -450,7 +450,7 @@ function mergeRendered(pages) {
  * leave that host alone for a while. The rule for refusals in general (no solving, no credentials, paid tiers only when the
  * operator switches them on) is in the README, "Refusals, identity and robots"; this file does not restate it.
  */
-const ENGINE_LABEL = { browser4: 'Browser4', playwright: 'Playwright' };
+const ENGINE_LABEL = { browser4: 'Browser4', playwright: 'Playwright', chrome: 'Chrome (CDP)' };
 const engineLabel = () => ENGINE_LABEL[render.engineName()] || 'Browser';
 
 async function browserRead(feed, plain, need) {
@@ -473,7 +473,9 @@ async function browserRead(feed, plain, need) {
     const page = mergeRendered(r.pages);
     // a page that opts out says nothing about whether rendering works on this host
     hoststrategy.record(host, { found, rendered: page.optedOut ? null : (need === 'media' ? page.media.length : page.links.length) });
-    return { page, via: r.via, notes: r.notes, pages: r.pages.length, scrolls: r.pages.reduce((n, p) => n + Math.max(0, p.scrolls), 0) };
+    // The CDP browser reports a challenge that never cleared; that page is not an answer, so the unblock ladder must go on.
+    const gated = (r.pages || []).some((p) => p && p.challenge);
+    return { page, via: r.via, notes: r.notes, gated, pages: r.pages.length, scrolls: r.pages.reduce((n, p) => n + Math.max(0, p.scrolls), 0) };
   } catch (e) {
     if (e.challenge) hoststrategy.record(host, { found, challenge: true });
     return { error: e };
@@ -521,9 +523,10 @@ async function unlockedRead(feed, need) {
   // Then the paid tiers, Bright Data before Scrapfly.
   if (bdOn && keep(await brightdataRead(feed, need, cfg, host))) return answers[answers.length - 1];
   if (scrapOn && keep(await scrapflyRead(feed, need, cfg, host))) return answers[answers.length - 1];
-  // Nothing found media: keep the first real answer (an empty page is still an answer), else the LAST tier's story
-  // (a skip or an error), because that is the tier that ran once the free ones had been used up.
-  return answers.find((a) => a.page) || answers.filter((a) => a.skipped || a.error).pop() || null;
+  // Nothing found media: keep the LAST real answer (an empty page is still an answer, and the last tier to get a page is the
+  // most capable one that ran), else the LAST tier's story (a skip or an error), because that is the tier that ran once the
+  // free ones had been used up.
+  return answers.filter((a) => a.page).pop() || answers.filter((a) => a.skipped || a.error).pop() || null;
 }
 
 /** The local Chrome (raw CDP) reads the page and clears a challenge on the way. Free. */
@@ -558,6 +561,11 @@ async function jinaRead(feed, need, cfg) {
     if (thirdPartyUnreachable(new URL(feed.target).hostname)) return { skipped: 'a private address cannot be read by a third party', tier: 'jina' };
     const r = await jina.read(feed.target, { format: 'html', budget: cfg.jinaDailyBudget });
     if (r.blocked) return { skipped: 'the reader was refused as well', tier: 'jina' };
+    // The reader answers 200 with the rendered page; anything in the 4xx/5xx range is the reader's own failure (it names the
+    // reason in the body), which is not an empty page and must not hide the next tier's story.
+    if (r.status >= 400) {
+      return { error: Object.assign(new Error(`the reader answered HTTP ${r.status}: ${String(r.html || r.text || '').slice(0, 160).trim() || 'no message'}`), { status: r.status }), tier: 'jina' };
+    }
     const page = extractPage(r.html, feed.target, { headers: {}, status: 200, maxMedia: RENDERED_MAX_MEDIA });
     return { page, via: 'jina-reader', notes: [] };
   } catch (e) {
@@ -693,6 +701,7 @@ const webAdapter = {
       else if (b && b.error) { notes.push(`${engine}: ${b.error.message}`); if (b.error.challenge) refused = true; }
       else if (b) {
         notes.push(...b.notes.map((n) => `${engine}: ${n}`));
+        if (b.gated) refused = true; // a challenge the browser did not clear: Jina and the paid tiers get their turn
         if (b.page.optedOut) page = b.page;
         else if (b.page.media.length >= page.media.length) {
           page = b.page; via = b.via;
@@ -779,6 +788,7 @@ const linkInBioAdapter = {
       if (b && b.skipped) info.push(`${engine} not used: ${b.skipped}`);
       else if (b && b.error) { notes.push(`${engine}: ${b.error.message}`); if (b.error.challenge) refused = true; }
       else if (b) {
+        if (b.gated) refused = true; // a challenge the browser did not clear: the unblock ladder gets its turn
         if (b.page.optedOut) page = b.page;
         else if (b.page.links.length >= page.links.length) { page = b.page; via = b.via; info.push(`${engine} found ${page.links.length} profile links`); }
       }

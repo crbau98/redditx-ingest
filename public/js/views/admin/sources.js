@@ -73,9 +73,15 @@ function enginesPanel(b, a, reload) {
   return h('div', { class: 'panel' },
     h('h3', null, icon('sparkle', 'sm'), 'Engines: browsers and AI'),
     h('div', { class: 'meta', style: { display: 'grid', gap: '6px' } },
-      line(true, 'Pages built by JavaScript are read with', `${r.engine === 'playwright' ? 'Playwright' : 'Browser4'} (RENDER_ENGINE=${r.setting || 'auto'}, mode ${b.mode})`),
+      line(true, 'Pages built by JavaScript are read with', `${({ playwright: 'Playwright', chrome: 'Chrome over CDP' }[r.engine] || 'Browser4')} (RENDER_ENGINE=${r.setting || 'auto'}, mode ${b.mode})`),
       line(r.browser4.ok, 'Browser4', eng(r.browser4)),
       line(r.playwright.ok, 'Playwright', eng(r.playwright)),
+      // The free tiers that clear a refusal, then the paid ones. Each line names what it costs.
+      line(r.chrome && r.chrome.enabled, 'Chrome (CDP)', r.chrome ? (r.chrome.enabled
+        ? `free · ${r.chrome.version ? `v${r.chrome.version} · ` : ''}${r.chrome.running ? 'running · ' : ''}challenge wait ${Math.round((r.chrome.challengeWaitMs || 15000) / 1000)}s`
+        : (r.chrome.available ? 'off (CHALLENGE_BROWSER=1 turns it on)' : 'off (no Chrome on this host: set CHROME_PATH)')) : 'not reported'),
+      b.jina ? line(b.jina.mode !== 'off', 'Jina Reader', b.jina.mode === 'off' ? 'off (jinaReader setting)' : `free · ${b.jina.usage.count || 0}/${b.jina.budgetPerDay} reads today`) : null,
+      b.captcha ? line(b.captcha.mode !== 'off' && b.captcha.configured, 'Captcha solver', b.captcha.configured ? `${b.captcha.mode === 'off' ? 'off (captchaSolver setting)' : 'on'} · ${b.captcha.usage.count || 0}/${b.captcha.budgetPerDay} tokens today` : 'off (set CAPSOLVER_API_KEY)') : null,
       b.brightdata ? line(b.brightdata.discover.configured || b.brightdata.unlocker.configured, 'Bright Data', `Discover ${b.brightdata.discover.configured ? 'on' : 'off'} · Unlocker ${b.brightdata.unlocker.configured ? `${b.brightdata.unlocker.mode}, ${b.brightdata.unlocker.usage.count || 0}/${b.brightdata.unlocker.budgetPerDay} today` : 'off'}`) : null,
       line(a.configured, a.label || 'AI', a.configured ? `${a.model} · ${fmt.int(u.calls)}/${fmt.int(a.budget)} requests today · ${fmt.int(u.input)} in / ${fmt.int(u.output)} out tokens${u.refusals ? ` · ${u.refusals} declined` : ''}` : `off (set ${a.keyName || 'OPENAI_API_KEY'})`),
       a.configured ? line(a.search || a.discovery, `${a.label || 'AI'} does`, [a.search ? 'search reading' : null, a.discovery ? 'discovery queries + account triage' : null].filter(Boolean).join(' · ') || 'nothing (both settings off)') : null,

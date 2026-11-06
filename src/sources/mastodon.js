@@ -119,7 +119,8 @@ async function getJson(url, host, ctx) {
           return JSON.parse(solved.html);
         }
       } catch (pow) {
-        if (ctx && ctx.notes && !pow.unsupported) ctx.notes.push(`${host}: Anubis proof of work failed (${pow.message})`);
+        // A failure worth reporting is one the host answered (a rejected proof of work); a dead name is the Scrapfly tier's business.
+        if (ctx && ctx.notes && !pow.unsupported && pow.status) ctx.notes.push(`${host}: Anubis proof of work failed (${pow.message})`);
       }
     }
     const cfg = settingsStore.get();
