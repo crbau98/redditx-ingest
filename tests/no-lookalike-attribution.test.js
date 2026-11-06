@@ -361,10 +361,14 @@ describe('Reddit: switched off by default, reversible, never a failure', () => {
     const src = fs.readFileSync(path.join(SRC, 'engine', 'discovery.js'), 'utf8');
     const calls = [...src.matchAll(/\breddit\.(\w+)\(/g)].map((m) => m[1]);
     assert.ok(calls.length >= 2);
-    assert.ok(calls.every((c) => c === 'searchSubreddits' || c === 'searchPosts'), `discovery calls reddit.${[...new Set(calls)].join(', reddit.')}`);
+    // parsePost is a pure row mapper: it turns an already-fetched row into media items and never touches the network
+    // (asserted below). The archive fetch in redditPosters() is a third-party archive, gated on the Reddit switch.
+    assert.ok(calls.every((c) => c === 'searchSubreddits' || c === 'searchPosts' || c === 'parsePost'), `discovery calls reddit.${[...new Set(calls)].join(', reddit.')}`);
     assert.ok(!/reddit\.com\/(?:r|user|search)/.test(src.replace(/'site:reddit\.com'/g, '')), 'and builds no Reddit URL of its own');
     const reddit = fs.readFileSync(path.join(SRC, 'sources', 'reddit.js'), 'utf8');
     for (const fn of ['searchSubreddits', 'searchPosts']) assert.match(reddit, new RegExp(`async function ${fn}\\([^)]*\\) \\{\\n  if \\(!enabled\\(\\)\\) return`), `${fn} checks the switch first`);
+    const parseBody = reddit.slice(reddit.indexOf('function parsePost('), reddit.indexOf('function fromRssEntry('));
+    assert.ok(!/\b(await|fetch|viaOauth|viaJson|viaRss|viaArchive)\b/.test(parseBody), 'parsePost never reaches the network');
   });
 
   test('the same calls DO reach Reddit once it is switched on (so the zero above is the switch, not a dead mock)', async () => {
