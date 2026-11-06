@@ -2,7 +2,7 @@ import { h, icon, fmt, proxied, emptyState, toast } from '../../dom.js';
 import { adminGet, adminPost } from '../../api.js';
 import { href } from '../../router.js';
 import { pageHead, act, platBadge, thumbOf, openModal, undoToast, bulkBar, loadingState, errorState } from './ui.js';
-import { holdOf, undoPlan, selectionSummary } from './logic.js';
+import { holdOf, undoPlan, selectionSummary, sendBackBody } from './logic.js';
 
 export { holdOf };
 
@@ -107,8 +107,12 @@ export function confirmBatch(action, items) {
   });
 }
 
-/** Put items back where they came from: approve, hide and remove all return to the review queue. */
-export async function sendBackToReview(ids) { return adminPost('/media/bulk', { ids, action: 'flag', reason: 'undo' }); }
+/**
+ * Put items back where they came from: approve, hide and remove all return to the review queue, each with the hold reason it was
+ * waiting under (the queue groups by it, and an approval names the safety rule it overrides), in ONE atomic request. Takes the items
+ * (or their ids, which come back as an unclassified hold).
+ */
+export async function sendBackToReview(items) { return adminPost('/media/bulk', sendBackBody(items)); }
 
 export async function render(root) {
   const host = h('div', { class: 'stack' });
@@ -172,7 +176,7 @@ export async function render(root) {
       const ok = await act(e && e.currentTarget, () => adminPost('/media/bulk', { ids, action, reason: 'review queue' }));
       if (!ok) return;
       const plan = undoPlan(action);
-      if (plan) undoToast(`${plan.verb} ${ids.length} item${ids.length === 1 ? '' : 's'}`, async () => { await sendBackToReview(ids); load(); });
+      if (plan) undoToast(`${plan.verb} ${ids.length} item${ids.length === 1 ? '' : 's'}`, async () => { await sendBackToReview(items); load(); });
       else toast(`${ids.length} ${ACTION_WORD[action]}`);
       load();
     };

@@ -262,10 +262,13 @@ router.post('/media/:id/moderate', (req, res) => {
 });
 
 router.post('/media/bulk', (req, res) => {
-  const { ids, action, reason } = req.body || {};
+  const { ids, action, reason, reasons } = req.body || {};
   if (!Array.isArray(ids) || !action) return bad(res, 'ids array and action required');
+  // `reasons` (optional): { id: reason } for items that each carry their own (an undo puts every item back under the hold reason it
+  // had), so a mixed batch is still ONE transaction: all of it applies or none of it. Others fall back to `reason`.
+  const own = (id) => (reasons && typeof reasons === 'object' && typeof reasons[id] === 'string' && reasons[id].slice(0, 200)) || null;
   let updated = 0;
-  repo.db.transaction(() => { for (const id of ids.slice(0, 500)) if (targets.moderate(String(id), action, reason || 'bulk')) updated++; })();
+  repo.db.transaction(() => { for (const id of ids.slice(0, 500)) if (targets.moderate(String(id), action, own(String(id)) || reason || 'bulk')) updated++; })();
   res.json({ ok: true, updated });
 });
 
