@@ -40,18 +40,14 @@ describe('popular creators', () => {
     assert.ok(ids.includes(recent.id) && ids.includes(big.id));
   });
 
-  test('without a popularity column, Popular keeps the existing media order', () => {
-    const popular = repo.creators.list({ sort: 'popular', limit: 100 }).items.map((c) => c.id);
-    const media = repo.creators.list({ sort: 'media', limit: 100 }).items.map((c) => c.id).filter((id) => popular.includes(id));
-    assert.deepEqual(popular, media);
-  });
-
-  test('with creators.popularity, Popular ranks by popularity first', () => {
-    repo.db.prepare('ALTER TABLE creators ADD COLUMN popularity INTEGER NOT NULL DEFAULT 0').run();
+  test('with the stored rank, Popular ranks by popularity first', () => {
     repo.db.prepare('UPDATE creators SET popularity = 10 WHERE id = ?').run(recent.id);
     repo.db.prepare('UPDATE creators SET popularity = 90 WHERE id = ?').run(big.id);
     const ids = repo.creators.list({ sort: 'popular', limit: 100 }).items.map((c) => c.id);
     assert.ok(ids.indexOf(big.id) < ids.indexOf(recent.id), 'higher popularity first');
+    // The default creator list is Popular, so a first visit meets the ranked order.
+    const dflt = repo.creators.list({ limit: 100 }).items.map((c) => c.id);
+    assert.ok(dflt.indexOf(big.id) < dflt.indexOf(recent.id));
   });
 
   test('"Hot this week" (Popular with a 7-day window) leaves out older posters', () => {

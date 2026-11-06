@@ -62,12 +62,13 @@ describe('popularity rank', () => {
     assert.equal(r.updated, 3, 'the hidden creator is not ranked');
     const top = await pub('/api/creators?sort=popular&limit=5');
     const ids = top.json.items.map((c) => c.id);
-    assert.deepEqual(ids.slice(0, 3), [world.engaged.id, world.broad.id, world.prolific.id]);
+    assert.deepEqual(ids.slice(0, 2), [world.engaged.id, world.broad.id]);
+    assert.ok(!ids.includes(world.prolific.id), 'the Popular list leaves out anyone quiet for 90 days');
 
     const engaged = top.json.items.find((c) => c.id === world.engaged.id);
     assert.ok(engaged.popularity > 70, `engaged creator should rank high, got ${engaged.popularity}`);
-    const stale = top.json.items.find((c) => c.id === world.prolific.id);
-    assert.ok(stale.popularity < engaged.popularity / 2, `400 stale posts must not beat real engagement (${stale.popularity} vs ${engaged.popularity})`);
+    const stale = popularity.explain(world.prolific.id);
+    assert.ok(stale.popularity < engaged.popularity / 2, `400 stale posts must not outrank real engagement (${stale.popularity} vs ${engaged.popularity})`);
   });
 
   test('the components explain the order and no signal is invented', () => {
