@@ -284,7 +284,7 @@ router.get('/creators', (req, res) => {
   const r = repo.creators.list({
     page: repo.clampInt(req.query.page, 0, 100000, 0), limit: repo.clampInt(req.query.limit, 1, 100, 36),
     q: typeof req.query.q === 'string' ? req.query.q.slice(0, 80) : undefined,
-    sort: ['media', 'score', 'recent', 'new', 'name'].includes(req.query.sort) ? req.query.sort : 'media',
+    sort: ['popular', 'media', 'score', 'recent', 'new', 'name'].includes(req.query.sort) ? req.query.sort : 'media',
     platform: /^[a-z]{1,20}$/.test(req.query.platform || '') ? req.query.platform : undefined,
     freshDays: repo.clampInt(req.query.fresh, 0, 3650, 0) || undefined,
     onlyfans: req.query.onlyfans === '1',

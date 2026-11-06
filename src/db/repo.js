@@ -133,6 +133,11 @@ function logAction(targetType, targetId, action, reason, actor = 'system') {
 }
 
 /* ------------------------------------------------------------------- creators */
+const POPULAR_ACTIVE_DAYS = 90;
+/** Whether creators.popularity exists yet (it is added separately). PRAGMA on a small table: cheap enough per request. */
+function hasCreatorPopularity() {
+  return db.prepare('PRAGMA table_info(creators)').all().some((c) => c.name === 'popularity');
+}
 const SELECT_CREATOR_CARD = `
   SELECT c.*,
     (SELECT json_group_array(t) FROM (
@@ -289,6 +294,8 @@ const creators = {
     if (fresh) { where.push('c.last_media_at >= ?'); params.push(new Date(Date.now() - fresh * 86400000).toISOString()); }
     if (paidHost) { const pc = paidClause(paidHost, 'c'); where.push(pc.sql); params.push(...pc.params); }
     if (!admin) { where.push("c.status = 'active'", "c.scope != 'excluded'"); }
+    // "Popular" never shows a creator who has not posted in 90 days: a dead page is not a first-screen result.
+    if (sort === 'popular' && !fresh) { where.push('c.last_media_at >= ?'); params.push(new Date(Date.now() - POPULAR_ACTIVE_DAYS * 86400000).toISOString()); }
     const min = minMedia !== undefined ? minMedia : (admin ? 0 : 1);
     if (min > 0) { where.push('c.media_count >= ?'); params.push(min); }
     if (query) {
@@ -303,8 +310,11 @@ const creators = {
       where.push('EXISTS (SELECT 1 FROM media m WHERE m.creator_id = c.id AND m.platform = ? AND m.publish_state = \'published\')');
       params.push(platform);
     }
+    const mediaOrder = "((c.links GLOB '*onlyfans.com/[A-Za-z0-9]*' OR c.links LIKE '%onlyfans.com/%' OR c.links LIKE '%OnlyFans%') AND c.media_count >= 5) DESC, (c.origin = 'admin') DESC, c.media_count DESC, c.total_score DESC";
     const order = {
-      media: "((c.links GLOB '*onlyfans.com/[A-Za-z0-9]*' OR c.links LIKE '%onlyfans.com/%' OR c.links LIKE '%OnlyFans%') AND c.media_count >= 5) DESC, (c.origin = 'admin') DESC, c.media_count DESC, c.total_score DESC",
+      media: mediaOrder,
+      // Popularity, then freshness. Until creators.popularity exists this is the media order, so nothing moves.
+      popular: hasCreatorPopularity() ? 'COALESCE(c.popularity, 0) DESC, c.last_media_at DESC, ' + mediaOrder : mediaOrder,
       score: 'c.total_score DESC',
       recent: 'c.last_media_at DESC',
       new: 'c.created_at DESC',
@@ -1569,12 +1579,8 @@ function adminOverview() {
 function discover() {
   const pageOf = (f) => media.list({ ...f, noCount: true }).items;
   // Suggested creators: OnlyFans creators with media first, then admin/lookup-curated creators, then by media count.
-  const featured = db.prepare(`${SELECT_CREATOR_CARD}
-    WHERE c.status = 'active' AND c.scope != 'excluded' AND c.media_count >= 2
-    ORDER BY ((c.links GLOB '*onlyfans.com/[A-Za-z0-9]*' OR c.links LIKE '%onlyfans.com/%' OR c.links LIKE '%OnlyFans%') AND c.media_count >= 5) DESC,
-             (c.origin = 'admin') DESC,
-             (c.links GLOB '*onlyfans.com/[A-Za-z0-9]*' OR c.links GLOB '*fansly.com/[A-Za-z0-9]*') DESC,
-             c.media_count DESC, c.total_score DESC LIMIT 16`).all().map(serializeCreator);
+  // Top creators use the Popular ranking (popularity, then freshness, 90-day activity floor), the same as the Creators page.
+  const featured = creators.list({ sort: 'popular', limit: 16, minMedia: 2 }).items;
   const ofTrending = pageOf({ paidHost: 'onlyfans', sort: 'trending', limit: 20 });
   const ofVideos = pageOf({ type: 'video', paidHost: 'onlyfans', sort: 'recent', limit: 14 });
   return {

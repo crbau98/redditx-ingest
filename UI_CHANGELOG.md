@@ -1,5 +1,13 @@
 # UI changelog
 
+## 2026-11-06 — Find popular creators: Popular, Hot this week, and a trending rail
+
+- **Creators opens on Popular.** Ranked by `creators.popularity` when that column exists, then freshness; until then, the same order as before (OnlyFans pages with posts first). Creators who have not posted in 90 days are left out of Popular, of Home's Top creators and of Hot this week, so a dead page does not lead the first screen.
+- **Creators chips:** Popular, Hot this week (posted in the last 7 days), OnlyFans only, Following, New & rising. "Most posts", "Top rated", "Recently active" and "A–Z" remain in the Sort menu.
+- **Home** has "Top creators" (the same ranking) and a new "Trending this week" rail of creators, each card giving the reason: "Posted 6 times this week".
+- **Explore** has one-tap Popular, Hot this week and New chips beside Top Rated.
+- **Find** shows popular niches as tap-to-explore hint chips (the most-used tags), above the example names.
+
 ## 2026-11-06 — Sources: the free tiers are on the panel, and the engine line tells the truth
 
 - **Chrome (CDP), Jina Reader and the captcha solver are named on Admin → Sources**, with the price of each ("free", "tokens today") and the reason when one is off (no Chrome on the host, `CHALLENGE_BROWSER=1`, `jinaReader` / `captchaSolver` setting, `CAPSOLVER_API_KEY`). Before, only Browser4, Playwright and Bright Data were listed, so three tiers that now act on a refused page were invisible.

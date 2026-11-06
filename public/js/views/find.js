@@ -1,11 +1,19 @@
 import { h, icon, avatar, emptyState, proxied } from '../dom.js';
-import { post } from '../api.js';
+import { get, post } from '../api.js';
 import { navigate, href } from '../router.js';
 import { platformLabel, platformColor } from '../store.js';
 import { attachSuggest } from '../components/suggest.js';
 import { lookupCache } from '../lookup-cache.js';
 
 const EXAMPLES = ['Reno Gold', 'Christian Hogue', 'Alejandro Pino', '@jakipz', 'Diego Sans', 'Malik Delgaty', 'Austin Wolf'];
+/** Popular niches as one-tap hints: the most-used tags in the library, each opening Explore for that tag. */
+function nicheHints() {
+  const wrap = h('div', { class: 'row wrap niche-hints', style: { gap: '8px' }, 'aria-label': 'Popular niches' });
+  get('/api/tags', { limit: 12 }).then((tags) => {
+    wrap.replaceChildren(...(tags || []).slice(0, 10).map((t) => h('a', { class: 'chip', href: href('/explore', { tag: t.name, sort: 'trending' }), title: `${t.count} posts tagged #${t.name}` }, `#${t.name}`, h('span', { class: 'n' }, String(t.count)))));
+  }).catch(() => {});
+  return wrap;
+}
 
 const paidKind = (l) => {
   const s = `${l.service || ''} ${l.label || ''} ${l.url || ''}`.toLowerCase();
@@ -233,6 +241,9 @@ export async function find(root, { query }) {
     } else {
       out.append(
         h('p', { class: 'muted find-lede' }, 'Look a creator up by name, handle or link. Accounts that exist are listed as found; they are grouped as one person only when they link to each other, never because they share a name. Paid pages are kept as link-outs.'),
+        h('div', { class: 'find-examples' },
+          h('span', { class: 'muted sm find-try' }, 'Popular niches:'),
+          nicheHints()),
         h('div', { class: 'find-examples' },
           h('span', { class: 'muted sm find-try' }, 'Try:'),
           h('div', { class: 'row wrap', style: { gap: '8px' } }, EXAMPLES.map((ex) => h('button', { class: 'chip', type: 'button', title: `Look up ${ex}`, onclick: () => { input.value = ex; run(); } }, ex)))),

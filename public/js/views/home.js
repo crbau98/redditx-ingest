@@ -136,8 +136,15 @@ export async function home(root) {
 
   if (top.length) {
     parts.push(h('section', { class: 'section suggested-spotlight' },
-      sectionHead('users', 'Top OnlyFans creators', 'Verified pages with the most posts here. Tap to open or follow.', { href: href('/creators'), label: 'See all' }),
+      sectionHead('users', 'Top creators', 'Most popular here, then freshest. Creators who have not posted in 90 days are left out.', { href: href('/creators'), label: 'See all' }),
       h('div', { class: 'rail' }, top.map((c) => creatorCard(c, { spotlight: true })))));
+  }
+  // Creators (not posts) who are posting most this week, with the plain reason on the card.
+  const trendingCreators = (data.rising || []).filter((c) => c.week_count >= 2);
+  if (trendingCreators.length >= 3) {
+    parts.push(h('section', { class: 'section' },
+      sectionHead('trend', 'Trending this week', 'Creators posting the most in the last 7 days', { href: href('/creators', { sort: 'popular', fresh: '7' }), label: 'See all' }),
+      h('div', { class: 'rail' }, trendingCreators.map((c) => creatorCard(c, { mini: true, badge: `Posted ${c.week_count} ${c.week_count === 1 ? 'time' : 'times'} this week` })))));
   }
   const fromFollowed = await followedP; // optional: a failed request leaves it empty
   if (fromFollowed.length) {
