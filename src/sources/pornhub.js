@@ -13,9 +13,11 @@
  * the duration, the picture and the age. The video page carries `flashvars_<id>`, whose
  * `mediaDefinitions` list the HLS playlists per quality (h264 + AAC, plays in every browser here).
  *
- * Male scope: a model page mixes segments, so only cards whose own `data-segment` is `gay` are read.
- * Items are trusted (the site labels the segment), like an xHamster /gay/ creator page; the hard
- * female/trans vocabulary check, safety, physique and picture gates still run on every item.
+ * Male scope: feeds come from the gay performer directory, and a model page mixes segments, so gay cards
+ * are always read. Straight-segment cards are read too when the page says the performer is Male or a
+ * Couple (a male amateur's solo scenes are labelled straight and would otherwise vanish); a page marked
+ * Female/Trans keeps gay only. Items are trusted (the site labels the segment); the hard female/trans
+ * vocabulary check, safety, physique and picture gates still run on every item.
  *
  * Stream links are signed (`exp=` / `e=` epoch) and stop working within hours, so
  * engine/playback.js asks resolve() for a fresh playlist when the proxy reports one dead.
@@ -120,6 +122,8 @@ function flashvars(html) {
 function modelPage(html) {
   const h = String(html || '');
   const name = stripTags((/<h1[^>]*itemprop="name"[^>]*>([\s\S]*?)<\/h1>/.exec(h) || /<h1[^>]*>([\s\S]*?)<\/h1>/.exec(h) || [])[1]) || null;
+  const gender = stripTags((/itemprop="gender"[^>]*>([\s\S]*?)<\/span>/i.exec(h) || [])[1]) || null;
+  const keepStraight = /^(male|couple)$/i.test(gender || '');
   const avatar = (/"getAvatar"\s+src="([^"]+)"/.exec(h) || /<img[^>]*class="[^"]*avatar[^"]*"[^>]*\ssrc="([^"]+)"/.exec(h) || /<meta property="og:image" content="([^"]+)"/.exec(h) || [])[1] || null;
   const videos = [];
   const seen = new Set();
@@ -131,7 +135,7 @@ function modelPage(html) {
     const vkey = (/data-video-vkey="([a-z0-9]+)"/i.exec(block) || [])[1];
     if (!vkey || seen.has(vkey)) continue;
     const segment = ((/data-segment="([a-z]*)"/i.exec(block) || [])[1] || '').toLowerCase();
-    if (segment !== 'gay') continue; // a model page mixes segments; the gay label is the male scope
+    if (segment !== 'gay' && !(segment === 'straight' && keepStraight)) continue;
     seen.add(vkey);
     const title = decode((/href="\/view_video\.php\?viewkey=[a-z0-9]+"\s+title="([^"]*)"/i.exec(block) || [])[1] || '');
     const thumb = (/src="(https:\/\/[^"]+phncdn\.com[^"]+)"/i.exec(block) || [])[1] || null;
@@ -150,7 +154,7 @@ function modelPage(html) {
   }
   // The cards already come newest-first; a page whose dates are words ("3 weeks ago") would lose that
   // order to a second-precision sort, so the page order is kept and the date only feeds postedAt.
-  return { name, avatar: avatar ? decode(avatar) : null, videos };}
+  return { name, gender, avatar: avatar ? decode(avatar) : null, videos };}
 
 /** The video page: title, date, poster, and the best HLS playlist. */
 function videoPage(html) {
@@ -202,7 +206,7 @@ async function fetchFeed(feed, ctx = {}) {
   if (!page.videos.length) {
     // A page with no cards may simply be empty; a page with no cards and no name is a wall.
     if (!page.name) return { items: [], notes: ['performer page could not be read'], via: 'pornhub' };
-    return { items: [], notes: ['pornhub: no gay videos on this page'], via: 'pornhub', profile: profileOf(page, target) };
+    return { items: [], notes: ['pornhub: no videos in scope on this page'], via: 'pornhub', profile: profileOf(page, target) };
   }
 
   const seen = new Set((ctx.cursor && ctx.cursor.seen) || []);

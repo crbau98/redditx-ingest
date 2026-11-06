@@ -30,9 +30,10 @@ const card = ({ vkey, title, dur = '18:01', added = '3 weeks ago', views = '70.9
     </div>
   </li>`;
 
-const modelHtml = (cards) => `<html><head><title>Demo Man Gay Porn Videos</title></head><body>
+const modelHtml = (cards, gender = 'Male') => `<html><head><title>Demo Man Gay Porn Videos</title></head><body>
   <div class="topProfileHeader"><div id="avatarPicture"><img id="getAvatar" src="https://ei.phncdn.com/avatar-demo.jpg" /></div>
-  <div class="name"><h1 itemprop="name"> Demo Man </h1></div></div>
+  <div class="name"><h1 itemprop="name"> Demo Man </h1></div>
+  <div class="infoPiece"><span>Gender:</span> <span itemprop="gender" class="smallInfo"> ${gender} </span></div></div>
   <ul class="videoList">${cards.join('')}</ul></body></html>`;
 
 const videoHtml = ({ title, dur = 1081, hls = 'https://ev-h.phncdn.com/hls/1080P.mp4/master.m3u8?h=x', info = '2 weeks ago' }) => `<html><head>
@@ -97,13 +98,32 @@ test('the model page yields the man and the gay cards, keeping the page order', 
     card({ vkey: 'ccc333', title: 'A straight scene', segment: 'straight' }),
   ]));
   assert.equal(page.name, 'Demo Man');
+  assert.equal(page.gender, 'Male');
   assert.equal(page.avatar, 'https://ei.phncdn.com/avatar-demo.jpg');
-  assert.deepEqual(page.videos.map((v) => v.title), ['Newest', 'Older'], 'only the gay segment is read');
+  assert.deepEqual(page.videos.map((v) => v.title), ['Newest', 'Older', 'A straight scene'], 'a male page keeps its straight-labelled cards too');
   assert.equal(page.videos[0].url, VIDEO_1);
   assert.equal(page.videos[0].views, 1200000);
   assert.equal(page.videos[0].duration, 1081, '18:01');
   assert.match(pornhub._relativeIso('3 weeks ago'), /^20\d\d-/);
   assert.equal(pornhub._relativeIso('56 years ago'), null, 'the site\'s age bug is not a 1970 date');
+});
+
+test('a male amateur whose scenes are all labelled straight keeps them (the gay index sent him)', () => {
+  const page = pornhub._modelPage(modelHtml([
+    card({ vkey: 'aaa111', title: 'Solo', segment: 'straight' }),
+    card({ vkey: 'bbb222', title: 'Another solo', segment: 'straight' }),
+    card({ vkey: 'ccc333', title: 'With a woman', segment: 'straight' }),
+  ], 'Couple'));
+  assert.equal(page.gender, 'Couple');
+  assert.deepEqual(page.videos.map((v) => v.vkey), ['aaa111', 'bbb222', 'ccc333']);
+});
+
+test('a female performer keeps only her gay-labelled cards plus no straight ones', () => {
+  const page = pornhub._modelPage(modelHtml([
+    card({ vkey: 'aaa111', title: 'She and he', segment: 'straight' }),
+    card({ vkey: 'bbb222', title: 'Gay scene', segment: 'gay' }),
+  ], 'Female'));
+  assert.deepEqual(page.videos.map((v) => v.vkey), ['bbb222']);
 });
 
 test('the profile picture falls back to og:image when the avatar markup is gone', () => {
@@ -160,11 +180,11 @@ test('a dead video page is remembered, not retried on every run', async () => {
   assert.equal(r.cursor.seen.includes('ddd444'), true, 'the dead id is in the cursor');
 });
 
-test('a page with no gay cards is a clean empty read, not an error', async () => {
-  pages.set('https://www.pornhub.com/model/straight-guy', modelHtml([card({ vkey: 'fff666', title: 'Straight', segment: 'straight' })]));
+test('a page with no in-scope cards is a clean empty read, not an error', async () => {
+  pages.set('https://www.pornhub.com/model/straight-guy', modelHtml([card({ vkey: 'fff666', title: 'Straight', segment: 'straight' })], 'Female'));
   const r = await pornhub.fetch({ platform: 'pornhub', kind: 'user', target: 'https://www.pornhub.com/model/straight-guy' }, {});
   assert.equal(r.items.length, 0);
-  assert.match(r.notes.join(' '), /no gay videos/);
+  assert.match(r.notes.join(' '), /no videos in scope/);
 });
 
 test('the gay directory yields each performer once, and discovery is wired to it', () => {
