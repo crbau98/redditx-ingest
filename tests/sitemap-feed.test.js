@@ -110,7 +110,8 @@ test('a sitemap URL that answers the JavaScript shell falls back to the site fee
   try {
     const out = await rss.fetch({ platform: 'rss', kind: 'feed', target: `${srv.url}/sitemap.xml` }, ctx());
     assert.equal(out.via, 'sitemap');
-    assert.equal(out.items.length, 2, 'both linked pages were read as pages');
+    const paths = new Set(out.items.map((i) => new URL(i.mediaUrl).pathname));
+    assert.ok(paths.has('/img/s7.jpg') && paths.has('/img/s8.jpg'), 'both linked pages were read as pages');
     assert.ok(out.notes.some((n) => /JavaScript shell/.test(n)), 'the fallback is reported');
   } finally { await srv.close(); }
 });
