@@ -204,8 +204,89 @@ function decodeBody(buf, contentType) {
 }
 
 const FEED_ACCEPT = 'application/rss+xml, application/atom+xml, application/feed+json, application/json;q=0.9, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5';
-const looksLikeHtml = (text, ctype) => /^\s*(?:<!doctype\s+html|<html)/i.test(text.slice(0, 2000))
-  || (/text\/html/i.test(ctype || '') && !/<(?:rss|feed|rdf:rdf)\b/i.test(text.slice(0, 4000)));
+// A sitemap counts as XML even when the host serves it as text/html (a common WordPress/AIO-SEO and
+// Project1 misconfiguration): the root element is the proof, never the Content-Type.
+const looksLikeSitemap = (text) => /<(?:urlset|sitemapindex)[\s>]/i.test(text.slice(0, 4000));
+const looksLikeHtml = (text, ctype) => !looksLikeSitemap(text) && (/^\s*(?:<!doctype\s+html|<html)/i.test(text.slice(0, 2000))
+  || (/text\/html/i.test(ctype || '') && !/<(?:rss|feed|rdf:rdf)\b/i.test(text.slice(0, 4000))));
+
+/* ------------------------------------------------------------------ sitemaps */
+/**
+ * A studio sitemap is a feed of *pages*, not of media: it lists scene or model URLs and each page is
+ * then read like any web page (robots, age gate, takedowns and the paid-host ladder all apply, because
+ * the page goes through the web adapter). Sitemaps can hold thousands of URLs, so a run reads a small
+ * number of the newest and remembers the rest, and says in the notes which studio actually yielded.
+ *
+ * The two real-world shapes this has to survive:
+ *   cockyboys.com  https -> http -> https, 301 + 302, tiny urlset of section pages
+ *   gaywire.com    /sitemap.xml answers the JavaScript tour shell with text/html and no XML at all
+ */
+const SITEMAP_PAGES = 4;       // pages read per run unless the setting says otherwise
+const SITEMAP_PAGES_MAX = 12;
+const SITEMAP_SEEN = 400;      // page URLs remembered so a sitemap is not read twice
+const ASSET_PATH = /\.(?:jpe?g|png|gif|webp|avif|svg|ico|mp4|webm|mov|m4v|m3u8|mp3|ogg|wav|zip|rar|7z|pdf|docx?|xlsx?|css|js|json|txt)(?:$|\?)/i;
+const TAXONOMY_PATH = /(?:^|\/)(?:categor(?:y|ies)|tags?|genero|geschlecht|kategorie(?:n)?|categoria|categorias|search|comments?)(?:\/|$)/i;
+
+const hostKey = (u) => { try { return new URL(u).hostname.toLowerCase().replace(/^www\./, ''); } catch { return ''; } };
+
+/** `<loc>` values, CDATA included (AIO SEO wraps them). Absolute http(s) only, de-duplicated. */
+function sitemapLocs(xml, baseUrl) {
+  const out = [];
+  const re = /<loc>\s*(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))\s*<\/loc>/gi;
+  let m;
+  while ((m = re.exec(String(xml || '')))) {
+    const raw = (m[1] || m[2] || '').replace(/&amp;/g, '&').trim();
+    const u = absUrl(raw, baseUrl);
+    if (u && /^https?:/i.test(u)) out.push(u.split('#')[0]);
+  }
+  return [...new Set(out)];
+}
+
+/** Per-URL lastmod, so an index and a urlset can both be walked newest first. */
+function sitemapLastmods(xml, baseUrl) {
+  const map = new Map();
+  const re = /<url>\s*<loc>\s*(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))\s*<\/loc>[\s\S]*?<lastmod>\s*(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))\s*<\/lastmod>/gi;
+  let m;
+  while ((m = re.exec(String(xml || '')))) {
+    const u = absUrl((m[1] || m[2] || '').trim(), baseUrl);
+    const iso = toIso((m[3] || m[4] || '').trim());
+    if (u && iso) map.set(u, iso);
+  }
+  return map;
+}
+
+/** Child sitemaps of an index, with their lastmod, newest first. */
+function sitemapChildren(xml, baseUrl) {
+  const out = [];
+  const re = /<sitemap>\s*<loc>\s*(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))\s*<\/loc>(?:[\s\S]*?<lastmod>\s*(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))\s*<\/lastmod>)?/gi;
+  let m;
+  while ((m = re.exec(String(xml || '')))) {
+    const u = absUrl((m[1] || m[2] || '').trim(), baseUrl);
+    if (u && /^https?:/i.test(u)) out.push({ url: u, lastmod: toIso((m[3] || m[4] || '').trim()) });
+  }
+  return out.sort((a, b) => String(b.lastmod || '').localeCompare(String(a.lastmod || '')));
+}
+
+/** How likely a sitemap URL is a content page: an id segment and depth help, taxonomy paths hurt. */
+function pageScore(u) {
+  let score = 0;
+  try {
+    const p = new URL(u).pathname;
+    const segs = p.split('/').filter(Boolean);
+    if (segs.some((s) => /^\d{3,}$/.test(s))) score += 2;
+    if (segs.length >= 2) score += 1;
+    if (TAXONOMY_PATH.test(p)) score -= 2;
+  } catch { return 0; }
+  return score;
+}
+
+/** Newest first by lastmod when the sitemap has one, otherwise by page shape and document order (WP writes oldest first). */
+function orderPages(urls, lastmods) {
+  const dated = urls.filter((u) => lastmods.has(u));
+  if (dated.length === urls.length) return [...urls].sort((a, b) => lastmods.get(b).localeCompare(lastmods.get(a)));
+  const reversed = [...urls].reverse();
+  return reversed.sort((a, b) => pageScore(b) - pageScore(a));
+}
 const guessedFeedPaths = ['/feed', '/rss', '/rss.xml', '/feed.xml', '/atom.xml', '/index.xml'];
 
 /** GET a feed with conditional-request validators. -> {notModified} | {text, url, headers} */
@@ -243,13 +324,90 @@ async function discover(html, pageUrl) {
   return null;
 }
 
+/**
+ * Read a sitemap feed: walk an index to a urlset, pick a capped number of new pages, and read each
+ * page through the web adapter. Per-studio yield goes into the notes (the engine keeps notes[0] as
+ * the feed's last_error), and the pages tried are remembered so the next run moves on.
+ */
+async function fetchSitemap(feed, ctx, got) {
+  const notes = [];
+  const settings = require('../settings');
+  const cap = Math.min(SITEMAP_PAGES_MAX, Number(settings.get().sitemapPagesPerRun ?? SITEMAP_PAGES) || 0);
+  if (cap <= 0) return { items: [], via: 'sitemap', notes: ['sitemap reading is off (sitemapPagesPerRun = 0)'] };
+
+  let xml = got.text;
+  let base = got.url;
+  let lastmods = sitemapLastmods(xml, base);
+  let urls = [];
+  if (/<sitemapindex[\s>]/i.test(xml)) {
+    // An index: try the newest children (a stale entry is common; the child list is not proof it exists).
+    for (const child of sitemapChildren(xml, base).filter((c) => hostKey(c.url) === hostKey(feed.target)).slice(0, 3)) {
+      if (ctx.aborted()) break;
+      let inner;
+      try { inner = await load(child.url); } catch (e) { notes.push(`${hostKey(child.url)}: sitemap ${child.url.split('/').pop()} — ${e.message}`); continue; }
+      if (inner.notModified || !looksLikeSitemap(inner.text)) continue;
+      xml = inner.text; base = inner.url;
+      lastmods = sitemapLastmods(xml, base);
+      if (!urls.length) urls = sitemapLocs(xml, base);
+      break;
+    }
+    if (!urls.length) return { items: [], via: 'sitemap', notes: [...notes, 'sitemap index listed no readable child sitemap'] };
+  } else {
+    urls = sitemapLocs(xml, base);
+  }
+
+  return readPages(feed, ctx, urls, lastmods, notes, cap, base);
+}
+
+/** Read the chosen pages through the web adapter and count the yield per studio. */
+async function readPages(feed, ctx, urls, lastmods, notes, cap, base) {
+  const own = hostKey(feed.target);
+  const seen = new Set(Array.isArray(ctx.cursor && ctx.cursor.seen) ? ctx.cursor.seen : []);
+  const candidates = urls
+    .filter((u) => hostKey(u) === own && u !== feed.target && !ASSET_PATH.test((() => { try { return new URL(u).pathname; } catch { return ''; } })()))
+    .filter((u) => !seen.has(u));
+  if (!candidates.length) return { items: [], via: 'sitemap', notes: [...notes, 'no new pages in the sitemap'] };
+
+  const picked = orderPages(candidates, lastmods).slice(0, cap);
+  const web = require('./web'); // lazy: web requires this module
+  const items = [];
+  const tally = new Map();
+  for (const page of picked) {
+    if (ctx.aborted()) break;
+    const host = hostKey(page);
+    const t = tally.get(host) || { pages: 0, items: 0, failed: 0 };
+    t.pages++;
+    try {
+      const r = await web.webAdapter.fetch({ platform: 'web', kind: 'page', target: page, origin: feed.origin }, ctx);
+      const got = (r.items || []).length;
+      t.items += got;
+      items.push(...(r.items || []));
+      (r.notes || []).forEach((n) => notes.push(`${host}: ${n}`));
+    } catch (e) {
+      t.failed++;
+      notes.push(`${host}: ${e.message}`);
+    }
+    tally.set(host, t);
+  }
+  // Which studio yielded what: a sitemap that only lists navigation pages must be visible as such.
+  for (const [host, t] of tally) notes.push(`${host}: ${t.items} item${t.items === 1 ? '' : 's'} from ${t.pages} page${t.pages === 1 ? '' : 's'}${t.failed ? `, ${t.failed} failed` : ''}`);
+  const nextSeen = [...seen, ...picked.map((u) => u)].slice(-SITEMAP_SEEN);
+  return {
+    items,
+    cursor: { seen: nextSeen },
+    profile: { displayName: hostKey(base), avatarUrl: null, bio: `Sitemap ${base}` },
+    via: 'sitemap',
+    notes,
+  };
+}
+
 module.exports = {
   platform: 'rss',
   label: 'RSS / Atom',
   color: '#f59e0b',
   kinds: ['feed'],
   intervalMin: { feed: 120 },
-  parseFeed, mediaFromHtml, entryToItems, decodeBody, load,
+  parseFeed, mediaFromHtml, entryToItems, decodeBody, load, looksLikeHtml, looksLikeSitemap, sitemapLocs, sitemapChildren,
   isConfigured: () => ({ ok: true }),
 
   async fetch(feed, ctx) {
@@ -258,11 +416,28 @@ module.exports = {
     let got = await load(feed.target, ctx.force ? {} : { etag: cursor.etag, lastModified: cursor.lastModified });
     if (got.notModified) return { items: [], via: 'feed-304' };
     let via = 'feed';
+    const sitemapish = looksLikeSitemap(got.text) || /sitemap[^/]*\.xml$/i.test((() => { try { return new URL(feed.target).pathname; } catch { return ''; } })());
+    if (looksLikeSitemap(got.text)) return fetchSitemap(feed, ctx, got);
     if (looksLikeHtml(got.text, got.ctype)) {
       // A site URL instead of a feed URL: follow <link rel="alternate"> (or a conventional path) rather than silently finding nothing.
       const found = await discover(got.text, got.url);
       if (!found) throw Object.assign(new Error(`${feed.target} is a web page, not a feed, and advertises no RSS/Atom/JSON feed`), { status: 422 });
       got = found; via = 'feed-discovered';
+      // A sitemap URL that answers the site's JavaScript shell (gaywire): the site's own feed still lists
+      // the pages, even when the entries carry no media. Read those pages like sitemap pages.
+      if (sitemapish) {
+        const s = require('../settings');
+        const cap = Math.min(SITEMAP_PAGES_MAX, Number(s.get().sitemapPagesPerRun ?? SITEMAP_PAGES) || 0);
+        if (cap > 0) {
+          let entries = [];
+          try { entries = parseFeed(got.text, got.url).entries; } catch { entries = []; }
+          const links = entries.map((e) => e.link).filter((u) => u && /^https?:/i.test(u));
+          if (links.length) {
+            const lastmods = new Map(entries.filter((e) => e.link && e.published).map((e) => [e.link, e.published]));
+            return { ...(await readPages(feed, ctx, links, lastmods, [`${hostKey(got.url)}: sitemap is the JavaScript shell; read its feed instead`], cap, got.url)) };
+          }
+        }
+      }
     }
     let parsed;
     try { parsed = parseFeed(got.text, got.url); } catch (e) { throw Object.assign(new Error(`Not a valid feed: ${e.message}`), { status: 422 }); }
