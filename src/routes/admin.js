@@ -481,7 +481,8 @@ router.post('/maintenance/image-sweep', async (req, res) => {
 /* ---------------------------------------------------------------- telegram (joined channels) */
 router.get('/telegram', (req, res) => {
   const sync = require('../services/telegram-sync');
-  res.json({ ...sync.status(), backfillMax: config.telegram.backfillMax, maxMb: config.telegram.maxMb, store: require('../lib/objectstore').describe() });
+  const s = require('../settings').get();
+  res.json({ ...sync.status(), backfillMax: s.telegramBackfillMax, maxMb: config.telegram.maxMb, store: require('../lib/objectstore').describe() });
 });
 router.post('/telegram/sync', async (req, res) => {
   try { res.json({ ok: true, ...(await require('../services/telegram-sync').sync()) }); }

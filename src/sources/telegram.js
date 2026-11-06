@@ -21,6 +21,7 @@ const mt = require('../lib/telegram-mtproto');
 const store = require('../lib/objectstore');
 const budget = require('../services/budget');
 const config = require('../config');
+const settingsStore = require('../settings');
 const aiguard = require('../lib/aiguard');
 
 const bg = (style) => { const m = String(style || '').match(/url\((['"]?)(.*?)\1\)/); return m ? m[2] : null; };
@@ -242,7 +243,8 @@ async function fetchChannel(feed, ctx) {
   const target = chanKey(feed.target);
   const cur = ctx.cursor || {};
   const perRun = Math.min(Math.max(ctx.limit || 40, 40), 200);
-  const maxBackfill = config.telegram.backfillMax;
+  // Admin → Settings wins over the deploy-time env default, so the cap changes without a redeploy.
+  const maxBackfill = settingsStore.get().telegramBackfillMax ?? config.telegram.backfillMax;
   const entity = await mt.entityOf(target);
   const ch = {
     id: String(entity.id), username: entity.username || null, title: entity.title || feed.label || target, target,
