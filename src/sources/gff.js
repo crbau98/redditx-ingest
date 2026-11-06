@@ -334,16 +334,50 @@ module.exports = {
         throw e;
       }
     };
-    let page = await read(target);
+    // Resolve a gayforfans performer on the sister directory. The two sites slug the same man
+    // differently ("adam-gray-so_much_adam-e5021" vs "adam-gray-somuchadam-43"), so trying the same
+    // slug usually 404s: try it first (exact, cheap) and then the site's own search by name.
+    const alternateFor = async () => {
+      if (!original) return null;
+      const same = performerUrl('justthegays.tv', original.label);
+      let candidate = await read(same).catch(() => null);
+      if (candidate && candidate.videos.length) return { page: candidate, url: same };
+      const query = String(feed.label || '').trim()
+        || original.label.replace(/-[a-z0-9]{4,6}$/i, '').replace(/_/g, ' ').trim();
+      if (!query) return null;
+      let matches = [];
+      try { matches = await this.searchPerformers(query, { limit: 8 }); } catch { matches = []; }
+      const best = matches.find((m) => m.host === 'justthegays.tv' && m.score >= 0.5);
+      if (!best) return null;
+      candidate = await read(best.url).catch(() => null);
+      return candidate && candidate.videos.length ? { page: candidate, url: best.url } : null;
+    };
+
+    let page;
     let resolvedTarget;
-    if ((!page || !page.videos.length) && original && target.includes('gayforfans.com/performer/')) {
-      const alternate = performerUrl('justthegays.tv', original.label);
-      const candidate = await read(alternate);
-      if (candidate && candidate.name && candidate.videos.length) {
-        page = candidate;
-        target = alternate;
-        resolvedTarget = alternate;
+    let triedAlternate = false;
+    if (original && /gayforfans\.com\/performer\//i.test(target)) {
+      try {
+        page = await read(target);
+      } catch (e) {
+        // A challenge on the primary host must not end the run while the sister directory works.
+        // The feed keeps its gayforfans target on purpose: a bot check is usually temporary, so the
+        // next run tries the primary again (and falls back again if it is still closed), while the
+        // library keeps filling from the sister directory in the meantime.
+        if (!(e.challenged || isBlockedStatus(e.status))) throw e;
+        triedAlternate = true;
+        const alt = await alternateFor();
+        if (!alt) throw e;
+        page = alt.page;
+        notes.push('gayforfans is bot-checking; read the same performer on JustTheGays this run');
       }
+      if (!triedAlternate && (!page || !page.videos.length)) {
+        triedAlternate = true;
+        const alt = await alternateFor();
+        if (alt) { page = alt.page; resolvedTarget = alt.url; }
+      }
+    } else {
+      page = await read(target);
     }
     if (!page) return { items: [], notes: ['performer page unavailable'], via: 'gff' };
     const seen = new Set((ctx.cursor && ctx.cursor.seen) || []);
