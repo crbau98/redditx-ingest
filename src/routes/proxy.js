@@ -169,12 +169,24 @@ router.get('/proxy', async (req, res) => {
 });
 
 /** HLS: rewrite playlist URIs so every segment/variant is fetched through us. */
+const hlsHeaders = (host, origin) => ({ referer: refererFor(host) || `${origin}/`, accept: 'application/vnd.apple.mpegurl, */*' });
 router.get('/hls', async (req, res) => {
   const t = parseTarget(req);
   if (t.error) return sendError(res, t.error);
   let r;
-  try { r = await net.request(t.url, { headers: { referer: refererFor(t.host) || `${t.origin}/`, accept: 'application/vnd.apple.mpegurl, */*' }, timeout: 15000, maxBytes: 1_500_000, retries: 1 }); }
+  try { r = await net.request(t.url, { headers: hlsHeaders(t.host, t.origin), timeout: 15000, maxBytes: 1_500_000, retries: 1 }); }
   catch (e) { return sendError(res, e.code === 'EBLOCKED' ? [403, 'Blocked host'] : [502, 'Upstream unreachable']); }
+  // A signed playlist (Pornhub's exp=/e=, xHamster's) that went stale since the page was rendered: ask the
+  // source for a current one and read that, so a viewer never gets a dead master playlist.
+  if ([401, 403, 404, 410, 412].includes(r.status) && playback.canRefresh(t.host)) {
+    const fresh = await playback.refresh(t.url);
+    if (fresh && fresh !== t.url) {
+      try {
+        const retry = await net.request(fresh, { headers: hlsHeaders(t.host, t.origin), timeout: 15000, maxBytes: 1_500_000, retries: 1 });
+        if (retry.status < 400) r = retry;
+      } catch { /* the dead link's own error stands */ }
+    }
+  }
   if (r.status >= 400) {
     // A bot-protection interstitial (Cloudflare "Just a moment...") is not a broken video: say so, so the
     // player shows a clear state instead of a generic failure. We do not solve or route around the challenge.
