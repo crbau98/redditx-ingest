@@ -283,7 +283,7 @@ module.exports = {
     syncHours: int(env.TELEGRAM_SYNC_HOURS, 12),     // how often the joined-channel list is re-read
     autoFollow: bool(env.TELEGRAM_AUTO_FOLLOW, true), // new joined channels become feeds automatically
     trustJoined: bool(env.TELEGRAM_TRUST_JOINED, true), // joined channels are curated by you: unlabeled posts are accepted (the picture filter still applies)
-    backfillMax: int(env.TELEGRAM_BACKFILL_MAX, 200), // older media read per channel beyond the newest posts (0 = only new posts)
+    backfillMax: int(env.TELEGRAM_BACKFILL_MAX, 60), // older media read per channel beyond the newest posts (0 = only new posts); 200 grew the library faster than it was watched
     followMax: int(env.TELEGRAM_FOLLOW_MAX, 50),     // new channels followed per sync (0 = no limit); the rest wait for the next sync
   },
   // --- object store for media PRISM must keep itself (Telegram files cannot be hotlinked). S3-compatible: Cloudflare R2,

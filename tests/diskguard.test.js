@@ -209,8 +209,8 @@ describe('Telegram byte budget', () => {
     budget._reset();
   });
 
-  test('the defaults are small enough for 541 channels: 200 older media, 50 MB videos, 50 new channels per sync, 5 GB a day', () => {
-    assert.equal(config.telegram.backfillMax, 200); assert.equal(config.telegram.maxMb, 50); assert.equal(config.telegram.followMax, 50);
+  test('the defaults are small enough for 541 channels: 60 older media, 50 MB videos, 50 new channels per sync, 5 GB a day', () => {
+    assert.equal(config.telegram.backfillMax, 60); assert.equal(config.telegram.maxMb, 50); assert.equal(config.telegram.followMax, 50);
     assert.equal(require('../src/settings').get().platformDailyMb, 'telegram=5000');
   });
 });
