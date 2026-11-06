@@ -193,38 +193,46 @@ async function readPage(url, opts = {}) {
     const grab = async () => (await c.send('Runtime.evaluate', { expression: 'document.documentElement.outerHTML', returnByValue: true })).result.value || '';
     let html = await grab();
     let seen = challenge.detect({ status: 200, html });
-    if (seen && challenge.isChallenge(seen.kind)) {
-      // Give a managed challenge its own time: it usually clears itself once the fingerprint passes.
+    // A managed challenge (Cloudflare / DDoS-Guard / DataDome) usually clears itself once the fingerprint passes: give it
+    // its own time. A proof of work and a captcha widget are not waited for - each has its own handler below, and waiting
+    // would only burn the 15 s.
+    if (seen && seen.solvable === 'browser') {
       const deadline = Date.now() + config.chrome.challengeWaitMs;
       while (seen && Date.now() < deadline) {
         await sleep(1500); html = await grab(); seen = challenge.detect({ status: 200, html });
       }
-      if (seen && seen.kind === 'anubis') {
-        notes.push('Anubis gate: solved as a proof of work, not in the browser');
-        const solved = await challenge.solveAnubis(href, { maxMs: 15000 }).catch(() => null);
-        if (solved) {
-          for (const part of solved.cookie.split('; ')) {
-            const [name, ...rest] = part.split('=');
-            if (!name || !rest.length) continue;
-            await c.send('Network.setCookie', { name, value: rest.join('='), domain: new URL(href).hostname, path: '/' }).catch(() => {});
-          }
-          await c.send('Page.navigate', { url: href }, config.chrome.timeoutMs).catch(() => {});
-          await sleep(Math.max(2500, ms)); html = await grab(); seen = challenge.detect({ status: 200, html });
+    }
+    // Anubis is arithmetic, not a browser test: solve it in Node and hand the signed cookie to the page.
+    if (seen && seen.kind === 'anubis') {
+      notes.push('Anubis gate: solved as a proof of work, not in the browser');
+      const solved = await challenge.solveAnubis(href, { maxMs: 15000 }).catch(() => null);
+      if (solved) {
+        for (const part of solved.cookie.split('; ')) {
+          const [name, ...rest] = part.split('=');
+          if (!name || !rest.length) continue;
+          await c.send('Network.setCookie', { name, value: rest.join('='), domain: new URL(href).hostname, path: '/' }).catch(() => {});
+        }
+        await c.send('Page.navigate', { url: href }, config.chrome.timeoutMs).catch(() => {});
+        await sleep(Math.max(2500, ms)); html = await grab(); seen = challenge.detect({ status: 200, html });
+      }
+    }
+    // A captcha widget is the one wall a browser cannot pass alone: buy a token when the solver is on and configured.
+    if (seen && seen.solvable === 'token' && captchasolver.configured()) {
+      const cfgS = require('../settings').get();
+      if (cfgS.captchaSolver !== 'fallback') notes.push('captcha widget: the captcha solver is off');
+      else {
+        const token = await captchasolver.solveForPage(html, href, { budget: cfgS.captchaSolverBudget }).catch((e) => { notes.push(`captcha solver: ${e.message}`); return null; });
+        if (token) {
+          await c.send('Runtime.evaluate', { expression: captchasolver.injectScript(token) }).catch(() => {});
+          await sleep(4000); html = await grab(); seen = challenge.detect({ status: 200, html });
+          notes.push('captcha solved through the token service');
         }
       }
-      if (seen && seen.solvable === 'token' && captchasolver.configured()) {
-        const cfgS = require('../settings').get();
-        if (cfgS.captchaSolver !== 'fallback') notes.push('captcha widget: the captcha solver is off');
-        else {
-          const token = await captchasolver.solveForPage(html, href, { budget: cfgS.captchaSolverBudget }).catch((e) => { notes.push(`captcha solver: ${e.message}`); return null; });
-          if (token) {
-            await c.send('Runtime.evaluate', { expression: captchasolver.injectScript(token) }).catch(() => {});
-            await sleep(4000); html = await grab(); seen = challenge.detect({ status: 200, html });
-            notes.push('captcha solved through the token service');
-          }
-        }
-      }
-      if (seen && challenge.isChallenge(seen.kind)) notes.push(`${seen.label} still stood after ${Math.round(config.chrome.challengeWaitMs / 1000)}s`);
+    }
+    if (seen && challenge.isChallenge(seen.kind)) {
+      notes.push(seen.solvable === 'browser'
+        ? `${seen.label} still stood after ${Math.round(config.chrome.challengeWaitMs / 1000)}s`
+        : `${seen.label} still stood`);
     }
     return { url: href, html, scrolls, challenge: seen ? seen.kind : null, notes };
   } finally {
