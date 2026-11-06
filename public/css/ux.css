@@ -190,3 +190,11 @@
 .lb-collab-av { width: 18px; height: 18px; border-radius: 50%; background-size: cover; background-position: center; flex-shrink: 0; }
 .lb-collab-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
 .lb-collab-name { overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
+
+/* ---------- first-visit taste picker: up to two wrapped rows of 44px chips, the rest one swipeable row ---------- */
+.taste-picker .taste-wrap { display: flex; flex-wrap: wrap; gap: 8px; }
+.taste-picker .taste-swipe { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; margin: 10px calc(var(--pad) * -1) 0; padding: 0 var(--pad); scroll-padding: 0 var(--pad); }
+.taste-picker .taste-swipe::-webkit-scrollbar { display: none; }
+.taste-picker .taste-swipe > * { flex: none; }
+.taste-picker .chip { min-height: 44px; }
+.taste-picker .btn.ghost { min-height: 44px; }

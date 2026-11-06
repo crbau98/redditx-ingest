@@ -255,7 +255,7 @@ export const recentSearches = {
 // is sent to the server only as a short weighted query, never stored there.
 const TASTE_KEY = 'prism.taste';
 const HALF_LIFE_DAYS = 21;
-const blankTaste = () => ({ t: {}, c: {}, p: {}, n: { t: {}, c: {} }, video: 0, image: 0, at: Date.now(), events: 0 });
+const blankTaste = () => ({ t: {}, c: {}, p: {}, n: { t: {}, c: {} }, seeds: {}, video: 0, image: 0, at: Date.now(), events: 0 });
 let taste = { ...blankTaste(), ...read(TASTE_KEY, {}) };
 if (!taste.n) taste.n = { t: {}, c: {} };
 const decayTaste = () => {
@@ -268,7 +268,7 @@ const decayTaste = () => {
 const trim = (obj, n) => Object.fromEntries(Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, n));
 let tasteTimer = null;
 const saveTaste = () => { clearTimeout(tasteTimer); tasteTimer = setTimeout(() => { write(TASTE_KEY, taste); bus.emit('taste', null); }, 400); };
-const GENERIC = new Set(['reddit', 'redgifs', 'bluesky', 'mastodon', 'misskey', 'tumblr', 'peertube', 'lemmy', 'x', 'telegram', 'rss', 'web', 'gay', 'nsfw']);
+export const GENERIC = new Set(['reddit', 'redgifs', 'bluesky', 'mastodon', 'misskey', 'tumblr', 'peertube', 'lemmy', 'x', 'telegram', 'rss', 'web', 'gay', 'nsfw']);
 const styleTags = (item, n = 8) => (item.tags || []).filter((x) => !GENERIC.has(x)).slice(0, n);
 const lower = (obj, key, by) => { if (obj[key] === undefined) return; obj[key] -= by; if (obj[key] < 0.05) delete obj[key]; };
 const weighted = (obj, n) => Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, w]) => `${k}:${Math.max(0.1, w).toFixed(1)}`).join(',');
@@ -307,12 +307,30 @@ export const tastes = {
     taste.n.t = trim(taste.n.t, 40); taste.n.c = trim(taste.n.c, 100);
     saveTaste();
   },
+  /**
+   * Explicit interest picks ("What are you into?"): each picked tag gets `weight` (~3) and decays like
+   * any other. A negative weight takes the pick back. Two picks are enough to personalise (see ready()).
+   */
+  seedTags(tags, weight = 3) {
+    if (!Array.isArray(tags) || !tags.length || prefs.historyOff) return;
+    decayTaste();
+    for (const tg of tags) {
+      if (!tg || GENERIC.has(tg)) continue;
+      const cur = (taste.t[tg] || 0) + weight;
+      if (cur < 0.05) delete taste.t[tg]; else taste.t[tg] = cur;
+      if (weight > 0) taste.seeds[tg] = 1; else delete taste.seeds[tg];
+    }
+    taste.t = trim(taste.t, 80);
+    saveTaste();
+  },
+  /** The tags picked on purpose, not learned. */
+  seededTags: () => Object.keys(taste.seeds || {}),
   recordCreator(id, weight = 5) { if (!id || prefs.historyOff) return; decayTaste(); taste.c[id] = (taste.c[id] || 0) + weight; delete taste.n.c[id]; taste.c = trim(taste.c, 80); saveTaste(); },
   /** "Show less #tag". */
   forgetTag(tag) { delete taste.t[tag]; taste.n.t[tag] = (taste.n.t[tag] || 0) + 1.5; saveTaste(); },
   reset() { taste = blankTaste(); write(TASTE_KEY, taste); bus.emit('taste', null); },
   /** Enough signal to personalise? */
-  ready: () => (taste.events || 0) >= 3 && (Object.keys(taste.t).length > 0 || Object.keys(taste.c).length > 0),
+  ready: () => ((taste.events || 0) >= 3 || Object.keys(taste.seeds || {}).length >= 2) && (Object.keys(taste.t).length > 0 || Object.keys(taste.c).length > 0),
   topTags: (n = 8) => Object.entries(taste.t).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k]) => k),
   /** A short human reason an item was picked for you ("A creator you like", "#beach", "Like @jake"), or null. */
   why(item) {

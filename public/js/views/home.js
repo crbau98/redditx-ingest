@@ -1,7 +1,7 @@
 import { h, icon, fmt, emptyState } from '../dom.js';
 import { get, prefetch } from '../api.js';
 import { href } from '../router.js';
-import { follows, tastes, history as viewHistory, prefs } from '../store.js';
+import { follows, tastes, history as viewHistory, prefs, GENERIC } from '../store.js';
 import { mediaCard } from '../components/card.js';
 import { creatorCard } from '../components/creator-card.js';
 import { createFeed } from '../components/feed.js';
@@ -38,32 +38,43 @@ async function forYouSection(open) {
       h('div', { class: 'rail' }, people.map((c) => creatorCard(c, { mini: true, badge: c.reason })))) : null);
 }
 
-/** First visit: let people pick a few interests so "For you" works from minute one. */
-function interestPicker(tags, onDone) {
-  if (tastes.ready() || prefs.introDone || !tags.length) return null;
-  const picked = new Set();
-  const go = h('button', { class: 'btn primary', disabled: true }, icon('sparkle', 'sm'), 'Build my feed');
-  const count = h('span', { class: 'muted', style: { fontSize: '13px' } }, 'Pick 3 or more');
-  const chipEls = tags.slice(0, 24).map((t) => {
-    const b = h('button', { class: 'chip', 'aria-pressed': 'false' }, `#${t.name}`);
+/**
+ * First visit: "What are you into?" Real tags from the library (never invented), 10 at most. Two picks
+ * tune For you; each pick refreshes that rail in place. "Skip for now" hides the card for good.
+ */
+function interestPicker(tags, { onChange, onSkip }) {
+  if (tastes.ready() || prefs.introDone) return null;
+  const niche = tags.filter((t) => t && t.name && !GENERIC.has(t.name)).slice(0, 10);
+  if (!niche.length) return null;
+  const picked = new Set(tastes.seededTags());
+  const count = h('span', { class: 'muted', style: { fontSize: '13px' }, 'aria-live': 'polite' }, '');
+  const paintCount = () => {
+    count.textContent = picked.size >= 2 ? `${picked.size} picked · For you is updating` : picked.size ? 'Pick one more' : 'Pick two or more';
+  };
+  let timer = null;
+  const schedule = () => { clearTimeout(timer); timer = setTimeout(() => { if (picked.size >= 2) onChange(); }, 300); };
+  const chipEl = (t) => {
+    const on = picked.has(t.name);
+    const b = h('button', { type: 'button', class: `chip${on ? ' on' : ''}`, 'aria-pressed': String(on), title: `${t.count} posts tagged #${t.name}` }, `#${t.name}`);
     b.addEventListener('click', () => {
-      if (picked.has(t.name)) picked.delete(t.name); else picked.add(t.name);
-      b.classList.toggle('on', picked.has(t.name)); b.setAttribute('aria-pressed', String(picked.has(t.name)));
-      go.disabled = picked.size < 3; count.textContent = picked.size < 3 ? `Pick ${3 - picked.size} more` : `${picked.size} picked`;
+      const now = !picked.has(t.name);
+      if (now) picked.add(t.name); else picked.delete(t.name);
+      tastes.seedTags([t.name], now ? 3 : -3);
+      b.classList.toggle('on', now); b.setAttribute('aria-pressed', String(now));
+      paintCount(); schedule();
     });
     return b;
-  });
-  const card = h('section', { class: 'section intro-card' },
+  };
+  const chips = niche.map(chipEl);
+  paintCount();
+  const card = h('section', { class: 'section intro-card taste-picker' },
     h('div', { class: 'row', style: { justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px' } },
-      h('div', null, h('h2', null, icon('sparkle'), 'What are you into?'), h('p', { class: 'muted', style: { margin: '6px 0 0' } }, 'Pick a few and PRISM tunes a “For you” feed around them. It keeps learning from what you watch and save — on this device only.')),
-      h('button', { class: 'btn icon ghost', 'aria-label': 'Dismiss', onclick: () => { prefs.introDone = true; card.remove(); } }, icon('x'))),
-    h('div', { class: 'row wrap', style: { gap: '8px', margin: '14px 0' } }, chipEls),
-    h('div', { class: 'row', style: { gap: '12px' } }, go, count));
-  go.addEventListener('click', () => {
-    for (const t of picked) tastes.record({ tags: [t] }, 3);
-    prefs.introDone = true;
-    onDone();
-  });
+      h('div', null, h('h2', null, icon('sparkle'), 'What are you into?'), h('p', { class: 'muted', style: { margin: '6px 0 0' } }, 'Pick two or more and For you and the creator picks follow them. Stored on this device only.'))),
+    h('div', { class: 'taste-wrap', role: 'group', 'aria-label': 'Interests' }, chips.slice(0, 4)),
+    chips.length > 4 ? h('div', { class: 'taste-swipe', role: 'group', 'aria-label': 'More interests' }, chips.slice(4)) : null,
+    h('div', { class: 'row', style: { justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginTop: '12px' } },
+      count,
+      h('button', { type: 'button', class: 'btn sm ghost', onclick: () => { prefs.introDone = true; clearTimeout(timer); card.remove(); onSkip(); } }, 'Skip for now')));
   return card;
 }
 
@@ -159,9 +170,12 @@ export async function home(root) {
   }
   const ring = creatorRing([...top, ...(data.rising || []), ...(data.newCreators || [])], { label: 'More creators' });
   if (ring) parts.push(ring);
-  const picker = interestPicker(data.tags, async () => { const sec = await forYouSection(open); if (picker.isConnected) { if (sec) picker.replaceWith(sec); else picker.remove(); } });
+  // The For you rail has a fixed slot; a pick refreshes what is in it, in place.
+  const refreshForYou = async () => { const sec = await forYouSection(open).catch(() => null); forYouSlot.replaceChildren(...(sec ? [sec] : [])); };
+  const picker = interestPicker(data.tags, { onChange: refreshForYou, onSkip: () => {} });
   if (picker) parts.push(picker);
 
+  const forYouSlot = h('div', { class: 'for-you-slot' });
   const fromFollowed = await followedP; // optional: a failed request leaves it empty
   if (fromFollowed.length) {
     parts.push(h('section', { class: 'section' }, sectionHead('heart', 'From creators you follow', 'Latest from the people you follow on this device', { href: href('/following'), label: 'See all' }), rail(fromFollowed, { open: open(fromFollowed) })));
@@ -170,7 +184,8 @@ export async function home(root) {
     parts.push(h('section', { class: 'section' }, sectionHead('flame', 'Trending now', 'Top posts, OnlyFans creators first', { href: href('/explore', { sort: 'trending', paid: 'onlyfans' }), label: 'See all' }), rail(data.trending, { open: open(data.trending) })));
   }
   const forYou = await forYouP;
-  if (forYou) parts.push(forYou);
+  if (forYou) forYouSlot.replaceChildren(forYou);
+  parts.push(forYouSlot);
 
   const latestHead = h('div', { class: 'section-head' },
     h('div', null, h('h2', null, icon('layers'), 'Latest uploads'), h('div', { class: 'sub' }, 'Filter by creator, or open Explore for everything')),
