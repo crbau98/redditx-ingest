@@ -60,6 +60,9 @@ const SCHEMA = {
   discoveryPosters: { type: 'bool', default: true, label: 'Follow prolific Reddit posters: read the newest posts of communities you already follow (keyless Reddit archive, no Reddit quota), count each person\'s media posts over 7 and 30 days, and queue the sustained ones. Needs Reddit reading on', group: 'discovery' },
   posterSubreddits: { type: 'int', default: 3, min: 0, max: 20, label: 'Reddit poster discovery: communities sampled per run (rotates through all followed ones)', group: 'discovery' },
   posterLeads: { type: 'int', default: 8, min: 0, max: 40, label: 'Reddit poster discovery: people measured per run', group: 'discovery' },
+  discoveryImageKeywords: { type: 'bool', default: true, label: 'Keyword image discovery: search the topic keywords for pictures on the free image feeds (Bing, then Jina) and queue the profile pages they come from. A picture already in the library (same perceptual hash) is skipped, so a known page is never queued twice', group: 'discovery' },
+  imageKeywordHits: { type: 'int', default: 20, min: 0, max: 60, label: 'Image discovery: results read per run', group: 'discovery' },
+  imageKeywordLeads: { type: 'int', default: 6, min: 0, max: 30, label: 'Image discovery: new pages queued per run', group: 'discovery' },
   braveDailyBudget: { type: 'int', default: 40, min: 0, max: 2000, label: 'Metered web searches per day (Brave + Keenable + Bright Data budget; 0 = free search only — SearXNG, Bing, DuckDuckGo, and discovery then searches MORE per run)', group: 'discovery' },
   discoveryQueries: {
     type: 'text', group: 'discovery', label: 'Web-search topics (one per line; rotated, one per run)',

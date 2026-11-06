@@ -246,15 +246,8 @@ async function web(q, { count = 20, budget = 40 } = {}) {
  * fallback. Results carry the picture URL, the page it came from and its title — exactly the shape
  * Brave's image search returns.
  */
-async function bingImages(query, { count = 30 } = {}) {
-  const q = String(query || '').trim();
-  if (!q) return [];
-  const url = `https://www.bing.com/images/async?q=${encodeURIComponent(q)}&first=1&count=${Math.min(Math.max(count, 10), 60)}&mmasync=1`;
-  const html = await ddgHttp.text(url, {
-    timeout: 15000,
-    headers: { 'accept-language': 'en-US,en;q=0.9', accept: 'text/html,application/xhtml+xml' },
-    retries: 1,
-  });
+/** Parse Bing's async image markup into the same hit shape every image provider returns. */
+function parseBingImages(html, count = 30) {
   const text = String(html || '');
   const out = [];
   const seen = new Set();
@@ -287,6 +280,18 @@ async function bingImages(query, { count = 30 } = {}) {
     if (out.length >= count) break;
   }
   return out;
+}
+
+async function bingImages(query, { count = 30 } = {}) {
+  const q = String(query || '').trim();
+  if (!q) return [];
+  const url = `https://www.bing.com/images/async?q=${encodeURIComponent(q)}&first=1&count=${Math.min(Math.max(count, 10), 60)}&mmasync=1`;
+  const html = await ddgHttp.text(url, {
+    timeout: 15000,
+    headers: { 'accept-language': 'en-US,en;q=0.9', accept: 'text/html,application/xhtml+xml' },
+    retries: 1,
+  });
+  return parseBingImages(html, count);
 }
 
 /**
@@ -468,6 +473,7 @@ module.exports = {
   ddgWeb,
   ddgUrls,
   bingImages,
+  parseBingImages,
   usage,
   configured,
   quotaState,

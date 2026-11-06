@@ -32,6 +32,10 @@ const { checkText } = require('../lib/safety');
 const takedowns = require('../lib/takedowns');
 const { classify, femaleCheck } = require('../lib/scope');
 const physiqueText = require('../lib/physique').textCheck;
+const net = require('../lib/net');
+const jina = require('../lib/jina');
+const phash = require('../lib/phash');
+const dedupe = require('../services/dedupe');
 
 /** Body filter on and the name / bio reads chub, gainer, dad bod ...: the rule that matched, else null. */
 function heavyRule(...texts) {
@@ -57,8 +61,8 @@ const archiveHttp = require('../sources/http').forPlatform('redditArchive', 300)
 // ofconfirmed: the account links to the exact OnlyFans page we were looking for (same person, proven)
 // onlyfans: the account has the same handle as an OnlyFans page creators promote (likely the same person)
 // ai: Claude read the public name and bio and judged it an adult male creator (engine/ai.js triage).
-const WEIGHTS = { identity: 6, mention: 3, cofollow: 1.5, search: 2, similar: 2, hangout: 1.5, ofconfirmed: 8, onlyfans: 2, ai: 2, poster: 6 };
-const CAPS = { identity: 1, mention: 5, cofollow: 8, search: 3, similar: 4, hangout: 6, ofconfirmed: 1, onlyfans: 1, ai: 1, poster: 1 };
+const WEIGHTS = { identity: 6, mention: 3, cofollow: 1.5, search: 2, similar: 2, hangout: 1.5, ofconfirmed: 8, onlyfans: 2, ai: 2, poster: 6, imagesearch: 3 };
+const CAPS = { identity: 1, mention: 5, cofollow: 8, search: 3, similar: 4, hangout: 6, ofconfirmed: 1, onlyfans: 1, ai: 1, poster: 1, imagesearch: 2 };
 const FOLLOWABLE_KINDS = new Set(['user', 'page']);
 // Communities and custom feeds mix many posters, so they are held to a stricter bar than people.
 const SHARED_KINDS = new Set(['community', 'feedgen', 'list', 'niche']);
@@ -525,6 +529,78 @@ async function redditPosters({ subreddits = 3, leads = 8, aborted = () => false 
     );
     if (c && c.status === 'pending' && c.scope !== 'excluded') out.found++;
   }
+  return out;
+}
+
+/* ---------------------------------------------- v4.9: keyword image discovery */
+// Text search finds pages that SAY the right words. Image search finds pages that SHOW the right
+// picture, which is how the best amateur profiles are tagged. Free tiers only: Bing's image feed over
+// plain HTTP, then the same query through Jina's renderer when the plain feed is challenged or empty.
+// Nobody is charged and the page itself is never scraped here: a picture only proves the page exists.
+// A picture already in the library (same perceptual hash) is skipped before it is fetched twice, so
+// the lane cannot re-queue a page PRISM already knows from a copy of a photo it already has.
+const IMAGE_HITS = 20;
+const IMAGE_LEADS = 6;
+const IMAGE_MAX_BYTES = 2_000_000;
+let imageProvider = null; // tests replace the search provider
+
+async function searchImages(query, count) {
+  if (imageProvider) return imageProvider(query, count);
+  const hits = await brave.bingImages(query, { count });
+  if (hits.length) return hits;
+  // Second free tier: the same query rendered by Jina (it runs a real browser elsewhere). Budgeted.
+  const s = settingsStore.get();
+  if (!jina.configured() || !s.jinaDailyBudget) return hits;
+  try {
+    const r = await jina.read(`https://www.bing.com/images/search?q=${encodeURIComponent(query)}`, { format: 'html', budget: s.jinaDailyBudget });
+    return brave.parseBingImages(r.html, count);
+  } catch (e) { events.log('INFO', `Discovery: image search "${query}" via Jina — ${e.message}`); return hits; }
+}
+
+/**
+ * Search the rotation of keywords for pictures and queue the pages they come from. A page is skipped
+ * when the picture is already stored (pHash), when the host is blocked, or when the page is not a
+ * profile shape PRISM can follow.
+ */
+async function imageKeywordDiscovery({ keywords = 1, hits = IMAGE_HITS, leads = IMAGE_LEADS, aborted = () => false } = {}) {
+  const list = keywordList();
+  const out = { searched: 0, hits: 0, fetched: 0, duplicates: 0, found: 0 };
+  if (!list.length || hits <= 0 || leads <= 0) return out;
+  let idx = parseInt(repo.discoveryState.get('image.index', '0'), 10) || 0;
+  for (let i = 0; i < Math.min(keywords, list.length) && out.found < leads; i++) {
+    if (aborted()) break;
+    const kw = list[idx % list.length];
+    idx++;
+    let rows;
+    try { rows = await searchImages(kw, hits); } catch (e) { events.log('WARN', `Discovery: image search "${kw}" — ${e.message}`); continue; }
+    out.searched++;
+    const seen = new Set();
+    for (const hit of rows) {
+      if (aborted() || out.found >= leads) break;
+      const page = hit.pageUrl || hit.url;
+      const img = hit.imageUrl || hit.mediaUrl;
+      if (!page || !img || page === img || seen.has(page)) continue;
+      seen.add(page);
+      let spec;
+      try { spec = parseProfile(page); } catch { spec = null; }
+      if (!spec || !usable(spec)) continue;
+      if (repo.feeds.find(spec.platform, spec.kind, spec.target)) continue;
+      out.hits++;
+      let hex = null;
+      try {
+        const res = await net.request(img, { maxBytes: IMAGE_MAX_BYTES, timeout: 12000 });
+        out.fetched++;
+        hex = await phash.hashBuffer(res.body);
+      } catch { /* an unreadable picture still proves the page exists, but cannot be de-duplicated */ }
+      if (hex) {
+        const d = dedupe.check({ phash: hex, mediaType: 'image' }, { distance: 6 });
+        if (d.dup || d.blocked) { out.duplicates++; continue; }
+      }
+      const c = consider(spec, 'imagesearch', `image:${kw}`, { displayName: hit.title || spec.label, bio: hit.description || null, avatarUrl: spec.platform === 'linkinbio' ? img : null });
+      if (c && c.status === 'pending' && c.scope !== 'excluded') out.found++;
+    }
+  }
+  if (list.length) repo.discoveryState.set('image.index', String(idx % list.length));
   return out;
 }
 
@@ -1844,6 +1920,7 @@ async function run({ trigger = 'schedule' } = {}) {
     if (s.discoveryCommunities) report.communities = await communityDiscovery({ aborted });
     if (s.discoveryCommunities) report.hangouts = creatorHangouts();
     if (s.discoveryPosters && s.redditEnabled && !config.isTest) report.posters = await redditPosters({ subreddits: s.posterSubreddits, leads: s.posterLeads, aborted });
+    if (s.discoveryImageKeywords && !config.isTest) report.images = await imageKeywordDiscovery({ hits: s.imageKeywordHits, leads: s.imageKeywordLeads, aborted });
     if (s.discoveryExpand) {
       report.suggested = await blueskySuggested({ aborted });
       report.people = await peopleSearch({ aborted });
@@ -1856,7 +1933,7 @@ async function run({ trigger = 'schedule' } = {}) {
     report.aiProfiles = await require('./ai').readProfiles();
     report.promote = s.autoDiscover || trigger === 'manual' ? promote(s) : { followed: 0, linked: 0 };
     report.pruned = repo.candidates.prune();
-    events.log('INFO', `Discovery ${trigger === 'manual' ? '(manual) ' : ''}finished: ${report.mentions.found} mention leads, ${report.graph ? report.graph.found : 0} graph leads, ${report.topics ? report.topics.found : 0} search leads, ${report.communities ? report.communities.found : 0} community/feed leads, ${report.hangouts ? report.hangouts.found : 0} hangouts, ${report.posters ? report.posters.found : 0} prolific Reddit posters (${report.posters ? report.posters.measured : 0} people measured in ${report.posters ? report.posters.subreddits : 0} communities), ${report.suggested ? report.suggested.found : 0} Bluesky suggestions, ${report.people ? report.people.found : 0} people-search leads, ${report.identity ? report.identity.linked : 0} identity matches, ${report.seeds ? report.seeds.followed : 0} named creators found, ${report.onlyfans ? report.onlyfans.found : 0} OnlyFans creators traced (${report.onlyfans ? report.onlyfans.linked : 0} accounts linked), ${report.identities.links} same-creator links (${report.identities.merged} merged), ${report.harvest ? report.harvest.read : 0} directory pages harvested (${report.harvest ? report.harvest.leads : 0} paid leads, ${report.harvest ? report.harvest.candidates : 0} profile links), ${report.gff ? report.gff.followed : 0} performer-directory follows, ${report.coomerIndex ? report.coomerIndex.feeds : 0} creators followed from coomer's creator index (${report.coomerIndex && report.coomerIndex.indexed ? report.coomerIndex.matched : 0} matched of ${report.coomerIndex ? report.coomerIndex.checked : 0} paid handles), ${report.coomerNames ? report.coomerNames.feeds : 0} creators matched on coomer by name, ${report.coomer ? report.coomer.verified : 0} coomer pages verified male (${report.coomer ? report.coomer.deferred : 0} deferred), ${report.imageMatch ? report.imageMatch.pages : 0} image-matched pages; followed ${report.promote.followed}, linked ${report.promote.linked}`);
+    events.log('INFO', `Discovery ${trigger === 'manual' ? '(manual) ' : ''}finished: ${report.mentions.found} mention leads, ${report.graph ? report.graph.found : 0} graph leads, ${report.topics ? report.topics.found : 0} search leads, ${report.communities ? report.communities.found : 0} community/feed leads, ${report.hangouts ? report.hangouts.found : 0} hangouts, ${report.posters ? report.posters.found : 0} prolific Reddit posters (${report.posters ? report.posters.measured : 0} people measured in ${report.posters ? report.posters.subreddits : 0} communities), ${report.images ? report.images.found : 0} image-search leads (${report.images ? report.images.duplicates : 0} pictures already stored), ${report.suggested ? report.suggested.found : 0} Bluesky suggestions, ${report.people ? report.people.found : 0} people-search leads, ${report.identity ? report.identity.linked : 0} identity matches, ${report.seeds ? report.seeds.followed : 0} named creators found, ${report.onlyfans ? report.onlyfans.found : 0} OnlyFans creators traced (${report.onlyfans ? report.onlyfans.linked : 0} accounts linked), ${report.identities.links} same-creator links (${report.identities.merged} merged), ${report.harvest ? report.harvest.read : 0} directory pages harvested (${report.harvest ? report.harvest.leads : 0} paid leads, ${report.harvest ? report.harvest.candidates : 0} profile links), ${report.gff ? report.gff.followed : 0} performer-directory follows, ${report.coomerIndex ? report.coomerIndex.feeds : 0} creators followed from coomer's creator index (${report.coomerIndex && report.coomerIndex.indexed ? report.coomerIndex.matched : 0} matched of ${report.coomerIndex ? report.coomerIndex.checked : 0} paid handles), ${report.coomerNames ? report.coomerNames.feeds : 0} creators matched on coomer by name, ${report.coomer ? report.coomer.verified : 0} coomer pages verified male (${report.coomer ? report.coomer.deferred : 0} deferred), ${report.imageMatch ? report.imageMatch.pages : 0} image-matched pages; followed ${report.promote.followed}, linked ${report.promote.linked}`);
   } catch (e) {
     report.error = e.message;
     events.log('ERR', `Discovery failed: ${e.message}`);
@@ -1918,4 +1995,4 @@ function start() {
 }
 function stop() { stopFlag = true; clearInterval(timer); timer = null; }
 
-module.exports = { seedCreators, seedStatus, onlyfansDiscovery, coomerDiscovery, coomerIndexDiscovery, coomerNameDiscovery, gffDiscovery, gffNextPage, xhamsterDiscovery, pornhubDiscovery, directoryHarvest, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, redditPosters, blueskySuggested, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };
+module.exports = { seedCreators, seedStatus, onlyfansDiscovery, coomerDiscovery, coomerIndexDiscovery, coomerNameDiscovery, gffDiscovery, gffNextPage, xhamsterDiscovery, pornhubDiscovery, directoryHarvest, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, redditPosters, imageKeywordDiscovery, _setImageProvider: (fn) => { imageProvider = fn; }, blueskySuggested, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };
