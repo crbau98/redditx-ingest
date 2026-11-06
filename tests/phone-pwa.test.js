@@ -162,9 +162,10 @@ describe('service worker: caching rules', () => {
   });
   test('activate removes caches of old shell versions but keeps the api and image caches', async () => {
     const w = worker();
-    for (const n of ['prism-shell-v8', 'prism-shell-v9', 'prism-api-v1', 'prism-img-v1']) await w.caches.open(n);
+    const current = `prism-shell-v${read('sw.js').match(/const VERSION = 'prism-shell-v(\d+)'/)[1]}`;
+    for (const n of ['prism-shell-v8', 'prism-shell-v9', current, 'prism-api-v1', 'prism-img-v1']) await w.caches.open(n);
     await w.lifecycle('activate');
-    assert.deepEqual([...w.stores.keys()].sort(), ['prism-api-v1', 'prism-img-v1', 'prism-shell-v9']);
+    assert.deepEqual([...w.stores.keys()].sort(), ['prism-api-v1', 'prism-img-v1', current]);
   });
   test('navigation offline with nothing cached shows /offline.html', async () => {
     const w = worker();
