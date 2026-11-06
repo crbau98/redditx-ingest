@@ -1366,7 +1366,7 @@ const media = {
    * killed even though the container is fine. Chunked, the same work is done in pieces small
    * enough that the server keeps answering between them.
    */
-  async recomputeHotChunked(tolerance = 0.02, chunk = 20000) {
+  async recomputeHotChunked(tolerance = 0.02, chunk = 2000) { // 2k rows per statement: a 20k chunk was a 1-3 s main-thread block on a cold file
     const now = Date.now();
     const stmt = db.prepare(`UPDATE media SET hot = hot_score(score, likes, views, epoch_ms(posted_at), @now)
       WHERE seq > @from AND seq <= @to AND publish_state = 'published' AND abs(hot - hot_score(score, likes, views, epoch_ms(posted_at), @now)) > @tol * hot_score(score, likes, views, epoch_ms(posted_at), @now)`);

@@ -651,7 +651,7 @@ function seedDefaults() {
  * The seed used to refresh the counts of every creator in one transaction (14k on prod: ~16 s on the main thread).
  * This does the same for every creator, a few at a time, so the event loop answers between the chunks.
  */
-function backfillCreatorStats(db, chunk = 25) {
+function backfillCreatorStats(db, chunk = 5) { // a few creators per tick: 25 blocked the loop for ~0.5 s each on a cold file
   const pick = db.prepare('SELECT id FROM creators WHERE id > ? ORDER BY id LIMIT ?');
   return new Promise((resolve) => {
     let after = ''; let done = 0;
@@ -683,8 +683,12 @@ function start() {
   setTimeout(() => {
     // Seeding is a transaction on the main thread: it runs after the first health answer, never before the listener is up.
     try { seedDefaults(); } catch (e) { events.log('ERR', `seed: ${e.message}`); }
-    repo.media.recomputeHotChunked().catch(() => { /* ignore */ }); tick();
+    tick();
   }, 2000).unref();
+  // The first hot-score pass after a restart reads every published row, cold on a fresh container. It used to run at
+  // 2 s, on top of the seed and the warm-up: a 12 s run of main-thread work. It now runs after the warm-up (30 s); the
+  // 10-minute timer above keeps the scores current in between.
+  setTimeout(() => { repo.media.recomputeHotChunked().catch(() => { /* ignore */ }); }, 30000).unref();
 }
 
 function shutdown() {
