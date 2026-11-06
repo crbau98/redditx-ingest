@@ -149,6 +149,23 @@ test('a dead video page is remembered, not retried on every run', async () => {
   assert.equal(r.cursor.seen.includes('21'), true, 'the dead id is in the cursor');
 });
 
+test('the creator directory yields each creator once, and discovery is wired to it', () => {
+  const html = `<html><script>window.initials=${JSON.stringify({
+    layoutPage: { pornstarListProps: { pornstars: [
+      { name: 'Dilan Castro', pageURL: 'https://xhamster.com/gay/creators/dilan-castro', rating: 1 },
+      { name: 'Dilan Castro again', pageURL: 'https://xhamster.com/gay/creators/dilan-castro', rating: 9 },
+      { name: 'TakkiKT', pageURL: 'https://xhamster.com/gay/creators/takkikt', rating: 2 },
+      { name: 'Index', pageURL: 'https://xhamster.com/gay/creators/all', rating: 3 },
+    ] } },
+  })};</script></html>`;
+  const list = xhamster.creatorsFromDirectory(html);
+  assert.deepEqual(list.map((c) => c.slug), ['dilan-castro', 'takkikt']);
+  assert.equal(list[0].url, 'https://xhamster.com/gay/creators/dilan-castro');
+  assert.equal(list[0].rating, 1);
+  const discovery = require('../src/engine/discovery');
+  assert.equal(typeof discovery.xhamsterDiscovery, 'function', 'the directory step is part of the discovery run');
+});
+
 test('expired xHamster playlists are refreshed at the video page (engine/playback)', () => {
   const playback = require('../src/engine/playback');
   assert.equal(playback.canRefresh('video-nss.xhcdn.com'), true);

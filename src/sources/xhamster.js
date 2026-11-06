@@ -223,6 +223,27 @@ async function fetchFeed(feed, ctx = {}) {
   };
 }
 
+/**
+ * The gay creator directory (https://xhamster.com/gay/creators): its own JSON lists the creators
+ * by rating. Used by discovery to follow creators nobody has named yet.
+ * @returns {Array<{url: string, name: string, slug: string, rating: number|null}>}
+ */
+function creatorsFromDirectory(html) {
+  const d = initials(html);
+  const list = d && d.layoutPage && d.layoutPage.pornstarListProps && d.layoutPage.pornstarListProps.pornstars;
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const c of list) {
+    const m = String(c && c.pageURL || '').match(/xhamster\.com\/gay\/creators\/([a-z0-9][a-z0-9_-]{1,60})\/?$/i);
+    if (!m || seen.has(m[1])) continue;
+    if (/^\d+$/.test(m[1]) || RESERVED.has(m[1].toLowerCase())) continue;
+    seen.add(m[1]);
+    out.push({ url: creatorUrl(m[1].toLowerCase()), name: String(c.name || m[1]).trim(), slug: m[1].toLowerCase(), rating: Number(c.rating) || null });
+  }
+  return out;
+}
+
 /** Parse an xHamster gay creator URL (or bare slug) into a feed spec. */
 function parse(input) {
   const s = String(input || '').trim();
@@ -260,6 +281,7 @@ module.exports = {
   intervalMin: { user: 240 },
   isConfigured: () => ({ ok: true, note: 'public creator pages, no key' }),
   parse,
+  creatorsFromDirectory,
   fetch: fetchFeed,
   resolve,
 };
