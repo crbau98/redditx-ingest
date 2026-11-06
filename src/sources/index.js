@@ -18,6 +18,7 @@ const adapters = [
   require('./rss'),
   require('./coomer'),
   require('./gff'),
+  require('./xhamster'),
   webAdapter,
   linkInBioAdapter,
 ];

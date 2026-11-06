@@ -283,6 +283,16 @@ function parseProfile(input, hint = {}) {
     }
   }
 
+  // xHamster gay creator page: an ingestible creator feed. The directory index, pagination and the
+  // newest/best sub-tabs stay ordinary web pages (robots.txt disallows most of them anyway).
+  if (matches(h, 'xhamster.com')) {
+    const m = url.pathname.match(/^\/gay\/creators\/([a-z0-9][a-z0-9_-]{1,60})\/?$/i);
+    if (m && !/^\d+$/.test(m[1]) && !/^(all|newest|best|most-commented|most-viewed|top|trending|countries|contest|categories|pornstars|videos|shorts|moments|channels)$/i.test(m[1])) {
+      const target = `https://xhamster.com/gay/creators/${m[1].toLowerCase()}`;
+      return { platform: 'xhamster', kind: 'user', target, ingestable: true, label: `${m[1].toLowerCase()} (xHamster)`, url: target };
+    }
+  }
+
   // OnlyFans: one canonical link per person (campaign / post links collapse to the profile); site pages are not links.
   if (matches(h, 'onlyfans.com')) {
     const handle = ofHandle(url.href);

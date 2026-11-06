@@ -1,5 +1,9 @@
 # UI changelog
 
+## 2026-11-06 — Sources: xHamster gay creators
+
+- **xHamster joins the source list** (Admin → Sources) as a keyless source: paste `https://xhamster.com/gay/creators/<slug>` anywhere a link is pasted and it becomes a creator feed. It has its own blurb ("one public page per creator, newest videos first, HLS playback"), the usual feed counts and a *Sync all* button. The README's source table lists it too.
+
 ## 2026-11-06 — Find popular creators: Popular, Hot this week, and a trending rail
 
 - **Creators opens on Popular.** Ranked by `creators.popularity` when that column exists, then freshness; until then, the same order as before (OnlyFans pages with posts first). Creators who have not posted in 90 days are left out of Popular, of Home's Top creators and of Hot this week, so a dead page does not lead the first screen.

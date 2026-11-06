@@ -22,6 +22,7 @@ const BLURB = {
   rss: 'Any RSS / Atom / JSON Feed — creators’ own sites, Tumblr blogs (/rss), Mastodon and Bluesky profile feeds. The most stable way to follow anything.',
   web: 'A single page’s photos and videos (OpenGraph, <video>, linked images). Respects robots.txt.',
   linkinbio: 'Linktree-style hubs. Not content: PRISM reads them to discover a creator’s other public accounts.',
+  xhamster: 'Gay creator pages on xHamster: one public page per creator, newest videos first, HLS playback. No key and no login; robots.txt allows the creator page itself.',
 };
 
 const ago = (iso) => {

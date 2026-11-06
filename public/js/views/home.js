@@ -80,6 +80,16 @@ function sectionHead(iconName, title, sub, more) {
     more ? h('a', { class: 'link-more', href: more.href }, more.label, icon('chev-r', 'sm')) : null);
 }
 
+/** Niche chips that stay on the page: each one opens Explore filtered to that tag. Nothing here is dismissible. */
+function nicheRow(tags) {
+  const list = (tags || []).filter((t) => t && t.name).slice(0, 12);
+  if (!list.length) return null;
+  return h('nav', { class: 'niche-row', 'aria-label': 'Browse by niche' },
+    h('span', { class: 'niche-label' }, 'Niches'),
+    h('div', { class: 'niche-chips' },
+      list.map((t) => h('a', { class: 'chip sm', href: href('/explore', { tags: t.name }) }, `#${t.name}`))));
+}
+
 export async function home(root) {
   eagerRail = 4;
   const holder = h('div', { class: 'stack' }, h('div', { class: 'skeleton', style: { height: '320px' } }), h('div', { class: 'skeleton', style: { height: '260px' } }));
@@ -111,7 +121,7 @@ export async function home(root) {
     h('p', { class: 'lead' }, 'Follow gay male creators across OnlyFans, GayForFans, Bluesky, Reddit and X in one place. Public posts only; paid pages link out.'),
     h('div', { class: 'hero-search' }, icon('search', 'lg'), input, h('button', { class: 'btn primary', onclick: go }, 'Search')),
     h('div', { class: 'hero-actions' },
-      h('a', { class: 'btn glass', href: href('/creators') }, icon('users', 'sm'), 'Top creators'),
+      h('a', { class: 'btn glass', href: href('/creators') }, icon('users', 'sm'), 'Popular creators'),
       h('a', { class: 'btn glass', href: href('/reels') }, icon('film', 'sm'), 'Watch Reels'),
       h('button', { class: 'btn glass', onclick: surpriseMe }, icon('shuffle', 'sm'), 'Surprise me')),
     h('p', { class: 'hero-note' }, 'Adults 18+ only. Male creators only. Report anything that doesn’t belong.')));
@@ -125,27 +135,33 @@ export async function home(root) {
     return () => {};
   }
 
-  // The page, in the order a visitor wants it: the top OnlyFans creators first, then what is new from people they follow,
+  // The page, in the order a visitor wants it: the most popular creators first, then what is new from people they follow,
   // what is trending, a personal feed once there is taste to learn from, and the latest uploads at the bottom.
   const top = data.topCreators || [];
   const parts = [hero];
-  const ring = creatorRing([...top, ...(data.rising || []), ...(data.newCreators || [])], { label: 'Top creators' });
+  // Niche chips persist under the hero: they are a way in, not a first-visit prompt, so they never go away.
+  const niches = nicheRow(data.tags);
+  if (niches) parts.push(niches);
+  // Order matters for the first screen: the creators come right after the hero and the niche row. The follow ring and the
+  // first-visit picker come after them, so neither pushes the first creator card below the fold at 390x844.
+  if (top.length) {
+    parts.push(h('section', { class: 'section suggested-spotlight' },
+      sectionHead('users', 'Popular creators', 'Ranked from engagement, platform breadth, archive size and freshness. Quiet for 90 days: left out.', { href: href('/creators'), label: 'See all' }),
+      h('div', { class: 'rail' }, top.map((c) => creatorCard(c, { spotlight: true, reason: 'Popular here' })))));
+  }
+  // "Popular now" is only what the server computes: posts in the last 7 days against each creator's usual pace.
+  // It is hidden, not faked, when fewer than three creators qualify.
+  const popular = (data.rising || []).filter((c) => c.week_count > 0);
+  if (popular.length >= 3) {
+    parts.push(h('section', { class: 'section popular-now' },
+      sectionHead('trend', 'Popular now', 'Most posts this week against each creator’s usual pace. A sign of momentum, not a quality rank.', { href: href('/creators', { sort: 'popular', fresh: '7' }), label: 'See all' }),
+      h('div', { class: 'rail' }, popular.map((c) => creatorCard(c, { mini: true, reason: `${fmt.num(c.week_count)} ${c.week_count === 1 ? 'post' : 'posts'} this week` })))));
+  }
+  const ring = creatorRing([...top, ...(data.rising || []), ...(data.newCreators || [])], { label: 'More creators' });
   if (ring) parts.push(ring);
   const picker = interestPicker(data.tags, async () => { const sec = await forYouSection(open); if (picker.isConnected) { if (sec) picker.replaceWith(sec); else picker.remove(); } });
   if (picker) parts.push(picker);
 
-  if (top.length) {
-    parts.push(h('section', { class: 'section suggested-spotlight' },
-      sectionHead('users', 'Top creators', 'Most popular here, then freshest. Creators who have not posted in 90 days are left out.', { href: href('/creators'), label: 'See all' }),
-      h('div', { class: 'rail' }, top.map((c) => creatorCard(c, { spotlight: true })))));
-  }
-  // Creators (not posts) who are posting most this week, with the plain reason on the card.
-  const trendingCreators = (data.rising || []).filter((c) => c.week_count >= 2);
-  if (trendingCreators.length >= 3) {
-    parts.push(h('section', { class: 'section' },
-      sectionHead('trend', 'Trending this week', 'Creators posting the most in the last 7 days', { href: href('/creators', { sort: 'popular', fresh: '7' }), label: 'See all' }),
-      h('div', { class: 'rail' }, trendingCreators.map((c) => creatorCard(c, { mini: true, badge: `Posted ${c.week_count} ${c.week_count === 1 ? 'time' : 'times'} this week` })))));
-  }
   const fromFollowed = await followedP; // optional: a failed request leaves it empty
   if (fromFollowed.length) {
     parts.push(h('section', { class: 'section' }, sectionHead('heart', 'From creators you follow', 'Latest from the people you follow on this device', { href: href('/following'), label: 'See all' }), rail(fromFollowed, { open: open(fromFollowed) })));

@@ -282,3 +282,28 @@ a, button, summary, label, select, input, [role='button'] { touch-action: manipu
 }
 .offline-pill svg { color: var(--warn); flex: none; }
 @media (max-width: 899px) { .offline-pill { top: calc(var(--appbar-h) + env(safe-area-inset-top) + 10px); } }
+
+/* ---------- creator discovery (v7.2) ------------------------------------
+   Who is posting, in words: "Posted 2 days ago" with a live dot, quiet creators dimmed (never hidden),
+   one reason chip where the rail has a true reason, platform badges on every card, a persistent niche row
+   and the "Popular now" rail. Tokens only, both themes, 44px targets on touch, no new animation. */
+.creator-card .creator-when { font-size: var(--t-xs); color: var(--muted); white-space: nowrap; }
+.creator-card .creator-when.live { color: var(--text); }
+.creator-card .creator-when.live::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--good); vertical-align: middle; }
+.creator-card.is-quiet .creator-thumbs { filter: saturate(.45) brightness(.8); }
+.creator-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
+.creator-plats { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.reason-chip { display: inline-flex; align-items: center; min-height: 24px; padding: 0 10px; border-radius: var(--r-pill); font-size: var(--t-xs); font-weight: 600; color: var(--text); background: color-mix(in srgb, var(--accent) 16%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent); }
+:root[data-theme='light'] .reason-chip { color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.niche-row { display: flex; align-items: center; gap: 12px; min-width: 0; margin: 4px 0 16px; }
+.niche-label { flex: none; font-size: var(--t-xs); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.niche-chips { display: flex; gap: 8px; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; padding: 2px 0; }
+.niche-chips::-webkit-scrollbar { display: none; }
+.niche-chips .chip { flex: none; }
+@media (pointer: coarse) {
+  .niche-chips .chip { min-height: 44px; display: inline-flex; align-items: center; }
+}
+/* On a phone the Home spotlight's samples end above the bottom tab bar, so the first creator's pictures are readable without scrolling. */
+@media (max-width: 899px) {
+  .suggested-spotlight .creator-card.spotlight .creator-thumbs { height: 120px; }
+}
