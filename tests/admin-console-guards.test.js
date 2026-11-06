@@ -91,3 +91,10 @@ describe('admin console views', () => {
     assert.match(reports, /CONFIRM\[action\]/, 'removing or blocking from a report asks first');
   });
 });
+
+test('no admin view retries by calling render(root) again (that appends a second copy of the page head and toolbar)', () => {
+  const dir = path.join(__dirname, '..', 'public', 'js', 'views', 'admin');
+  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.js'))) {
+    assert.doesNotMatch(fs.readFileSync(path.join(dir, f), 'utf8'), /errorState\(.*=>\s*render\(root\)/, `${f}: retry must reload into the existing host`);
+  }
+});

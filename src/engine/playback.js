@@ -68,7 +68,7 @@ async function fresh(row) {
   if (hostMatches(host, 'redgifs.com')) {
     const id = redgifsId(row);
     if (!id) return null;
-    const it = await registry.get('redgifs').resolve(`https://www.redgifs.com/watch/${id}`);
+    const it = await registry.get('redgifs').resolve(`https://www.redgifs.com/watch/${id}`, { fresh: true });
     return it && it.mediaUrl ? { mediaUrl: it.mediaUrl, previewUrl: it.previewUrl || null } : null;
   }
   if (hostMatches(host, 'twimg.com')) {

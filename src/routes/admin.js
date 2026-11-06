@@ -43,7 +43,8 @@ router.get('/stream', (req, res) => {
 
 /* ------------------------------------------------------------------ engine */
 router.get('/engine', (req, res) => res.json({ ...engine.status(), logs: events.getLogs(150) }));
-router.get('/logs', (req, res) => res.json(events.getLogs(int(req.query.limit, 1, 600, 300))));
+// ?level=problems: only warnings and errors, from a ring that INFO chatter cannot push them out of
+router.get('/logs', (req, res) => res.json(req.query.level === 'problems' ? events.getProblems(int(req.query.limit, 1, 300, 100)) : events.getLogs(int(req.query.limit, 1, 600, 300))));
 router.delete('/logs', (req, res) => { events.clearLogs(); res.json({ ok: true }); });
 
 router.post('/engine/run', (req, res) => {
@@ -58,7 +59,9 @@ router.post('/engine/pause', (req, res) => { engine.pause(); res.json({ ok: true
 router.post('/engine/resume', (req, res) => { engine.resume(); res.json({ ok: true }); });
 router.post('/engine/breakers/reset', (req, res) => { breaker.reset(); res.json({ ok: true }); });
 
-router.get('/runs', (req, res) => res.json(repo.runs.recent({ feedId: req.query.feedId, limit: int(req.query.limit, 1, 200, 60) })));
+// `error_kind`: why a run or feed failed (blocked / not_found / rate_limited / parse / timeout / network / server / config / other), see engine/errorclass
+const errorKind = (text) => (text ? require('../engine/errorclass').classify(text).kind : null);
+router.get('/runs', (req, res) => res.json(repo.runs.recent({ feedId: req.query.feedId, limit: int(req.query.limit, 1, 200, 60) }).map((r) => ({ ...r, error_kind: errorKind(r.error) }))));
 
 /* ----------------------------------------------------------------- sources */
 router.get('/sources', (req, res) => {
@@ -131,7 +134,8 @@ router.post('/ai/triage', async (req, res) => {
 /* ------------------------------------------------------------------- feeds */
 router.get('/feeds', (req, res) => {
   const { platform, kind, status, q, creatorId, enabled } = req.query;
-  res.json(repo.feeds.list({ platform, kind, status, q, creatorId, enabled, ...page(req, 500) }));
+  const out = repo.feeds.list({ platform, kind, status, q, creatorId, enabled, ...page(req, 500) });
+  res.json({ ...out, items: out.items.map((f) => ({ ...f, last_error_kind: errorKind(f.last_error) })) });
 });
 
 router.post('/feeds', (req, res) => {
@@ -265,10 +269,13 @@ router.post('/media/:id/moderate', (req, res) => {
 });
 
 router.post('/media/bulk', (req, res) => {
-  const { ids, action, reason } = req.body || {};
+  const { ids, action, reason, reasons } = req.body || {};
   if (!Array.isArray(ids) || !action) return bad(res, 'ids array and action required');
+  // `reasons` (optional): { id: reason } for items that each carry their own (an undo puts every item back under the hold reason it
+  // had), so a mixed batch is still ONE transaction: all of it applies or none of it. Others fall back to `reason`.
+  const own = (id) => (reasons && typeof reasons === 'object' && typeof reasons[id] === 'string' && reasons[id].slice(0, 200)) || null;
   let updated = 0;
-  repo.db.transaction(() => { for (const id of ids.slice(0, 500)) if (targets.moderate(String(id), action, reason || 'bulk')) updated++; })();
+  repo.db.transaction(() => { for (const id of ids.slice(0, 500)) if (targets.moderate(String(id), action, own(String(id)) || reason || 'bulk')) updated++; })();
   res.json({ ok: true, updated });
 });
 

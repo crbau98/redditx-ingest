@@ -152,19 +152,23 @@ function serializeCreator(row) {
   return out;
 }
 
+/** The ONE definition of a creator's counters: what is visible (published) now. Every writer uses it; do not write a second one. */
+const STATS_SET = `media_count = (SELECT COUNT(*) FROM media WHERE creator_id = @id AND publish_state = 'published'),
+      video_count = (SELECT COUNT(*) FROM media WHERE creator_id = @id AND publish_state = 'published' AND media_type = 'video'),
+      total_score = (SELECT COALESCE(SUM(score), 0) FROM media WHERE creator_id = @id AND publish_state = 'published'),
+      last_media_at = (SELECT MAX(posted_at) FROM media WHERE creator_id = @id AND publish_state = 'published')`;
+
 const creatorQ = {
   get: db.prepare('SELECT * FROM creators WHERE id = ?'),
   insert: db.prepare(`INSERT INTO creators (id, handle, display_name, bio, avatar_url, banner_url, scope, origin)
                       VALUES (@id, @handle, @display_name, @bio, @avatar_url, @banner_url, @scope, @origin)`),
   byAccount: db.prepare(`SELECT c.* FROM feeds f JOIN creators c ON c.id = f.creator_id
                          WHERE f.platform = ? AND f.kind IN ('user', 'channel') AND f.target = ? COLLATE NOCASE LIMIT 1`),
-  stats: db.prepare(`UPDATE creators SET
-      media_count = (SELECT COUNT(*) FROM media WHERE creator_id = @id AND publish_state = 'published'),
-      video_count = (SELECT COUNT(*) FROM media WHERE creator_id = @id AND publish_state = 'published' AND media_type = 'video'),
-      total_score = (SELECT COALESCE(SUM(score), 0) FROM media WHERE creator_id = @id AND publish_state = 'published'),
-      last_media_at = (SELECT MAX(posted_at) FROM media WHERE creator_id = @id AND publish_state = 'published'),
+  stats: db.prepare(`UPDATE creators SET ${STATS_SET},
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
     WHERE id = @id`),
+  // the same counts without touching updated_at (boot-time reconciliation of many creators)
+  recount: db.prepare(`UPDATE creators SET ${STATS_SET} WHERE id = @id`),
   feedsOf: db.prepare('SELECT * FROM feeds WHERE creator_id = ? ORDER BY platform, target'),
   topTags: db.prepare(`SELECT t.name, COUNT(*) AS n FROM media m
       JOIN media_tags mt ON mt.media_id = m.id JOIN tags t ON t.id = mt.tag_id
@@ -232,7 +236,11 @@ const creators = {
     return creators.get(id);
   },
 
-  /** Fill blanks only — never overwrite what an admin curated. */
+  /**
+   * Fill blanks only — never overwrite what an admin curated. One exception: a picture (avatar / banner) a platform now serves from
+   * the SAME site as the stored one replaces it (a changed or dead avatar link would otherwise stay for ever); a link from another
+   * site never does, so a creator's accounts on different platforms cannot take the avatar back and forth.
+   */
   enrich(id, { displayName, bio, avatarUrl, bannerUrl, links }) {
     const c = creatorQ.get.get(id);
     if (!c) return;
@@ -240,8 +248,10 @@ const creators = {
     const validName = displayName && !/^(?:untitled|sin t[íi]tulo|unbenannt|sans titre)$/i.test(String(displayName).trim());
     if (validName && (!c.display_name || c.display_name === c.handle)) patch.displayName = displayName;
     if (bio && !c.bio) patch.bio = bio;
-    if (avatarUrl && !c.avatar_url) patch.avatarUrl = avatarUrl;
-    if (bannerUrl && !c.banner_url) patch.bannerUrl = bannerUrl;
+    const { siteOf } = require('../lib/site'); // the registrable domain, not the last two labels (`co.uk`, `github.io` are not sites)
+    const better = (now, stored) => !!now && (!stored || (now !== stored && siteOf(now) && siteOf(now) === siteOf(stored)));
+    if (better(avatarUrl, c.avatar_url)) patch.avatarUrl = avatarUrl;
+    if (better(bannerUrl, c.banner_url)) patch.bannerUrl = bannerUrl;
     if (links && links.length) {
       let existing = []; try { existing = JSON.parse(c.links || '[]'); } catch { /* ignore */ }
       const normUrl = (u) => String(u || '').toLowerCase().replace(/\/+$/, '');
@@ -267,6 +277,8 @@ const creators = {
   },
 
   refreshStats(id) { if (id) creatorQ.stats.run({ id }); },
+  /** Recompute the counters of one creator without marking it updated. */
+  recount(id) { if (id) creatorQ.recount.run({ id }); },
 
   list({ page = 0, limit = 48, q: query, sort = 'media', platform, admin = false, minMedia, onlyfans: ofOnly = false, paidHost, freshDays, ids } = {}) {
     const where = []; const params = [];
