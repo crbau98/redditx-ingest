@@ -651,9 +651,30 @@ function maybeExpand(feed, page) {
   } catch { return 0; }
 }
 
+// A host can accept the TCP connection and then refuse the TLS handshake (metamoldz.com answers "tlsv1 alert
+// internal error" to every client). The same page usually still answers plain HTTP, so try it once: the request
+// is read-only and the host itself chose not to speak TLS to us.
+const TLS_REFUSED = /EPROTO|tlsv1 alert|ssl3_read_bytes|ERR_TLS|handshake|unsupported protocol|CERT_/i;
+const isTlsRefusal = (e) => /^https:/i.test(String((e && e.url) || '')) && TLS_REFUSED.test(String((e && e.message) || ''));
+
+/** Rewrite the page's own https URLs to http when the host refused TLS (its files are on the same broken origin). */
+function downgradeSameHost(page, plainUrl) {
+  let host;
+  try { host = new URL(plainUrl).hostname; } catch { return page; }
+  const fix = (u) => {
+    try {
+      const x = new URL(u);
+      return x.protocol === 'https:' && x.hostname === host ? u.replace(/^https:/i, 'http:') : u;
+    } catch { return u; }
+  };
+  for (const m of page.media || []) { m.url = fix(m.url); if (m.preview) m.preview = fix(m.preview); }
+  if (page.image) page.image = fix(page.image);
+  return page;
+}
+
 async function fetchHtmlWithMeta(targetUrl, maxBytes = 3_000_000) {
-  try {
-    const res = await http.raw(targetUrl, {
+  const read = async (u) => {
+    const res = await http.raw(u, {
       headers: { accept: 'text/html,application/xhtml+xml' },
       maxBytes,
     });
@@ -661,13 +682,18 @@ async function fetchHtmlWithMeta(targetUrl, maxBytes = 3_000_000) {
       html: res.body.toString('utf8'),
       headers: res.headers || {},
       status: res.status || 200,
-      url: res.url || targetUrl, // the URL we ended up on, after redirects
+      url: res.url || u, // the URL we ended up on, after redirects
     };
+  };
+  try {
+    return await read(targetUrl);
   } catch (e) {
     if (e && Number(e.status) === 451) {
       return { html: '', headers: {}, status: 451, url: targetUrl };
     }
-    throw e;
+    if (!isTlsRefusal(e)) throw e;
+    const plain = targetUrl.replace(/^https:/i, 'http:');
+    return { ...(await read(plain)), downgraded: true };
   }
 }
 
@@ -682,9 +708,10 @@ const webAdapter = {
 
   async fetch(feed, ctx) {
     if (!(await robotsAllows(feed.target))) throw Object.assign(new Error('Blocked by robots.txt'), { skip: true });
-    let { html, headers, status, url: finalUrl } = await fetchHtmlWithMeta(feed.target, 3_000_000);
+    let { html, headers, status, url: finalUrl, downgraded } = await fetchHtmlWithMeta(feed.target, 3_000_000);
     const notes = []; // problems and limits (the engine keeps notes[0] as the feed's last_error)
     const info = [];  // what went well (the engine logs it)
+    if (downgraded) info.push('read over http: the host refuses the TLS handshake');
     // An age/consent interstitial in front of the page (JustFor.Fans): pass it with the site's own
     // confirmation parameter and read the page behind it (owner decision 2026-11-05).
     let readTarget = feed.target;
@@ -738,6 +765,9 @@ const webAdapter = {
         via,
       };
     }
+    // The page links its own files as https even though the host refuses TLS: point same-host media at the
+    // scheme that answers, or every stored file would be unreachable behind the very refusal we just worked around.
+    if (downgraded) downgradeSameHost(page, finalUrl);
     const expanded = maybeExpand(feed, page);
     if (expanded) info.push(`Browser4 auto-expand added ${expanded} same-site page feed${expanded === 1 ? '' : 's'}`);
     const items = page.media.map((m, i) => ({
