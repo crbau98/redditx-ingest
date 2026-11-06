@@ -150,7 +150,10 @@ function downloadLink(it) {
   if (isHlsOnly(it)) return null; // streams cannot be saved as a single file
   const ext = (String(it.media_url).split('?')[0].match(/\.([a-z0-9]{2,4})$/i) || [])[1] || (it.media_type === 'video' ? 'mp4' : 'jpg');
   const name = `${(it.creator_handle || it.author || 'prism').replace(/[^a-z0-9_-]+/gi, '')}-${it.id.slice(0, 8)}.${ext}`;
-  return h('a', { class: 'btn icon', href: proxied(it.media_url), download: name, 'aria-label': 'Download', title: 'Download', rel: 'noopener' }, icon('download'));
+  // Images download with the PRISM mark (the marked copy is made on the server, once). Videos download as before.
+  const src = proxied(it.media_url);
+  const href = it.media_type !== 'video' && src.startsWith('/api/proxy?') ? `${src}&mark=prism` : src;
+  return h('a', { class: 'btn icon', href, download: name, 'aria-label': 'Download', title: 'Download', rel: 'noopener' }, icon('download'));
 }
 
 const SLIDE_MS = 4500;

@@ -21,6 +21,7 @@ const cache = require('../lib/media-cache');
 const repo = require('../db/repo');
 const playback = require('../engine/playback');
 const { isChallengeText } = require('../sources/util');
+const { markImage } = require('../lib/watermark');
 
 const router = express.Router();
 
@@ -96,9 +97,47 @@ const proxyHeaders = (target, extra = {}) => {
   };
 };
 
+/**
+ * A downloaded image with the PRISM mark (/api/proxy?url=…&mark=prism). The marked file is cached under
+ * its own key, so normal viewing (which never sends mark=prism) is untouched.
+ */
+async function servePrismMarked(req, res, t) {
+  const key = `${t.url}#mark=prism`;
+  const hit = cache.get(key);
+  if (hit) {
+    res.set({ 'Content-Type': hit.type, 'Content-Length': hit.size, 'Cache-Control': 'public, max-age=604800', 'Cross-Origin-Resource-Policy': 'same-origin', 'X-Cache': 'HIT' });
+    const file = require('fs').createReadStream(hit.file);
+    file.on('error', () => { if (!res.headersSent) sendError(res, [404, 'Gone']); else res.destroy(); });
+    return file.pipe(res);
+  }
+  let source;
+  const base = cache.get(t.url);
+  if (base) {
+    source = await require('fs').promises.readFile(base.file).catch(() => null);
+  }
+  if (!source) {
+    let up;
+    try { up = await net.open(t.url, { headers: proxyHeaders(t.url), timeout: 15000, maxRedirects: 4 }); }
+    catch (e) { return sendError(res, e.code === 'EBLOCKED' ? [403, 'Blocked host'] : [502, 'Upstream unreachable']); }
+    const type = String(up.res.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+    if (up.res.statusCode !== 200 || !type.startsWith('image/') || type === 'image/svg+xml') { up.res.resume(); return sendError(res, [415, 'Only images can be marked']); }
+    const chunks = []; let size = 0; let tooBig = false;
+    for await (const c of up.res) { size += c.length; if (size > cache.MAX_FILE) { tooBig = true; up.res.destroy(); break; } chunks.push(c); }
+    if (tooBig) return sendError(res, [413, 'Image too large to mark']);
+    source = Buffer.concat(chunks);
+  }
+  let marked;
+  try { marked = await markImage(source); }
+  catch { return sendError(res, [502, 'Could not mark this image']); } // never fall back to an unmarked file
+  cache.put(key, marked.buffer, marked.type);
+  res.set({ 'Content-Type': marked.type, 'Content-Length': marked.buffer.length, 'Cache-Control': 'public, max-age=604800', 'Cross-Origin-Resource-Policy': 'same-origin', 'X-Cache': 'MISS' });
+  res.end(marked.buffer);
+}
+
 router.get('/proxy', async (req, res) => {
   const t = parseTarget(req);
   if (t.error) return sendError(res, t.error);
+  if (req.query.mark === 'prism') return servePrismMarked(req, res, t);
 
   const hasRange = !!req.headers.range;
   if (!hasRange) {
