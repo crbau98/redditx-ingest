@@ -1,11 +1,15 @@
 'use strict';
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { prepareEnv } = require('./helpers/mock');
 
 let server; let base; let engine; let backup; let cache; let sharp; let markBox;
 const AGE = { cookie: 'prism_age=1' };
 const IMG = 'https://i.redd.it/prism-watermark-test.png';
+const ANIM = 'https://i.redd.it/prism-watermark-test.gif';
+const ANIM_GIF = fs.readFileSync(path.join(__dirname, 'fixtures', 'animated-mark.gif'));
 
 before(async () => {
   prepareEnv({ AGE_GATE_ENFORCE: 'true' });
@@ -64,6 +68,30 @@ describe('downloads carry the PRISM mark; viewing does not', () => {
     await fetchBytes(`/api/proxy?url=${encodeURIComponent(IMG)}&mark=prism`);
     const again = await fetchBytes(`/api/proxy?url=${encodeURIComponent(IMG)}&mark=prism`);
     assert.equal(again.cache, 'HIT');
+  });
+
+  test('an animated GIF keeps every frame and is marked on every one', async () => {
+    cache.put(ANIM, ANIM_GIF, 'image/gif');
+    const r = await fetchBytes(`/api/proxy?url=${encodeURIComponent(ANIM)}&mark=prism`);
+    assert.equal(r.status, 200);
+    assert.equal(r.type, 'image/gif');
+    const meta = await sharp(r.buf, { animated: true }).metadata();
+    assert.equal(meta.pages, 2, 'the download is still an animation');
+    const frameH = meta.pageHeight;
+    const box = markBox(meta.width, frameH);
+    const src = await sharp(ANIM_GIF, { animated: true }).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    const out = await sharp(r.buf, { animated: true }).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    for (let p = 0; p < 2; p++) {
+      const y0 = p * frameH;
+      let inside = 0; let sampled = 0;
+      for (let y = box.y; y < box.y + box.h; y += 2) for (let x = box.x; x < box.x + box.w; x += 2) {
+        sampled++;
+        const i = ((y0 + y) * meta.width + x) * 3;
+        const diff = Math.abs(src.data[i] - out.data[i]) + Math.abs(src.data[i + 1] - out.data[i + 1]) + Math.abs(src.data[i + 2] - out.data[i + 2]);
+        if (diff > 40) inside++;
+      }
+      assert.ok(inside > sampled * 0.3, `frame ${p} mark changed ${inside} of ${sampled} sampled pixels`);
+    }
   });
 
   test('a non-image is refused rather than passed through', async () => {

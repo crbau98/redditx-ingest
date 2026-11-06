@@ -102,7 +102,8 @@ const proxyHeaders = (target, extra = {}) => {
  * its own key, so normal viewing (which never sends mark=prism) is untouched.
  */
 async function servePrismMarked(req, res, t) {
-  const key = `${t.url}#mark=prism`;
+  // ":2" retires the first mark's cached files (it flattened animated GIFs to one still frame).
+  const key = `${t.url}#mark=prism:2`;
   const hit = cache.get(key);
   if (hit) {
     res.set({ 'Content-Type': hit.type, 'Content-Length': hit.size, 'Cache-Control': 'public, max-age=604800', 'Cross-Origin-Resource-Policy': 'same-origin', 'X-Cache': 'HIT' });
