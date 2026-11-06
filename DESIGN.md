@@ -14,6 +14,24 @@ A prism splits light into a spectrum, so the spectrum is the one structural devi
 - **Touch**: every interactive element is at least 44px on coarse pointers, including Browse tag chips (measured with Playwright at 390px: 0 under 44px on Home, Explore, Creators, Reels, Saved, Find, Browse).
 - No new infinite animation. The ring only transitions `transform` and is off for reduced motion.
 
+## Admin console (v4.18)
+
+The owner's jobs, in the order they come up: see what is broken in ingestion, clear the review queue, add a source, tune the filters, check throughput. The console is built around them and not around the database tables.
+
+- **Overview is "Needs attention"**: only queues with something in them, worst first (reports, failing feeds, review, feeds the app paused, same-person links, new creators). Failing feeds and auto-paused feeds are expanded in place: the error in plain words (`explainFeedError`), one tap to fix (Retry, Pause, Check keys, Turn back on). Below: items ingested in 24h against the day before, the engine, and a folded "More numbers".
+- **Phones**: a bottom tab bar (Overview, Review, Feeds, Settings, More) replaces the public tab bar while the console is open (`body.is-admin`); lists are cards (`.tbl.a-cards`, the same cells laid out by CSS), search is the one sticky row, bulk actions live in a fixed bar above the tab bar, dialogs are sheets, every target is 44px.
+- **Settings** are grouped, searchable and each has one plain sentence (`settings-model.js`). The body filter and feed housekeeping come first and open. A changed setting says so and resets to its default. Discovery settings stay on the Discovery page.
+- **Destructive actions** ask first and say what they do (approve, remove, block, delete a feed, block a creator). What can be reversed has an 8-second Undo toast instead of a second prompt: hide, approve, remove (back to the review queue), pause or resume a feed, hide a creator, reject candidates, remove a blocklist entry, add a feed. A block cannot be undone from the console and says so.
+- **Stylesheets**: `admin.css` (older shared classes) and `admin-console.css` (this layout) load with the console only, from `adminStyles()`; public pages never download them. Tokens only, so light and dark both work. All new classes are `a-*`.
+- **Logic is pure** (`logic.js`, `settings-model.js`: no DOM, no imports) so `tests/admin-ui-logic.test.js` pins down the wording, the ordering and the grouping. `scripts/ui-audit.js --admin-key … --only-admin [--strict]` checks every admin screen at 360, 390, 768 and 1280 for cut-off content, scrollers inside the page and touch targets under 44px.
+
+## Phone & install (v7.1, `aurora.css` last block, `components/scroll-chrome.js`, `components/pwa.js`, `sw.js`)
+
+- Budgets, enforced by `node scripts/ui-audit.js <url> --phone --strict` on the demo library at 360x740, 390x844, 430x932 and 768x1024: 0 px of sideways overflow, 0 clipped elements, 0 targets under 44px, 0 text under 12px, 0 form fields under 16px, 0 content under the tab bar, 0 pinned controls under the notch (47px) or home indicator (34px), pinned chrome (app bar + filter bar + tab bar, minus safe areas) at most 22% of the viewport after scrolling.
+- The sticky filter bar tucks away while scrolling down and returns on the first scroll up (transform only; instant under reduced motion). While a text field has focus the tab bar is hidden (`html.typing`).
+- Every viewport-height rule carries a `dvh` / `svh` line after the `vh` one (guarded by `tests/phone-pwa.test.js`); `content-visibility: auto` always comes with `contain-intrinsic-size`.
+- Install: PNG icons incl. a separate maskable one, shortcuts, `theme-color` follows the theme, Install / Add to Home Screen in the phone menu. Offline: shell and hashed files precached; public reads (stale-while-revalidate, 60 s fresh) and pictures (cache-first, 150) are cached ONLY when the person turns on Display > "Keep what I browse for offline use" (off by default: adult content is not kept on the device unasked), never admin / stream / age / HLS / video; a pill says when the device is offline. Bump `VERSION` in `sw.js` when the worker or a precached file changes.
+
 ## Information architecture (top first)
 
 The job is to find the top OnlyFans creators fast. Home is, in order: masthead, ring strip, Top OnlyFans creators, follows, trending, For you, latest uploads. Creators opens on **Top** (OnlyFans-linked first), with **OnlyFans only**, **Following** and **New** beside it; other sorts live in Filters. A section earns its place only if it answers a different question from another one; the rest were cut. No number on a page may be typed in by hand: Browse tiles are live counts or absent.

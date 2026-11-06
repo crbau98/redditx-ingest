@@ -30,7 +30,7 @@ export function dropFeedStash(key) {
  */
 export function createFeed({ query = {}, endpoint = '/api/media', fetchPage = null, pageSize, empty, onTotal, onDone, ids, hideSeen = false, why = null, quietEnd = false }) {
   const root = h('div', { class: 'feed' });
-  const masonry = createMasonry({ density: prefs.density, render: (item, d, opts) => mediaCard(item, { open: openAt, compact: d === 's', why: why ? why(item) : null, eager: !!(opts && opts.eager) }) });
+  const masonry = createMasonry({ density: prefs.density, render: (item, d, opts) => mediaCard(item, { open: openAt, compact: d === 's', why: why ? why(item) : null, eager: !!(opts && opts.eager), width: (opts && opts.width) || 0 }) });
   const sentinel = h('div', { class: 'loadmore' });
   root.append(masonry.el, sentinel);
 

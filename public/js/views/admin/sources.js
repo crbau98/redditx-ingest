@@ -1,7 +1,7 @@
 import { h, icon, toast, fmt } from '../../dom.js';
 import { adminGet, adminPost, adminPatch } from '../../api.js';
 import { href } from '../../router.js';
-import { pageHead, act, platBadge } from './ui.js';
+import { pageHead, act, platBadge, undoToast } from './ui.js';
 
 const ENV_HELP = {
   reddit: ['REDDIT_CLIENT_ID', 'REDDIT_CLIENT_SECRET'],
@@ -37,7 +37,11 @@ function healthRow(f, why, reload) {
     h('a', { href: href('/admin/feeds', { platform: f.platform, q: f.target }), style: { fontWeight: 600 } }, f.label),
     h('span', { class: 'muted', style: { fontSize: '12.5px' } }, why),
     h('span', { class: 'grow' }),
-    h('button', { class: 'btn sm ghost', title: 'Stop reading this feed (it can be switched back on under Feeds)', onclick: (e) => act(e.currentTarget, async () => { await adminPatch(`/feeds/${f.id}`, { enabled: false }); await reload(); }, 'Feed paused') }, 'Pause'));
+    h('button', { class: 'btn sm', type: 'button', title: 'Stop reading this feed (it can be switched back on under Feeds)', 'aria-label': `Pause ${f.label}`, onclick: async (e) => {
+      if (await act(e.currentTarget, () => adminPatch(`/feeds/${f.id}`, { enabled: false })) === undefined) return;
+      undoToast(`Paused ${f.label}`, async () => { await adminPatch(`/feeds/${f.id}`, { enabled: true }); await reload(); });
+      await reload();
+    } }, 'Pause'));
 }
 
 function healthPanel(r, reload) {
@@ -87,9 +91,9 @@ export async function render(root) {
   const health = h('div');
   const engines = h('div');
   root.append(pageHead('Sources', 'The platforms PRISM can pull from, and how healthy each connection is.',
-    h('button', { class: 'btn sm', onclick: (e) => act(e.currentTarget, async () => { await adminPost('/engine/breakers/reset'); await load(); }, 'Circuit breakers reset') }, icon('refresh', 'sm'), 'Reset circuit breakers')), grid, engines, health,
-  h('div', { class: 'panel' }, h('h3', null, icon('shield', 'sm'), 'Safety and boundaries'),
-    h('p', { class: 'muted', style: { fontSize: '14px' } }, 'PRISM reads public creator content from across the web — personal sites, social profiles, galleries, RSS feeds — and follows what creators publish. Everything passes a safety gate (anything suggesting a person may be under 18 is dropped) and every item can be reported and permanently blocklisted.')));
+    h('button', { class: 'btn', type: 'button', title: 'Let every resting source try again now', onclick: (e) => act(e.currentTarget, async () => { await adminPost('/engine/breakers/reset'); await load(); }, 'Circuit breakers reset') }, icon('refresh', 'sm'), 'Reset circuit breakers')), health, grid, engines,
+  h('details', { class: 'a-fold' }, h('summary', null, icon('shield', 'sm'), 'How PRISM stays safe'),
+    h('div', { class: 'a-fold-body' }, h('p', { class: 'a-note' }, 'PRISM reads public creator content from across the web (personal sites, social profiles, galleries, RSS feeds) and follows what creators publish. Everything passes a safety gate (anything suggesting a person may be under 18 is dropped) and every item can be reported and permanently blocklisted.'))));
 
   async function load() {
     adminGet('/sources/health').then((r) => health.replaceChildren(healthPanel(r, load))).catch(() => {});

@@ -9,9 +9,11 @@ import { playFlip, heartBurst, haptic } from './fx.js';
 import { makeZoomable } from './zoom.js';
 import { viewerExit } from './transitions.js';
 import { openElsewhere } from './elsewhere.js';
+import { tileImage } from '../images.js';
 
 let S = null; // the single active lightbox session
 const viewed = new Set();
+const warmed = new Set(); // full-size image URLs this viewer has finished loading (instant when shown)
 const relCache = new Map(); // media id -> related items
 const byCreator = new Map(); // creator id -> { at, items } his latest posts
 
@@ -135,7 +137,7 @@ function show(i, { push = false } = {}) {
   // keep the feed ahead of the viewer, and warm the next image
   if (S.loadMore && i >= S.items.length - 5) S.loadMore().then((items) => { if (S && items && items.length > S.items.length) S.items = items; });
   const n = S.items[i + 1];
-  if (n && n.media_type === 'image') { const pre = new Image(); pre.src = proxied(n.media_url); }
+  if (n && n.media_type === 'image') { const pre = new Image(); pre.onload = () => warmed.add(n.media_url); pre.src = proxied(n.media_url); }
   if (!viewed.has(it.id)) { viewed.add(it.id); post(`/api/media/${it.id}/view`).catch(() => {}); }
   viewHistory.add(it.id);
   tastes.record(it, 1);
@@ -228,7 +230,7 @@ function paintDock(it) {
     const list = (items || []).filter((x) => x && x.id !== it.id).slice(0, 7);
     if (!list.length) return;
     thumbsHolder.replaceChildren(...list.map((r) => {
-      const src = r.preview_url || r.thumbnail_url || (r.media_type === 'image' ? r.media_url : '');
+      const src = tileImage(r) || '';
       return h('button', {
         class: `lb-dock-thumb${r.id === it.id ? ' on' : ''}`,
         title: r.title || `Post by ${cName}`,
@@ -324,7 +326,7 @@ function teardownVideo() {
 }
 
 function paintAmbient(it) {
-  const src = it.preview_url || it.thumbnail_url || (it.media_type === 'image' ? it.media_url : null);
+  const src = tileImage(it); // a blurred backdrop: the thumbnail is plenty
   const next = S.amb[S.ambIdx ^ 1]; const cur = S.amb[S.ambIdx];
   if (!src) { cur.classList.remove('on'); next.classList.remove('on'); return; }
   next.style.backgroundImage = `url("${proxied(src)}")`;
@@ -340,7 +342,7 @@ function paintStrip() {
   const thumbs = [];
   for (let i = from; i < to; i++) {
     const x = S.items[i];
-    const src = x.preview_url || x.thumbnail_url || (x.media_type === 'image' ? x.media_url : '');
+    const src = tileImage(x) || '';
     thumbs.push(h('button', { class: `lb-thumb${i === S.index ? ' on' : ''}`, role: 'option', 'aria-selected': String(i === S.index), 'aria-label': x.title || `Item ${i + 1}`, style: src ? { backgroundImage: `url("${proxied(src)}")` } : null, onclick: () => show(i) },
       x.media_type === 'video' ? icon('play', 'fill') : null));
   }
@@ -374,13 +376,29 @@ function paintStage(it) {
     v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
   } else {
     const preview = it.preview_url || it.thumbnail_url;
-    const img = h('img', { alt: it.title || '', draggable: 'false', src: proxied(preview || it.media_url) });
+    const sharp = preview || it.media_url;
+    // Grid cards load the 360px thumbnail now, so it is already in the browser's cache: show it at once, then the platform
+    // preview, then the full file (one after the other, so each gets the whole connection). Without a thumbnail the
+    // preview is the first picture, as before. A full file the viewer has already loaded (the next item is preloaded
+    // below, and the one just left) is shown straight away.
+    const ready = warmed.has(it.media_url);
+    const first = ready ? it.media_url : it.thumb_url && it.thumb_url !== sharp ? it.thumb_url : sharp;
+    const img = h('img', { alt: it.title || '', draggable: 'false', src: proxied(first) });
     S.stage.replaceChildren(...keep, img);
     playFlip(img);
-    if (preview && preview !== it.media_url) {
+    const startFull = () => {
+      if (!preview || preview === it.media_url) return;
       const full = new Image();
-      full.onload = () => { if (img.isConnected) img.src = full.src; };
+      full.onload = () => { warmed.add(it.media_url); if (img.isConnected) img.src = full.src; };
       full.src = proxied(it.media_url);
+    };
+    if (!ready) {
+      if (first !== sharp) {
+        const mid = new Image();
+        mid.onload = () => { if (img.isConnected) img.src = mid.src; startFull(); };
+        mid.onerror = startFull;
+        mid.src = proxied(sharp);
+      } else startFull();
     }
     S.zoom = makeZoomable(img, S.stage, { onSingleClick: () => {
       // touch: tap toggles the controls (pinch zooms); a tap on a zoomed image still zooms back out
@@ -439,7 +457,7 @@ function paintInfo() {
     if (!items.length) { rel.replaceWith(h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Nothing related yet.')); return; }
     rel.replaceChildren(...items.map((r) => h('a', {
       href: href(parse().path, { ...Object.fromEntries(parse().query), m: r.id }),
-      style: { backgroundImage: `url("${proxied(r.preview_url || r.thumbnail_url || (r.media_type === 'image' ? r.media_url : ''))}")` }, 'aria-label': r.title || 'Related',
+      style: { backgroundImage: `url("${proxied(tileImage(r) || '')}")` }, 'aria-label': r.title || 'Related',
       onclick: (e) => { e.preventDefault(); jumpTo(r); },
     }, r.media_type === 'video' ? h('span', { class: 'pill', style: { position: 'absolute', left: '6px', top: '6px' } }, icon('play', 'fill')) : null)));
   };
@@ -487,7 +505,7 @@ function creatorStrip(it) {
     const list = items.filter((x) => x.id !== it.id).slice(0, 8);
     if (!list.length) { strip.remove(); return; }
     strip.replaceChildren(...list.map((r) => {
-      const src = r.preview_url || r.thumbnail_url || (r.media_type === 'image' ? r.media_url : '');
+      const src = tileImage(r) || '';
       return h('a', { class: 'lb-more-thumb', role: 'listitem', href: href(parse().path, { ...Object.fromEntries(parse().query), m: r.id }), 'aria-label': r.title || `Post by ${name}`,
         style: src ? { backgroundImage: `url("${proxied(src)}")` } : null, onclick: (e) => { e.preventDefault(); jumpTo(r); } },
       r.media_type === 'video' ? h('span', { class: 'pill' }, icon('play', 'fill')) : null);

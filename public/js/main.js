@@ -8,6 +8,8 @@ import { dropFeedStash } from './components/feed.js';
 import { attachSuggest } from './components/suggest.js';
 import { dur, sharedMotionBusy, spring } from './components/transitions.js';
 import { smartSearch, setAiSearch } from './smart.js';
+import { initPwa } from './components/pwa.js';
+import { initScrollChrome } from './components/scroll-chrome.js';
 import { home } from './views/home.js';
 // Home ships with the app (most visits start there); every other view is fetched on its first visit and
 // prefetched in the background once the first screen has painted (see warm() below).
@@ -294,13 +296,6 @@ function wireLiveUpdates(shell) {
   window.addEventListener('hashchange', () => { if (pill) { pill.remove(); pill = null; pending = 0; } });
 }
 
-/* ---------------------------------------------------------- offline shell (PWA) */
-function registerServiceWorker() {
-  if (!('serviceWorker' in navigator)) return;
-  if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') return;
-  navigator.serviceWorker.register('/sw.js').catch(() => { /* optional enhancement */ });
-}
-
 /* ------------------------------------------------------------------- boot */
 async function boot() {
   prefs.theme = prefs.theme; // re-apply (handles "auto")
@@ -348,7 +343,8 @@ async function boot() {
   warm(Object.values(VIEWS)); // the other views and on-demand components, fetched while the browser is idle
   wireFollowBadges();
   wireLiveUpdates(shell);
-  registerServiceWorker();
+  initPwa(); // offline pill, install prompt, service worker (components/pwa.js)
+  initScrollChrome(); // the sticky filter bar tucks away while scrolling down, the keyboard hides the tab bar
 }
 
 boot();

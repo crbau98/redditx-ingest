@@ -48,7 +48,7 @@ function activityPanel(a) {
       h('div', { class: 'row wrap', style: { gap: '4px 12px', fontSize: '12.5px', marginBottom: '14px' } }, a.platforms.map((p) => h('span', { class: 'row', style: { gap: '5px' } }, h('span', { style: { width: '8px', height: '8px', borderRadius: '50%', background: platformColor(p.platform), display: 'inline-block' } }), `${platformLabel(p.platform)} ${Math.round((p.n / total) * 100)}%`))),
       h('h4', null, 'Usually posts around'),
       h('div', { class: 'hours', role: 'img', 'aria-label': `Most posts around ${fmtHour(peak)}` }, hours.map((n, i) => h('i', { style: { height: `${Math.max(3, (n / hMax) * 100)}%` }, title: `${fmtHour(i)}: ${n}` }))),
-      h('div', { class: 'chart-axis', style: { display: 'flex', justifyContent: 'space-between', color: 'var(--muted)', fontSize: '11.5px', marginTop: '6px' } }, h('span', null, fmtHour(0)), h('b', { style: { color: 'var(--text)' } }, `peak ${fmtHour(peak)}`), h('span', null, fmtHour(23)))));
+      h('div', { class: 'chart-axis', style: { display: 'flex', justifyContent: 'space-between', color: 'var(--muted)', fontSize: '12px', marginTop: '6px' } }, h('span', null, fmtHour(0)), h('b', { style: { color: 'var(--text)' } }, `peak ${fmtHour(peak)}`), h('span', null, fmtHour(23)))));
 }
 
 const counted = new Set(); // creators whose stats already counted up this visit
