@@ -425,7 +425,13 @@ function popularFallback(t, limit) {
  * you already like, follow or asked to see less of.
  */
 function creatorsForYou(t, limit = 12) {
-  const lib = library();
+  const noTaste = !t.creators.size && !t.tags.size;
+  let lib;
+  try { lib = library(); } catch (e) {
+    // A first visitor does not need the similarity snapshot at all: the stored popularity rank answers.
+    if (noTaste && e.code === 'warming') return popularFallback(t, limit);
+    throw e;
+  }
   const creatorW = normalise(t.creators); const tagW = normalise(t.tags);
   const score = new Map(); const via = new Map();
   for (const [cid, w] of [...creatorW].sort((a, b) => b[1] - a[1]).slice(0, 15)) {

@@ -8,10 +8,10 @@ import { postedWords } from './creator-words.js';
  * A creator card.
  *
  * Three variants share one markup: the default card (grids), `mini` (rails, 220px) and `spotlight` (Home's
- * "Top OnlyFans creators", larger samples and name). Every card says when he last posted, in words, and dims its
+ * "Popular creators" rail, larger samples and name). Every card says when he last posted, in words, and dims its
  * pictures when he has been quiet for a long time. Quiet creators stay visible.
  *
- * reason is one short line of why he is on this rail (for example "Most posts here"). It is only shown when the
+ * reason is one short line of why he is on this rail (for example "Popular here"). It is only shown when the
  * caller has a true reason to give; the card never invents one.
  */
 export function creatorCard(c, { mini = false, badge = null, spotlight = false, reason = null } = {}) {
