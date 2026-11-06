@@ -118,7 +118,7 @@ export function avatar(entity, size = 40) {
   const initial = name.replace(/^[^A-Za-z0-9]+/, '').charAt(0).toUpperCase() || '?';
   let hash = 0; for (const c of name) hash = (hash * 31 + c.charCodeAt(0)) >>> 0;
   const [a, b] = GRADS[hash % GRADS.length];
-  const el = h('div', { class: 'avatar', style: { width: `${size}px`, height: `${size}px`, fontSize: `${Math.round(size * 0.42)}px`, background: `linear-gradient(135deg, ${a}, ${b})` } }, initial);
+  const el = h('div', { class: 'avatar', style: { width: `${size}px`, height: `${size}px`, fontSize: `${Math.max(12, Math.round(size * 0.42))}px`, background: `linear-gradient(135deg, ${a}, ${b})` } }, initial);
   if (url) {
     // Eager, not lazy: an avatar inside a horizontal rail can sit off-screen for ever, and a lazy
     // image that is never near the viewport never loads — the card kept showing its initials.
