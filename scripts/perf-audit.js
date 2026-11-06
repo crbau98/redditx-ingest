@@ -71,6 +71,7 @@ async function newPage(browser, { throttleNet = false } = {}) {
   await ctx.addInitScript(PROBES);
   // pass the age gate without the dialog, as a returning visitor would
   await ctx.request.post(`${BASE}/api/age/confirm`).catch(() => {});
+  await ctx.addInitScript(() => { try { localStorage.setItem('prism.ageConfirmed', '1'); } catch { /* ignore */ } });
   const page = await ctx.newPage();
   const cdp = await ctx.newCDPSession(page);
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });

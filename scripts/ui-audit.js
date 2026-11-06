@@ -232,12 +232,13 @@ const PHONE_CHECKS = async ({ notchTop, notchBottom, scrollTest }) => {
 /** One screen at one viewport and theme. `prep(page)` gets the page into a state (opens a dialog). */
 async function phoneScreen(browser, vp, theme, label, route, ids, prep, { gate = false } = {}) {
   const ctx = await browser.newContext({ viewport: vp.viewport, deviceScaleFactor: vp.phone ? 3 : 1, isMobile: vp.phone, hasTouch: vp.phone, colorScheme: theme, serviceWorkers: 'block' });
-  await ctx.addInitScript(({ theme: t, favs, follows }) => {
+  await ctx.addInitScript(({ theme: t, favs, follows, gate: g }) => {
     try {
       localStorage.setItem('prism.theme', JSON.stringify(t)); localStorage.setItem('prism.introDone', 'true'); localStorage.setItem('prism.reelsHint', 'true');
+      if (!g) localStorage.setItem('prism.ageConfirmed', '1');
       if (!localStorage.getItem('prism.favs')) { localStorage.setItem('prism.favs', JSON.stringify(favs)); localStorage.setItem('prism.follows', JSON.stringify(follows)); }
     } catch { /* storage blocked */ }
-  }, { theme, favs: ids.media.slice(0, 12), follows: ids.creators.slice(0, 4).map((c) => ({ id: c.id, handle: c.handle, name: c.display_name, seen: new Date(Date.now() - 864e5).toISOString() })) });
+  }, { theme, favs: ids.media.slice(0, 12), follows: ids.creators.slice(0, 4).map((c) => ({ id: c.id, handle: c.handle, name: c.display_name, seen: new Date(Date.now() - 864e5).toISOString() })), gate });
   if (vp.phone) {
     // the notch: safe-area insets cannot be emulated, so the served stylesheet gets the values of an iPhone
     await ctx.route(/\/css\/bundle\.css$/, async (r2) => {

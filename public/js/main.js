@@ -50,7 +50,10 @@ function ensureAgeGate() {
   agePromise = new Promise((resolve) => {
     const root = $('#age-root');
     const confirmBtn = h('button', { class: 'btn primary lg', onclick: async () => {
-      try { await post('/api/age/confirm'); } catch { /* proceed anyway; API will re-prompt if needed */ }
+      try {
+        await post('/api/age/confirm');
+        try { localStorage.setItem('prism.ageConfirmed', '1'); } catch { /* ignore */ }
+      } catch { /* proceed anyway; API will re-prompt if needed */ }
       root.replaceChildren(); agePromise = null; resolve();
     } }, 'I’m 18 or older — Enter');
     root.replaceChildren(h('div', { class: 'age', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Age verification' },
@@ -306,8 +309,12 @@ async function boot() {
   let meta;
   try { meta = await get('/api/meta'); } catch { meta = { ageGate: { enforce: false, verified: true }, platforms: [] }; }
   for (const pl of meta.platforms || []) platforms.map[pl.platform] = pl;
-  setAiSearch(!!(meta.ai && meta.ai.search));
-  if (meta.ageGate && meta.ageGate.enforce && !meta.ageGate.verified) await ensureAgeGate();
+  if (meta.ageGate && meta.ageGate.enforce && !meta.ageGate.verified) {
+    try { localStorage.removeItem('prism.ageConfirmed'); } catch { /* ignore */ }
+    await ensureAgeGate();
+  } else if (meta.ageGate && meta.ageGate.verified) {
+    try { localStorage.setItem('prism.ageConfirmed', '1'); } catch { /* ignore */ }
+  }
 
   const shell = buildShell();
   wireShortcuts();

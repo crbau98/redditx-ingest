@@ -50,16 +50,29 @@
     var lists = [];
     if (!seg) { // home: the discover payload and the first page of the latest feed (views/home.js)
       lists.push('/api/discover', '/api/media?sort=recent&page=0&limit=36');
+    } else if (seg === 'explore') {
+      lists.push('/api/media?sort=recent&page=0&limit=36');
+    } else if (seg === 'creators') {
+      lists.push('/api/creators?sort=popular&page=0&limit=36');
+    } else if (seg === 'reels') {
+      lists.push('/api/media?type=video&sort=trending&page=0&limit=12');
     } else if (seg === 'browse') { // views/browse.js
       lists.push('/api/tags?limit=200', '/api/communities', '/api/platforms', '/api/topics', '/api/creators?onlyfans=1&limit=1', '/api/media?paid=onlyfans&limit=1', '/api/creators?paid=fansly&limit=1');
     }
+    var confirmed = false;
+    try { confirmed = localStorage.getItem('prism.ageConfirmed') === '1'; } catch (e) { /* storage blocked */ }
     var meta = start('/api/meta');
     if (lists.length) {
-      meta.then(function (text) {
-        var gate = JSON.parse(text).ageGate;
-        if (gate && gate.enforce && !gate.verified) return; // main.js shows the age gate first; the lists are asked for after it
+      if (confirmed) {
         lists.forEach(start);
-      }).catch(function () { /* the normal requests follow */ });
+      } else {
+        meta.then(function (text) {
+          var gate = JSON.parse(text).ageGate;
+          if (gate && gate.enforce && !gate.verified) return; // main.js shows the age gate first; the lists are asked for after it
+          try { localStorage.setItem('prism.ageConfirmed', '1'); } catch (e) {}
+          lists.forEach(start);
+        }).catch(function () { /* the normal requests follow */ });
+      }
     }
   } catch (e) { /* only a hint */ }
 })();
