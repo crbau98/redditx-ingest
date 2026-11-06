@@ -1,5 +1,9 @@
 # UI changelog
 
+## 2026-11-06 — Sources: Pornhub gay models and pornstars
+
+- **Pornhub joins the source list** (Admin → Sources) as a keyless source: paste `https://www.pornhub.com/model/<slug>` or `/pornstar/<slug>` anywhere a link is pasted and it becomes a creator feed. Only the cards the site itself labels `gay` are read, so a mixed model page cannot pull a straight scene in. Its blurb, the feed counts and a *Sync all* button come with it; the README's source table lists it too.
+
 ## 2026-11-06 — Sources: xHamster gay creators
 
 - **xHamster joins the source list** (Admin → Sources) as a keyless source: paste `https://xhamster.com/gay/creators/<slug>` anywhere a link is pasted and it becomes a creator feed. It has its own blurb ("one public page per creator, newest videos first, HLS playback"), the usual feed counts and a *Sync all* button. The README's source table lists it too.

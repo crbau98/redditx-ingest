@@ -1646,6 +1646,45 @@ async function xhamsterDiscovery({ pages = 1, maxFollows = 6, aborted = () => fa
   return out;
 }
 
+/**
+ * Pornhub's gay performer directory (https://www.pornhub.com/gay/pornstars) lists 25-32 performers
+ * a page, and every model/pornstar page is a feed. robots.txt allows the directory and its ?page=
+ * links (only /lesbian/pornstars?page= is off limits) and the bare performer page. One page a run,
+ * the cursor rotating across the first dozen pages, with the same gates as every other discovery run.
+ */
+const PH_LAST_PAGE = 12;
+async function pornhubDiscovery({ pages = 1, maxFollows = 6, aborted = () => false } = {}) {
+  const out = { scanned: 0, followed: 0, rejected: 0 };
+  const t = require('../services/targets');
+  const ph = registry.get('pornhub');
+  if (!ph || typeof ph.modelsFromDirectory !== 'function') return out;
+  const http = require('../sources/http').forPlatform('pornhub', 1200);
+  let page = parseInt(repo.discoveryState.get('pornhub.page', '0'), 10) || 0;
+  for (let p = 0; p < Math.max(1, pages); p++) {
+    if (aborted()) break;
+    const url = page ? `https://www.pornhub.com/gay/pornstars?page=${page + 1}` : 'https://www.pornhub.com/gay/pornstars';
+    let html;
+    try {
+      html = await http.text(url, { maxBytes: 3_000_000, retries: 1, headers: { accept: 'text/html', 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36' } });
+    } catch (e) { events.log('WARN', `Discovery: Pornhub performers — ${e.message}`); break; }
+    const list = ph.modelsFromDirectory(String(html));
+    out.scanned += list.length;
+    for (const c of list) {
+      if (aborted() || out.followed >= maxFollows) break;
+      const verdict = gate(c.name, c.slug);
+      const gender = femaleCheck(c.name, c.slug);
+      if (verdict.level === 'block' || gender.level === 'hard') { out.rejected++; continue; }
+      if (settingsStore.get().physiqueFilter && heavyRule(c.name, c.slug)) { out.rejected++; continue; }
+      const r = t.addSpec({ platform: 'pornhub', kind: 'user', target: c.url, label: c.name, ingestable: true }, { origin: 'discovered', trusted: true });
+      if (r.status === 'created') { out.followed++; events.log('OK', `Discovery: Pornhub performer ${c.name} → followed`); }
+    }
+    page = (page + 1) % PH_LAST_PAGE;
+    repo.discoveryState.set('pornhub.page', String(page));
+    if (list.length < 10) break;
+  }
+  return out;
+}
+
 /** Auto-follow the strongest pending candidates, within the feed cap. */
 function promote(s = settingsStore.get()) {
   const capacity = Math.max(0, s.maxFeeds - repo.feeds.countEnabled());
@@ -1708,6 +1747,7 @@ async function run({ trigger = 'schedule' } = {}) {
     if (s.discoveryOnlyFans && !config.isTest) report.coomer = await coomerDiscovery({ aborted });
     if (!config.isTest) report.gff = await gffDiscovery({ aborted, pages: s.gffDirectoryPages });
     if (!config.isTest) report.xhamster = await xhamsterDiscovery({ aborted });
+    if (!config.isTest) report.pornhub = await pornhubDiscovery({ aborted });
     if (s.discoveryOnlyFans && s.coomerIndexFollows > 0 && !config.isTest) report.coomerIndex = await coomerIndexDiscovery({ limit: s.coomerIndexFollows, aborted });
     if (s.discoveryOnlyFans && s.coomerNameFollows > 0 && !config.isTest) report.coomerNames = await coomerNameDiscovery({ limit: s.coomerNameFollows, aborted });
     if (s.imageMatch && !config.isTest) report.imageMatch = await require('./imagematch').run({ aborted, budget: s.braveDailyBudget });
@@ -1787,4 +1827,4 @@ function start() {
 }
 function stop() { stopFlag = true; clearInterval(timer); timer = null; }
 
-module.exports = { seedCreators, seedStatus, onlyfansDiscovery, coomerDiscovery, coomerIndexDiscovery, coomerNameDiscovery, gffDiscovery, gffNextPage, xhamsterDiscovery, directoryHarvest, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskySuggested, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };
+module.exports = { seedCreators, seedStatus, onlyfansDiscovery, coomerDiscovery, coomerIndexDiscovery, coomerNameDiscovery, gffDiscovery, gffNextPage, xhamsterDiscovery, pornhubDiscovery, directoryHarvest, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskySuggested, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };

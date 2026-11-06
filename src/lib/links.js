@@ -293,6 +293,17 @@ function parseProfile(input, hint = {}) {
     }
   }
 
+  // Pornhub model / pornstar page: an ingestible creator feed (the bare page only; /videos, /photos
+  // and /live are sub-pages that robots.txt disallows). A view_video.php link stays an ordinary page.
+  if (matches(h, 'pornhub.com')) {
+    const m = url.pathname.match(/^\/(model|pornstar)\/([a-z0-9][a-z0-9_-]{1,60})\/?$/i);
+    if (m && !/^\d+$/.test(m[2]) && !/^(all|videos|photos|live|clips|about)$/i.test(m[2])) {
+      const seg = m[1].toLowerCase();
+      const target = `https://www.pornhub.com/${seg}/${m[2].toLowerCase()}`;
+      return { platform: 'pornhub', kind: 'user', target, ingestable: true, label: `${m[2].toLowerCase()} (Pornhub)`, url: target };
+    }
+  }
+
   // OnlyFans: one canonical link per person (campaign / post links collapse to the profile); site pages are not links.
   if (matches(h, 'onlyfans.com')) {
     const handle = ofHandle(url.href);

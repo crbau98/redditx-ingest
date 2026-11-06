@@ -19,6 +19,7 @@ const adapters = [
   require('./coomer'),
   require('./gff'),
   require('./xhamster'),
+  require('./pornhub'),
   webAdapter,
   linkInBioAdapter,
 ];

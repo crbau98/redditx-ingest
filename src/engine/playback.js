@@ -33,7 +33,7 @@ function canRefresh(host) {
   const h = String(host || '').toLowerCase();
   return hostMatches(h, 'redgifs.com') || hostMatches(h, 'twimg.com')
     || hostMatches(h, 'telesco.pe') || hostMatches(h, 'telegram-cdn.org') || hostMatches(h, 'cdn-telegram.org')
-    || hostMatches(h, 'xhcdn.com');
+    || hostMatches(h, 'xhcdn.com') || hostMatches(h, 'phncdn.com');
 }
 
 /** RedGIFs gif id from a media link (media.redgifs.com/SomeName-mobile.mp4) or a watch page. */
@@ -87,6 +87,15 @@ async function fresh(row) {
     const page = /^https?:/i.test(row.source_url || '') ? row.source_url : null;
     if (!page) return null;
     const it = await xh.resolve(page);
+    return it && it.mediaUrl ? { mediaUrl: it.mediaUrl, previewUrl: it.previewUrl || null } : null;
+  }
+  if (hostMatches(host, 'phncdn.com') || row.platform === 'pornhub') {
+    // Pornhub playlists carry an `exp=`/`e=` epoch and stop working within hours: re-read the video page.
+    const ph = registry.get('pornhub');
+    if (!ph || typeof ph.resolve !== 'function') return null;
+    const page = /^https?:/i.test(row.source_url || '') ? row.source_url : null;
+    if (!page) return null;
+    const it = await ph.resolve(page);
     return it && it.mediaUrl ? { mediaUrl: it.mediaUrl, previewUrl: it.previewUrl || null } : null;
   }
   if (hostMatches(host, 'telesco.pe') || hostMatches(host, 'telegram-cdn.org') || hostMatches(host, 'cdn-telegram.org') || row.platform === 'telegram') {

@@ -23,6 +23,7 @@ const BLURB = {
   web: 'A single page’s photos and videos (OpenGraph, <video>, linked images). Respects robots.txt.',
   linkinbio: 'Linktree-style hubs. Not content: PRISM reads them to discover a creator’s other public accounts.',
   xhamster: 'Gay creator pages on xHamster: one public page per creator, newest videos first, HLS playback. No key and no login; robots.txt allows the creator page itself.',
+  pornhub: 'Gay model and pornstar pages on Pornhub: one public page per performer, only the cards the site labels gay, HLS playback. No key, no login, no proxy; robots.txt allows the performer page and the video page.',
 };
 
 const ago = (iso) => {
