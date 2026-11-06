@@ -165,10 +165,14 @@ body {
   /* Reels: the one-time hint stays clear of the action rail instead of wrapping over the Save button */
   .reel-hint { max-width: calc(100vw - 150px); }
 
-  /* Creators: search gets its own full-width row, so the four views (Top, OnlyFans only, Following, New) are all visible
-     without swiping (the input carries an inline max-width from creators.js, hence !important on that one property) */
-  .creator-filters .filter-scroll { flex-wrap: wrap; overflow: visible; margin: 0; padding: 0; -webkit-mask-image: none; mask-image: none; }
-  .creator-filters .filter-scroll > input[type='search'] { flex: 1 1 100%; max-width: none !important; }
+  /* Creators: search on its own full-width row; the views are one swipeable row of 44px chips with snap points.
+     The edge fade shows only while the row overflows (creators.js sets .is-overflowing). The input carries an inline
+     max-width from creators.js, hence !important on that one property. */
+  .creator-search-row { flex: 1 1 100%; min-width: 0; }
+  .creator-search-row > input[type='search'] { width: 100%; max-width: none !important; }
+  .creator-filters .filter-scroll { flex-wrap: nowrap; overflow-x: auto; scroll-snap-type: none; scroll-padding: 0 calc(var(--pad) + 32px) 0 var(--pad); margin: 0 calc(var(--pad) * -1); padding: 0 calc(var(--pad) + 32px) 0 var(--pad); -webkit-mask-image: none; mask-image: none; }
+  .creator-filters .filter-scroll > * { flex: none; min-height: 44px; }
+  .creator-filters.is-overflowing .filter-scroll { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 32px), transparent); }
 
   /* Explore: a label and its chip row share one line (the rails carry inline padding from explore.js,
      hence !important on the vertical padding only) */

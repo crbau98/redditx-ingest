@@ -142,6 +142,25 @@ export async function creators(root, { query }) {
     return [btn, panel];
   })();
 
+  // Search on its own row; the views are one row of chips that swipes on phones (see aurora.css).
+  const filterScroll = h('div', { class: 'filter-scroll' },
+    allChip,
+    hotChip,
+    ofChip,
+    followingChip,
+    newChip,
+    ...filtersDisclosure,
+    clearBtn
+  );
+  const filterBar = h('div', { class: 'filterbar creator-filters', role: 'toolbar', 'aria-label': 'Creator filters' },
+    h('div', { class: 'creator-search-row' }, search),
+    filterScroll
+  );
+  // The edge fade shows only while the row really overflows; the active view is scrolled into view.
+  const syncFilterRow = () => filterBar.classList.toggle('is-overflowing', filterScroll.scrollWidth > filterScroll.clientWidth + 1);
+  const showActiveChip = () => filterScroll.querySelector('.chip.on')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  window.addEventListener('resize', syncFilterRow);
+
   const grid = h('div', { class: 'creator-grid' });
   const more = h('div', { class: 'loadmore' });
 
@@ -158,18 +177,7 @@ export async function creators(root, { query }) {
         h('button', { type: 'button', class: 'btn primary sm', onclick: () => runInlineLookup(search.value.trim()) }, icon('search', 'sm'), 'Look up on web')
       )
     ),
-    h('div', { class: 'filterbar creator-filters', role: 'toolbar', 'aria-label': 'Creator filters' },
-      h('div', { class: 'filter-scroll' },
-        search,
-        allChip,
-        hotChip,
-        ofChip,
-        followingChip,
-        newChip,
-        ...filtersDisclosure,
-        clearBtn
-      )
-    ),
+    filterBar,
     lookupHost,
     grid,
     more
@@ -212,5 +220,6 @@ export async function creators(root, { query }) {
   const io = new IntersectionObserver((en) => { if (en[0].isIntersecting && page > 0) load(); }, { rootMargin: '800px' });
   io.observe(more);
   await load();
-  return () => { destroyed = true; io.disconnect(); };
+  requestAnimationFrame(() => { syncFilterRow(); showActiveChip(); });
+  return () => { destroyed = true; io.disconnect(); window.removeEventListener('resize', syncFilterRow); };
 }
