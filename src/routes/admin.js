@@ -78,6 +78,9 @@ router.get('/browser4', async (req, res) => {
       discover: { configured: brightdata.configured(), usage: brightdata.usage() },
       unlocker: { mode: cfg.brightdataUnlocker, budgetPerDay: cfg.brightdataUnlockBudget, configured: brightdata.unlockerConfigured(), browserApi: brightdata.browserConfigured(), usage: brightdata.unlockUsage() },
     },
+    // The free tiers after the browser, and the optional token service. Booleans and counts only.
+    jina: { mode: cfg.jinaReader, budgetPerDay: cfg.jinaDailyBudget, configured: require('../lib/jina').configured(), usage: require('../lib/jina').usage() },
+    captcha: { mode: cfg.captchaSolver, budgetPerDay: cfg.captchaSolverBudget, configured: require('../lib/captchasolver').configured(), usage: require('../lib/captchasolver').usage() },
   });
 });
 /** Read a page in the browser and add the pages it links to (same site) as feeds. Runs in the background; see GET /browser4. */

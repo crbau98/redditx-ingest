@@ -31,9 +31,10 @@ function forPlatform(key, minIntervalMs = 500, { penalty = null } = {}) {
     });
   return {
     key,
-    json: wrap(net.fetchJSON),
-    text: wrap(net.fetchText),
-    raw: wrap(net.request),
+    // Called through the module object, not captured, so a test can replace net.request/fetchJSON and every adapter sees it.
+    json: wrap((url, opts) => net.fetchJSON(url, opts)),
+    text: wrap((url, opts) => net.fetchText(url, opts)),
+    raw: wrap((url, opts) => net.request(url, opts)),
   };
 }
 

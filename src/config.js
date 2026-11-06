@@ -105,6 +105,8 @@ module.exports = {
     openaiKey: env.OPENAI_API_KEY || readKeyFile(env.OPENAI_API_KEY_FILE),
     // Telegram Bot API token (from @BotFather, "123456:ABC…"): channel metadata and existence checks.
     telegramBot: env.TELEGRAM_API_KEY || env.TELEGRAM_BOT_TOKEN || '',
+    // Captcha token service (CapSolver). Inert without it; see lib/captchasolver.js and setting captchaSolver.
+    capsolverKey: env.CAPSOLVER_API_KEY || readKeyFile(env.CAPSOLVER_API_KEY_FILE),
   },
 
   // Web search backends (discovery + creator lookup), tried in this order. SearXNG needs no key: point it at any instance with the JSON format enabled.
@@ -190,8 +192,33 @@ module.exports = {
     renderBudgetMs: int(env.PLAYWRIGHT_RENDER_BUDGET_MS, 80000),
     maxQueueWaitMs: int(env.PLAYWRIGHT_MAX_QUEUE_WAIT_MS, 40000),
   },
-  // Which engine reads JavaScript-built pages: browser4, playwright, or auto (Browser4 when enabled, else Playwright).
-  renderEngine: ['auto', 'browser4', 'playwright'].includes(String(env.RENDER_ENGINE || '').trim()) ? String(env.RENDER_ENGINE).trim() : 'auto',
+  // Chrome over plain CDP (lib/chrome.js): the stealth renderer. It speaks to a system Chrome / Chromium directly, with no
+  // Playwright or driver in front of it, which is the shape anti-bot gates stopped flagging (see the module header).
+  // Enabled when CHALLENGE_BROWSER=1 or when CHROME_PATH names a browser; whether a feed uses it is CHALLENGE_BROWSER_MODE /
+  // RENDER_ENGINE=chrome, and the paid tiers still come after it.
+  chrome: {
+    enabled: bool(env.CHALLENGE_BROWSER, !!String(env.CHROME_PATH || '').trim()),
+    path: String(env.CHROME_PATH || '').trim(),          // empty = find Chrome/Chromium in its usual place
+    headed: bool(env.CHROME_HEADED, false),              // needs a display; useful to watch a challenge
+    timeoutMs: int(env.CHROME_TIMEOUT_MS, 45000),        // one navigation
+    challengeWaitMs: int(env.CHROME_CHALLENGE_WAIT_MS, 15000), // how long a bot challenge gets to clear itself
+    idleMs: int(env.CHROME_IDLE_MS, 240000),             // close the browser after this long unused
+  },
+  // Jina Reader: a free third-party reader (lib/jina.js) that renders a page in its own browser. Last free tier before
+  // the paid unblockers; capped by setting jinaDailyBudget.
+  jina: {
+    base: String(env.JINA_READER_BASE_URL || 'https://r.jina.ai/').replace(/\/?$/, '/'),
+    key: String(env.JINA_API_KEY || '').trim(),
+    timeoutMs: int(env.JINA_TIMEOUT_MS, 60000),
+  },
+  // Captcha tokens (lib/captchasolver.js): set CAPSOLVER_API_KEY, then setting captchaSolver=fallback.
+  captcha: {
+    timeoutMs: int(env.CAPTCHA_TIMEOUT_MS, 120000),
+    pollMs: int(env.CAPTCHA_POLL_MS, 3000),
+  },
+  // Which engine reads JavaScript-built pages: browser4, playwright, chrome, or auto (Browser4 when enabled, else
+  // Playwright, else Chrome).
+  renderEngine: ['auto', 'browser4', 'playwright', 'chrome'].includes(String(env.RENDER_ENGINE || '').trim()) ? String(env.RENDER_ENGINE).trim() : 'auto',
 
   // Federated sources: instances that adapters may talk to by default. Every hashtag/keyword feed is queried
   // on EACH instance below, so a longer list means more surface (and more requests): override from the
@@ -229,6 +256,10 @@ module.exports = {
     telegramWeb: String(env.TELEGRAM_WEB_BASE_URL || 'https://t.me').replace(/\/+$/, ''),
     keenable: env.KEENABLE_BASE_URL || 'https://api.keenable.ai/mcp',
     brightdata: String(env.BRIGHTDATA_BASE_URL || 'https://api.brightdata.com').replace(/\/+$/, ''),
+    // Jina Reader: a free third-party page reader (html/markdown of a rendered page). See lib/jina.js.
+    jina: String(env.JINA_READER_BASE_URL || 'https://r.jina.ai/').replace(/\/?$/, '/'),
+    // CapSolver: captcha tokens (Turnstile, hCaptcha, reCAPTCHA). See lib/captchasolver.js.
+    capsolver: String(env.CAPSOLVER_BASE_URL || 'https://api.capsolver.com').replace(/\/+$/, ''),
     anthropic: String(env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/+$/, ''),
     openai: String(env.OPENAI_BASE_URL || 'https://api.openai.com').replace(/\/+$/, ''),
     // Tumblr's global tag feeds (blog feeds live on <blog>.tumblr.com or the blog's own domain).

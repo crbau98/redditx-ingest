@@ -132,6 +132,7 @@ No system can enumerate "the whole web". PRISM grows its coverage in layers:
 | Tumblr | user (blog), tag | – | Public RSS. Reblogs skipped (`TUMBLR_REBLOGS=true` to include), images upgraded to the largest size. |
 | PeerTube | user, channel, tag, search | – | Documented public API; keyword search through Sepia Search (`PEERTUBE_SEARCH_URL`), tags across `PEERTUBE_INSTANCES`. MP4 up to 1080p, else HLS. |
 | YouTube | user, channel | – | Official channel RSS only (no key). Paste `@handle`, channel URL, or `UC…` channel_id. Videos appear as thumbnail cards linking out to YouTube. No search feeds. |
+| TikTok | user | – | The profile page is captcha-walled, but the public **embed** (`/embed/@handle`) is not: it ships the 10 newest videos server-side, with direct `playAddr` mp4s and covers. Paste `@handle` or a profile URL. No login, no key. |
 | Telegram | user (public channel) | – | Public web preview (`t.me/s/<channel>`); channels that disable it report an error. |
 | Telegram | channel (joined by your account) | `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, a one-time login (`scripts/telegram-login.js`), `MEDIA_STORE_*` | Every channel/group your account has joined, public or private (MTProto via GramJS): full history back-filled gradually, original photos and videos copied into your R2/B2 bucket (Telegram files cannot be hotlinked). Feeds are created and retired by the sync. |
 | RSS / Atom / JSON Feed | feed | – | Creator sites, Tumblr `/rss`, Mastodon `.rss`, Bluesky `/rss`, … Bulk import accepts **OPML** exported from any feed reader. |
@@ -231,6 +232,55 @@ It uses the Chrome channel by default. Where only Playwright's Chromium is insta
 ```
 
 ---
+
+## Captchas and challenges: the free tiers first
+
+A public page can refuse a server in several ways, and PRISM now has a ladder that starts at zero cost and only then spends
+money. The order is fixed in `sources/web.js` `unlockedRead` and named in every run note ("Chrome (CDP): …", "Jina
+Reader: …", "Bright Data Web Unlocker: …", "Scrapfly Unblocker: …", "… not used: …").
+
+1. **Plain download** (`lib/net.js`), then the local Browser4/Playwright browser when the page needs JavaScript.
+2. **The CDP browser** (`lib/chrome.js`, setting `challengeBrowser`, default `fallback`). It launches a system Chrome and
+   talks to its DevTools port directly - no Playwright, no driver in between, which is the shape anti-bot gates stopped
+   flagging (the 2026 benchmark of stealth tools against 31 live Cloudflare targets put only a raw-CDP driver at 28/31).
+   It waits out a managed challenge and hands back the finished DOM for the same `extractPage`, so robots.txt, opt-outs,
+   takedowns and every later gate behave identically. Every request still goes through PRISM's guard proxy.
+   *Needs a browser on the host:* the Docker image installs Alpine's `chromium` (`CHROME_PATH=/usr/bin/chromium-browser`,
+   `CHALLENGE_BROWSER=1`); on a Mac, Chrome is found in `/Applications`. `CHALLENGE_BROWSER=0` or `challengeBrowser=off`
+   disables it. `CHROME_HEADED=1` shows the window; `CHROME_TIMEOUT_MS`, `CHROME_CHALLENGE_WAIT_MS` (15 s) and
+   `CHROME_IDLE_MS` (4 min, then the browser closes) tune it.
+3. **Jina Reader** (`lib/jina.js`, setting `jinaReader`, default `fallback`, free and keyless). `r.jina.ai` renders the page
+   from Jina's own addresses, so a site that refuses PRISM's address often answers there. It never sees a paid platform and
+   never a private/loopback address, and `jinaDailyBudget` (default 60, 0 = none) caps it. `JINA_API_KEY` raises the rate
+   limit; `JINA_READER_BASE_URL`/`JINA_TIMEOUT_MS` exist for a mirror.
+4. **Bright Data** (paid, see the next section), then **Scrapfly** (paid, allowlist only).
+
+Two kinds of challenge are cleared without a browser or a credit:
+
+- **Anubis** ("Making sure you're not a bot!", now in front of many fediverse servers) is a SHA-256 proof of work. PRISM
+  solves the nonce in Node, trades it for the signed cookie and keeps the cookie per host for 40 minutes
+  (`lib/challenge.js`). The Mastodon adapter tries this before any paid tier.
+- **A captcha widget** (Cloudflare Turnstile, hCaptcha, reCAPTCHA) embedded in an otherwise real page is never mistaken for
+  a wall: the detector names the vendor and the CDP browser waits it out.
+
+**Captcha tokens (optional, paid):** when a widget still stands after the browser has waited, `lib/captchasolver.js` can buy
+one token from CapSolver (setting `captchaSolver`, default `off`, inert without `CAPSOLVER_API_KEY`; `captchaSolverBudget`,
+default 50 tokens a day, is a hard stop). Without a key nothing changes and no request is made.
+
+**What each tier actually cleared (measured 2026-11-06):**
+
+| Page | Result |
+|---|---|
+| `nowsecure.nl` (Cloudflare's own challenge demo) | CDP browser cleared it in ~5 s: 180 KB, no gate left |
+| `boyfriendtv.com` (Cloudflare, refused Jina with "Just a moment…") | CDP browser: 500 KB, 221 media URLs, in ~7.7 s |
+| `gayfr.social` API (Anubis 1.28.2, difficulty 2) | proof of work solved in Node, valid JSON returned, no browser |
+| TikTok profile | embed ships 10 videos with `playAddr`; a range request answered `206 video/mp4` |
+| `justthegays.com` via Jina Reader | 831 KB, 514 media URLs |
+| `gayforfans.com` (Cloudflare firewall rule, error 1019/1020) | **still blocked**: the WAF refuses the address itself; only the paid unblockers read it |
+
+**Bot-challenge pages are named, not guessed:** `lib/challenge.js` `detect()` recognises Anubis, a Cloudflare interstitial,
+a Cloudflare firewall block, DDoS-Guard, DataDome, PerimeterX, Imperva and the three captcha vendors, and a large page is
+content even when it embeds a Turnstile demo (Cloudflare's own demo site does).
 
 ## Bright Data: discovery and unblocking
 
@@ -382,7 +432,7 @@ Set `SENTRY_DSN` to enable sampled reports for HTTP errors reaching the final ha
 
 ## Refusals, identity and robots
 
-PRISM does not defeat a refusal by itself. It does not solve challenges, does not use credentials, cookies or logins, and does not spend on a paid unblocker unless the operator has switched that tier on (`brightdataUnlocker`, and for Scrapfly `scrapflyUnlocker` plus the `scrapflyAllowlist` of creators it may spend on). When a page refuses PRISM, it is skipped or handed to a tier the operator enabled, and the run note says which tier acted.
+PRISM never defeats a *login* or a *paywall*: it uses no credentials, no borrowed session and no cookies of anyone's, and a paid creator platform that refuses it always stays a link-out (see below). What it does defeat is a machine check on a public page, in a fixed order that starts at zero cost (README, "Captchas and challenges: the free tiers first"): the plain download, the local Browser4/Playwright browser, the raw-CDP Chrome that waits out a managed challenge, the free Jina reader, then Bright Data, then Scrapfly - and the paid tiers only when the operator has switched them on (`brightdataUnlocker`, and for Scrapfly `scrapflyUnlocker` plus the `scrapflyAllowlist` of creators it may spend on). When every tier is off or none gets the page, it is skipped, and the run note names the tier that acted or explains why none did.
 
 A paid creator platform that refuses PRISM is never handed to an unblocker, whatever the tiers are set to: the content there sits behind the platform's own gate, and spending credits to break a refusal is not something PRISM does on its own. The page stays a link-out and a read, and the run note says so.
 

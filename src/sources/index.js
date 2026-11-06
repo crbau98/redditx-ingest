@@ -14,6 +14,7 @@ const adapters = [
   require('./x'),
   require('./telegram'),
   require('./youtube'),
+  require('./tiktok'),
   require('./rss'),
   require('./coomer'),
   require('./gff'),

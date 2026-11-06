@@ -16,8 +16,11 @@ const http = require('./http').forPlatform('web', 1000);
 const { absUrl, clip, uniq, bestSrcset } = require('./util');
 const { extractLinks } = require('../lib/links');
 const { hostOf, hostBlocked, looksLikeDirectMedia, looksLikeVideo } = require('../lib/mediaurl');
+const net = require('../lib/net');
 const { checkHtmlOptOut } = require('../lib/takedowns');
-const render = require('../lib/render'); // Browser4 or Playwright (RENDER_ENGINE)
+const render = require('../lib/render'); // Browser4 / Playwright / Chrome (RENDER_ENGINE)
+const chrome = require('../lib/chrome');  // the CDP browser, used directly to clear a challenge
+const jina = require('../lib/jina');      // free third-party page reader, the last free tier before the paid ones
 const agegate = require('../lib/agegate');
 const paid = require('../lib/paid');
 const brightdata = require('../lib/brightdata');
@@ -498,25 +501,82 @@ async function unlockedRead(feed, need) {
   const cfg = settingsStore.get();
   // A paid platform that refuses us is not ours to unblock: that would spend credits to break a refusal
   // on a host whose content sits behind its own gate. The page stays a link-out and a note explains why.
-  if (paid.isPaidPlatform(feed.target)) return { skipped: 'paid platform: PRISM does not spend credits to break a refusal here' };
+  if (paid.isPaidPlatform(feed.target)) return { skipped: 'paid platform: PRISM does not spend credits to break a refusal here', tier: 'unlock' };
+  const localOn = cfg.challengeBrowser === 'fallback' && chrome.enabled();
+  const jinaOn = cfg.jinaReader === 'fallback' && jina.configured();
   const bdOn = cfg.brightdataUnlocker === 'fallback' && !!cfg.brightdataUnlockBudget && (brightdata.unlockerConfigured() || (brightdata.browserConfigured() && render.enabled()));
   const scrapOn = cfg.scrapflyUnlocker === 'fallback' && scrapfly.configured() && scrapfly.allowedFor(feed);
-  if (!bdOn && !scrapOn) return null;
+  if (!localOn && !jinaOn && !bdOn && !scrapOn) return null;
   // robots.txt first, inside this function, because the link-in-bio adapter does not consult it on its own
-  if (!(await robotsAllows(feed.target))) return { skipped: 'robots.txt disallows this page' };
+  if (!(await robotsAllows(feed.target))) return { skipped: 'robots.txt disallows this page', tier: 'unlock' };
   const host = hostOf(feed.target);
   const count = (pg) => (need === 'media' ? pg.media.length : pg.links.length);
-  const bd = bdOn ? await brightdataRead(feed, need, cfg, host) : null;
-  if (bd && bd.page && count(bd.page) > 0) return bd;
-  if (!scrapOn) return bd;
-  const s = await scrapflyRead(feed, need, cfg, host);
-  if (s && s.page && count(s.page) > 0) return s;
-  if (bd && bd.page) return bd;   // Bright Data answered (empty): keep its answer
-  return s || bd;
+  const answers = [];
+  const keep = (r) => { if (r) answers.push(r); return !!(r && r.page && count(r.page) > 0); };
+
+  // Free tiers first: the CDP browser (the only one that clears a challenge) and the Jina reader.
+  if (localOn && keep(await chromeRead(feed, need, cfg, host))) return answers[0];
+  if (jinaOn && keep(await jinaRead(feed, need, cfg))) return answers[answers.length - 1];
+
+  // Then the paid tiers, Bright Data before Scrapfly.
+  if (bdOn && keep(await brightdataRead(feed, need, cfg, host))) return answers[answers.length - 1];
+  if (scrapOn && keep(await scrapflyRead(feed, need, cfg, host))) return answers[answers.length - 1];
+  // Nothing found media: keep the first real answer (an empty page is still an answer), else the LAST tier's story
+  // (a skip or an error), because that is the tier that ran once the free ones had been used up.
+  return answers.find((a) => a.page) || answers.filter((a) => a.skipped || a.error).pop() || null;
 }
 
-/** Which unblocker answered, for the run note. */
-const unlockLabel = (u) => (u.via === 'scrapfly-unlocker' ? 'Scrapfly Unblocker' : u.via === 'brightdata-browser' ? 'Bright Data Browser API' : 'Bright Data Web Unlocker');
+/** The local Chrome (raw CDP) reads the page and clears a challenge on the way. Free. */
+async function chromeRead(feed, need, cfg, host) {
+  try {
+    const r = await chrome.renderPages(feed.target, {
+      scrolls: need === 'media' ? cfg.browser4Scrolls : 2,
+      pages: need === 'media' ? cfg.browser4Pages : 1,
+      allowUrl: robotsAllows,
+    });
+    const page = mergeRendered(r.pages);
+    // The plain download was REFUSED, so it found nothing: the CDP browser's count is what it added, host history included.
+    hoststrategy.record(host, { found: 0, rendered: page.optedOut ? null : (need === 'media' ? page.media.length : page.links.length) });
+    return { page, via: 'chrome-cdp', notes: r.notes || [] };
+  } catch (e) {
+    return { error: e, tier: 'chrome' };
+  }
+}
+
+/** Can a third-party reader (Jina) even reach this host? Loopback, LAN names and private addresses, no matter how PRISM's own guard is configured. */
+function thirdPartyUnreachable(host) {
+  const h = String(host || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (!h) return true;
+  if (h === 'localhost' || /\.(localhost|local|internal)$/.test(h)) return true;
+  return !!require('net').isIP(h) && net.isPrivateIp(h);
+}
+
+/** The Jina reader renders the page from its own addresses. Free (rate limited), capped by jinaDailyBudget. */
+async function jinaRead(feed, need, cfg) {
+  try {
+    // A third party cannot read PRISM's own loopback / LAN: only a public page is worth handing over.
+    if (thirdPartyUnreachable(new URL(feed.target).hostname)) return { skipped: 'a private address cannot be read by a third party', tier: 'jina' };
+    const r = await jina.read(feed.target, { format: 'html', budget: cfg.jinaDailyBudget });
+    if (r.blocked) return { skipped: 'the reader was refused as well', tier: 'jina' };
+    const page = extractPage(r.html, feed.target, { headers: {}, status: 200, maxMedia: RENDERED_MAX_MEDIA });
+    return { page, via: 'jina-reader', notes: [] };
+  } catch (e) {
+    if (e && e.budget) return { skipped: e.message, tier: 'jina' };
+    return { error: e, tier: 'jina' };
+  }
+}
+
+/** Which tier answered, for the run note. */
+const unlockLabel = (u) => (u.via === 'scrapfly-unlocker' ? 'Scrapfly Unblocker'
+  : u.via === 'chrome-cdp' ? 'Chrome (CDP)'
+    : u.via === 'jina-reader' ? 'Jina Reader'
+      : u.via === 'brightdata-browser' ? 'Bright Data Browser API' : 'Bright Data Web Unlocker');
+
+/** The tier a result came from, for a note about a skip or an error. */
+const tierLabel = (t) => (t === 'scrapfly' ? 'Scrapfly'
+  : t === 'chrome' ? 'Chrome (CDP)'
+    : t === 'jina' ? 'Jina Reader'
+      : t === 'unlock' ? 'Unlock tiers' : 'Bright Data');
 
 /** Scrapfly Unblocker: datacenter pool first (cheap), a JS-rendered retry only when the first answer is empty or blocked. */
 async function scrapflyRead(feed, need, cfg, host) {
@@ -642,10 +702,10 @@ const webAdapter = {
     }
     if (refused && !page.optedOut) {
       const u = await unlockedRead(feed, 'media');
-      if (u && u.skipped) info.push(`Bright Data not used: ${u.skipped}`);
-      else if (u && u.error) notes.push(`${u.error.tier === 'scrapfly' ? 'Scrapfly' : 'Bright Data'}: ${u.error.message}`);
+      if (u && u.skipped) info.push(`${tierLabel(u.tier)} not used: ${u.skipped}`);
+      else if (u && u.error) notes.push(`${tierLabel(u.error.tier)}: ${u.error.message}`);
       else if (u) {
-        notes.push(...u.notes.map((n) => `Bright Data: ${n}`));
+        notes.push(...u.notes.map((n) => `${unlockLabel(u)}: ${n}`));
         if (u.page.optedOut) page = u.page;
         else if (u.page.media.length) { page = u.page; via = u.via; info.push(`${unlockLabel(u)} got past the refusal: ${page.media.length} media${u.cost != null ? ` (Scrapfly cost ${u.cost} credits)` : ''}`); }
       }
@@ -725,8 +785,8 @@ const linkInBioAdapter = {
     }
     if (refused && !page.optedOut) {
       const u = await unlockedRead(feed, 'links');
-      if (u && u.skipped) info.push(`Bright Data not used: ${u.skipped}`);
-      else if (u && u.error) notes.push(`${u.error.tier === 'scrapfly' ? 'Scrapfly' : 'Bright Data'}: ${u.error.message}`);
+      if (u && u.skipped) info.push(`${tierLabel(u.tier)} not used: ${u.skipped}`);
+      else if (u && u.error) notes.push(`${tierLabel(u.error.tier)}: ${u.error.message}`);
       else if (u) {
         if (u.page.optedOut) page = u.page;
         else if (u.page.links.length) { page = u.page; via = u.via; info.push(`${unlockLabel(u)} got past the refusal: ${page.links.length} profile links${u.cost != null ? ` (Scrapfly cost ${u.cost} credits)` : ''}`); }
