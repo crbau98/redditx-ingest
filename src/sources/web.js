@@ -300,6 +300,12 @@ function extractPage(html, pageUrl0, opts = {}) {
     .map((u) => absUrl(u, pageUrl))
     .filter(Boolean);
 
+  // The page's own declared image is a real item: on a video post it is the poster, and on a page
+  // whose DOM only carries a site logo it is the only picture that belongs to the page at all.
+  for (const img of ogImages) {
+    if (img && !IMG_JUNK.test(img)) push({ url: img, type: 'image' });
+  }
+
   for (const v of ogVideos) {
     if (looksLikeDirectMedia(v) || looksLikeVideo(v)) {
       push({ url: v, type: 'video', preview: ogImage });
@@ -364,10 +370,11 @@ function extractPage(html, pageUrl0, opts = {}) {
 
   $('img').each((_, i) => {
     const el = $(i);
-    const src = absUrl(bestSrcset(el.attr('srcset') || el.attr('data-srcset'), pageUrl) || el.attr('src') || el.attr('data-src') || el.attr('data-lazy-src') || el.attr('data-original'), pageUrl);
+    const src = absUrl(bestSrcset(el.attr('srcset') || el.attr('data-srcset'), pageUrl) || el.attr('src') || el.attr('data-src') || el.attr('data-lazy-src') || el.attr('data-original') || el.attr('data-main-thumb'), pageUrl);
     if (!src || src.startsWith('data:') || IMG_JUNK.test(src)) return;
     const w = parseInt(el.attr('width'), 10); const h = parseInt(el.attr('height'), 10);
-    if ((w && w < 200) || (h && h < 200)) return;
+    // 160px: a 300x168 thumbnail is real page media (studio video posters), a 150px avatar is not.
+    if ((w && w < 160) || (h && h < 160)) return;
     push({ url: src, type: 'image', width: w || null, height: h || null, alt: el.attr('alt') || null });
   });
 
