@@ -120,7 +120,7 @@ function flashvars(html) {
 function modelPage(html) {
   const h = String(html || '');
   const name = stripTags((/<h1[^>]*itemprop="name"[^>]*>([\s\S]*?)<\/h1>/.exec(h) || /<h1[^>]*>([\s\S]*?)<\/h1>/.exec(h) || [])[1]) || null;
-  const avatar = (/"getAvatar"\s+src="([^"]+)"/.exec(h) || /<img[^>]*class="[^"]*avatar[^"]*"[^>]*\ssrc="([^"]+)"/.exec(h) || [])[1] || null;
+  const avatar = (/"getAvatar"\s+src="([^"]+)"/.exec(h) || /<img[^>]*class="[^"]*avatar[^"]*"[^>]*\ssrc="([^"]+)"/.exec(h) || /<meta property="og:image" content="([^"]+)"/.exec(h) || [])[1] || null;
   const videos = [];
   const seen = new Set();
   const re = /<li class="pcVideoListItem/g;

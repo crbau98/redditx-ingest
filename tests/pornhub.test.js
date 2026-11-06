@@ -106,6 +106,11 @@ test('the model page yields the man and the gay cards, keeping the page order', 
   assert.equal(pornhub._relativeIso('56 years ago'), null, 'the site\'s age bug is not a 1970 date');
 });
 
+test('the profile picture falls back to og:image when the avatar markup is gone', () => {
+  const html = `<html><head><meta property="og:image" content="https://ei.phncdn.com/og-man.jpg" /></head><body><h1>Og Man</h1></body></html>`;
+  assert.equal(pornhub._modelPage(html).avatar, 'https://ei.phncdn.com/og-man.jpg');
+});
+
 test('the video page picks the best HLS playlist and reads the date and poster', () => {
   const page = pornhub._videoPage(videoHtml({ title: 'Demo Clip' }));
   assert.equal(page.title, 'Demo Clip');
