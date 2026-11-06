@@ -158,7 +158,7 @@ export async function home(root) {
   if (top.length) {
     parts.push(h('section', { class: 'section suggested-spotlight' },
       sectionHead('users', 'Popular creators', 'Ranked from engagement, platform breadth, archive size and freshness. Quiet for 90 days: left out.', { href: href('/creators'), label: 'See all' }),
-      h('div', { class: 'rail' }, top.map((c) => creatorCard(c, { spotlight: true, reason: 'Popular here' })))));
+      h('div', { class: 'rail' }, top.map((c, i) => creatorCard(c, { spotlight: true, reason: 'Popular here', eager: i < 2 })))));
   }
   // "Popular now" is only what the server computes: posts in the last 7 days against each creator's usual pace.
   // It is hidden, not faked, when fewer than three creators qualify.

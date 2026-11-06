@@ -14,7 +14,7 @@ import { postedWords } from './creator-words.js';
  * reason is one short line of why he is on this rail (for example "Popular here"). It is only shown when the
  * caller has a true reason to give; the card never invents one.
  */
-export function creatorCard(c, { mini = false, badge = null, spotlight = false, reason = null } = {}) {
+export function creatorCard(c, { mini = false, badge = null, spotlight = false, reason = null, eager = false } = {}) {
   const thumbs = (c.previews || []).slice(0, 3);
   while (thumbs.length < 3) thumbs.push(null);
   const isNew = follows.has(c.id) && c.last_media_at && follows.seen(c.id) && c.last_media_at > follows.seen(c.id);
@@ -96,7 +96,7 @@ export function creatorCard(c, { mini = false, badge = null, spotlight = false, 
   badge ? h('span', { class: 'rise' }, icon('trend', 'sm'), badge) : null,
   // Three sample pictures, decorative: the card's link already names him. Each loads only when near the screen (lazy-bg.js).
   h('div', { class: 'creator-thumbs', 'aria-hidden': 'true' },
-    thumbs.map((t) => lazyBackground(h('div'), t ? proxied(t) : null))),
+    thumbs.map((t, idx) => lazyBackground(h('div'), t ? proxied(t) : null, eager && idx === 0))),
   h('div', { class: 'creator-body' },
     h('div', { class: 'creator-head' },
       avatar(c, spotlight ? 64 : 56),

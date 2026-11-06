@@ -3,7 +3,7 @@ import { get, post, onAgeRequired, streamPublic, ApiError, clearApiCache, prefet
 import { parse, href, navigate, matchRoute, routeKey } from './router.js';
 import { prefs, favorites, follows, platforms, bus, visits } from './store.js';
 import { syncFromUrl, lightboxOpen as isOpen, openPalette, paletteOpen, surpriseMe, openDisplaySettings, openTakedownForm, openMenu, warm } from './components/ondemand.js';
-import { initRails } from './components/fx.js';
+import { initRails, haptic } from './components/fx.js';
 import { dropFeedStash } from './components/feed.js';
 import { attachSuggest } from './components/suggest.js';
 import { dur, sharedMotionBusy, spring } from './components/transitions.js';
@@ -167,6 +167,7 @@ function buildShell() {
   app.addEventListener('click', (e) => {
     const a = e.target.closest('a[data-nav]');
     if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button) return;
+    haptic('selection');
     if (a.getAttribute('href') === (location.hash || '#/')) {
       e.preventDefault();
       const behavior = matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
@@ -177,7 +178,10 @@ function buildShell() {
     }
     freshNav = true;
   });
-  const fab = h('button', { class: 'fab', hidden: true, 'aria-label': 'Back to top', onclick: () => window.scrollTo({ top: 0, behavior: 'smooth' }) }, icon('up'));
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('.chip, .seg button, .taste-chips button, .reels-tune')) haptic('light');
+  }, { passive: true });
+  const fab = h('button', { class: 'fab', hidden: true, 'aria-label': 'Back to top', onclick: () => { haptic('medium'); window.scrollTo({ top: 0, behavior: 'smooth' }); } }, icon('up'));
   window.addEventListener('scroll', () => { fab.hidden = window.scrollY < 900; }, { passive: true });
 
   app.replaceChildren(header, main, footer, bottom, fab);

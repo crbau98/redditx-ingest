@@ -122,7 +122,7 @@ export function avatar(entity, size = 40) {
   if (url) {
     // Eager, not lazy: an avatar inside a horizontal rail can sit off-screen for ever, and a lazy
     // image that is never near the viewport never loads — the card kept showing its initials.
-    const img = h('img', { src: proxied(url), alt: '', loading: 'eager', decoding: 'async' });
+    const img = h('img', { src: proxied(url), alt: '', loading: 'eager', decoding: 'async', fetchpriority: size >= 60 ? 'high' : 'auto' });
     img.addEventListener('load', () => { el.textContent = ''; el.appendChild(img); }, { once: true });
     img.addEventListener('error', () => { /* keep the initials */ }, { once: true });
   }
@@ -162,6 +162,7 @@ export function openModal({ title, sub, body, actions = [], wide = false, sheet 
     modal.addEventListener('touchstart', (e) => {
       if (modal.scrollTop > 0) return;
       startY = e.touches[0].clientY; curY = startY; tracking = true;
+      modal.style.transition = ''; overlay.style.transition = '';
     }, { passive: true });
     modal.addEventListener('touchmove', (e) => {
       if (!tracking) return;
@@ -176,8 +177,19 @@ export function openModal({ title, sub, body, actions = [], wide = false, sheet 
       if (!tracking) return;
       tracking = false;
       const dy = curY - startY;
-      if (dy > 75) close();
-      else { modal.style.transform = ''; overlay.style.opacity = ''; }
+      if (dy > 75) {
+        modal.style.transition = 'transform .22s cubic-bezier(0.2, 0.9, 0.4, 1)';
+        overlay.style.transition = 'opacity .22s ease';
+        modal.style.transform = 'translateY(100%)';
+        overlay.style.opacity = '0';
+        setTimeout(close, 220);
+      } else {
+        modal.style.transition = 'transform .2s cubic-bezier(0.2, 0.9, 0.4, 1)';
+        overlay.style.transition = 'opacity .2s ease';
+        modal.style.transform = '';
+        overlay.style.opacity = '';
+        setTimeout(() => { modal.style.transition = ''; overlay.style.transition = ''; }, 200);
+      }
     }, { passive: true });
   }
   document.addEventListener('keydown', onKey, true);

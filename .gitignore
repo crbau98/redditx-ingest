@@ -44,6 +44,7 @@ bower_components
 build/Release
 
 # Dependency directories
+node_modules
 node_modules/
 jspm_packages/
 
@@ -148,5 +149,6 @@ vite.config.ts.timestamp-*
 .browser4-cli/
 .playwright-cli/
 ui-audit/
+ui-audit-phone/
 e2e-screenshots/
 .DS_Store

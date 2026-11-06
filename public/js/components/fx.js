@@ -108,9 +108,21 @@ export function initRails(root = document.body) {
 export { rememberFlip, playFlip } from './transitions.js';
 
 /* ---------------------------------------------------------------- haptics */
-/** A tiny tap on phones that support it (Android Chrome); silently nothing elsewhere. */
-export function haptic(ms = 10) {
-  try { if (navigator.vibrate && window.matchMedia('(pointer: coarse)').matches) navigator.vibrate(ms); } catch { /* ignore */ }
+/** A tiny tactile tap on phones that support it (Capacitor native bridge or navigator.vibrate); silently nothing elsewhere. */
+export function haptic(type = 'light') {
+  try {
+    const cap = window.Capacitor?.Plugins?.Haptics;
+    if (cap) {
+      if (type === 'selection') cap.selectionChanged();
+      else if (type === 'medium') cap.impact({ style: 'MEDIUM' });
+      else cap.impact({ style: 'LIGHT' });
+      return;
+    }
+    if (navigator.vibrate && window.matchMedia('(pointer: coarse)').matches) {
+      const ms = typeof type === 'number' ? type : type === 'medium' ? 15 : 8;
+      navigator.vibrate(ms);
+    }
+  } catch { /* ignore */ }
 }
 
 /* ------------------------------------------------------- colour from an image
@@ -155,37 +167,43 @@ export function dominantColor(src) {
  * backdrop costs nothing per frame (a live CSS blur was re-rendered on every frame of a swipe).
  * Resolves to a data: URL, or null when the image cannot be read. */
 const ambientCache = new Map();
+let scratchSmall = null;
+let scratchOut = null;
 export function ambientBackdrop(src, { brightness = 0.42, saturate = 1.3 } = {}) {
   if (!src) return Promise.resolve(null);
   const key = `${src}|${brightness}|${saturate}`;
   if (ambientCache.has(key)) return ambientCache.get(key);
-  const p = new Promise((resolve) => {
-    const img = new Image();
-    img.decoding = 'async';
-    img.onload = () => {
-      try {
-        const small = document.createElement('canvas'); small.width = 10; small.height = 10;
-        const sg = small.getContext('2d', { willReadFrequently: true });
-        sg.imageSmoothingQuality = 'high';
-        sg.drawImage(img, 0, 0, 10, 10);
-        const px = sg.getImageData(0, 0, 10, 10); const d = px.data;
-        for (let i = 0; i < d.length; i += 4) {
-          const l = 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
-          for (let k = 0; k < 3; k++) d[i + k] = Math.max(0, Math.min(255, (l + (d[i + k] - l) * saturate) * brightness));
-          d[i + 3] = 255;
-        }
-        sg.putImageData(px, 0, 0);
-        // two smooth upscales read as a blur; the element then stretches the result
-        const out = document.createElement('canvas'); out.width = 40; out.height = 40;
-        const og = out.getContext('2d');
-        og.imageSmoothingEnabled = true; og.imageSmoothingQuality = 'high';
-        og.drawImage(small, 0, 0, 40, 40);
-        resolve(out.toDataURL());
-      } catch { resolve(null); }
-    };
-    img.onerror = () => resolve(null);
-    img.src = src;
-  });
+  const p = (async () => {
+    try {
+      const img = new Image();
+      img.decoding = 'async';
+      img.src = src;
+      if (img.decode) {
+        try { await img.decode(); } catch { /* proceed to onload fallback */ }
+      } else {
+        await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
+      }
+      if (!scratchSmall) { scratchSmall = document.createElement('canvas'); scratchSmall.width = 10; scratchSmall.height = 10; }
+      const sg = scratchSmall.getContext('2d', { willReadFrequently: true });
+      sg.imageSmoothingQuality = 'high';
+      sg.drawImage(img, 0, 0, 10, 10);
+      const px = sg.getImageData(0, 0, 10, 10); const d = px.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const l = 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+        for (let k = 0; k < 3; k++) d[i + k] = Math.max(0, Math.min(255, (l + (d[i + k] - l) * saturate) * brightness));
+        d[i + 3] = 255;
+      }
+      sg.putImageData(px, 0, 0);
+      // two smooth upscales read as a blur; the element then stretches the result
+      if (!scratchOut) { scratchOut = document.createElement('canvas'); scratchOut.width = 40; scratchOut.height = 40; }
+      const og = scratchOut.getContext('2d');
+      og.imageSmoothingEnabled = true; og.imageSmoothingQuality = 'high';
+      og.drawImage(scratchSmall, 0, 0, 40, 40);
+      return scratchOut.toDataURL();
+    } catch {
+      return null;
+    }
+  })();
   ambientCache.set(key, p);
   if (ambientCache.size > 200) ambientCache.delete(ambientCache.keys().next().value);
   return p;

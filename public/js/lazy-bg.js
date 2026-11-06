@@ -18,10 +18,10 @@ function paint(el) {
   if (url) el.style.backgroundImage = `url("${url}")`;
 }
 
-/** @returns the element, so it can be used inline: `lazyBackground(h('div'), url)` */
-export function lazyBackground(el, url) {
+/** @returns the element, so it can be used inline: `lazyBackground(h('div'), url, eager)` */
+export function lazyBackground(el, url, eager = false) {
   if (!url) return el;
-  if (typeof IntersectionObserver === 'undefined') { el._lazyBg = url; paint(el); return el; }
+  if (eager || typeof IntersectionObserver === 'undefined') { el._lazyBg = url; paint(el); return el; }
   if (!observer) {
     observer = new IntersectionObserver((entries) => {
       for (const e of entries) {
