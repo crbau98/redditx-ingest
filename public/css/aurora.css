@@ -220,7 +220,7 @@ a, button, summary, label, select, input, [role='button'] { touch-action: manipu
 
 /* Nested scrollers keep their own momentum: reaching their end never scrolls (or pull-to-refreshes) the page behind. */
 .lb, .lb-info, .lb-strip, .modal, .overlay, .palette-list, .suggest, .coll-pick { overscroll-behavior: contain; }
-.rail, .follow-rail, .filter-scroll, .active-filters, .related-rail, .lb-more-strip, .lb-collab-strip, .ps-pills, .ps-paid, .tabs, .heatmap, .free-on-row { overscroll-behavior-x: contain; }
+.rail, .follow-rail, .filter-scroll, .active-filters, .related-rail, .lb-more-strip, .lb-collab-strip, .ps-pills, .ps-paid, .tabs, .heatmap, .free-on-row { overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
 
 /* iOS zooms the page when a field under 16px takes focus, and never zooms back out. */
 @media (pointer: coarse), (max-width: 899px) {
@@ -310,4 +310,56 @@ a, button, summary, label, select, input, [role='button'] { touch-action: manipu
 /* On a phone the Home spotlight's samples end above the bottom tab bar, so the first creator's pictures are readable without scrolling. */
 @media (max-width: 899px) {
   .suggested-spotlight .creator-card.spotlight .creator-thumbs { height: 120px; }
+}
+
+/* ---------- pull to refresh indicator --------------------------------- */
+.ptr-indicator {
+  position: fixed;
+  top: calc(var(--appbar-h) + 10px);
+  left: 50%;
+  margin-left: -20px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--bg-elev);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28), 0 1px 3px rgba(0, 0, 0, 0.16);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  z-index: 75;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate3d(0, 0, 0) scale(0.6);
+  will-change: transform, opacity;
+}
+@media (max-width: 899px) {
+  .ptr-indicator {
+    top: calc(var(--appbar-h) + env(safe-area-inset-top, 0px) + 10px);
+  }
+}
+.ptr-icon {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform: rotate(var(--ptr-rot, 0deg));
+}
+.ptr-icon svg {
+  width: 18px;
+  height: 18px;
+}
+.ptr-loading .ptr-icon {
+  animation: ptr-spin 0.75s linear infinite;
+}
+@keyframes ptr-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ptr-loading .ptr-icon {
+    animation: none;
+  }
 }

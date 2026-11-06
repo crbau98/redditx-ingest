@@ -9,6 +9,7 @@ import { openLightbox, surpriseMe } from '../components/ondemand.js';
 import { smartSearch } from '../smart.js';
 import { attachSuggest } from '../components/suggest.js';
 import { creatorRing } from '../components/creator-ring.js';
+import { initPullToRefresh } from '../components/pull-to-refresh.js';
 
 /** "For you": a rail ranked from this device's taste, with the taste shown (and editable) right there. */
 async function forYouSection(open) {
@@ -215,5 +216,12 @@ export async function home(root) {
   parts.push(h('section', { class: 'section' }, latestHead, creatorFilterBar, feed.el));
 
   root.replaceChildren(...parts);
-  return () => { if (feed) feed.destroy(); };
+  const stopPtr = initPullToRefresh(root, async () => {
+    if (feed) await feed.refresh();
+    await refreshForYou();
+  });
+  return () => {
+    stopPtr();
+    if (feed) feed.destroy();
+  };
 }

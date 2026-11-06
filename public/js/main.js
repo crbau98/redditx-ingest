@@ -309,6 +309,7 @@ async function boot() {
   let meta;
   try { meta = await get('/api/meta'); } catch { meta = { ageGate: { enforce: false, verified: true }, platforms: [] }; }
   for (const pl of meta.platforms || []) platforms.map[pl.platform] = pl;
+  setAiSearch(!!(meta.ai && meta.ai.search));
   if (meta.ageGate && meta.ageGate.enforce && !meta.ageGate.verified) {
     try { localStorage.removeItem('prism.ageConfirmed'); } catch { /* ignore */ }
     await ensureAgeGate();

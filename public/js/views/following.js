@@ -4,6 +4,7 @@ import { navigate, href } from '../router.js';
 import { follows, followVisits } from '../store.js';
 import { createFeed } from '../components/feed.js';
 import { creatorCard } from '../components/creator-card.js';
+import { initPullToRefresh } from '../components/pull-to-refresh.js';
 
 /*
  * Following: everything the creators you follow posted, newest first, split at the point you
@@ -98,5 +99,12 @@ export async function following(root, { query }) {
     sub.textContent = `${fmt.int(d.creators.length)} creator${d.creators.length === 1 ? '' : 's'}${fresh ? ` · ${fresh} posted since your last visit` : ''}`;
   }).catch(() => railHost.replaceChildren());
 
-  return () => { for (const f of feeds) f.destroy(); };
+  const stopPtr = initPullToRefresh(root, async () => {
+    await Promise.all(feeds.map((f) => f.refresh()));
+  });
+
+  return () => {
+    stopPtr();
+    for (const f of feeds) f.destroy();
+  };
 }

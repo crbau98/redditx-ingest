@@ -50,8 +50,6 @@
     var lists = [];
     if (!seg) { // home: the discover payload and the first page of the latest feed (views/home.js)
       lists.push('/api/discover', '/api/media?sort=recent&page=0&limit=36');
-    } else if (seg === 'explore') {
-      lists.push('/api/media?sort=recent&page=0&limit=36');
     } else if (seg === 'creators') {
       lists.push('/api/creators?sort=popular&page=0&limit=36');
     } else if (seg === 'reels') {

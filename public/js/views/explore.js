@@ -4,6 +4,7 @@ import { navigate, href, parse } from '../router.js';
 import { prefs, platformLabel, follows, searches, tastes, history as viewHistory, bus } from '../store.js';
 import { createFeed } from '../components/feed.js';
 import { understand, findRelaxation, relatedRail } from '../smart.js';
+import { initPullToRefresh } from '../components/pull-to-refresh.js';
 
 const SORTS = [['trending', 'Trending'], ['recent', 'Newest'], ['top', 'Top rated'], ['random', 'Shuffle'], ['oldest', 'Oldest']];
 const SINCE = [['', 'All time'], ['day', 'Past day'], ['week', 'Past week'], ['month', 'Past month'], ['year', 'Past year']];
@@ -269,6 +270,15 @@ export async function explore(root, { query }) {
     }).catch(() => {});
   }
 
-  return () => { feed.destroy(); offSearches(); offSeen(); };
+  const stopPtr = initPullToRefresh(root, async () => {
+    if (feed) await feed.refresh();
+  });
+
+  return () => {
+    stopPtr();
+    feed.destroy();
+    offSearches();
+    offSeen();
+  };
 }
 

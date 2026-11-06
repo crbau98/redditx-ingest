@@ -131,11 +131,25 @@ export function createFeed({ query = {}, endpoint = '/api/media', fetchPage = nu
   if (restored) keepFilled(); else setTimeout(load, 0); // first page does not depend on the observer's initial callback
   const offDensity = bus.on('density', (d) => { if (!destroyed) masonry.setDensity(d); });
 
+  async function refresh() {
+    page = 0;
+    total = null;
+    done = false;
+    errored = false;
+    hidden = 0;
+    fetched = 0;
+    seed = Math.floor(Math.random() * 1e6);
+    masonry.clear();
+    dropFeedStash(routeKey());
+    return loadPage();
+  }
+
   return {
     el: root,
     get items() { return masonry.items; },
     get total() { return total; },
     load,
+    refresh,
     destroy() {
       if (!destroyed && masonry.items.length && !errored) {
         stash.set(stashKey, { at: Date.now(), items: masonry.items, page, total, done, fetched, hidden, seed, limit });
