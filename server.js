@@ -7,6 +7,7 @@ const engine = require('./src/engine/engine');
 const maintenance = require('./src/engine/maintenance');
 const backup = require('./src/engine/backup');
 const discovery = require('./src/engine/discovery');
+const popularity = require('./src/engine/popularity');
 const health = require('./src/engine/health');
 const { migration } = require('./src/db');
 
@@ -32,6 +33,7 @@ afterHealthy(() => require('./src/routes/public').warmPrep()); // compile the ho
 afterHealthy(() => require('./src/routes/public').warm()); // pre-build the big caches (topics, graph, home)
 backup.start();
 discovery.start();
+popularity.start(); // the stored rank Home and Creators sort by
 health.start();
 maintenance.startImageSweep();
 require('./src/engine/visual').start(); // "More like this": embeds the library in the background
@@ -45,6 +47,7 @@ function shutdown(signal) {
   engine.shutdown();
   backup.stop();
   discovery.stop();
+  popularity.stop();
   health.stop();
   maintenance.stopImageSweep();
   require('./src/engine/visual').stop();

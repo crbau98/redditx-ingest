@@ -5,7 +5,7 @@ import { platformLabel, follows } from '../store.js';
 import { find } from './find.js';
 import { creatorCard } from '../components/creator-card.js';
 
-const SORTS = [['media', 'Most posts'], ['score', 'Top rated'], ['recent', 'Recently active'], ['new', 'Newest'], ['name', 'A–Z']];
+const SORTS = [['popular', 'Popular here'], ['media', 'Most posts'], ['score', 'Top rated'], ['recent', 'Recently active'], ['new', 'Newest'], ['name', 'A–Z']];
 /** "Posted in the last …": who is publishing right now. */
 const FRESH = [['', 'Any time'], ['7', 'This week'], ['30', 'This month'], ['90', 'Last 3 months'], ['365', 'This year']];
 
@@ -13,7 +13,7 @@ export async function creators(root, { query }) {
   document.title = 'Creators — PRISM';
   const PAID_OPTS = [['', 'All creators'], ['onlyfans', 'OnlyFans'], ['fansly', 'Fansly'], ['justforfans', 'JustFor.Fans'], ['manyvids', 'ManyVids'], ['loyalfans', 'LoyalFans'], ['fancentro', 'FanCentro'], ['fanvue', 'Fanvue'], ['clips4sale', 'Clips4Sale']];
   const f = {
-    q: query.get('q') || '', sort: query.get('sort') || 'media', platform: query.get('platform') || '',
+    q: query.get('q') || '', sort: query.get('sort') || 'popular', platform: query.get('platform') || '',
     paid: query.get('paid') || (query.get('onlyfans') === '1' ? 'onlyfans' : ''),
     fresh: query.get('fresh') || '',
     following: query.get('following') || '',
@@ -49,14 +49,14 @@ export async function creators(root, { query }) {
     }
   });
 
-  const isAll = !f.q && !f.paid && f.sort === 'media' && !f.platform && !f.fresh && !f.following;
+  const isAll = !f.q && !f.paid && f.sort === 'popular' && !f.platform && !f.fresh && !f.following;
   const allChip = h('button', {
     type: 'button',
     class: `chip${isAll ? ' on' : ''}`,
     'aria-pressed': String(isAll),
-    title: 'Top creators: OnlyFans pages first, then everyone else by posts',
+    title: 'Popular here: engagement, platform breadth, archive size and how recently he posted',
     onclick: () => { search.value = ''; navigate('/creators', {}, { replace: true }); },
-  }, icon('flame', 'sm'), 'Top');
+  }, icon('flame', 'sm'), 'Popular');
 
   const followingChip = h('button', {
     type: 'button',
@@ -79,7 +79,7 @@ export async function creators(root, { query }) {
     class: `chip${f.sort === 'new' ? ' on' : ''}`,
     'aria-pressed': String(f.sort === 'new'),
     title: 'Sort by newly discovered creators',
-    onclick: () => set({ sort: f.sort === 'new' ? 'media' : 'new' }),
+    onclick: () => set({ sort: f.sort === 'new' ? 'popular' : 'new' }),
   }, icon('sparkle', 'sm'), 'New');
 
   // The other sorts live in the Filters panel as one menu instead of three more chips.
@@ -106,7 +106,7 @@ export async function creators(root, { query }) {
 
   const field = (label, el) => h('label', { class: 'filter-field' }, h('span', { class: 'filter-label' }, label), el);
 
-  const filtersActive = Boolean(f.q || f.sort !== 'media' || f.platform || f.paid || f.fresh || f.following);
+  const filtersActive = Boolean(f.q || f.sort !== 'popular' || f.platform || f.paid || f.fresh || f.following);
   const clearBtn = filtersActive ? h('button', {
     class: 'chip clear-all',
     onclick: () => { search.value = ''; navigate('/creators', {}, { replace: true }); },
@@ -115,7 +115,7 @@ export async function creators(root, { query }) {
 
   // Secondary disclosure for Source and Activity
   const moreFilters = [field('Sort', sortSel), field('Source', platSel), field('Activity', freshSel)].filter(Boolean);
-  const activeExtraCount = (f.platform ? 1 : 0) + (f.fresh ? 1 : 0) + (f.sort !== 'media' && f.sort !== 'new' ? 1 : 0);
+  const activeExtraCount = (f.platform ? 1 : 0) + (f.fresh ? 1 : 0) + (f.sort !== 'popular' && f.sort !== 'new' ? 1 : 0);
   const filtersDisclosure = (() => {
     let open = window.matchMedia('(min-width: 900px)').matches && activeExtraCount > 0;
     const panel = h('div', { class: 'filter-more', hidden: !open }, moreFilters);

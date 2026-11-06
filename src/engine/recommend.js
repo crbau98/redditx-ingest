@@ -404,6 +404,21 @@ function recommend(t) {
 }
 
 /**
+ * The no-taste answer: creators in the stored popularity order, excluding who the visitor follows
+ * and who they asked to see less of. Freshness is part of the rank, so the rail is not a museum of
+ * old accounts. The reason never claims personalisation; it names the order.
+ */
+function popularFallback(t, limit) {
+  const avoid = [...new Set([...t.avoidCreators, ...t.exclude])].filter((id) => UUID.test(id)).slice(0, 200);
+  const yearAgo = new Date(Date.now() - 365 * 86400000).toISOString();
+  const rows = db.prepare(`${repo.SELECT_CREATOR_CARD}
+      WHERE c.status = 'active' AND c.scope != 'excluded' AND c.media_count > 0 AND c.last_media_at >= ?
+        ${avoid.length ? `AND c.id NOT IN (${marks(avoid)})` : ''}
+      ORDER BY c.popularity DESC, c.last_media_at DESC LIMIT ?`).all(yearAgo, ...avoid, limit);
+  return rows.map(repo.serializeCreator).map((c) => ({ ...c, reason: 'Popular here' }));
+}
+
+/**
  * Creators you might like: those most similar to the creators in your taste (weighted by how
  * much you like each), or matching your tags when you have no favourites yet; recent posting
  * breaks near-ties. Excludes creators
@@ -428,7 +443,9 @@ function creatorsForYou(t, limit = 12) {
     }
   }
   const top = [...score].sort((a, b) => b[1] - a[1]).slice(0, limit * 2).map(([id]) => id);
-  if (!top.length) return [];
+  // A brand-new visitor has no taste yet: answer with the site-wide popularity rank instead of an
+  // empty rail. Same exclusions apply (followed, "show less"), and the reason says what the order is.
+  if (!top.length) return popularFallback(t, limit);
   const found = db.prepare(`${repo.SELECT_CREATOR_CARD} WHERE c.id IN (${marks(top)}) AND c.status = 'active' AND c.scope != 'excluded' AND c.media_count > 0`).all(...top).map(repo.serializeCreator);
   // Among close matches, creators posting right now come first.
   const now = Date.now();
@@ -462,4 +479,4 @@ function tasteFromQuery(q, { clampInt }) {
   };
 }
 
-module.exports = { recommend, creatorsForYou, tasteFromQuery, parseWeighted, diversify, creatorFirst, setCacheTtl };
+module.exports = { recommend, creatorsForYou, popularFallback, tasteFromQuery, parseWeighted, diversify, creatorFirst, setCacheTtl };

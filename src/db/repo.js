@@ -305,6 +305,8 @@ const creators = {
     }
     const order = {
       media: "((c.links GLOB '*onlyfans.com/[A-Za-z0-9]*' OR c.links LIKE '%onlyfans.com/%' OR c.links LIKE '%OnlyFans%') AND c.media_count >= 5) DESC, (c.origin = 'admin') DESC, c.media_count DESC, c.total_score DESC",
+      // Popular = the stored rank (engine/popularity.js); among equals, the freshest and then the biggest archive.
+      popular: 'c.popularity DESC, c.last_media_at DESC, c.media_count DESC',
       score: 'c.total_score DESC',
       recent: 'c.last_media_at DESC',
       new: 'c.created_at DESC',
@@ -1568,13 +1570,17 @@ function adminOverview() {
 
 function discover() {
   const pageOf = (f) => media.list({ ...f, noCount: true }).items;
-  // Suggested creators: OnlyFans creators with media first, then admin/lookup-curated creators, then by media count.
+  // Suggested creators, in the order a visitor should meet them: the stored popularity rank first
+  // (engagement + breadth + volume + freshness, engine/popularity.js), OnlyFans pages and admin adds
+  // break ties. Anyone who has not posted in a year is out of the first rail; when the ranked pool is
+  // still warming (a fresh deploy computes it after healthy), the old media-count order answers instead.
+  const yearAgo = new Date(Date.now() - 365 * 86400000).toISOString();
   const featured = db.prepare(`${SELECT_CREATOR_CARD}
-    WHERE c.status = 'active' AND c.scope != 'excluded' AND c.media_count >= 2
-    ORDER BY ((c.links GLOB '*onlyfans.com/[A-Za-z0-9]*' OR c.links LIKE '%onlyfans.com/%' OR c.links LIKE '%OnlyFans%') AND c.media_count >= 5) DESC,
+    WHERE c.status = 'active' AND c.scope != 'excluded' AND c.media_count >= 2 AND c.last_media_at >= ?
+    ORDER BY c.popularity DESC,
+             ((c.links GLOB '*onlyfans.com/[A-Za-z0-9]*' OR c.links LIKE '%onlyfans.com/%' OR c.links LIKE '%OnlyFans%') AND c.media_count >= 5) DESC,
              (c.origin = 'admin') DESC,
-             (c.links GLOB '*onlyfans.com/[A-Za-z0-9]*' OR c.links GLOB '*fansly.com/[A-Za-z0-9]*') DESC,
-             c.media_count DESC, c.total_score DESC LIMIT 16`).all().map(serializeCreator);
+             c.last_media_at DESC, c.media_count DESC LIMIT 16`).all(yearAgo).map(serializeCreator);
   const ofTrending = pageOf({ paidHost: 'onlyfans', sort: 'trending', limit: 20 });
   const ofVideos = pageOf({ type: 'video', paidHost: 'onlyfans', sort: 'recent', limit: 14 });
   return {
