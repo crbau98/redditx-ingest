@@ -36,12 +36,13 @@ const modelHtml = (cards, gender = 'Male') => `<html><head><title>Demo Man Gay P
   <div class="infoPiece"><span>Gender:</span> <span itemprop="gender" class="smallInfo"> ${gender} </span></div></div>
   <ul class="videoList">${cards.join('')}</ul></body></html>`;
 
-const videoHtml = ({ title, dur = 1081, hls = 'https://ev-h.phncdn.com/hls/1080P.mp4/master.m3u8?h=x', info = '2 weeks ago' }) => `<html><head>
+const videoHtml = ({ title, dur = 1081, hls = 'https://ev-h.phncdn.com/hls/1080P.mp4/master.m3u8?h=x', info = '2 weeks ago', published }) => `<html><head>
   <title>${title} - Pornhub Gay</title></head><body>
   <div class="videoInfo">${info}</div>
   <script>var flashvars_492128815 = ${JSON.stringify({
     video_title: title,
     video_duration: dur,
+    ...(published === null ? {} : { published_at: published || '2026-11-04 13:14:22' }),
     image_url: 'https://pix-cdn77.phncdn.com/poster.jpg',
     mediaDefinitions: [
       { format: 'mp4', quality: '[]', videoUrl: 'https://www.pornhub.com/video/get_media?s=abc' },
@@ -137,7 +138,15 @@ test('the video page picks the best HLS playlist and reads the date and poster',
   assert.equal(page.duration, 1081);
   assert.equal(page.hls, 'https://ev-h.phncdn.com/hls/1080P.mp4/master.m3u8?h=x');
   assert.equal(page.thumb, 'https://pix-cdn77.phncdn.com/poster.jpg');
-  assert.match(page.postedAt, /^20\d\d-/);
+  const days = (Date.now() - Date.parse(page.postedAt)) / 86400e3;
+  assert.ok(days > 12 && days < 16, `the visible words win (2 weeks), got ${page.postedAt}`);
+});
+
+test('the page-render published_at is only a fallback when the words are missing', () => {
+  const dated = pornhub._videoPage(videoHtml({ title: 'Words', info: '3 hours ago' }));
+  assert.ok(Date.now() - Date.parse(dated.postedAt) < 4 * 3600e3, 'the words date it, not the constant stamp');
+  const bare = pornhub._videoPage(videoHtml({ title: 'No words', info: '', published: '2026-11-04 13:14:22' }));
+  assert.equal(bare.postedAt, '2026-11-04T13:14:22.000Z');
 });
 
 test('one fetch: reads the latest video pages, marks items trusted, remembers what it saw', async () => {
@@ -203,8 +212,42 @@ test('the gay directory yields each performer once, and discovery is wired to it
   assert.equal(list[0].url, 'https://www.pornhub.com/model/demo-man');
   assert.equal(list[0].views, 14400000);
   assert.equal(list[1].kind, 'pornstar');
+  // Deep pages (~p300+) serve a plain <li> row with the same link and image, no performerCard class.
+  const deep = pornhub.modelsFromDirectory(`<ul><li><a href="/model/deep-man"><img alt="Deep Man" src="https://ei.phncdn.com/a.jpg" /><span class="link">Deep Man</span></a></li></ul>`);
+  assert.deepEqual(deep.map((c) => c.slug), ['deep-man']);
+  assert.equal(deep[0].name, 'Deep Man');
   const discovery = require('../src/engine/discovery');
   assert.equal(typeof discovery.pornhubDiscovery, 'function', 'the directory step is part of the discovery run');
+});
+
+test('a discovery run reads six pages, keeps the follow cap, queues the rest and persists the page', async () => {
+  const repo = require('../src/db/repo');
+  const settings = require('../src/settings');
+  settings.update({ physiqueFilter: false });
+  repo.discoveryState.set('pornhub.page', '0');
+  const performer = (slug, name) => `<li class="modelLi performerCard"><div class="wrap"><a href="/model/${slug}"><img alt="${name}" /></a></div></li>`;
+  const pageUrl = (p) => (p === 1 ? 'https://www.pornhub.com/gay/pornstars' : `https://www.pornhub.com/gay/pornstars?page=${p}`);
+  for (let p = 1; p <= 6; p++) {
+    pages.set(pageUrl(p), `<html><body><ul>${
+      [1, 2, 3].map((n) => performer(`page${p}-man${n}`, `Page ${p} Man ${n}`)).join('')}</ul></body></html>`);
+  }
+  const discovery = require('../src/engine/discovery');
+  const out = await discovery.pornhubDiscovery({ pages: 6, maxFollows: 2 });
+  assert.equal(out.followed, 2);
+  assert.equal(out.queued, 16, 'the other 16 are queued as candidates, not lost');
+  assert.equal(repo.discoveryState.get('pornhub.page'), '6');
+  assert.ok(repo.candidates.find('pornhub', 'user', 'https://www.pornhub.com/model/page6-man3'), 'a deep page reached the queue');
+});
+
+test('a 404 on the directory wraps the walk back to page 1', async () => {
+  const repo = require('../src/db/repo');
+  repo.discoveryState.set('pornhub.page', '500');
+  delete require.cache[require.resolve('../src/engine/discovery')];
+  const discovery = require('../src/engine/discovery');
+  // the stub answers 404 for any URL that is not in `pages`; page 501 is absent
+  const out = await discovery.pornhubDiscovery({ pages: 2 });
+  assert.equal(out.scanned, 0);
+  assert.equal(repo.discoveryState.get('pornhub.page'), '0');
 });
 
 test('expired Pornhub playlists are refreshed at the video page (engine/playback)', () => {

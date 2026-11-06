@@ -165,13 +165,17 @@ function videoPage(html) {
     .filter((d) => d && /hls/i.test(String(d.format || '')) && /^https?:\/\//.test(String(d.videoUrl || '')))
     .sort((a, b) => (Number(b.quality) || 0) - (Number(a.quality) || 0))[0];
   const info = (/<div class="videoInfo">([^<]*)<\/div>/i.exec(h) || [])[1] || null;
+  // The visible block dates the video in words ("3 weeks ago"). The JSON `published_at` is the page
+  // render stamp - the same minute on a 3-hour-old and a 3-year-old video - so it is only the fallback.
+  const published = (/"published_at"\s*:\s*"(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})"/i.exec(h) || []);
+  const stamp = published[1] ? new Date(`${published[1]}T${published[2]}Z`) : null;
   const titleTag = (/<title>([^<]*)<\/title>/i.exec(h) || [])[1] || null;
   const cleanTitle = titleTag ? decode(titleTag).replace(/\s*[-|]\s*Pornhub[^-|]*$/i, '').trim() : null;
   return {
     title: decode(fv.video_title || '') || cleanTitle,
     body: '',
     duration: Number(fv.video_duration) || null,
-    postedAt: relativeIso(info),
+    postedAt: relativeIso(info) || (stamp && !Number.isNaN(stamp.getTime()) ? stamp.toISOString() : null),
     author: null,
     thumb: decode(fv.image_url || '') || null,
     preview: null,
@@ -299,16 +303,19 @@ function modelsFromDirectory(html) {
   const h = String(html || '');
   const out = [];
   const seen = new Set();
-  const re = /<li class="modelLi[^"]*"[\s\S]{0,2500}?<\/li>/g;
+  // Early and mid pages mark the card <li class="modelLi performerCard">; deep pages serve plain <li>
+  // rows with the same link and image, so the block is matched by its link, not by the class.
+  const re = /<li[^>]*>([\s\S]{0,2500}?)<\/li>/g;
   let m;
   while ((m = re.exec(h))) {
-    const block = m[0];
+    const block = m[1];
     const link = /href="\/(model|pornstar)\/([a-z0-9][a-z0-9_-]{1,60})"/i.exec(block);
     if (!link) continue;
     const slug = link[2].toLowerCase();
     if (seen.has(slug) || /^\d+$/.test(slug) || RESERVED.has(slug)) continue;
     seen.add(slug);
-    const name = stripTags((/alt="([^"]+)"/i.exec(block) || [])[1] || slug);
+    const name = stripTags((/alt="([^"]+)"/i.exec(block) || /<span class="link">([^<]+)<\/span>/i.exec(block) || [])[1] || slug);
+    if (!name) continue;
     const views = countOf((/<span class="viewsNumber[^"]*">([^<]*)</i.exec(block) || [])[1] || '');
     out.push({ url: `https://www.pornhub.com/${link[1].toLowerCase()}/${slug}`, name, slug, kind: link[1].toLowerCase(), views });
   }
