@@ -23,6 +23,14 @@ const { toIso, clip } = require('./util');
 const base = config.baseUrls.redgifs;
 let cached = null;
 
+const RESOLVE_TTL_MS = 15 * 60 * 1000;
+const resolved = new Map(); // gif id -> { at, item | gone }
+const inflight = new Map(); // gif id -> the promise of the lookup being made right now (concurrent callers share it)
+function remember(id, v) {
+  if (resolved.size >= 2000) for (const k of [...resolved.keys()].slice(0, 500)) resolved.delete(k);
+  resolved.set(id, { at: Date.now(), ...v });
+}
+
 async function authHeaders() {
   if (!cached || Date.now() > cached.expires) {
     const res = await http.json(`${base}/v2/auth/temporary`, { headers: { origin: 'https://www.redgifs.com' }, retries: 1 });
@@ -171,11 +179,32 @@ module.exports = {
   profileFromUser,
   isConfigured: () => ({ ok: true }),
 
-  async resolve(url) {
+  /**
+   * One gif by its page or embed link. The answer is remembered for RESOLVE_TTL_MS: the same clip is linked from many posts
+   * (crossposts, several communities in one run) and every lookup is a call 2 s apart and a 429 risk. A gif that is gone (404/410)
+   * is remembered as gone; a rate limit or an outage is not. `{ fresh: true }` (the playback refresh: the stored link stopped
+   * working) always asks again and replaces what is remembered.
+   */
+  async resolve(url, { fresh = false } = {}) {
     const id = idFromUrl(url);
     if (!id) return null;
-    const json = await api(`/v2/gifs/${encodeURIComponent(id)}`);
-    return itemFromGif(json.gif || json, null);
+    const hit = resolved.get(id);
+    if (!fresh && hit && Date.now() - hit.at < RESOLVE_TTL_MS) { if (hit.gone) throw hit.gone; return hit.item ? { ...hit.item } : null; }
+    // Pipeline workers resolve in parallel: all of them miss the cache before the first answer is back, so each would queue its own
+    // authentication and lookup 2 s apart. A lookup already under way is joined instead (a refresh always makes its own).
+    let p = !fresh ? inflight.get(id) : null;
+    if (!p) {
+      p = (async () => {
+        try { const json = await api(`/v2/gifs/${encodeURIComponent(id)}`); const item = itemFromGif(json.gif || json, null); remember(id, { item }); return item; } catch (e) {
+          if (e && (e.status === 404 || e.status === 410)) remember(id, { gone: e });
+          throw e;
+        }
+      })();
+      inflight.set(id, p);
+      p.finally(() => { if (inflight.get(id) === p) inflight.delete(id); }).catch(() => {});
+    }
+    const item = await p;
+    return item ? { ...item } : null;
   },
 
   async fetch(feed, ctx) {

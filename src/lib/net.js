@@ -229,12 +229,15 @@ class HttpError extends Error {
   }
 }
 
+// A server that says "come back in an hour" means it: clamping that to two minutes made PRISM knock again after 120 s,
+// which deepens a throttle. Six hours is the most a single answer can ask for.
+const MAX_RETRY_AFTER_MS = 6 * 3600 * 1000;
 function parseRetryAfter(h) {
   if (!h) return 0;
   const secs = Number(h);
-  if (Number.isFinite(secs)) return Math.min(secs * 1000, 120000);
+  if (Number.isFinite(secs)) return Math.max(0, Math.min(secs * 1000, MAX_RETRY_AFTER_MS));
   const date = Date.parse(h);
-  return Number.isFinite(date) ? Math.max(0, Math.min(date - Date.now(), 120000)) : 0;
+  return Number.isFinite(date) ? Math.max(0, Math.min(date - Date.now(), MAX_RETRY_AFTER_MS)) : 0;
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

@@ -55,6 +55,9 @@ function remember(id, phash, { mediaType, width, height } = {}) {
   if (phash) live.add(id, phash, { type: mediaType === 'video' ? 'video' : 'image', aspect: aspectOf(width, height) });
 }
 
+/** Take a picture out of the index (its hash was wrong, e.g. a borrowed poster). The next load rebuilds from the database anyway. */
+function forget(id) { if (loaded) live.remove(id); }
+
 /** Refuse this picture (and its look-alikes) from now on. */
 function blockHash(phash, reason) {
   load();
@@ -64,4 +67,4 @@ function blockHash(phash, reason) {
 function stats() { load(); return { indexed: live.size, blocked: blocked.size }; }
 function _reset() { loaded = false; live.entries.clear(); live.buckets.clear(); blocked.entries.clear(); blocked.buckets.clear(); }
 
-module.exports = { check, remember, blockHash, stats, load, _reset };
+module.exports = { check, remember, forget, blockHash, stats, load, _reset };

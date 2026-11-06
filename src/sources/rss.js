@@ -101,16 +101,18 @@ function parseFeed(text, baseUrl) {
       const content = e.children('content\\:encoded').first().text() || e.children('content').first().text()
         || e.children('description').first().text() || e.children('summary').first().text();
       const media = [];
+      const thumbs = [];
+      e.find('media\\:thumbnail').each((_, n) => { const u = absUrl($(n).attr('url'), baseUrl); if (u) thumbs.push(u); });
+      // a video enclosure has no poster of its own; the entry's media:thumbnail is it (PeerTube, WordPress video, podcasts)
+      const posterFor = (type) => (type === 'video' ? thumbs[0] || null : null);
       e.children('enclosure').each((_, n) => {
         const url = absUrl($(n).attr('url'), baseUrl); const type = $(n).attr('type') || '';
-        if (url && (/^(image|video)\//.test(type) || looksLikeDirectMedia(url))) media.push({ url, type: kindOf(url, type) });
+        if (url && (/^(image|video)\//.test(type) || looksLikeDirectMedia(url))) { const k = kindOf(url, type); media.push({ url, type: k, preview: posterFor(k) }); }
       });
       e.children('link[rel="enclosure"]').each((_, n) => {
         const url = absUrl($(n).attr('href'), baseUrl); const type = $(n).attr('type') || '';
-        if (url) media.push({ url, type: kindOf(url, type) });
+        if (url) { const k = kindOf(url, type); media.push({ url, type: k, preview: posterFor(k) }); }
       });
-      const thumbs = [];
-      e.find('media\\:thumbnail').each((_, n) => { const u = absUrl($(n).attr('url'), baseUrl); if (u) thumbs.push(u); });
       e.find('media\\:content').each((_, n) => {
         const url = absUrl($(n).attr('url'), baseUrl); const type = $(n).attr('type') || $(n).attr('medium') || '';
         if (!url) return;
@@ -177,6 +179,9 @@ function entryToItems(entry, feed, ctx = {}) {
       mediaType: m.type,
       mediaUrl: m.url,
       previewUrl: m.preview || (m.type === 'image' ? m.url : null),
+      // a video's poster here is the entry's media:thumbnail, often a channel or podcast artwork reused by every entry: it says nothing
+      // about WHICH video this is, so the pipeline must not take its perceptual hash as the video's (it would drop the second one)
+      ...(m.type === 'video' && m.preview ? { posterShared: true } : {}),
       width: m.width || null,
       height: m.height || null,
       altText: m.alt || null,
@@ -212,7 +217,7 @@ async function load(url, validators = {}) {
   if (res.status === 304) return { notModified: true };
   if (res.status >= 400) {
     const retryAfter = net.parseRetryAfter(res.headers['retry-after']);
-    if (res.status === 429) limiter.penalize(http.key, retryAfter || 30000);
+    if (res.status === 429) limiter.penalize(http.key, Math.min(retryAfter || 30000, require('./http').MAX_SHARED_HOLD_MS));
     throw new net.HttpError(`HTTP ${res.status} for ${url}`, { status: res.status, url, retryAfter });
   }
   return { text: decodeBody(res.body, res.headers['content-type']), url: res.url || url, headers: res.headers, ctype: res.headers['content-type'] };
