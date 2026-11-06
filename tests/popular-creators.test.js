@@ -68,4 +68,21 @@ describe('popular creators', () => {
     const r = await call('/api/creators?sort=bogus&limit=5');
     assert.equal(r.status, 200);
   });
+
+  test('a first visitor gets Popular while the library is still warming', () => {
+    const snapshots = require('../src/lib/snapshots');
+    const recommend = require('../src/engine/recommend');
+    const clampInt = (v, lo, hi, d) => { const n = Number.parseInt(v, 10); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d; };
+    const wasWorker = snapshots.USE_WORKER;
+    snapshots.USE_WORKER = true; // no snapshot in this process: library() answers "warming"
+    try {
+      const fresh = recommend.creatorsForYou(recommend.tasteFromQuery({}, { clampInt }), 5);
+      assert.ok(fresh.length > 0, 'a visitor with no taste must not wait for the similarity build');
+      assert.equal(fresh[0].reason, 'Popular here');
+
+      const taste = recommend.tasteFromQuery({ tags: 'beard' }, { clampInt });
+      assert.throws(() => recommend.creatorsForYou(taste, 5), (e) => e.code === 'warming',
+        'a taste profile still waits for the snapshot it needs');
+    } finally { snapshots.USE_WORKER = wasWorker; }
+  });
 });
