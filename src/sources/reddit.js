@@ -12,6 +12,10 @@
  *   3. old  /<path>.json                                 - different edge
  *   4. /<path>.rss                                       - Atom, rarely blocked
  *   5. Arctic Shift archive                              - works when Reddit is down
+ *
+ * Public mode (no credentials) starts at 5 instead: those three requests are guaranteed 403 from this host and
+ * only the archive answers. A paged read (an `after` cursor) can only use transports that carry one, so it keeps
+ * the JSON ladder. The archive takes no sort and no time window.
  */
 const config = require('../config');
 // Reddit answers an anonymous reader at about one request a minute (x-ratelimit-remaining: 0,
@@ -309,11 +313,15 @@ async function fetchPage(feed, sort, params, dead = new Set()) {
   const path = listingPath(feed, sort);
   const paged = !!params.after;
   const label = `${feed.kind === 'user' ? 'u' : 'r'}/${feed.target}`;
+  // Without OAuth credentials Reddit refuses every .json/.rss request from this host with a 403 challenge, so
+  // public mode asks the archive first instead of paying three doomed requests per page. The public transports
+  // stay behind it as fallbacks (the archive can lag or miss a small community) and a paged read still uses them.
+  const publicMode = !config.creds.redditClientId || !config.creds.redditClientSecret;
   const attempts = [
-    ['oauth', () => viaOauth(path, params)],
+    ...(publicMode ? [['archive', () => viaArchive(feed, params)]] : [['oauth', () => viaOauth(path, params)]]),
     ['json', () => viaJson(base, path, params, 'json')],
     ['old', () => viaJson(oldBase, path, params, 'old')],
-    ...(paged ? [] : [['rss', () => viaRss(path, params)], ['archive', () => viaArchive(feed, params)]]),
+    ...(paged ? [] : [['rss', () => viaRss(path, params)], ...(publicMode ? [] : [['archive', () => viaArchive(feed, params)]])]),
   ];
   const usable = attempts.filter(([name]) => !dead.has(name));
   const notes = [];
@@ -456,11 +464,17 @@ module.exports = {
       ? [{ sort: 'top', t: 'month' }, { sort: 'hot' }]
       : [{ sort: 'new' }];
     const items = [];
+    const seen = new Set();
     const notes = new Set();
     let via = null;
     let newest = cursor.newestAt || null;
 
-    for (const pass of passes) {
+    for (let p = 0; p < passes.length; p++) {
+      const pass = passes[p];
+      // The archive answers with the newest rows regardless of sort and time window, so on the archive the
+      // first-run top+hot second pass would re-read the same page. One pass is enough there (the feed cursor
+      // then switches to the incremental `new` path anyway).
+      if (p > 0 && via === 'archive') { notes.add('archive read once (it ignores sort and window)'); break; }
       let after = null;
       const maxPages = first ? 3 : 2;
       for (let page = 0; page < maxPages; page++) {
@@ -482,6 +496,9 @@ module.exports = {
         for (const it of parsed) {
           if (it.postedAt && (!newest || it.postedAt > newest)) newest = it.postedAt;
           if (!first && pass.sort === 'new' && cursor.newestAt && it.postedAt && it.postedAt <= cursor.newestAt && !ctx.force) { reachedKnown = true; continue; }
+          const key = `${it.sourceId}:${it.position || 0}`;
+          if (seen.has(key)) continue; // the archive can serve the same row to two passes
+          seen.add(key);
           items.push(it);
         }
         after = res.after;

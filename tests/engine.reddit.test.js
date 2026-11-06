@@ -14,10 +14,12 @@ before(async () => {
     '/r/gaybrosgonewild/top.json': () => ({ json: F.listing(all) }),
     '/r/gaybrosgonewild/hot.json': () => ({ json: F.listing(all) }),
     '/r/gaybrosgonewild/new.json': () => ({ json: F.listing(newPosts ? [F.fresh, ...all] : all) }),
+    // no credentials anywhere in the suite: the adapter starts at the archive, which serves the same rows
+    '/api/posts/search': () => ({ json: { data: (newPosts ? [F.fresh, ...all] : all).map((c) => c) } }),
     '/v2/auth/temporary': () => ({ json: { token: 'tok' } }),
     '/v2/gifs/blueduck': (req) => (req.headers.authorization === 'Bearer tok' ? { json: { gif } } : { status: 401 }),
   });
-  prepareEnv({ REDDIT_BASE_URL: mock.url, REDGIFS_BASE_URL: mock.url });
+  prepareEnv({ REDDIT_BASE_URL: mock.url, REDDIT_ARCHIVE_URL: mock.url, REDGIFS_BASE_URL: mock.url });
   repo = require('../src/db/repo');
   require('../src/settings').update({ redditEnabled: true }); // Reddit is off by default: these tests exercise it
   engine = require('../src/engine/engine');
@@ -28,7 +30,7 @@ after(async () => { engine.shutdown(); await mock.close(); });
 test('first run ingests every valid media item and applies all gates', async () => {
   const r = await engine.runFeed(feed, 'manual');
   assert.equal(r.status, 'ok');
-  assert.equal(r.via, 'json');
+  assert.equal(r.via, 'archive', 'public mode reads the archive, not the three refused transports');
   const rows = repo.media.list({ limit: 100, state: 'any', admin: true }).items;
   const titles = rows.map((m) => `${m.title}|${m.position}`).sort();
 
