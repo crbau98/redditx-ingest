@@ -125,6 +125,21 @@ test('when the CDP browser gets a page with nothing, the free reader goes next',
   restore();
 });
 
+test('when every free tier comes back empty, the answer says which tiers ran', async () => {
+  reset(); withSettings({ challengeBrowser: 'fallback', jinaReader: 'fallback', brightdataUnlocker: 'off', scrapflyUnlocker: 'off' });
+  const chrome = require('../src/lib/chrome');
+  const jina = require('../src/lib/jina');
+  const real = { enabled: chrome.enabled, renderPages: chrome.renderPages, read: jina.read };
+  chrome.enabled = () => true;
+  chrome.renderPages = async () => ({ pages: [{ html: '<html><body>nothing</body></html>', url: TARGET, scrolls: 0, challenge: null }], notes: [] });
+  jina.read = async () => ({ html: '<html><body>still nothing</body></html>', status: 200, bytes: 40, blocked: false, ms: 1 });
+  const u = await web._unlockedRead(feed, 'media');
+  assert.equal(u.page.media.length, 0);
+  assert.deepEqual(u.tiers, ['Chrome (CDP)', 'Jina Reader'], 'the run note can name who tried');
+  chrome.enabled = real.enabled; chrome.renderPages = real.renderPages; jina.read = real.read;
+  restore();
+});
+
 test('with Scrapfly off and no Bright Data, the unlock is not used at all', async () => {
   reset(); withSettings({ scrapflyUnlocker: 'off', brightdataUnlocker: 'off' }); browser4.assertAllowed = async () => {};
   let scrapflyCalls = 0;

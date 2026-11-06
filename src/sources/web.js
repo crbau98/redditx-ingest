@@ -515,18 +515,24 @@ async function unlockedRead(feed, need) {
   const count = (pg) => (need === 'media' ? pg.media.length : pg.links.length);
   const answers = [];
   const keep = (r) => { if (r) answers.push(r); return !!(r && r.page && count(r.page) > 0); };
+  // Which tiers actually got an answer (a page or an error), in the order they ran: the run note names them even when none
+  // of them found anything, so a page that stays empty says who tried instead of looking like the plain download alone.
+  const ran = (u) => {
+    if (u) u.tiers = [...new Set(answers.filter((a) => !a.skipped).map((a) => (a.tier || (a.error && a.error.tier) ? tierLabel(a.tier || a.error.tier) : unlockLabel(a))).filter(Boolean))];
+    return u;
+  };
 
   // Free tiers first: the CDP browser (the only one that clears a challenge) and the Jina reader.
-  if (localOn && keep(await chromeRead(feed, need, cfg, host))) return answers[0];
-  if (jinaOn && keep(await jinaRead(feed, need, cfg))) return answers[answers.length - 1];
+  if (localOn && keep(await chromeRead(feed, need, cfg, host))) return ran(answers[0]);
+  if (jinaOn && keep(await jinaRead(feed, need, cfg))) return ran(answers[answers.length - 1]);
 
   // Then the paid tiers, Bright Data before Scrapfly.
-  if (bdOn && keep(await brightdataRead(feed, need, cfg, host))) return answers[answers.length - 1];
-  if (scrapOn && keep(await scrapflyRead(feed, need, cfg, host))) return answers[answers.length - 1];
+  if (bdOn && keep(await brightdataRead(feed, need, cfg, host))) return ran(answers[answers.length - 1]);
+  if (scrapOn && keep(await scrapflyRead(feed, need, cfg, host))) return ran(answers[answers.length - 1]);
   // Nothing found media: keep the LAST real answer (an empty page is still an answer, and the last tier to get a page is the
   // most capable one that ran), else the LAST tier's story (a skip or an error), because that is the tier that ran once the
   // free ones had been used up.
-  return answers.filter((a) => a.page).pop() || answers.filter((a) => a.skipped || a.error).pop() || null;
+  return ran(answers.filter((a) => a.page).pop() || answers.filter((a) => a.skipped || a.error).pop() || null);
 }
 
 /** The local Chrome (raw CDP) reads the page and clears a challenge on the way. Free. */
@@ -540,7 +546,7 @@ async function chromeRead(feed, need, cfg, host) {
     const page = mergeRendered(r.pages);
     // The plain download was REFUSED, so it found nothing: the CDP browser's count is what it added, host history included.
     hoststrategy.record(host, { found: 0, rendered: page.optedOut ? null : (need === 'media' ? page.media.length : page.links.length) });
-    return { page, via: 'chrome-cdp', notes: r.notes || [] };
+    return { page, via: 'chrome-cdp', tier: 'chrome', notes: r.notes || [] };
   } catch (e) {
     return { error: e, tier: 'chrome' };
   }
@@ -567,7 +573,7 @@ async function jinaRead(feed, need, cfg) {
       return { error: Object.assign(new Error(`the reader answered HTTP ${r.status}: ${String(r.html || r.text || '').slice(0, 160).trim() || 'no message'}`), { status: r.status }), tier: 'jina' };
     }
     const page = extractPage(r.html, feed.target, { headers: {}, status: 200, maxMedia: RENDERED_MAX_MEDIA });
-    return { page, via: 'jina-reader', notes: [] };
+    return { page, via: 'jina-reader', tier: 'jina', notes: [] };
   } catch (e) {
     if (e && e.budget) return { skipped: e.message, tier: 'jina' };
     return { error: e, tier: 'jina' };
@@ -600,10 +606,10 @@ async function scrapflyRead(feed, need, cfg, host) {
       allowed: scrapfly.allowedFor(feed),
       host,
     });
-    return { page: r.value, via: 'scrapfly-unlocker', notes: [], cost: r.cost };
+    return { page: r.value, via: 'scrapfly-unlocker', tier: 'scrapfly', notes: [], cost: r.cost };
   } catch (e) {
     e.tier = 'scrapfly';
-    return { error: e, cost: e.cost || 0 };
+    return { error: e, tier: 'scrapfly', cost: e.cost || 0 };
   }
 }
 
@@ -628,10 +634,10 @@ async function brightdataRead(feed, need, cfg, host) {
     }
     if (!page) return null;
     if (!page.optedOut) hoststrategy.recordUnlock(host, { found: count(page) }); // an opt-out says nothing about whether unlocking pays
-    return { page, via, notes };
+    return { page, via, tier: 'brightdata', notes };
   } catch (e) {
     if (spent) hoststrategy.recordUnlock(host, { found: 0 });
-    return { error: e };
+    return { error: e, tier: 'brightdata' };
   }
 }
 
@@ -717,6 +723,7 @@ const webAdapter = {
         notes.push(...u.notes.map((n) => `${unlockLabel(u)}: ${n}`));
         if (u.page.optedOut) page = u.page;
         else if (u.page.media.length) { page = u.page; via = u.via; info.push(`${unlockLabel(u)} got past the refusal: ${page.media.length} media${u.cost != null ? ` (Scrapfly cost ${u.cost} credits)` : ''}`); }
+        else if (u.tiers && u.tiers.length) info.push(`${u.tiers.join(' then ')} read the page and found no media`);
       }
     }
     if (page.optedOut) {
@@ -800,6 +807,7 @@ const linkInBioAdapter = {
       else if (u) {
         if (u.page.optedOut) page = u.page;
         else if (u.page.links.length) { page = u.page; via = u.via; info.push(`${unlockLabel(u)} got past the refusal: ${page.links.length} profile links${u.cost != null ? ` (Scrapfly cost ${u.cost} credits)` : ''}`); }
+        else if (u.tiers && u.tiers.length) info.push(`${u.tiers.join(' then ')} read the page and found no profile links`);
       }
     }
     if (page.optedOut) {
