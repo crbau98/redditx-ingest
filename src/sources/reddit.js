@@ -14,7 +14,11 @@
  *   5. Arctic Shift archive                              - works when Reddit is down
  */
 const config = require('../config');
-const http = require('./http').forPlatform('reddit', 1100);
+// Reddit answers an anonymous reader at about one request a minute (x-ratelimit-remaining: 0,
+// x-ratelimit-reset ~60). A 429 is a wait, not a failure, so hold the call for the whole
+// Retry-After window instead of giving up at the shared 30 s ceiling.
+const REDDIT_WAIT = { maxCooldownWaitMs: 70_000 };
+const http = require('./http').forPlatform('reddit', 1100, { penalty: { ms: 60_000 } });
 const net = require('../lib/net');
 const rss = require('./rss');
 const events = require('../engine/events');
@@ -237,7 +241,7 @@ async function viaOauth(path, params) {
   if (!t) return null;
   try {
     const json = await http.json(`${config.baseUrls.redditOauth}${path}?${qs({ ...params, raw_json: 1 })}`, {
-      headers: { authorization: `Bearer ${t}`, 'user-agent': config.redditUserAgent },
+      ...REDDIT_WAIT, headers: { authorization: `Bearer ${t}`, 'user-agent': config.redditUserAgent },
     });
     if (!json || !json.data) throw new Error('unexpected Reddit OAuth JSON shape');
     return { children: json.data.children || [], after: json.data.after, via: 'oauth' };
@@ -253,7 +257,7 @@ const looksLikeSearchRedirect = (children) => children.length > 0 && children.ev
 async function viaJson(origin, path, params, label) {
   assertOn();
   const json = await http.json(`${origin}${path}.json?${qs({ ...params, raw_json: 1 })}`, {
-    headers: { 'user-agent': config.redditUserAgent },
+    ...REDDIT_WAIT, headers: { 'user-agent': config.redditUserAgent },
   });
   if (!json || !json.data) throw new Error('unexpected Reddit JSON shape'); // e.g. {"message":"Forbidden","error":403} served with 200
   const children = json.data.children || [];
@@ -264,7 +268,7 @@ async function viaJson(origin, path, params, label) {
 async function viaRss(path, params) {
   assertOn();
   const text = await http.text(`${base}${path}.rss?${qs({ limit: params.limit, sort: params.sort, t: params.t })}`, {
-    headers: { 'user-agent': config.redditUserAgent, accept: 'application/atom+xml, application/rss+xml, application/xml;q=0.9' },
+    ...REDDIT_WAIT, headers: { 'user-agent': config.redditUserAgent, accept: 'application/atom+xml, application/rss+xml, application/xml;q=0.9' },
   });
   // A block/challenge page served with 200 parses as an empty feed; refuse it so the ladder keeps walking.
   if (!/<(?:feed|rss|rdf:RDF)[\s>]/i.test(String(text).slice(0, 4000))) throw new Error('Reddit RSS returned a non-feed document (HTML challenge page?)');
@@ -276,7 +280,7 @@ async function viaArchive(feed, params) {
   assertOn();
   // Arctic Shift: /api/posts/search?subreddit=<name>|author=<name>&limit=<=100&sort=desc  ->  {data:[reddit-shaped posts]}
   const q = { limit: Math.min(params.limit || 100, 100), sort: 'desc', ...(feed.kind === 'user' ? { author: feed.target } : { subreddit: feed.target }) };
-  const json = await http.json(`${config.baseUrls.redditArchive}/api/posts/search?${qs(q)}`, { headers: { 'user-agent': config.redditUserAgent } });
+  const json = await http.json(`${config.baseUrls.redditArchive}/api/posts/search?${qs(q)}`, { ...REDDIT_WAIT, headers: { 'user-agent': config.redditUserAgent } });
   const rows = Array.isArray(json) ? json : json.data || [];
   return { children: rows, rawCount: rows.length, after: null, via: 'archive' };
 }
@@ -461,7 +465,16 @@ module.exports = {
       const maxPages = first ? 3 : 2;
       for (let page = 0; page < maxPages; page++) {
         if (ctx.aborted()) break;
-        const res = await fetchPage(feed, pass.sort, { limit: Math.min(ctx.limit || 100, 100), t: pass.t, after, sort: feed.kind === 'user' ? 'new' : undefined });
+        let res;
+        try {
+          res = await fetchPage(feed, pass.sort, { limit: Math.min(ctx.limit || 100, 100), t: pass.t, after, sort: feed.kind === 'user' ? 'new' : undefined });
+        } catch (e) {
+          // Public Reddit allows about one request a minute: a rate-limited later page (or the second
+          // pass) must not throw away the page that already worked. Only a run with nothing at all fails.
+          if (!items.length) throw e;
+          notes.add(`stopped early after ${items.length} items: ${e.message}`);
+          break;
+        }
         via = via || res.via;
         (res.notes || []).forEach((n) => notes.add(n));
         const parsed = res.items || res.children.flatMap(parsePost);

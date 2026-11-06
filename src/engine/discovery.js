@@ -48,14 +48,17 @@ function splitLead(key) {
   return { service: 'OnlyFans', handle: String(key || '') };
 }
 const bskyHttp = require('../sources/http').forPlatform('bluesky', 400);
+// The Reddit archive is its own host with no Reddit quota, so it gets its own limiter key and never
+// waits behind a reddit feed's rate-limit hold.
+const archiveHttp = require('../sources/http').forPlatform('redditArchive', 300);
 
 // similar: Bluesky lists the account among those most like a followed creator (per creator, max 4)
 // hangout: a community where several followed creators post (per creator, max 6)
 // ofconfirmed: the account links to the exact OnlyFans page we were looking for (same person, proven)
 // onlyfans: the account has the same handle as an OnlyFans page creators promote (likely the same person)
 // ai: Claude read the public name and bio and judged it an adult male creator (engine/ai.js triage).
-const WEIGHTS = { identity: 6, mention: 3, cofollow: 1.5, search: 2, similar: 2, hangout: 1.5, ofconfirmed: 8, onlyfans: 2, ai: 2 };
-const CAPS = { identity: 1, mention: 5, cofollow: 8, search: 3, similar: 4, hangout: 6, ofconfirmed: 1, onlyfans: 1, ai: 1 };
+const WEIGHTS = { identity: 6, mention: 3, cofollow: 1.5, search: 2, similar: 2, hangout: 1.5, ofconfirmed: 8, onlyfans: 2, ai: 2, poster: 6 };
+const CAPS = { identity: 1, mention: 5, cofollow: 8, search: 3, similar: 4, hangout: 6, ofconfirmed: 1, onlyfans: 1, ai: 1, poster: 1 };
 const FOLLOWABLE_KINDS = new Set(['user', 'page']);
 // Communities and custom feeds mix many posters, so they are held to a stricter bar than people.
 const SHARED_KINDS = new Set(['community', 'feedgen', 'list', 'niche']);
@@ -435,6 +438,93 @@ async function communityDiscovery({ keywords = 2, aborted = () => false } = {}) 
     }
   }
   if (list.length) repo.discoveryState.set('community.index', String(idx % list.length));
+  return out;
+}
+
+/* ------------------------------------------------- v4.9: prolific Reddit posters */
+// One appearance in a listing proves little. Read the newest posts of the communities we already
+// follow from the Arctic Shift archive (keyless, free, real time, and it does not spend Reddit's
+// one-request-a-minute anonymous quota), tally who actually posts there, then measure each
+// shortlisted author on their own last 100 submissions and count only posts that carry usable
+// media. Only sustained output becomes a lead; a chatterbox in a text-only sub does not.
+const POSTER_7D = 4;    // media posts in the last 7 days
+const POSTER_30D = 12;  // or media posts in the last 30 days
+const POSTER_LOOKBACK = 100; // archive rows per request; the API's maximum
+
+async function archivePosts(params) {
+  const q = new URLSearchParams({ limit: String(POSTER_LOOKBACK), sort: 'desc', ...params });
+  const json = await archiveHttp.json(`${config.baseUrls.redditArchive}/api/posts/search?${q}`);
+  return ((Array.isArray(json) ? json : json.data) || []).filter((r) => r && r.id);
+}
+
+/** Posts inside the window that really parse to media (galleries and videos included). */
+function mediaCount(reddit, rows, windowSeconds) {
+  const cutoff = Date.now() / 1000 - windowSeconds;
+  let n = 0;
+  for (const row of rows) {
+    if (Number(row.created_utc) < cutoff) continue;
+    try { if (reddit.parsePost(row).some((i) => i.mediaUrl)) n++; } catch { /* one odd row must not stop the count */ }
+  }
+  return n;
+}
+
+/**
+ * Follow people who provably post: sample the newest submissions of followed communities, tally
+ * authors, measure the busiest ones over 7 and 30 days, and queue the sustained ones with the
+ * `poster` signal. Communities rotate (cursor), so the whole followed set is covered over time.
+ */
+async function redditPosters({ subreddits = 3, leads = 8, aborted = () => false } = {}) {
+  const reddit = registry.get('reddit');
+  const out = { subreddits: 0, authors: 0, measured: 0, qualified: 0, found: 0 };
+  if (!reddit || !reddit.parsePost || !settingsStore.get().redditEnabled) return out;
+  const subs = repo.db.prepare(`SELECT target FROM feeds WHERE platform = 'reddit' AND kind = 'community'
+      AND enabled = 1 AND items_total >= 20 ORDER BY id`).all().map((r) => r.target);
+  if (!subs.length) return out;
+  let idx = parseInt(repo.discoveryState.get('poster.index', '0'), 10) || 0;
+  const tally = new Map();
+  for (let i = 0; i < Math.min(subreddits, subs.length); i++) {
+    if (aborted()) break;
+    const sub = subs[idx % subs.length];
+    idx++;
+    let rows;
+    try { rows = await archivePosts({ subreddit: sub }); } catch (e) { events.log('WARN', `Discovery: Reddit archive r/${sub} — ${e.message}`); continue; }
+    out.subreddits++;
+    for (const row of rows) {
+      if (!row.author || row.author === '[deleted]' || /^automoderator$/i.test(row.author)) continue;
+      try { if (!reddit.parsePost(row).some((i) => i.mediaUrl)) continue; } catch { continue; }
+      tally.set(row.author, (tally.get(row.author) || 0) + 1);
+    }
+  }
+  if (subs.length) repo.discoveryState.set('poster.index', String(idx % subs.length));
+  out.authors = tally.size;
+  // Busiest first. A person we already follow, or already have queued, does not need a second look.
+  const shortlist = [...tally.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([name]) => name)
+    .filter((name) => !repo.feeds.find('reddit', 'user', name))
+    .filter((name) => { const c = repo.candidates.find('reddit', 'user', name); return !c || c.status !== 'pending'; })
+    .slice(0, leads);
+  for (const author of shortlist) {
+    if (aborted()) break;
+    let rows;
+    try { rows = await archivePosts({ author }); } catch (e) { events.log('WARN', `Discovery: Reddit archive u/${author} — ${e.message}`); continue; }
+    out.measured++;
+    const d7 = mediaCount(reddit, rows, 7 * 86400);
+    const d30 = mediaCount(reddit, rows, 30 * 86400);
+    if (d7 < POSTER_7D && d30 < POSTER_30D) continue;
+    out.qualified++;
+    const own = rows.filter((r) => Number(r.created_utc) >= Date.now() / 1000 - 30 * 86400);
+    // The community names are the account-level evidence: a single post title that says "my girl took
+    // this" would otherwise reject the person outright, while every item is judged again at ingest.
+    const where = [...new Set(own.map((r) => r.subreddit).filter(Boolean))].slice(0, 6);
+    const karma = own.reduce((n, r) => n + (Number(r.score) || 0), 0);
+    const c = consider(
+      { platform: 'reddit', kind: 'user', target: author, label: `u/${author}`, ingestable: true },
+      'poster', `${d7} in 7d, ${d30} in 30d`,
+      { displayName: author, bio: where.join(' · '), popularity: karma },
+    );
+    if (c && c.status === 'pending' && c.scope !== 'excluded') out.found++;
+  }
   return out;
 }
 
@@ -1753,6 +1843,7 @@ async function run({ trigger = 'schedule' } = {}) {
     if (s.imageMatch && !config.isTest) report.imageMatch = await require('./imagematch').run({ aborted, budget: s.braveDailyBudget });
     if (s.discoveryCommunities) report.communities = await communityDiscovery({ aborted });
     if (s.discoveryCommunities) report.hangouts = creatorHangouts();
+    if (s.discoveryPosters && s.redditEnabled && !config.isTest) report.posters = await redditPosters({ subreddits: s.posterSubreddits, leads: s.posterLeads, aborted });
     if (s.discoveryExpand) {
       report.suggested = await blueskySuggested({ aborted });
       report.people = await peopleSearch({ aborted });
@@ -1765,7 +1856,7 @@ async function run({ trigger = 'schedule' } = {}) {
     report.aiProfiles = await require('./ai').readProfiles();
     report.promote = s.autoDiscover || trigger === 'manual' ? promote(s) : { followed: 0, linked: 0 };
     report.pruned = repo.candidates.prune();
-    events.log('INFO', `Discovery ${trigger === 'manual' ? '(manual) ' : ''}finished: ${report.mentions.found} mention leads, ${report.graph ? report.graph.found : 0} graph leads, ${report.topics ? report.topics.found : 0} search leads, ${report.communities ? report.communities.found : 0} community/feed leads, ${report.hangouts ? report.hangouts.found : 0} hangouts, ${report.suggested ? report.suggested.found : 0} Bluesky suggestions, ${report.people ? report.people.found : 0} people-search leads, ${report.identity ? report.identity.linked : 0} identity matches, ${report.seeds ? report.seeds.followed : 0} named creators found, ${report.onlyfans ? report.onlyfans.found : 0} OnlyFans creators traced (${report.onlyfans ? report.onlyfans.linked : 0} accounts linked), ${report.identities.links} same-creator links (${report.identities.merged} merged), ${report.harvest ? report.harvest.read : 0} directory pages harvested (${report.harvest ? report.harvest.leads : 0} paid leads, ${report.harvest ? report.harvest.candidates : 0} profile links), ${report.gff ? report.gff.followed : 0} performer-directory follows, ${report.coomerIndex ? report.coomerIndex.feeds : 0} creators followed from coomer's creator index (${report.coomerIndex && report.coomerIndex.indexed ? report.coomerIndex.matched : 0} matched of ${report.coomerIndex ? report.coomerIndex.checked : 0} paid handles), ${report.coomerNames ? report.coomerNames.feeds : 0} creators matched on coomer by name, ${report.coomer ? report.coomer.verified : 0} coomer pages verified male (${report.coomer ? report.coomer.deferred : 0} deferred), ${report.imageMatch ? report.imageMatch.pages : 0} image-matched pages; followed ${report.promote.followed}, linked ${report.promote.linked}`);
+    events.log('INFO', `Discovery ${trigger === 'manual' ? '(manual) ' : ''}finished: ${report.mentions.found} mention leads, ${report.graph ? report.graph.found : 0} graph leads, ${report.topics ? report.topics.found : 0} search leads, ${report.communities ? report.communities.found : 0} community/feed leads, ${report.hangouts ? report.hangouts.found : 0} hangouts, ${report.posters ? report.posters.found : 0} prolific Reddit posters (${report.posters ? report.posters.measured : 0} people measured in ${report.posters ? report.posters.subreddits : 0} communities), ${report.suggested ? report.suggested.found : 0} Bluesky suggestions, ${report.people ? report.people.found : 0} people-search leads, ${report.identity ? report.identity.linked : 0} identity matches, ${report.seeds ? report.seeds.followed : 0} named creators found, ${report.onlyfans ? report.onlyfans.found : 0} OnlyFans creators traced (${report.onlyfans ? report.onlyfans.linked : 0} accounts linked), ${report.identities.links} same-creator links (${report.identities.merged} merged), ${report.harvest ? report.harvest.read : 0} directory pages harvested (${report.harvest ? report.harvest.leads : 0} paid leads, ${report.harvest ? report.harvest.candidates : 0} profile links), ${report.gff ? report.gff.followed : 0} performer-directory follows, ${report.coomerIndex ? report.coomerIndex.feeds : 0} creators followed from coomer's creator index (${report.coomerIndex && report.coomerIndex.indexed ? report.coomerIndex.matched : 0} matched of ${report.coomerIndex ? report.coomerIndex.checked : 0} paid handles), ${report.coomerNames ? report.coomerNames.feeds : 0} creators matched on coomer by name, ${report.coomer ? report.coomer.verified : 0} coomer pages verified male (${report.coomer ? report.coomer.deferred : 0} deferred), ${report.imageMatch ? report.imageMatch.pages : 0} image-matched pages; followed ${report.promote.followed}, linked ${report.promote.linked}`);
   } catch (e) {
     report.error = e.message;
     events.log('ERR', `Discovery failed: ${e.message}`);
@@ -1827,4 +1918,4 @@ function start() {
 }
 function stop() { stopFlag = true; clearInterval(timer); timer = null; }
 
-module.exports = { seedCreators, seedStatus, onlyfansDiscovery, coomerDiscovery, coomerIndexDiscovery, coomerNameDiscovery, gffDiscovery, gffNextPage, xhamsterDiscovery, pornhubDiscovery, directoryHarvest, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, blueskySuggested, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };
+module.exports = { seedCreators, seedStatus, onlyfansDiscovery, coomerDiscovery, coomerIndexDiscovery, coomerNameDiscovery, gffDiscovery, gffNextPage, xhamsterDiscovery, pornhubDiscovery, directoryHarvest, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, redditPosters, blueskySuggested, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };
