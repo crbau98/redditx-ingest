@@ -41,6 +41,19 @@ const HLS_TYPES = /^(application\/(vnd\.apple\.mpegurl|x-mpegurl|octet-stream)|a
 const REFERER_BY_HOST = {
   'cdn.gff.network': 'https://gayforfans.com/',
 };
+/** Same, for a whole CDN: Pornhub's media nodes (hv-h.phncdn.com, ev-h.phncdn.com, …) answer 412 to
+ * anything but the site itself as the Referer. */
+const REFERER_BY_SUFFIX = [
+  ['phncdn.com', 'https://www.pornhub.com/'],
+];
+
+function refererFor(host) {
+  if (REFERER_BY_HOST[host]) return REFERER_BY_HOST[host];
+  for (const [domain, referer] of REFERER_BY_SUFFIX) {
+    if (host === domain || host.endsWith(`.${domain}`)) return referer;
+  }
+  return null;
+}
 
 function parseTarget(req) {
   const raw = req.query.url;
@@ -76,7 +89,7 @@ const proxyHeaders = (target, extra = {}) => {
   let host = '';
   try { host = new URL(target).hostname.toLowerCase(); } catch { /* none */ }
   return {
-    referer: REFERER_BY_HOST[host] || `${origin}/`,
+    referer: refererFor(host) || `${origin}/`,
     accept: 'image/avif,image/webp,video/*,image/*;q=0.8,*/*;q=0.5',
     'accept-encoding': 'identity',
     ...extra,
@@ -160,7 +173,7 @@ router.get('/hls', async (req, res) => {
   const t = parseTarget(req);
   if (t.error) return sendError(res, t.error);
   let r;
-  try { r = await net.request(t.url, { headers: { referer: `${t.origin}/`, accept: 'application/vnd.apple.mpegurl, */*' }, timeout: 15000, maxBytes: 1_500_000, retries: 1 }); }
+  try { r = await net.request(t.url, { headers: { referer: refererFor(t.host) || `${t.origin}/`, accept: 'application/vnd.apple.mpegurl, */*' }, timeout: 15000, maxBytes: 1_500_000, retries: 1 }); }
   catch (e) { return sendError(res, e.code === 'EBLOCKED' ? [403, 'Blocked host'] : [502, 'Upstream unreachable']); }
   if (r.status >= 400) {
     // A bot-protection interstitial (Cloudflare "Just a moment...") is not a broken video: say so, so the
@@ -191,3 +204,4 @@ router.get('/hls', async (req, res) => {
 });
 
 module.exports = router;
+module.exports._refererFor = refererFor; // test hook: the hotlink Referer rules

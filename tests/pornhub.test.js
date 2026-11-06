@@ -188,3 +188,12 @@ test('expired Pornhub playlists are refreshed at the video page (engine/playback
   assert.equal(playback.canRefresh('pix-cdn77.phncdn.com'), true);
   assert.equal(playback.canRefresh('i.redd.it'), false);
 });
+
+test('the media proxy sends Pornhub as the Referer for every phncdn.com node', () => {
+  const proxy = require('../src/routes/proxy');
+  assert.equal(proxy._refererFor('hv-h.phncdn.com'), 'https://www.pornhub.com/', 'a CDN-origin Referer is refused with 412');
+  assert.equal(proxy._refererFor('ev-h.phncdn.com'), 'https://www.pornhub.com/');
+  assert.equal(proxy._refererFor('pix-cdn77.phncdn.com'), 'https://www.pornhub.com/');
+  assert.equal(proxy._refererFor('cdn.gff.network'), 'https://gayforfans.com/');
+  assert.equal(proxy._refererFor('i.redd.it'), null, 'everything else keeps the generic origin referer');
+});
