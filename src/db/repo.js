@@ -1438,17 +1438,26 @@ const tagIntel = {
   relatedUncached(list, limit, all, lib) {
     const total = lib.total || 1;
     const marks = list.map(() => '?').join(',');
-    const baseSet = `SELECT mt2.media_id FROM media_tags mt2 JOIN tags t2 ON t2.id = mt2.tag_id JOIN media m ON m.id = mt2.media_id
-      WHERE t2.name IN (${marks}) AND m.publish_state = 'published' AND m.scope != 'excluded'
-      GROUP BY mt2.media_id${all ? ' HAVING COUNT(DISTINCT mt2.tag_id) = ?' : ''}`;
-    const baseArgs = all ? [...list, list.length] : list;
-    const base = db.prepare(`SELECT COUNT(*) AS n FROM (${baseSet})`).get(...baseArgs).n;
+    // The base set (media that carry the listed tags, all of them or any) is found from the tag side: one tag's
+    // posting list, probed by (media_id, tag_id) for the rest. No GROUP BY over every tag row of the base set.
+    const tagIds = db.prepare(`SELECT id FROM tags WHERE name IN (${marks})`).all(...list).map((r) => r.id);
+    if (!tagIds.length || (all && tagIds.length !== list.length)) return [];
+    const idMarks = tagIds.map(() => '?').join(',');
+    const baseIds = all
+      ? db.prepare(`SELECT mt1.media_id AS media_id FROM media_tags mt1 JOIN media m ON m.id = mt1.media_id
+          WHERE mt1.tag_id = ? AND m.publish_state = 'published' AND m.scope != 'excluded'
+            AND (SELECT COUNT(*) FROM media_tags mt2 WHERE mt2.media_id = mt1.media_id AND mt2.tag_id IN (${idMarks})) = ?`)
+        .all(tagIds[0], ...tagIds, tagIds.length).map((r) => r.media_id)
+      : db.prepare(`SELECT DISTINCT mt.media_id AS media_id FROM media_tags mt JOIN media m ON m.id = mt.media_id
+          WHERE mt.tag_id IN (${idMarks}) AND m.publish_state = 'published' AND m.scope != 'excluded'`)
+        .all(...tagIds).map((r) => r.media_id);
+    const base = baseIds.length;
     if (!base) return [];
-    const rows = db.prepare(`SELECT t.name, COUNT(DISTINCT mt.media_id) AS co
+    const rows = db.prepare(`SELECT t.name, COUNT(*) AS co
       FROM media_tags mt JOIN tags t ON t.id = mt.tag_id
-      WHERE mt.media_id IN (${baseSet})
+      WHERE mt.media_id IN (SELECT value FROM json_each(?))
         AND t.name NOT IN (${marks}) AND t.name NOT IN (${PLATFORM_TAGS_SQL})
-      GROUP BY t.id HAVING co >= 2`).all(...baseArgs, ...list);
+      GROUP BY t.id HAVING co >= 2`).all(JSON.stringify(baseIds), ...list);
     const communities = new Set(db.prepare("SELECT DISTINCT community FROM media WHERE community IS NOT NULL").all().map((r) => cleanTag(r.community)));
     return rows.filter((r) => !communities.has(r.name)).map((r) => {
       const lift = (r.co / base) / ((lib.tagCount.get(r.name) || r.co) / total);
