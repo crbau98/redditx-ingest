@@ -54,7 +54,14 @@ export async function browse(root) {
   root.replaceChildren(h('div', { class: 'skeleton', style: { height: '320px' } }));
   let tags; let communities; let platforms;
   let topics;
-  try { [tags, communities, platforms, topics] = await Promise.all([get('/api/tags', { limit: 200 }), get('/api/communities'), get('/api/platforms'), topicCards({ limit: 12 })]); }
+  let ofCreators = null; let ofPosts = null; let fanslyCreators = null;
+  const total = (p) => p.then((r) => (r && Number.isFinite(r.total) ? r.total : null), () => null);
+  try {
+    [tags, communities, platforms, topics, ofCreators, ofPosts, fanslyCreators] = await Promise.all([
+      get('/api/tags', { limit: 200 }), get('/api/communities'), get('/api/platforms'), topicCards({ limit: 12 }),
+      total(get('/api/creators', { onlyfans: '1', limit: 1 })), total(get('/api/media', { paid: 'onlyfans', limit: 1 })), total(get('/api/creators', { paid: 'fansly', limit: 1 })),
+    ]);
+  }
   catch (e) { root.replaceChildren(emptyState({ icon: 'alert', title: 'Couldn’t load', text: e.message })); return () => {}; }
 
   if (!platforms.length) {
@@ -65,35 +72,24 @@ export async function browse(root) {
   const byPlatform = new Map();
   for (const c of communities) { if (!byPlatform.has(c.platform)) byPlatform.set(c.platform, []); byPlatform.get(c.platform).push(c); }
 
+  // Only tiles with a real number: a count that is missing or zero is left out, never invented.
+  const tile = (cls, to, name, count, caption, style) => h('a', { class: `browse-tile ${cls}`.trim(), href: to, style },
+    h('div', { class: 'name' }, name), h('div', { class: 'count num' }, fmt.num(count)), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, caption));
+  const paidTiles = [
+    ofCreators ? tile('of-tile', href('/creators', { paid: 'onlyfans' }), [h('span', { class: 'of-mark', 'aria-hidden': 'true' }), 'OnlyFans creators'], ofCreators, 'With a linked page') : null,
+    ofPosts ? tile('of-tile', href('/explore', { paid: 'onlyfans' }), [icon('sparkle', 'sm'), 'OnlyFans posts'], ofPosts, 'Photos and videos') : null,
+    fanslyCreators ? tile('', href('/creators', { paid: 'fansly' }), 'Fansly creators', fanslyCreators, 'With a linked page', { '--c': '#0c85d0' }) : null,
+  ].filter(Boolean);
+
   root.replaceChildren(
-    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Browse'), h('div', { class: 'sub' }, 'Every source, community and tag in the library. Discover for finding a creator; Explore for content.'))),
-    h('section', { class: 'section', style: { marginTop: '8px' } },
+    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Browse'), h('div', { class: 'sub' }, 'Every source, community and tag in the library.'))),
+    paidTiles.length ? h('section', { class: 'section', style: { marginTop: '8px' } },
       h('div', { class: 'section-head' },
         h('div', null,
-          h('h2', null, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), 'OnlyFans & Creator Networks'),
-          h('div', { class: 'sub' }, 'Verified male creators with independent subscription pages')),
-        h('a', { class: 'link-more', href: href('/creators', { paid: 'onlyfans' }) }, 'All OnlyFans creators', icon('chev-r', 'sm'))),
-      h('div', { class: 'browse-grid' },
-        h('a', { class: 'browse-tile of-tile', href: href('/creators', { paid: 'onlyfans' }) },
-          h('div', { class: 'name' }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), 'OnlyFans Stars'),
-          h('div', { class: 'count num' }, '285+'),
-          h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Verified creators')),
-        h('a', { class: 'browse-tile of-tile', href: href('/explore', { paid: 'onlyfans' }) },
-          h('div', { class: 'name' }, icon('sparkle', 'sm'), 'OnlyFans Media'),
-          h('div', { class: 'count num' }, '25.9K+'),
-          h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Photos & videos')),
-        h('a', { class: 'browse-tile of-tile', href: href('/reels', { paid: 'onlyfans' }) },
-          h('div', { class: 'name' }, icon('film', 'sm'), 'OnlyFans Reels'),
-          h('div', { class: 'count num' }, 'Full-Screen'),
-          h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Vertical video feed')),
-        h('a', { class: 'browse-tile', href: href('/creators', { paid: 'fansly' }), style: { '--c': '#0c85d0' } },
-          h('div', { class: 'name' }, 'Fansly Creators'),
-          h('div', { class: 'count num' }, 'Active'),
-          h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Independent feeds')),
-        h('a', { class: 'browse-tile', href: href('/creators', { paid: 'gff' }), style: { '--c': '#ff4757' } },
-          h('div', { class: 'name' }, 'GayForFans'),
-          h('div', { class: 'count num' }, '1,300+'),
-          h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Creators & feeds')))),
+          h('h2', null, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), 'OnlyFans & paid pages'),
+          h('div', { class: 'sub' }, 'Creators with a linked OnlyFans or Fansly page')),
+        h('a', { class: 'link-more', href: href('/creators'), 'aria-label': 'See top creators' }, 'See all', icon('chev-r', 'sm'))),
+      h('div', { class: 'browse-grid' }, paidTiles)) : null,
     h('section', { class: 'section', style: { marginTop: '8px' } }, h('div', { class: 'section-head' }, h('h2', null, icon('layers'), 'Sources'), h('div', { class: 'sub' }, 'Free platforms PRISM ingests — each tile opens Explore')),
       h('div', { class: 'browse-grid' }, platforms.map((p) => h('a', { class: 'browse-tile', href: href('/explore', { platform: p.platform }), style: { '--c': platformColor(p.platform) } },
         h('div', { class: 'name' }, platformLabel(p.platform)), h('div', { class: 'count num' }, fmt.int(p.count)), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'items'))))),

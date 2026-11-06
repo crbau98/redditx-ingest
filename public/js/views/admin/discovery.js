@@ -1,7 +1,7 @@
 import { h, icon, fmt, toast, avatar, debounce } from '../../dom.js';
 import { adminGet, adminPost, adminPut } from '../../api.js';
 import { parse, navigate } from '../../router.js';
-import { table, pager, toggle, platBadge, pageHead, act, kpi } from './ui.js';
+import { table, pager, toggle, platBadge, pageHead, act, kpi, chips, bulkBar, checkbox, undoToast, searchBox } from './ui.js';
 
 const STATUSES = [['pending', 'Waiting'], ['followed', 'Followed'], ['linked', 'Linked to a creator'], ['rejected', 'Rejected'], ['all', 'All']];
 const SIGNAL_LABEL = { identity: 'same name', mention: 'mentioned', cofollow: 'followed by', search: 'search', similar: 'looks like', hangout: 'creators post here', ofconfirmed: 'runs a paid page', onlyfans: 'same handle as a paid page' };
@@ -58,24 +58,32 @@ export async function render(root) {
   let data; let seedsText = '';
 
   const runBtn = h('button', { class: 'btn primary', onclick: (e) => act(e.currentTarget, async () => { await adminPost('/discovery/run'); toast('Discovery started — watch the Live log', 'ok'); setTimeout(load, 2500); }) }, icon('sparkle', 'sm'), 'Run discovery now');
-  head.append(pageHead('Discovery', 'Finds creators you are not following yet: who your creators mention and follow, keyword searches on Reddit and Bluesky, directory and list pages across the open web, the Coomer index and the GayForFans performer ranking, then image-matches their content — scores every lead and follows the strong ones automatically.', runBtn));
+  head.append(pageHead('Discovery', 'Finds creators you are not following yet, scores every lead and follows the strong ones automatically.', runBtn));
 
-  const search = h('input', { class: 'input sm', type: 'search', 'aria-label': 'Search candidates', placeholder: 'Search candidates…', value: f.q, style: { maxWidth: '220px' } });
-  search.addEventListener('input', debounce(() => set({ q: search.value.trim(), page: 0 }), 350));
   const PLATFORMS = [['', 'All platforms'], ['bluesky', 'Bluesky'], ['reddit', 'Reddit'], ['redgifs', 'RedGIFs'], ['x', 'X'], ['telegram', 'Telegram'], ['mastodon', 'Mastodon'], ['misskey', 'Misskey'], ['tumblr', 'Tumblr'], ['peertube', 'PeerTube'], ['linkinbio', 'Link pages']];
-  const bar = h('div', { class: 'toolbar' },
-    h('div', { class: 'seg', role: 'group', 'aria-label': 'Status' }, STATUSES.map(([v, l]) => h('button', { class: f.status === v ? 'on' : '', onclick: () => set({ status: v, page: 0 }) }, l))),
-    search,
+  const bar = h('div', { class: 'a-toolbar' }, h('div', { class: 'a-toolbar-row' }, chips(STATUSES, f.status, (v) => set({ status: v, page: 0 }), 'Status')), h('div', { class: 'a-toolbar-row' },
+    searchBox({ value: f.q, placeholder: 'Search candidates…', label: 'Search candidates', onInput: (v) => set({ q: v, page: 0 }) }),
     h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Platform', onchange: (e) => set({ platform: e.target.value, page: 0 }) }, PLATFORMS.map(([v, l]) => h('option', { value: v, selected: f.platform === v }, l))),
     h('select', { class: 'select sm', style: { width: 'auto' }, 'aria-label': 'Sort', onchange: (e) => set({ sort: e.target.value }) }, [['score', 'Best score'], ['recent', 'Recently seen'], ['new', 'Newest']].map(([v, l]) => h('option', { value: v, selected: f.sort === v }, l))),
-    h('span', { class: 'grow' }),
-    h('button', { class: 'btn sm', onclick: (e) => bulk(e.currentTarget, 'follow') }, icon('check', 'sm'), 'Follow selected'),
-    h('button', { class: 'btn sm', onclick: (e) => bulk(e.currentTarget, 'reject') }, icon('x', 'sm'), 'Reject selected'));
+  ));
+  const bulkUi = bulkBar([
+    h('button', { class: 'btn primary', type: 'button', onclick: (e) => bulk(e.currentTarget, 'follow') }, icon('check', 'sm'), 'Follow'),
+    h('button', { class: 'btn', type: 'button', onclick: (e) => bulk(e.currentTarget, 'reject') }, icon('x', 'sm'), 'Reject'),
+    h('button', { class: 'btn ghost', type: 'button', onclick: () => { selected.clear(); syncBulk(); for (const cb of tableHost.querySelectorAll('input[data-id]')) cb.checked = false; } }, 'Clear'),
+  ], { label: 'Selected candidates' });
+  function syncBulk() { if (selected.size) bulkUi.set(`${selected.size} candidate${selected.size === 1 ? '' : 's'} selected`); else bulkUi.clear(); }
 
   async function bulk(btn, action) {
     if (!selected.size) { toast('Select candidates first'); return; }
     const r = await act(btn, () => adminPost('/discovery/candidates', { ids: [...selected], action }));
-    if (r) { toast(`${r.ok} ${action === 'follow' ? 'followed' : 'rejected'}${r.failed ? ` · ${r.failed} failed` : ''}`, r.failed ? '' : 'ok'); selected.clear(); load(); }
+    if (r) {
+      const ids = [...selected];
+      selected.clear(); syncBulk();
+      const msg = `${r.ok} ${action === 'follow' ? 'followed' : 'rejected'}${r.failed ? ` · ${r.failed} failed` : ''}`;
+      // a rejection can be taken back (the candidate goes back to waiting); a follow has already created feeds, so it cannot
+      if (action === 'reject') undoToast(msg, async () => { for (const id of ids) await adminPost(`/discovery/candidates/${id}`, { action: 'reset' }); load(); }); else toast(msg, r.failed ? '' : 'ok');
+      load();
+    }
   }
   const decide = (c, action) => async (e) => {
     const r = await act(e.currentTarget, () => adminPost(`/discovery/candidates/${c.id}`, { action }));
@@ -220,7 +228,7 @@ export async function render(root) {
     wmHost.replaceChildren(h('details', { class: 'panel', open: rev.length > 0 ? true : null, style: { marginTop: '14px' } },
       h('summary', null, h('b', null, 'Visual & Face Match Queue'), h('span', { class: 'muted', style: { marginLeft: '10px', fontSize: '13px' } },
         `${rev.length} awaiting review · ${conf.length} recent confirmed matches`)),
-      h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Matches found via perceptual hash, video keyframes, seeded link crawl, or opt-in local face similarity. Face matches without corroborating handle/text on the page wait here for human review.'),
+      h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Matches found via perceptual hash, video keyframes, reverse-image search (the same picture elsewhere on the web), seeded link crawl, or opt-in local face similarity. Face matches without corroborating handle/text on the page wait here for human review.'),
       table([
         { label: 'Creator', render: (m) => h('a', { href: `#/creator/${m.creator_id}`, style: { fontWeight: 600 } }, m.creator_name || `@${m.creator_handle}`) },
         { label: 'Web page', render: (m) => h('a', { href: m.page_url, target: '_blank', rel: 'noopener noreferrer nofollow', class: 'truncate', style: { maxWidth: '280px', display: 'inline-block' } }, m.title || m.page_url) },
@@ -242,7 +250,7 @@ export async function render(root) {
     const r = d.candidates;
     tableHost.replaceChildren(
       table([
-        { label: '', width: '28px', render: (c) => { const cb = h('input', { type: 'checkbox', checked: selected.has(c.id), 'aria-label': `Select ${c.target}` }); cb.addEventListener('change', () => { if (cb.checked) selected.add(c.id); else selected.delete(c.id); }); return cb; } },
+        { label: '', srLabel: 'Select', width: '28px', cell: 'check', render: (c) => checkbox({ cell: true, id: c.id, checked: selected.has(c.id), label: `Select ${c.display_name || c.target}`, onChange: (on) => { if (on) selected.add(c.id); else selected.delete(c.id); syncBulk(); } }) },
         { label: 'Candidate', render: (c) => h('div', { class: 'row', style: { gap: '10px', minWidth: 0 } }, avatar({ display_name: c.display_name || c.target, avatar_url: c.avatar_url }, 34),
           h('div', { style: { minWidth: 0 } },
             h('a', { href: c.url || '#', target: '_blank', rel: 'noopener noreferrer nofollow', style: { fontWeight: 600 }, class: 'truncate', title: c.target }, c.display_name || c.label || c.target),
@@ -261,7 +269,7 @@ export async function render(root) {
       pager({ page: r.page, limit: r.limit, total: r.total, onPage: (p) => set({ page: p }) }));
   }
 
-  root.append(head, kpis, runLine, tune, wmHost, ofHost, bar, tableHost);
+  root.append(head, kpis, runLine, tune, wmHost, ofHost, bar, tableHost, bulkUi.el);
   await load();
   loadOnlyFans().catch(() => {});
   const timer = setInterval(() => { if (root.isConnected && data && data.running) load().catch(() => {}); }, 5000);

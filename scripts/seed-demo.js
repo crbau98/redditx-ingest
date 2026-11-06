@@ -46,7 +46,7 @@ const creators = names.map((name, i) => {
   const handle = `${name.toLowerCase()}_${pick(['fit', 'xo', 'lifts', 'nyc', 'bear', 'sun'])}`;
   const plats = [pick(platforms), pick(platforms)].filter((v, idx, a) => a.indexOf(v) === idx);
   const c = repo.creators.create({ handle, displayName: name, bio: pick(bios), avatarUrl: `/demo/art/av${i}/200/200.svg`, bannerUrl: `/demo/art/bn${i}/1200/360.svg`, origin: 'admin' });
-  repo.creators.update(c.id, { verified: rand() > 0.6, links: rand() > 0.5 ? [{ platform: 'external', service: 'OnlyFans', label: `OnlyFans · ${handle}`, url: 'https://onlyfans.com/' } , { platform: 'external', service: 'Throne', label: 'Throne wishlist', url: 'https://throne.com/' }] : [] });
+  repo.creators.update(c.id, { verified: rand() > 0.6, links: rand() > 0.5 ? [{ platform: 'external', service: 'OnlyFans', label: `OnlyFans · ${handle}`, url: `https://onlyfans.com/${handle}` } , { platform: 'external', service: 'Throne', label: 'Throne wishlist', url: 'https://throne.com/' }] : [] });
   for (const p of plats) {
     const a = require('../src/sources').get(p);
     if (a && a.kinds.includes('user')) repo.feeds.upsert({ platform: p, kind: 'user', target: p === 'mastodon' ? `${handle}@mastodon.social` : handle, creatorId: c.id, origin: 'admin', enabled: rand() > 0.3 ? 1 : 0, runNow: false });

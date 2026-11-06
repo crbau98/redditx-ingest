@@ -35,7 +35,6 @@ const tagQ = {
   insert: db.prepare('INSERT OR IGNORE INTO tags (name, category) VALUES (?, ?)'),
   byName: db.prepare('SELECT id FROM tags WHERE name = ?'),
   link: db.prepare('INSERT OR IGNORE INTO media_tags (media_id, tag_id, source) VALUES (?, ?, ?)'),
-  bump: db.prepare('UPDATE tags SET usage_count = usage_count + 1 WHERE id = ?'),
   forMedia: db.prepare('SELECT t.name, t.category FROM tags t JOIN media_tags mt ON mt.tag_id = t.id WHERE mt.media_id = ? ORDER BY t.name'),
   setText: db.prepare('UPDATE media SET tags_text = ? WHERE id = ?'),
 };
@@ -53,7 +52,8 @@ function addTags(mediaId, names, source = 'ingest') {
   for (const name of clean) {
     tagQ.insert.run(name, 'general');
     const tag = tagQ.byName.get(name);
-    if (tag && tagQ.link.run(mediaId, tag.id, source).changes) tagQ.bump.run(tag.id);
+    // tags.usage_count is kept by the media_tags triggers (schema v23), so the link itself is enough
+    if (tag) tagQ.link.run(mediaId, tag.id, source);
   }
   const all = tagQ.forMedia.all(mediaId).map((t) => t.name);
   tagQ.setText.run(all.join(' '), mediaId);
@@ -90,6 +90,42 @@ const blocklist = {
   remove(id) { return blockQ.remove.run(id).changes > 0; },
 };
 
+/* ------------------------------------------------- removed content: identifiers */
+const hasTable = (name) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
+/**
+ * Remove the content identifiers of media that is 'removed': face and visual embeddings, the perceptual
+ * and exact hashes, and every URL. The rows, their publish state, review reason and all blocklists stay,
+ * so an item stays removed and can never be re-imported. Only 'removed' rows are touched; a published
+ * row given here is skipped by the SQL, not by the caller.
+ */
+function purgeRemovedContent(ids) {
+  const all = [...new Set(ids.filter(Boolean))];
+  let purged = 0;
+  for (let i = 0; i < all.length; i += 500) {
+    const chunk = all.slice(i, i + 500);
+    const ph = chunk.map(() => '?').join(',');
+    const gone = db.prepare(`SELECT id FROM media WHERE publish_state = 'removed' AND id IN (${ph})`).all(...chunk).map((r) => r.id);
+    if (!gone.length) continue;
+    const gph = gone.map(() => '?').join(',');
+    if (hasTable('media_embeddings')) db.prepare(`DELETE FROM media_embeddings WHERE media_id IN (${gph})`).run(...gone);
+    // hash and media_url are NOT NULL, and hash is UNIQUE: they get placeholders that no real hash or URL equals
+    db.prepare(`UPDATE media SET phash = NULL, hash = 'purged:' || id, media_url = '', preview_url = NULL,
+      thumbnail_url = NULL, thumb_url = NULL, hls_url = NULL, tint = NULL,
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE publish_state = 'removed' AND id IN (${gph})`).run(...gone);
+    purged += gone.length;
+  }
+  return purged;
+}
+/** Purge every removed item of one creator (a block or takedown may leave older removed rows behind). */
+const purgeRemovedFor = (creatorId) => purgeRemovedContent(db.prepare("SELECT id FROM media WHERE creator_id = ? AND publish_state = 'removed'").all(creatorId).map((r) => r.id));
+/** Keep a removed item's hashes blocked before its identifiers are cleared. Idempotent. */
+function rememberRemovedHashes(creatorId, reason) {
+  for (const m of db.prepare("SELECT hash, phash FROM media WHERE creator_id = ? AND publish_state = 'removed'").all(creatorId)) {
+    if (m.hash && !String(m.hash).startsWith('purged:')) blocklist.add('hash', m.hash, reason);
+    if (m.phash) db.prepare('INSERT OR IGNORE INTO phash_blocklist (phash, reason) VALUES (?, ?)').run(m.phash, reason || null);
+  }
+}
+
 /* ------------------------------------------------------------ moderation log */
 const logQ = db.prepare('INSERT INTO moderation_actions (target_type, target_id, action, reason, actor) VALUES (?, ?, ?, ?, ?)');
 function logAction(targetType, targetId, action, reason, actor = 'system') {
@@ -97,6 +133,7 @@ function logAction(targetType, targetId, action, reason, actor = 'system') {
 }
 
 /* ------------------------------------------------------------------- creators */
+const POPULAR_ACTIVE_DAYS = 90;
 const SELECT_CREATOR_CARD = `
   SELECT c.*,
     (SELECT json_group_array(t) FROM (
@@ -116,19 +153,23 @@ function serializeCreator(row) {
   return out;
 }
 
+/** The ONE definition of a creator's counters: what is visible (published) now. Every writer uses it; do not write a second one. */
+const STATS_SET = `media_count = (SELECT COUNT(*) FROM media WHERE creator_id = @id AND publish_state = 'published'),
+      video_count = (SELECT COUNT(*) FROM media WHERE creator_id = @id AND publish_state = 'published' AND media_type = 'video'),
+      total_score = (SELECT COALESCE(SUM(score), 0) FROM media WHERE creator_id = @id AND publish_state = 'published'),
+      last_media_at = (SELECT MAX(posted_at) FROM media WHERE creator_id = @id AND publish_state = 'published')`;
+
 const creatorQ = {
   get: db.prepare('SELECT * FROM creators WHERE id = ?'),
   insert: db.prepare(`INSERT INTO creators (id, handle, display_name, bio, avatar_url, banner_url, scope, origin)
                       VALUES (@id, @handle, @display_name, @bio, @avatar_url, @banner_url, @scope, @origin)`),
   byAccount: db.prepare(`SELECT c.* FROM feeds f JOIN creators c ON c.id = f.creator_id
                          WHERE f.platform = ? AND f.kind IN ('user', 'channel') AND f.target = ? COLLATE NOCASE LIMIT 1`),
-  stats: db.prepare(`UPDATE creators SET
-      media_count = (SELECT COUNT(*) FROM media WHERE creator_id = @id AND publish_state = 'published'),
-      video_count = (SELECT COUNT(*) FROM media WHERE creator_id = @id AND publish_state = 'published' AND media_type = 'video'),
-      total_score = (SELECT COALESCE(SUM(score), 0) FROM media WHERE creator_id = @id AND publish_state = 'published'),
-      last_media_at = (SELECT MAX(posted_at) FROM media WHERE creator_id = @id AND publish_state = 'published'),
+  stats: db.prepare(`UPDATE creators SET ${STATS_SET},
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
     WHERE id = @id`),
+  // the same counts without touching updated_at (boot-time reconciliation of many creators)
+  recount: db.prepare(`UPDATE creators SET ${STATS_SET} WHERE id = @id`),
   feedsOf: db.prepare('SELECT * FROM feeds WHERE creator_id = ? ORDER BY platform, target'),
   topTags: db.prepare(`SELECT t.name, COUNT(*) AS n FROM media m
       JOIN media_tags mt ON mt.media_id = m.id JOIN tags t ON t.id = mt.tag_id
@@ -196,7 +237,11 @@ const creators = {
     return creators.get(id);
   },
 
-  /** Fill blanks only — never overwrite what an admin curated. */
+  /**
+   * Fill blanks only — never overwrite what an admin curated. One exception: a picture (avatar / banner) a platform now serves from
+   * the SAME site as the stored one replaces it (a changed or dead avatar link would otherwise stay for ever); a link from another
+   * site never does, so a creator's accounts on different platforms cannot take the avatar back and forth.
+   */
   enrich(id, { displayName, bio, avatarUrl, bannerUrl, links }) {
     const c = creatorQ.get.get(id);
     if (!c) return;
@@ -204,8 +249,10 @@ const creators = {
     const validName = displayName && !/^(?:untitled|sin t[íi]tulo|unbenannt|sans titre)$/i.test(String(displayName).trim());
     if (validName && (!c.display_name || c.display_name === c.handle)) patch.displayName = displayName;
     if (bio && !c.bio) patch.bio = bio;
-    if (avatarUrl && !c.avatar_url) patch.avatarUrl = avatarUrl;
-    if (bannerUrl && !c.banner_url) patch.bannerUrl = bannerUrl;
+    const { siteOf } = require('../lib/site'); // the registrable domain, not the last two labels (`co.uk`, `github.io` are not sites)
+    const better = (now, stored) => !!now && (!stored || (now !== stored && siteOf(now) && siteOf(now) === siteOf(stored)));
+    if (better(avatarUrl, c.avatar_url)) patch.avatarUrl = avatarUrl;
+    if (better(bannerUrl, c.banner_url)) patch.bannerUrl = bannerUrl;
     if (links && links.length) {
       let existing = []; try { existing = JSON.parse(c.links || '[]'); } catch { /* ignore */ }
       const normUrl = (u) => String(u || '').toLowerCase().replace(/\/+$/, '');
@@ -231,6 +278,8 @@ const creators = {
   },
 
   refreshStats(id) { if (id) creatorQ.stats.run({ id }); },
+  /** Recompute the counters of one creator without marking it updated. */
+  recount(id) { if (id) creatorQ.recount.run({ id }); },
 
   list({ page = 0, limit = 48, q: query, sort = 'media', platform, admin = false, minMedia, onlyfans: ofOnly = false, paidHost, freshDays, ids } = {}) {
     const where = []; const params = [];
@@ -241,6 +290,8 @@ const creators = {
     if (fresh) { where.push('c.last_media_at >= ?'); params.push(new Date(Date.now() - fresh * 86400000).toISOString()); }
     if (paidHost) { const pc = paidClause(paidHost, 'c'); where.push(pc.sql); params.push(...pc.params); }
     if (!admin) { where.push("c.status = 'active'", "c.scope != 'excluded'"); }
+    // "Popular" never shows a creator who has not posted in 90 days: a dead page is not a first-screen result.
+    if (sort === 'popular' && !fresh) { where.push('c.last_media_at >= ?'); params.push(new Date(Date.now() - POPULAR_ACTIVE_DAYS * 86400000).toISOString()); }
     const min = minMedia !== undefined ? minMedia : (admin ? 0 : 1);
     if (min > 0) { where.push('c.media_count >= ?'); params.push(min); }
     if (query) {
@@ -255,9 +306,11 @@ const creators = {
       where.push('EXISTS (SELECT 1 FROM media m WHERE m.creator_id = c.id AND m.platform = ? AND m.publish_state = \'published\')');
       params.push(platform);
     }
+    const mediaOrder = "((c.links GLOB '*onlyfans.com/[A-Za-z0-9]*' OR c.links LIKE '%onlyfans.com/%' OR c.links LIKE '%OnlyFans%') AND c.media_count >= 5) DESC, (c.origin = 'admin') DESC, c.media_count DESC, c.total_score DESC";
     const order = {
-      media: "((c.links GLOB '*onlyfans.com/[A-Za-z0-9]*' OR c.links LIKE '%onlyfans.com/%' OR c.links LIKE '%OnlyFans%') AND c.media_count >= 5) DESC, (c.origin = 'admin') DESC, c.media_count DESC, c.total_score DESC",
-      score: 'c.total_score DESC',
+      media: mediaOrder,
+      // Popular = the stored rank (engine/popularity.js), then the freshest and the biggest archive.
+      popular: 'COALESCE(c.popularity, 0) DESC, c.last_media_at DESC, c.media_count DESC, c.total_score DESC',
       recent: 'c.last_media_at DESC',
       new: 'c.created_at DESC',
       name: 'c.handle COLLATE NOCASE ASC',
@@ -310,6 +363,8 @@ const creators = {
     db.transaction(() => {
       db.prepare("UPDATE creators SET status = 'blocked', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(id);
       db.prepare("UPDATE media SET publish_state = 'removed', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE creator_id = ? AND publish_state != 'removed'").run(id);
+      rememberRemovedHashes(id, reason);
+      purgeRemovedFor(id);
       db.prepare('UPDATE feeds SET enabled = 0 WHERE creator_id = ?').run(id);
       blocklist.add('creator', id, reason);
       for (const f of creatorQ.feedsOf.all(id)) blocklist.add('creator', `${f.platform}:${String(f.target).toLowerCase()}`, reason);
@@ -332,6 +387,14 @@ const GENERIC_TAGS = new Set([...PLATFORM_TAGS, 'gay', 'nsfw', 'video', 'photo',
  * first build is synchronous. In tests it is rebuilt synchronously on any write so results are exact.
  */
 const changesV = db.prepare('SELECT total_changes() AS v');
+/**
+ * "Has the data behind a cached total changed?" Keyed on SQLite's total_changes(), which moves on every row this connection
+ * writes. Viewers' likes and views and the trending-score refresh move it all the time without changing any count, tag
+ * profile or visibility, so they are subtracted (`quiet`): without that, every view of a post threw away every cached total.
+ */
+let quiet = 0;
+const quietly = (changes) => { quiet += changes; return changes; };
+const writeVersion = () => changesV.get().v - quiet;
 const snap = { data: null, at: 0, v: -1, pending: false };
 const SNAP_MAX_AGE = process.env.NODE_ENV === 'test' ? 0 : 60000;
 function buildLibrary() {
@@ -376,7 +439,7 @@ function library() {
   const snapshots = require('../lib/snapshots');
   if (!snapshots.USE_WORKER) return libraryInline();
   const entry = snapshots.peek('library');
-  const v = changesV.get().v;
+  const v = writeVersion();
   if (!entry || (v !== libV && Date.now() - entry.at > LIB_MAX_AGE)) {
     libV = v;
     snapshots.refresh('library').catch((e) => console.error('[library] refresh failed:', e.message));
@@ -386,11 +449,11 @@ function library() {
   return entry.value.lib;
 }
 function libraryInline() {
-  const v = changesV.get().v;
-  if (!snap.data || (SNAP_MAX_AGE === 0 && v !== snap.v)) { snap.data = buildLibrary(); snap.at = Date.now(); snap.v = changesV.get().v; return snap.data; }
+  const v = writeVersion();
+  if (!snap.data || (SNAP_MAX_AGE === 0 && v !== snap.v)) { snap.data = buildLibrary(); snap.at = Date.now(); snap.v = writeVersion(); return snap.data; }
   if (v !== snap.v && Date.now() - snap.at > SNAP_MAX_AGE && !snap.pending) {
     snap.pending = true;
-    setImmediate(() => { try { snap.data = buildLibrary(); snap.at = Date.now(); snap.v = changesV.get().v; } finally { snap.pending = false; } });
+    setImmediate(() => { try { snap.data = buildLibrary(); snap.at = Date.now(); snap.v = writeVersion(); } finally { snap.pending = false; } });
   }
   return snap.data;
 }
@@ -657,6 +720,7 @@ creators.graph = function graph({ limit = 150, perNode = 4, minSim = 0.12 } = {}
   return { nodes, links };
 };
 
+// INDEXED BY: only the last 28 days of posts are read; the planner would scan every published row (~0.8 s on 260k rows, a few ms this way)
 creators.rising = function rising(limit = 12) {
   const now = Date.now();
   const d7 = new Date(now - 7 * 86400000).toISOString();
@@ -665,7 +729,7 @@ creators.rising = function rising(limit = 12) {
       SUM(CASE WHEN m.posted_at >= @d7 THEN 1 ELSE 0 END) AS week,
       SUM(CASE WHEN m.posted_at < @d7 THEN 1 ELSE 0 END) AS before,
       SUM(CASE WHEN m.posted_at >= @d7 THEN m.score + m.likes * 5 ELSE 0 END) AS heat
-    FROM media m JOIN creators c ON c.id = m.creator_id
+    FROM media m INDEXED BY ix_media_pub_posted JOIN creators c ON c.id = m.creator_id
     WHERE m.posted_at >= @d28 AND m.publish_state = 'published' AND m.scope != 'excluded' AND c.status = 'active' AND c.scope != 'excluded'
     GROUP BY m.creator_id HAVING week >= 2`).all({ d7, d28 });
   const scored = rows.map((r) => ({ id: r.id, week: r.week, score: (r.week / (r.before / 3 + 1)) * Math.log2(r.heat + 4) }))
@@ -693,8 +757,10 @@ function suggest(query, limit = 6) {
         AND (handle LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\' OR handle LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\'${aliasCond})
       ORDER BY (handle LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\') DESC, media_count DESC LIMIT ?`).all(...cArgs),
     tags: (() => { const p = q.toLowerCase().replace(/^#/, ''); const out = []; for (const t of library().tagList) { if (t.name.startsWith(p)) { out.push(t); if (out.length >= limit) break; } } return out; })(),
-    communities: db.prepare(`SELECT community AS name, platform, COUNT(*) AS count FROM media
-      WHERE publish_state = 'published' AND scope != 'excluded' AND community LIKE ? ESCAPE '\\' GROUP BY community, platform ORDER BY count DESC LIMIT ?`).all(pre, limit),
+    // a case-insensitive prefix, as a range on the NOCASE index (LIKE cannot use it here: ~1 s per keystroke on 260k rows, ~30 ms as a range)
+    communities: db.prepare(`SELECT community AS name, platform, COUNT(*) AS count FROM media INDEXED BY ix_media_pub_comm
+      WHERE publish_state = 'published' AND scope != 'excluded' AND community >= ? COLLATE NOCASE AND community < ? COLLATE NOCASE
+      GROUP BY community, platform ORDER BY count DESC LIMIT ?`).all(q, `${q}\u{10FFFF}`, limit),
   };
 }
 
@@ -1001,22 +1067,46 @@ function tagRows(name) {
   tagCountCache.set(name, { n, at: Date.now() });
   return n;
 }
+/**
+ * Share of the published library that belongs to creators with a page on a paid host ("on OnlyFans"), from the creators'
+ * own media counts (a 10k-row scan of the links column, cached for a minute). A host most of the library's creators use
+ * is as broad a filter as a common tag: walking the sort index meets a match every few rows, where the creator index
+ * would gather and sort every one of those creators' posts (~200 ms for the first page, on 20% of the creators).
+ */
+const paidShareCache = new Map(); // host -> { share, at }
+function paidShare(host) {
+  const hit = paidShareCache.get(host);
+  if (hit && Date.now() - hit.at < 60000) return hit.share;
+  const pc = paidClause(host);
+  const mine = db.prepare(`SELECT COALESCE(SUM(media_count), 0) AS n FROM creators WHERE status = 'active' AND ${pc.sql}`).get(...pc.params).n;
+  const all = db.prepare("SELECT COALESCE(SUM(media_count), 0) AS n FROM creators WHERE status = 'active'").get().n;
+  const share = all ? mine / all : 0;
+  if (paidShareCache.size > 50) paidShareCache.clear();
+  paidShareCache.set(host, { share, at: Date.now() });
+  return share;
+}
+const BROAD_PAID_SHARE = 0.1;
 function sortIndexFor(f, sort, where) {
   const idx = SORT_INDEX[sort || 'recent'];
   if (!idx || !where.includes("m.publish_state = 'published'")) return null; // partial indexes cover published rows only
-  if (f.creator || (Array.isArray(f.ids) && f.ids.length) || f.community || f.minScore || f.paidHost) return null;
+  if (f.creator || (Array.isArray(f.ids) && f.ids.length) || f.community || f.minScore) return null;
+  if (f.paidHost && paidShare(f.paidHost) < BROAD_PAID_SHARE) return null;
   const all = [...(f.tag ? [f.tag] : []), ...(Array.isArray(f.tagsAll) ? f.tagsAll : [])].map(cleanTag);
   if (all.length && Math.min(...all.map(tagRows)) < BROAD_TAG_MIN) return null;
+  // several tags that must all match: the matches are about total * product of the shares, far fewer than any one tag's rows
+  if (all.length > 1) {
+    const total = db.prepare('SELECT COALESCE(MAX(seq), 0) AS n FROM media').get().n || 1;
+    if (total * all.reduce((p, t) => p * (tagRows(t) / total), 1) < BROAD_TAG_MIN) return null;
+  }
   if (Array.isArray(f.tagsAny) && f.tagsAny.length && f.tagsAny.map(cleanTag).reduce((a, t) => a + tagRows(t), 0) < BROAD_TAG_MIN) return null;
   return idx;
 }
-// Totals ("1,234 results") are recounted only after a write: the cache is keyed by SQLite's
-// total_changes(), which moves on every insert/update/delete made through this connection.
+// Totals ("1,234 results") are recounted only after a write that can change them: the cache is keyed by writeVersion()
+// (SQLite's total_changes(), minus the likes / views / trending-score writes, which change no count).
 const countCache = new Map(); // sql+params -> { n, at, v }
-const changesQ = db.prepare('SELECT total_changes() AS v');
 function cachedCount(sql, args) {
   const key = `${sql}|${JSON.stringify(args)}`;
-  const v = changesQ.get().v;
+  const v = writeVersion();
   const hit = countCache.get(key);
   if (hit && hit.v === v && Date.now() - hit.at < 60000) return hit.n;
   const n = db.prepare(sql).get(...args).n;
@@ -1027,7 +1117,7 @@ function cachedCount(sql, args) {
 /** Same write-invalidated caching for small aggregate row sets (platform counts, stats). */
 cachedCount.rows = function cachedRows(sql, args = []) {
   const key = `rows|${sql}|${JSON.stringify(args)}`;
-  const v = changesQ.get().v;
+  const v = writeVersion();
   const hit = countCache.get(key);
   if (hit && hit.v === v && Date.now() - hit.at < 60000) return hit.n;
   const n = db.prepare(sql).all(...args);
@@ -1042,6 +1132,23 @@ const stateHooks = [];
 const blockedHooks = [];
 const notifyBlocked = (hex) => { for (const fn of blockedHooks) { try { fn(hex); } catch { /* ignore */ } } };
 const notifyState = (id, state) => { for (const fn of stateHooks) { try { fn(id, state); } catch { /* an index must never break moderation */ } } };
+
+/**
+ * The list total for the plain public library ("N results": everything published, optionally one type and/or one platform)
+ * reads only platform, media_type, creator_id and the two state columns, which ix_media_pub_count holds (schema v22):
+ * an index-only scan instead of a table lookup per row (~1 s -> ~80 ms on 260k rows). Named explicitly because the planner
+ * prefers ix_media_state. Any other filter (tags, community, creator, text...) is left to the planner.
+ */
+const COUNT_ONLY_FILTERS = new Set(['limit', 'page', 'sort', 'seed', 'type', 'platform', 'noCount', 'paidHost']);
+function countIndexFor(f) {
+  if (f.admin || (f.state !== undefined && f.state !== 'published')) return null;
+  for (const k of Object.keys(f)) if (f[k] !== undefined && !COUNT_ONLY_FILTERS.has(k) && k !== 'since' && k !== 'after') return null;
+  // "since last week" / "new since": a short window of the date indexes, not the whole library (a year is most of it: left to the planner)
+  if (f.since === 'day' || f.since === 'week' || f.since === 'month') return f.after ? null : 'ix_media_pub_posted';
+  if (f.since) return null;
+  if (f.after) return 'ix_media_ingested';
+  return 'ix_media_pub_count';
+}
 
 const media = {
   /** Subscribe to publish-state changes: fn(id, state). */
@@ -1091,6 +1198,8 @@ const media = {
         throw e;
       }
       if (tags.length) addTags(id, tags, 'ingest');
+      // a new row changes its creator's counts (media_count, video_count, total_score, last_media_at)
+      if (row.creator_id) creatorQ.stats.run({ id: row.creator_id });
       hosts.add(row.media_url, row.preview_url, row.thumbnail_url, row.hls_url);
       return id;
     });
@@ -1098,11 +1207,12 @@ const media = {
   },
 
   /** `exact`: write `reason` as given (null clears it) instead of keeping the previous reason when none is passed. */
-  setState(id, state, reason, { exact = false } = {}) {
+  setState(id, state, reason, { exact = false, deferStats = false } = {}) {
     if (!PUBLISH_STATES.includes(state)) throw new Error('bad state');
     const m = db.prepare('SELECT creator_id FROM media WHERE id = ?').get(id);
     (exact ? mediaQ.stateExact : mediaQ.state).run(state, reason || null, id);
-    if (m && m.creator_id) creators.refreshStats(m.creator_id);
+    // `deferStats`: a bulk caller refreshes each affected creator once itself (refreshStats recounts all of a creator's media)
+    if (m && m.creator_id && !deferStats) creators.refreshStats(m.creator_id);
     notifyState(id, state);
   },
 
@@ -1135,6 +1245,7 @@ const media = {
       if (m.source_key) blocklist.add('source_key', m.source_key, reason);
       // the same picture re-uploaded anywhere else stays blocked too
       if (m.phash) db.prepare('INSERT OR IGNORE INTO phash_blocklist (phash, reason) VALUES (?, ?)').run(m.phash, reason || null);
+      purgeRemovedContent([id]);
       logAction('media', id, 'block', reason, actor);
       if (m.creator_id) creators.refreshStats(m.creator_id);
     })();
@@ -1143,8 +1254,8 @@ const media = {
     return true;
   },
 
-  bumpLike(id, delta = 1) { return (delta >= 0 ? mediaQ.like : mediaQ.unlike).run(id).changes > 0; },
-  bumpView(id) { return mediaQ.view.run(id).changes > 0; },
+  bumpLike(id, delta = 1) { return quietly((delta >= 0 ? mediaQ.like : mediaQ.unlike).run(id).changes) > 0; },
+  bumpView(id) { return quietly(mediaQ.view.run(id).changes) > 0; },
 
   list(f = {}) {
     const limit = clampInt(f.limit, 1, 200, 48);
@@ -1182,7 +1293,7 @@ const media = {
     // media and re-run the MATCH once per row (minutes on a large library instead of milliseconds).
     const total = f.noCount ? null : (join
       ? cachedCount(`SELECT COUNT(*) AS n FROM media m WHERE m.seq IN (SELECT rowid FROM media_fts WHERE media_fts MATCH ?) AND ${whereSql}`, [...joinParams, ...params])
-      : cachedCount(`SELECT COUNT(*) AS n FROM media m WHERE ${whereSql}`, params));
+      : cachedCount(`SELECT COUNT(*) AS n FROM media m${countIndexFor(f) ? ` INDEXED BY ${countIndexFor(f)}` : ''} WHERE ${whereSql}`, params));
     const rows = db.prepare(`SELECT m.*, c.handle AS creator_handle, c.display_name AS creator_name, c.avatar_url AS creator_avatar, c.links AS creator_links ${base}
       ORDER BY ${order} LIMIT ? OFFSET ?`).all(...joinParams, ...params, ...orderParams, limit, page * limit);
     return { items: rows.map(serializeMedia), total, page, limit };
@@ -1241,9 +1352,9 @@ const media = {
    */
   recomputeHot(tolerance = 0.02) {
     const now = Date.now();
-    return db.prepare(`UPDATE media SET hot = hot_score(score, likes, views, epoch_ms(posted_at), @now)
+    return quietly(db.prepare(`UPDATE media SET hot = hot_score(score, likes, views, epoch_ms(posted_at), @now)
       WHERE publish_state = 'published' AND abs(hot - hot_score(score, likes, views, epoch_ms(posted_at), @now)) > @tol * hot_score(score, likes, views, epoch_ms(posted_at), @now)`)
-      .run({ now, tol: tolerance }).changes;
+      .run({ now, tol: tolerance }).changes);
   },
 
   /**
@@ -1265,7 +1376,7 @@ const media = {
     let updated = 0;
     while (from < top) {
       const to = Math.min(from + chunk, top);
-      updated += stmt.run({ now, tol: tolerance, from, to }).changes;
+      updated += quietly(stmt.run({ now, tol: tolerance, from, to }).changes);
       from = to;
       await new Promise((r) => setImmediate(r)); // let requests (and the health check) through
     }
@@ -1273,7 +1384,7 @@ const media = {
   },
 
   communities(limit = 60) {
-    return db.prepare(`SELECT community AS name, platform, COUNT(*) AS count FROM media
+    return db.prepare(`SELECT community AS name, platform, COUNT(*) AS count FROM media INDEXED BY ix_media_pub_comm
       WHERE publish_state = 'published' AND scope != 'excluded' AND community IS NOT NULL AND community != ''
       GROUP BY community, platform ORDER BY count DESC LIMIT ?`).all(limit);
   },
@@ -1286,7 +1397,7 @@ const media = {
   },
 
   platforms() {
-    return cachedCount.rows(`SELECT platform, COUNT(*) AS count FROM media WHERE publish_state = 'published' AND scope != 'excluded'
+    return cachedCount.rows(`SELECT platform, COUNT(*) AS count FROM media INDEXED BY ix_media_pub_count WHERE publish_state = 'published' AND scope != 'excluded'
       GROUP BY platform ORDER BY count DESC`);
   },
 
@@ -1427,7 +1538,7 @@ function publicStats() {
   const [s] = cachedCount.rows(`SELECT COUNT(*) AS total,
       SUM(CASE WHEN media_type = 'image' THEN 1 ELSE 0 END) AS images,
       SUM(CASE WHEN media_type = 'video' THEN 1 ELSE 0 END) AS videos
-    FROM media WHERE publish_state = 'published' AND scope != 'excluded'`);
+    FROM media INDEXED BY ix_media_pub_count WHERE publish_state = 'published' AND scope != 'excluded'`);
   const c = cachedCount("SELECT COUNT(*) AS n FROM creators WHERE status = 'active' AND media_count > 0", []);
   return { total: s.total || 0, images: s.images || 0, videos: s.videos || 0, creators: c };
 }
@@ -1462,13 +1573,11 @@ function adminOverview() {
 
 function discover() {
   const pageOf = (f) => media.list({ ...f, noCount: true }).items;
-  // Suggested creators: OnlyFans creators with media first, then admin/lookup-curated creators, then by media count.
-  const featured = db.prepare(`${SELECT_CREATOR_CARD}
-    WHERE c.status = 'active' AND c.scope != 'excluded' AND c.media_count >= 2
-    ORDER BY ((c.links GLOB '*onlyfans.com/[A-Za-z0-9]*' OR c.links LIKE '%onlyfans.com/%' OR c.links LIKE '%OnlyFans%') AND c.media_count >= 5) DESC,
-             (c.origin = 'admin') DESC,
-             (c.links GLOB '*onlyfans.com/[A-Za-z0-9]*' OR c.links GLOB '*fansly.com/[A-Za-z0-9]*') DESC,
-             c.media_count DESC, c.total_score DESC LIMIT 16`).all().map(serializeCreator);
+  // Suggested creators, in the order a visitor should meet them: the stored popularity rank first
+  // (engagement + breadth + volume + freshness, engine/popularity.js), with the 90-day activity
+  // floor the Creators page uses. When the ranked pool is empty (a brand-new library), the old
+  // media-count order answers instead.
+  const featured = creators.list({ sort: 'popular', limit: 16, minMedia: 2 }).items;
   const ofTrending = pageOf({ paidHost: 'onlyfans', sort: 'trending', limit: 20 });
   const ofVideos = pageOf({ type: 'video', paidHost: 'onlyfans', sort: 'recent', limit: 14 });
   return {
@@ -1560,7 +1669,9 @@ const parseLead = (r) => {
 };
 const OF = 'OnlyFans';
 /** Canonical paid-page host per traced service, for owner matching and lead search queries. */
-const PAID_HOSTS = { 'OnlyFans': 'onlyfans.com', 'Fansly': 'fansly.com', 'JustFor.Fans': 'justfor.fans' };
+const PAID_HOSTS = { 'OnlyFans': 'onlyfans.com', 'Fansly': 'fansly.com', 'JustFor.Fans': 'justfor.fans',
+  'ManyVids': 'manyvids.com', 'LoyalFans': 'loyalfans.com', 'Fanvue': 'fanvue.com',
+  'FanCentro': 'fancentro.com', 'Clips4Sale': 'clips4sale.com', 'Patreon': 'patreon.com' };
 const onlyfans = {
   get(handle, service = OF) { return parseLead(db.prepare('SELECT * FROM onlyfans_leads WHERE service = ? AND handle = ?').get(service, String(handle))); },
   /**
@@ -1623,7 +1734,9 @@ const onlyfans = {
   ownerOf(handle, service = OF) {
     const host = PAID_HOSTS[service] || PAID_HOSTS[OF];
     const h = String(handle).toLowerCase().replace(/[\\%_]/g, (m) => `\\${m}`);
-    return db.prepare(`SELECT id, handle FROM creators WHERE status = 'active' AND links LIKE ? ESCAPE '\\' LIMIT 1`).get(`%${host}/${h}"%`) || null;
+    // The handle may sit behind a section segment (clips4sale.com/store/<handle>), so any path
+    // ending in the handle counts, on that host only.
+    return db.prepare(`SELECT id, handle FROM creators WHERE status = 'active' AND links LIKE ? ESCAPE '\\' LIMIT 1`).get(`%${host}/%${h}"%`) || null;
   },
   /** Creators with a paid page but few known accounts elsewhere, least recently searched first. */
   reachTargets(limit = 4, staleDays = 30, maxAccounts = 4, service = OF, keyPrefix = null) {
@@ -1834,6 +1947,9 @@ const takedowns = {
         purgedMedia++;
       }
 
+      // blocked creators' older removed rows: keep their hashes blocked, then clear the identifiers
+      for (const cid of blockedCreatorIds) { rememberRemovedHashes(cid, why); purgeRemovedFor(cid); }
+      purgeRemovedContent(removedMediaIds);
       for (const cid of affectedCreators) {
         creatorQ.stats.run({ id: cid });
       }

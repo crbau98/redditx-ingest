@@ -800,7 +800,86 @@ function v21(db) {
   }
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21];
+// Removed media kept its embeddings, hashes and URLs. Keep each removed item's hashes in the blocklists
+// (they are what stops a re-upload), then clear the identifiers. Only publish_state = 'removed' rows change.
+function v22(db) {
+  db.exec(`INSERT OR IGNORE INTO phash_blocklist (phash, reason)
+    SELECT phash, COALESCE(review_reason, 'removed') FROM media WHERE publish_state = 'removed' AND phash IS NOT NULL`);
+  db.exec(`INSERT OR IGNORE INTO blocklist (type, value, reason)
+    SELECT 'hash', lower(hash), review_reason FROM media
+    WHERE publish_state = 'removed' AND hash NOT LIKE 'purged:%'`);
+  if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'media_embeddings'").get()) {
+    db.exec("DELETE FROM media_embeddings WHERE media_id IN (SELECT id FROM media WHERE publish_state = 'removed')");
+  }
+  db.exec(`UPDATE media SET phash = NULL, hash = 'purged:' || id, media_url = '', preview_url = NULL,
+    thumbnail_url = NULL, thumb_url = NULL, hls_url = NULL, tint = NULL
+    WHERE publish_state = 'removed' AND hash NOT LIKE 'purged:%'`);
+}
+
+// Counters drifted: creators.media_count and friends were only refreshed by some writers, and tags.usage_count
+// was bumped by hand. Keep tags.usage_count equal to its media_tags rows with triggers (so every writer,
+// including cascades, is covered), then recompute both once for rows that are already wrong.
+function v23(db) {
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS trg_media_tags_insert AFTER INSERT ON media_tags
+    BEGIN UPDATE tags SET usage_count = usage_count + 1 WHERE id = NEW.tag_id; END;
+    CREATE TRIGGER IF NOT EXISTS trg_media_tags_delete AFTER DELETE ON media_tags
+    BEGIN UPDATE tags SET usage_count = usage_count - 1 WHERE id = OLD.tag_id; END;
+  `);
+  db.exec('UPDATE tags SET usage_count = (SELECT COUNT(*) FROM media_tags mt WHERE mt.tag_id = tags.id)');
+  db.exec(`UPDATE creators SET
+      media_count = (SELECT COUNT(*) FROM media m WHERE m.creator_id = creators.id AND m.publish_state = 'published'),
+      video_count = (SELECT COUNT(*) FROM media m WHERE m.creator_id = creators.id AND m.publish_state = 'published' AND m.media_type = 'video'),
+      total_score = (SELECT COALESCE(SUM(m.score), 0) FROM media m WHERE m.creator_id = creators.id AND m.publish_state = 'published'),
+      last_media_at = (SELECT MAX(m.posted_at) FROM media m WHERE m.creator_id = creators.id AND m.publish_state = 'published')`);
+}
+
+/**
+ * v24: covering indexes for the read paths that scan the whole published library, measured on a 300k-media / 10k-creator copy.
+ * SQLite answers "COUNT(*) of the published library" (the list total, /api/stats, the per-platform counts) from
+ * ix_media_state, which holds no other column, so every one of the 260k rows costs a table lookup (~1 s). These two partial
+ * indexes hold exactly the columns those queries read, so they are index-only scans (~20-80 ms):
+ *   ix_media_pub_count  (platform, media_type, creator_id): list totals by type / platform, stats, platform counts;
+ *   ix_media_pub_comm   (community NOCASE, platform): community counts and the autocomplete's community prefix.
+ * Both are partial (published and not excluded: what every public query asks for), so they stay small, and
+ * CREATE INDEX IF NOT EXISTS adds them in place without rewriting the table (about 2 s for 400k rows). The queries
+ * name them with INDEXED BY: sqlite_stat1 makes the planner believe "publish_state = 'published'" is selective.
+ */
+function v24(db) {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS ix_media_pub_count ON media(platform, media_type, creator_id) WHERE publish_state = 'published' AND scope != 'excluded';
+    CREATE INDEX IF NOT EXISTS ix_media_pub_comm ON media(community COLLATE NOCASE, platform) WHERE publish_state = 'published' AND scope != 'excluded' AND community IS NOT NULL;
+  `);
+}
+
+// Index-only: adds no rows and changes none, so it cannot leave a foreign key dangling. migrate() skips the post-migration
+// foreign_key_check for it, which on a 400k-row library is a few seconds of boot time before the listener is up.
+v24.ddlOnly = true;
+
+
+/**
+ * v25: creator popularity (src/engine/popularity.js). One stored number per creator, so "popular"
+ * sorts and Home rails are an index read instead of an aggregate over the whole media table.
+ *   popularity    0-100, from engagement / breadth / volume / freshness (see the engine).
+ *   popularity_at when the number was last computed (the UI only speaks about freshness, never
+ *                 presents a stale rank as current).
+ *   ix_creators_popularity  (popularity DESC, last_media_at DESC): the default "popular" order,
+ *                 freshest among equals.
+ *   ix_media_platform_score  (platform, score DESC) partial: the per-platform 95th percentile the
+ *                 rank normalises by, answered index-only instead of scanning each platform.
+ */
+function v25(db) {
+  const cols = db.prepare('PRAGMA table_info(creators)').all().map((c) => c.name);
+  if (!cols.includes('popularity')) db.exec('ALTER TABLE creators ADD COLUMN popularity REAL NOT NULL DEFAULT 0');
+  if (!cols.includes('popularity_at')) db.exec('ALTER TABLE creators ADD COLUMN popularity_at TEXT');
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS ix_creators_popularity ON creators(popularity DESC, last_media_at DESC);
+    CREATE INDEX IF NOT EXISTS ix_media_platform_score ON media(platform, score DESC) WHERE publish_state = 'published' AND score > 0;
+  `);
+}
+v25.ddlOnly = true;
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });
@@ -812,7 +891,7 @@ function migrate(db) {
     for (let i = current; i < MIGRATIONS.length; i++) {
       const run = db.transaction(() => {
         MIGRATIONS[i](db);
-        const issues = db.pragma('foreign_key_check');
+        const issues = MIGRATIONS[i].ddlOnly ? [] : db.pragma('foreign_key_check');
         if (issues.length) throw new Error(`Migration ${i + 1} left ${issues.length} foreign-key violations`);
         db.pragma(`user_version = ${i + 1}`);
       });

@@ -51,6 +51,7 @@ function publicCreator(c) {
   return {
     id: c.id, handle: c.handle, display_name: c.display_name, bio: c.bio, avatar_url: c.avatar_url, banner_url: c.banner_url,
     links: c.links, verified: c.verified, media_count: c.media_count, video_count: c.video_count, total_score: c.total_score,
+    popularity: Math.round((Number(c.popularity) || 0) * 10) / 10,
     last_media_at: c.last_media_at, previews: c.previews, platforms: c.platforms, added_at: c.created_at,
     onlyfans: of, paid: creatorPaid(c),
   };
@@ -284,7 +285,7 @@ router.get('/creators', (req, res) => {
   const r = repo.creators.list({
     page: repo.clampInt(req.query.page, 0, 100000, 0), limit: repo.clampInt(req.query.limit, 1, 100, 36),
     q: typeof req.query.q === 'string' ? req.query.q.slice(0, 80) : undefined,
-    sort: ['media', 'score', 'recent', 'new', 'name'].includes(req.query.sort) ? req.query.sort : 'media',
+    sort: ['popular', 'media', 'score', 'recent', 'new', 'name'].includes(req.query.sort) ? req.query.sort : 'popular',
     platform: /^[a-z]{1,20}$/.test(req.query.platform || '') ? req.query.platform : undefined,
     freshDays: repo.clampInt(req.query.fresh, 0, 3650, 0) || undefined,
     onlyfans: req.query.onlyfans === '1',

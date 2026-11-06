@@ -1,7 +1,7 @@
 import { h, icon, toast, fmt } from '../../dom.js';
 import { adminGet, adminPost, adminPatch } from '../../api.js';
 import { href } from '../../router.js';
-import { pageHead, act, platBadge } from './ui.js';
+import { pageHead, act, platBadge, undoToast } from './ui.js';
 
 const ENV_HELP = {
   reddit: ['REDDIT_CLIENT_ID', 'REDDIT_CLIENT_SECRET'],
@@ -22,6 +22,7 @@ const BLURB = {
   rss: 'Any RSS / Atom / JSON Feed — creators’ own sites, Tumblr blogs (/rss), Mastodon and Bluesky profile feeds. The most stable way to follow anything.',
   web: 'A single page’s photos and videos (OpenGraph, <video>, linked images). Respects robots.txt.',
   linkinbio: 'Linktree-style hubs. Not content: PRISM reads them to discover a creator’s other public accounts.',
+  xhamster: 'Gay creator pages on xHamster: one public page per creator, newest videos first, HLS playback. No key and no login; robots.txt allows the creator page itself.',
 };
 
 const ago = (iso) => {
@@ -37,7 +38,11 @@ function healthRow(f, why, reload) {
     h('a', { href: href('/admin/feeds', { platform: f.platform, q: f.target }), style: { fontWeight: 600 } }, f.label),
     h('span', { class: 'muted', style: { fontSize: '12.5px' } }, why),
     h('span', { class: 'grow' }),
-    h('button', { class: 'btn sm ghost', title: 'Stop reading this feed (it can be switched back on under Feeds)', onclick: (e) => act(e.currentTarget, async () => { await adminPatch(`/feeds/${f.id}`, { enabled: false }); await reload(); }, 'Feed paused') }, 'Pause'));
+    h('button', { class: 'btn sm', type: 'button', title: 'Stop reading this feed (it can be switched back on under Feeds)', 'aria-label': `Pause ${f.label}`, onclick: async (e) => {
+      if (await act(e.currentTarget, () => adminPatch(`/feeds/${f.id}`, { enabled: false })) === undefined) return;
+      undoToast(`Paused ${f.label}`, async () => { await adminPatch(`/feeds/${f.id}`, { enabled: true }); await reload(); });
+      await reload();
+    } }, 'Pause'));
 }
 
 function healthPanel(r, reload) {
@@ -69,9 +74,15 @@ function enginesPanel(b, a, reload) {
   return h('div', { class: 'panel' },
     h('h3', null, icon('sparkle', 'sm'), 'Engines: browsers and AI'),
     h('div', { class: 'meta', style: { display: 'grid', gap: '6px' } },
-      line(true, 'Pages built by JavaScript are read with', `${r.engine === 'playwright' ? 'Playwright' : 'Browser4'} (RENDER_ENGINE=${r.setting || 'auto'}, mode ${b.mode})`),
+      line(true, 'Pages built by JavaScript are read with', `${({ playwright: 'Playwright', chrome: 'Chrome over CDP' }[r.engine] || 'Browser4')} (RENDER_ENGINE=${r.setting || 'auto'}, mode ${b.mode})`),
       line(r.browser4.ok, 'Browser4', eng(r.browser4)),
       line(r.playwright.ok, 'Playwright', eng(r.playwright)),
+      // The free tiers that clear a refusal, then the paid ones. Each line names what it costs.
+      line(r.chrome && r.chrome.enabled, 'Chrome (CDP)', r.chrome ? (r.chrome.enabled
+        ? `free · ${r.chrome.version ? `v${r.chrome.version} · ` : ''}${r.chrome.running ? 'running · ' : ''}challenge wait ${Math.round((r.chrome.challengeWaitMs || 15000) / 1000)}s`
+        : (r.chrome.available ? 'off (CHALLENGE_BROWSER=1 turns it on)' : 'off (no Chrome on this host: set CHROME_PATH)')) : 'not reported'),
+      b.jina ? line(b.jina.mode !== 'off', 'Jina Reader', b.jina.mode === 'off' ? 'off (jinaReader setting)' : `free · ${b.jina.usage.count || 0}/${b.jina.budgetPerDay} reads today`) : null,
+      b.captcha ? line(b.captcha.mode !== 'off' && b.captcha.configured, 'Captcha solver', b.captcha.configured ? `${b.captcha.mode === 'off' ? 'off (captchaSolver setting)' : 'on'} · ${b.captcha.usage.count || 0}/${b.captcha.budgetPerDay} tokens today` : 'off (set CAPSOLVER_API_KEY)') : null,
       b.brightdata ? line(b.brightdata.discover.configured || b.brightdata.unlocker.configured, 'Bright Data', `Discover ${b.brightdata.discover.configured ? 'on' : 'off'} · Unlocker ${b.brightdata.unlocker.configured ? `${b.brightdata.unlocker.mode}, ${b.brightdata.unlocker.usage.count || 0}/${b.brightdata.unlocker.budgetPerDay} today` : 'off'}`) : null,
       line(a.configured, a.label || 'AI', a.configured ? `${a.model} · ${fmt.int(u.calls)}/${fmt.int(a.budget)} requests today · ${fmt.int(u.input)} in / ${fmt.int(u.output)} out tokens${u.refusals ? ` · ${u.refusals} declined` : ''}` : `off (set ${a.keyName || 'OPENAI_API_KEY'})`),
       a.configured ? line(a.search || a.discovery, `${a.label || 'AI'} does`, [a.search ? 'search reading' : null, a.discovery ? 'discovery queries + account triage' : null].filter(Boolean).join(' · ') || 'nothing (both settings off)') : null,
@@ -87,9 +98,9 @@ export async function render(root) {
   const health = h('div');
   const engines = h('div');
   root.append(pageHead('Sources', 'The platforms PRISM can pull from, and how healthy each connection is.',
-    h('button', { class: 'btn sm', onclick: (e) => act(e.currentTarget, async () => { await adminPost('/engine/breakers/reset'); await load(); }, 'Circuit breakers reset') }, icon('refresh', 'sm'), 'Reset circuit breakers')), grid, engines, health,
-  h('div', { class: 'panel' }, h('h3', null, icon('shield', 'sm'), 'Safety and boundaries'),
-    h('p', { class: 'muted', style: { fontSize: '14px' } }, 'PRISM reads public creator content from across the web — personal sites, social profiles, galleries, RSS feeds — and follows what creators publish. Everything passes a safety gate (anything suggesting a person may be under 18 is dropped) and every item can be reported and permanently blocklisted.')));
+    h('button', { class: 'btn', type: 'button', title: 'Let every resting source try again now', onclick: (e) => act(e.currentTarget, async () => { await adminPost('/engine/breakers/reset'); await load(); }, 'Circuit breakers reset') }, icon('refresh', 'sm'), 'Reset circuit breakers')), health, grid, engines,
+  h('details', { class: 'a-fold' }, h('summary', null, icon('shield', 'sm'), 'How PRISM stays safe'),
+    h('div', { class: 'a-fold-body' }, h('p', { class: 'a-note' }, 'PRISM reads public creator content from across the web (personal sites, social profiles, galleries, RSS feeds) and follows what creators publish. Everything passes a safety gate (anything suggesting a person may be under 18 is dropped) and every item can be reported and permanently blocklisted.'))));
 
   async function load() {
     adminGet('/sources/health').then((r) => health.replaceChildren(healthPanel(r, load))).catch(() => {});

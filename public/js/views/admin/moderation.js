@@ -1,7 +1,10 @@
-import { h, icon, fmt, proxied, emptyState } from '../../dom.js';
+import { h, icon, fmt, proxied, emptyState, toast } from '../../dom.js';
 import { adminGet, adminPost } from '../../api.js';
 import { href } from '../../router.js';
-import { pageHead, act, platBadge, thumbOf, openModal } from './ui.js';
+import { pageHead, act, platBadge, thumbOf, openModal, undoToast, bulkBar, loadingState, errorState } from './ui.js';
+import { holdOf, undoPlan, selectionSummary, sendBackBody } from './logic.js';
+
+export { holdOf };
 
 /*
  * The review queue: media the gate held back. Nothing here is public until approved.
@@ -13,24 +16,11 @@ import { pageHead, act, platBadge, thumbOf, openModal } from './ui.js';
  *   other   anything else the gate wrote. Shown as the gate wrote it.
  *
  * Actions, and what each one does to the item:
- *   Approve   publish (asks first)
- *   Hide      keep it out of the library; approving it later publishes it (no prompt)
- *   Remove    take it down (asks first)
- *   Block     block the item forever so the source cannot return it (asks first; no key)
+ *   Approve   publish (asks first; undo puts it back in the queue)
+ *   Hide      keep it out of the library (undo puts it back in the queue)
+ *   Remove    take it down (asks first; undo puts it back in the queue)
+ *   Block     block the item forever so the source cannot return it (asks first; cannot be undone here)
  */
-
-export function holdOf(reason) {
-  const r = String(reason || '').trim();
-  const safety = r.match(/^safety:\s*(.+?)(?:\s*\(community\))?$/);
-  if (safety) {
-    const rule = safety[1].trim();
-    return { kind: 'safety', rule, label: `Safety: ${rule}`, group: 'Safety rule matched', why: `The safety gate matched “${rule}”. Approving publishes it.` };
-  }
-  if (r === 'scope:unclear' || r === 'scope') {
-    return { kind: 'scope', rule: null, label: 'Male focus unclear', group: 'Male focus unclear', why: 'The gate could not confirm a male creator. Check the creator and the post before you approve.' };
-  }
-  return { kind: 'other', rule: null, label: r || 'Held for review', group: 'Other holds', why: 'Held by the gate for a decision. Nothing here is public until you approve it.' };
-}
 
 // Used by the media browser's grid (selectableGrid below), which still shows the raw reason.
 const REASONS = { 'scope:unclear': 'Male focus unclear', 'scope': 'Male focus unclear' };
@@ -112,16 +102,23 @@ export function confirmBatch(action, items) {
     let m;
     const cancel = h('button', { class: 'btn', type: 'button', onclick: () => m.close(false) }, 'Cancel');
     const go = h('button', { class: `btn ${copy.cls}`, type: 'button', onclick: () => m.close(true) }, copy.go);
-    m = openModal({ title: copy.title, sub: copy.sub, body: null, sheet: false, onClose: (ok) => resolve(!!ok), actions: [cancel, go] });
+    m = openModal({ title: copy.title, sub: copy.sub, body: null, onClose: (ok) => resolve(!!ok), actions: [cancel, go] });
     setTimeout(() => cancel.focus(), 60);
   });
 }
+
+/**
+ * Put items back where they came from: approve, hide and remove all return to the review queue, each with the hold reason it was
+ * waiting under (the queue groups by it, and an approval names the safety rule it overrides), in ONE atomic request. Takes the items
+ * (or their ids, which come back as an unclassified hold).
+ */
+export async function sendBackToReview(items) { return adminPost('/media/bulk', sendBackBody(items)); }
 
 export async function render(root) {
   const host = h('div', { class: 'stack' });
   const sub = h('div', null,
     h('div', null, 'Held back, not public. The gate kept these out because a safety rule matched or the male focus is unclear.'),
-    h('div', { class: 'review-keys muted' }, 'Keys: ← → move · Space select · A approve (asks first) · H hide · R remove (asks first). Block forever has no key.'));
+    h('div', { class: 'a-keys' }, 'Keys: ← → move · Space select · A approve (asks first) · H hide · R remove (asks first). Block has no key.'));
   root.append(pageHead('Review queue', sub), host);
 
   // Keyboard triage: with hundreds waiting, clicking each one is the slowest part. Approve, Remove and Block ask first; Hide does not.
@@ -155,17 +152,14 @@ export async function render(root) {
   document.addEventListener('keydown', onKey);
 
   const showState = (node) => host.replaceChildren(node);
-  const loading = () => showState(h('p', { class: 'muted', role: 'status' }, 'Loading the queue…'));
+  let bulk = null;
 
   async function load() {
-    loading();
+    showState(loadingState('Loading the queue'));
+    if (bulk) bulk.clear();
     let r;
     try { r = await adminGet('/moderation/queue', { limit: 60 }); }
-    catch (e) {
-      showState(emptyState({ icon: 'alert', title: 'Couldn’t load the queue', text: `${e.message || 'The server did not answer.'} Nothing was changed.`,
-        actions: [h('button', { class: 'btn', type: 'button', onclick: () => load() }, 'Try again')] }));
-      return;
-    }
+    catch (e) { showState(errorState(e.message, () => load())); return; }
     if (!r.items.length) {
       grid = null; shortcuts = null;
       showState(emptyState({ icon: 'check', title: 'Nothing is waiting',
@@ -173,32 +167,30 @@ export async function render(root) {
         actions: [h('a', { class: 'btn', href: href('/admin/overview') }, 'Back to overview')] }));
       return;
     }
-    const bar = h('div', { class: 'bulkbar', hidden: true, role: 'region', 'aria-label': 'Selected items' });
-    const count = h('b', { role: 'status', 'aria-live': 'polite' }, '0 selected');
     const run = (action) => async (e) => {
       const items = [...grid.selected.values()];
       if (!items.length) return;
-      if (action !== 'hide' && !(await confirmBatch(action === 'approve' ? 'approve' : action === 'reject' ? 'reject' : 'block', items))) return;
+      // Everything that changes what the public sees asks first (Approve names any safety rule it overrides); Hide does not.
+      if (action !== 'hide' && !(await confirmBatch(action, items))) return;
       const ids = items.map((m) => m.id);
-      await act(e && e.currentTarget, () => adminPost('/media/bulk', { ids, action, reason: 'review queue' }), `${ids.length} ${ACTION_WORD[action]}`);
+      const ok = await act(e && e.currentTarget, () => adminPost('/media/bulk', { ids, action, reason: 'review queue' }));
+      if (!ok) return;
+      const plan = undoPlan(action);
+      if (plan) undoToast(`${plan.verb} ${ids.length} item${ids.length === 1 ? '' : 's'}`, async () => { await sendBackToReview(items); load(); });
+      else toast(`${ids.length} ${ACTION_WORD[action]}`);
       load();
     };
-    grid = reviewGroups(r.items, { onChange: (sel) => {
-      const items = [...sel.values()];
-      bar.hidden = !items.length;
-      const safety = items.filter((m) => holdOf(m.review_reason).kind === 'safety').length;
-      const scope = items.filter((m) => holdOf(m.review_reason).kind === 'scope').length;
-      count.textContent = `${items.length} selected${safety ? ` · ${safety} safety` : ''}${scope ? ` · ${scope} male focus unclear` : ''}`;
-    } });
-    bar.append(count, h('span', { class: 'grow' }),
+    bulk = bulkBar([
       h('button', { class: 'btn good', type: 'button', onclick: run('approve') }, icon('check', 'sm'), 'Approve'),
       h('button', { class: 'btn', type: 'button', onclick: run('hide') }, 'Hide'),
       h('button', { class: 'btn', type: 'button', onclick: run('reject') }, 'Remove'),
-      h('button', { class: 'btn danger', type: 'button', onclick: run('block') }, 'Block forever'));
+      h('button', { class: 'btn danger', type: 'button', 'aria-label': 'Block forever', title: 'Block forever', onclick: run('block') }, 'Block'),
+    ], { label: 'Selected items' });
+    grid = reviewGroups(r.items, { onChange: (sel) => { const items = [...sel.values()]; if (items.length) bulk.set(selectionSummary(items)); else bulk.clear(); } });
     showState(h('div', { class: 'stack' },
-      h('div', { class: 'row' }, h('span', { class: 'muted' }, `${fmt.int(r.total)} waiting · showing ${r.items.length}`), h('span', { class: 'grow' }),
+      h('div', { class: 'row' }, h('span', { class: 'a-meta', role: 'status' }, `${fmt.int(r.total)} waiting · showing ${r.items.length}`), h('span', { class: 'grow' }),
         h('button', { class: 'btn sm', type: 'button', onclick: () => grid.selectAll() }, 'Select all on this page')),
-      grid.el, bar));
+      grid.el, bulk.el));
     shortcuts = { a: run('approve'), h: run('hide'), r: run('reject') };
   }
   await load();

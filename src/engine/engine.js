@@ -19,6 +19,8 @@ const { deriveFeeds } = require('../sources/seed-feeds');
 const settingsStore = require('../settings');
 const config = require('../config');
 const breaker = require('./breaker');
+const limiter = require('../lib/limiter');
+const { classify } = require('./errorclass');
 const events = require('./events');
 const { processItem } = require('./pipeline');
 const physique = require('./physique');
@@ -131,6 +133,26 @@ function computeNextRun(feed, failures, retryAfterMs = 0, factor = 1) {
 
 const ITEM_CONCURRENCY = 4;
 
+/**
+ * Should this run also read the creator's profile? Always on the feed's first run and on a manual run; after that every
+ * `profileRefreshDays` days (0 = never), for the platforms where it is one cheap request. The time of the last read lives in the
+ * feed cursor (`profiledAt`; `profileTryAt` when the adapter gave no profile, retried after a day), so it needs no column.
+ * Telegram is left out: its profile read costs MTProto budget (see lib/telegram-budget).
+ */
+const PROFILE_REFRESH_PLATFORMS = new Set(['bluesky', 'mastodon', 'misskey', 'reddit', 'x', 'peertube']);
+function profileDue(feed, cursor, cfg, trigger, now = Date.now()) {
+  if (!feed.creator_id) return false;
+  if (!feed.last_success_at || trigger === 'manual') return true;
+  const days = cfg && cfg.profileRefreshDays;
+  // a PeerTube creator is attached as a `channel` as often as a `user`, and its adapter reads the channel profile just as cheaply
+  const profileKind = feed.kind === 'user' || (feed.platform === 'peertube' && feed.kind === 'channel');
+  if (!days || !profileKind || !PROFILE_REFRESH_PLATFORMS.has(feed.platform)) return false;
+  const c = cursor || {};
+  const read = Date.parse(c.profiledAt); const tried = Date.parse(c.profileTryAt);
+  if (Number.isFinite(tried) && now - tried < 86400000) return false;
+  return !Number.isFinite(read) || now - read >= days * 86400000;
+}
+
 /* -------------------------------------------------------------- run a feed */
 /**
  * Reposts and crossposts are ways in to more creators and more sources (v5 A6):
@@ -197,7 +219,8 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
   events.admin('run:start', entry);
   const runId = repo.runs.start(feed.id, trigger);
   const tag = `${feed.platform}/${feed.kind}:${feed.target}`;
-  const host = ['mastodon', 'misskey', 'peertube'].includes(feed.platform) ? breaker.feedHost(feed) : null;
+  // platforms whose feeds live on many unrelated servers: a server's gateway errors rest that server (host breaker), not the platform
+  const host = ['mastodon', 'misskey', 'peertube', 'rss', 'web', 'linkinbio'].includes(feed.platform) ? breaker.feedHost(feed) : null;
 
   const finish = (status, extra = {}) => {
     repo.runs.finish(runId, { status, ...stats, via: extra.via, error: extra.error, durationMs: Date.now() - started });
@@ -231,7 +254,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
       limit: runLimit,
       cursor,
       force: !!opts.force,
-      needProfile: !!feed.creator_id && (!feed.last_success_at || trigger === 'manual'),
+      needProfile: profileDue(feed, cursor, cfg, trigger),
       aborted: () => state.stopRequested || !!opts.aborted,
     };
     if (opts.lane !== undefined) budget.charge(feed.platform, opts.lane); // only a run that really goes to the source uses the budget
@@ -323,7 +346,14 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     // poll interval. A flag on the result covers adapters whose cursor cannot say it (Coomer's walk).
     const prevCur = backfill.parse(feed.cursor);
     const baseCur = result.cursor || (prevCur.backfillPending ? prevCur : undefined);
-    const cursorOut = result.backfillPending ? { ...(baseCur || {}), backfillPending: true } : (baseCur && baseCur.backfillPending ? { ...baseCur, backfillPending: false } : baseCur);
+    let cursorOut = result.backfillPending ? { ...(baseCur || {}), backfillPending: true } : (baseCur && baseCur.backfillPending ? { ...baseCur, backfillPending: false } : baseCur);
+    // when the profile was last read (see profileDue); adapters build their cursor from scratch, so the stamps are carried over here
+    const stamp = {};
+    const readNow = ctx.needProfile && result.profile ? new Date().toISOString() : null;
+    if (readNow || prevCur.profiledAt) stamp.profiledAt = readNow || prevCur.profiledAt;
+    if (ctx.needProfile && !result.profile && PROFILE_REFRESH_PLATFORMS.has(feed.platform)) stamp.profileTryAt = new Date().toISOString();
+    else if (!readNow && prevCur.profileTryAt) stamp.profileTryAt = prevCur.profileTryAt;
+    if (Object.keys(stamp).length && (ctx.needProfile || prevCur.profiledAt || prevCur.profileTryAt)) cursorOut = { ...(cursorOut || prevCur), ...stamp };
     const more = backfill.pending({ cursor: cursorOut });
     repo.feeds.finishRun(feed.id, {
       status, cursor: cursorOut, addedItems: stats.added, failures: 0,
@@ -344,20 +374,31 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
       events.log('INFO', `${tag} skipped: ${e.message}`);
       return finish('skipped', { error: e.message });
     }
+    // The platform is cooling down after a 429 and the limiter refused to queue this call behind the hold (lib/limiter, maxWaitMs):
+    // nothing was sent, so this is no failure of the feed. Come back when the hold is over.
+    if (e.cooldown) {
+      breaker.release(feed.platform);
+      const wait = Math.max(e.retryAfter || 0, 60000) + Math.floor(Math.random() * 60000);
+      repo.feeds.finishRun(feed.id, { status: 'skipped', error: `rate limited: ${e.message}; trying again in ${Math.ceil(wait / 60000)} min`, failures: feed.consecutive_failures, nextRunAt: new Date(Date.now() + wait).toISOString() });
+      events.log('INFO', `${tag} skipped: ${e.message}`);
+      return finish('skipped', { error: e.message });
+    }
     const failures = (feed.consecutive_failures || 0) + 1;
     // One instance's gateway errors trip that host's breaker (after 2), not the whole platform's (after 4).
     if (host && breaker.isGateway(e)) {
       if (breaker.hostFailure(host, e)) events.log('WARN', `${tag}: ${host} keeps answering ${e.status}; skipping that host until ${new Date(breaker.hostOpenUntil(host)).toISOString()}`);
       breaker.release(feed.platform);
     } else breaker.failure(feed.platform, e);
-    const gone = e.status === 404 || e.status === 410;
-    const brokenTarget = /not found|target no longer exists|account suspended|user not found|user_banned|channel is private|preview disabled|preview-disabled|feed unavailable/i.test(e.message || "");
+    const cls = classify(e);
     repo.feeds.finishRun(feed.id, { status: 'error', error: e.message, failures, nextRunAt: computeNextRun(feed, failures, Math.max(e.retryAfter || 0, host ? Math.max(0, breaker.hostOpenUntil(host) - Date.now()) : 0)) });
-    if ((gone || brokenTarget) && failures >= 3) {
+    if (cls.permanent && failures >= 3) {
       repo.feeds.update(feed.id, { enabled: false });
-      repo.feeds.finishRun(feed.id, { status: 'error', error: `${gone ? `Not found (${e.status})` : "Target broken"} — disabled after ${failures} tries`, failures, nextRunAt: null });
-      events.log('WARN', `${tag} disabled: ${gone ? "target no longer exists" : e.message}`);
-    } else if (failures >= 5) {
+      repo.feeds.finishRun(feed.id, { status: 'error', error: `${e.status === 404 || e.status === 410 ? `Not found (${e.status})` : 'Target broken'} — disabled after ${failures} tries`, failures, nextRunAt: null });
+      events.log('WARN', `${tag} disabled: ${e.status === 404 || e.status === 410 ? 'target no longer exists' : e.message}`);
+    } else if (failures >= 5 && !cls.transient) {
+      // Only errors that say something about the feed itself end it (it answers, but never with anything readable). A rate limit,
+      // a 403/challenge, a timeout, a dropped connection or a 5xx can pass: those keep backing off (up to a day) and stay visible
+      // as failing in the source-health report; the auto-retire sweep pauses the app's own feeds that never recover.
       repo.feeds.update(feed.id, { enabled: false });
       repo.feeds.finishRun(feed.id, { status: 'error', error: `Chronic failure (${failures} consecutive errors: ${e.message}) — disabled`, failures, nextRunAt: null });
       events.log('WARN', `${tag} disabled: ${failures} consecutive failures`);
@@ -392,11 +433,14 @@ function runningOn(platform) {
   return n;
 }
 const platformFull = (platform, cfg) => runningOn(platform) >= slotsFor(platform, cfg);
+/** The key a platform's HTTP calls are limited under (lib/limiter): the link-in-bio adapter reads through the shared `web` client. */
+const limiterKeyOf = (platform) => (platform === 'linkinbio' ? 'web' : platform);
 
 /** Platforms that still have a free slot and an open breaker. */
 function openPlatforms(cfg) {
   const open = new Set(Object.entries(breaker.snapshot()).filter(([, s]) => s.state === 'open').map(([p]) => p));
-  return { open, free: registry.list().map((a) => a.platform).filter((p) => !open.has(p) && !platformFull(p, cfg)) };
+  // A platform the limiter is holding after a 429 gets no new run either: the call would only be refused (lib/limiter, maxWaitMs).
+  return { open, free: registry.list().map((a) => a.platform).filter((p) => !open.has(p) && !platformFull(p, cfg) && !limiter.coolingDown(limiterKeyOf(p))) };
 }
 
 function nextWork(cfg) {
@@ -408,7 +452,7 @@ function nextWork(cfg) {
     if (state.running.has(job.feedId)) { state.queue.splice(i, 1); i--; continue; }
     const feed = repo.feeds.get(job.feedId);
     if (!feed) { state.queue.splice(i, 1); i--; continue; }
-    if (platformFull(feed.platform, cfg) || !breaker.canRun(feed.platform)) continue;
+    if (platformFull(feed.platform, cfg) || limiter.coolingDown(limiterKeyOf(feed.platform)) || !breaker.canRun(feed.platform)) continue;
     state.queue.splice(i, 1);
     return { feed, trigger: job.trigger, force: job.force, limit: job.limit, lane: 0 };
   }
@@ -574,14 +618,8 @@ function seedCuratedCreators(db) {
     }
     // Only the curated creators: the counts are per creator, and a correlated UPDATE over every creator in
     // the library (14k on prod) cost ~16 s inside this transaction, on the main thread, at boot.
-    const refreshStats = db.prepare(`
-      UPDATE creators SET
-        media_count = (SELECT COUNT(*) FROM media WHERE creator_id = creators.id AND publish_state = 'published'),
-        video_count = (SELECT COUNT(*) FROM media WHERE creator_id = creators.id AND publish_state = 'published' AND media_type = 'video'),
-        total_score = COALESCE((SELECT SUM(score) FROM media WHERE creator_id = creators.id), 0)
-      WHERE id = ?
-    `);
-    for (const c of seed.creators) refreshStats.run(c.id);
+    // (repo.creators.recount is the one definition of the counters: published items only.)
+    for (const c of seed.creators) repo.creators.recount(c.id);
   });
 
   tx();
@@ -615,21 +653,17 @@ function seedDefaults() {
  */
 function backfillCreatorStats(db, chunk = 5) { // a few creators per tick: 25 blocked the loop for ~0.5 s each on a cold file
   const pick = db.prepare('SELECT id FROM creators WHERE id > ? ORDER BY id LIMIT ?');
-  const stmt = db.prepare(`
-    UPDATE creators SET
-      media_count = (SELECT COUNT(*) FROM media WHERE creator_id = creators.id AND publish_state = 'published'),
-      video_count = (SELECT COUNT(*) FROM media WHERE creator_id = creators.id AND publish_state = 'published' AND media_type = 'video'),
-      total_score = COALESCE((SELECT SUM(score) FROM media WHERE creator_id = creators.id), 0)
-    WHERE id = ?`);
-  let after = ''; let done = 0;
-  const step = () => {
-    const ids = pick.all(after, chunk).map((r) => r.id);
-    if (!ids.length) { if (done) events.log('INFO', `Refreshed media counts for ${done} creators`); return; }
-    db.transaction(() => { for (const id of ids) stmt.run(id); })();
-    done += ids.length; after = ids[ids.length - 1];
+  return new Promise((resolve) => {
+    let after = ''; let done = 0;
+    const step = () => {
+      const ids = pick.all(after, chunk).map((r) => r.id);
+      if (!ids.length) { if (done) events.log('INFO', `Refreshed media counts for ${done} creators`); return resolve(done); }
+      db.transaction(() => { for (const id of ids) repo.creators.recount(id); })();
+      done += ids.length; after = ids[ids.length - 1];
+      setImmediate(step);
+    };
     setImmediate(step);
-  };
-  setImmediate(step);
+  });
 }
 
 function start() {
@@ -662,4 +696,4 @@ function shutdown() {
   state.timer = null; state.hotTimer = null; state.stopRequested = true;
 }
 
-module.exports = { _nextWork: nextWork, slotsFor, runningOn, start, shutdown, tick, runFeed, enqueue, enqueuePlatforms, stopAll, pause, resume, status, seedDefaults, seedCuratedCreators, computeNextRun, tempo, adoptDiscoveredFeeds, _state: state, _waysIn: { noteWaysIn, followWaysIn } };
+module.exports = { _nextWork: nextWork, slotsFor, runningOn, start, shutdown, tick, runFeed, enqueue, enqueuePlatforms, stopAll, pause, resume, status, seedDefaults, seedCuratedCreators, backfillCreatorStats, computeNextRun, tempo, adoptDiscoveredFeeds, _profileDue: profileDue, _state: state, _waysIn: { noteWaysIn, followWaysIn } };

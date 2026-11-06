@@ -7,6 +7,10 @@
 const clients = { public: new Set(), admin: new Set() };
 const logs = [];
 const MAX_LOGS = 600;
+// Warnings and errors also go into a ring of their own: a busy scheduler writes a few INFO lines per run, which pushes the
+// 600-line log past a failure within minutes, long before anybody looked at it.
+const problems = [];
+const MAX_PROBLEMS = 300;
 let pendingNew = 0;
 let newTimer = null;
 
@@ -38,6 +42,7 @@ function log(level, msg, meta) {
   const entry = { ts: new Date().toISOString(), level, msg, ...(meta || {}) };
   logs.push(entry);
   if (logs.length > MAX_LOGS) logs.shift();
+  if (level === 'WARN' || level === 'ERR') { problems.push(entry); if (problems.length > MAX_PROBLEMS) problems.shift(); }
   broadcast('admin', { type: 'log', data: entry });
   if (level === 'ERR' && process.env.NODE_ENV !== 'test') console.error(`[ingest] ${msg}`);
 }
@@ -55,7 +60,9 @@ function newItems(count = 1) {
 
 const admin = (type, data) => broadcast('admin', { type, data });
 const getLogs = (n = 200) => logs.slice(-n);
-const clearLogs = () => { logs.length = 0; };
+/** The last warnings and errors, newest last, however much was logged since. */
+const getProblems = (n = 100) => problems.slice(-n);
+const clearLogs = () => { logs.length = 0; problems.length = 0; };
 const counts = () => ({ public: clients.public.size, admin: clients.admin.size });
 
-module.exports = { subscribe, broadcast, log, newItems, admin, getLogs, clearLogs, counts };
+module.exports = { subscribe, broadcast, log, newItems, admin, getLogs, getProblems, clearLogs, counts };

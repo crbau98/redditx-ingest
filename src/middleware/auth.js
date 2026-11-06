@@ -23,6 +23,14 @@ function adminAuth(req, res, next) {
   return adminCredentialAuth(req, res, next);
 }
 
+/** True when the request carries the right admin key (or the dev-only open mode is on). */
+function adminKeyValid(req) {
+  if (!config.adminKey) return !!config.adminOpen;
+  const bearer = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  const provided = req.headers['x-admin-key'] || bearer;
+  return !!(provided && safeEqual(provided, config.adminKey));
+}
+
 function adminCredentialAuth(req, res, next) {
   if (!config.adminKey) {
     if (config.adminOpen) return next(); // development convenience only
@@ -37,6 +45,7 @@ function adminCredentialAuth(req, res, next) {
 module.exports = {
   adminAuth: [failedAttempts, adminAuth],
   adminRateLimit: failedAttempts,
+  adminKeyValid,
   adminCredentialAuth,
   safeEqual,
 };

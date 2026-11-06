@@ -32,7 +32,8 @@ const q = {
 function canRefresh(host) {
   const h = String(host || '').toLowerCase();
   return hostMatches(h, 'redgifs.com') || hostMatches(h, 'twimg.com')
-    || hostMatches(h, 'telesco.pe') || hostMatches(h, 'telegram-cdn.org') || hostMatches(h, 'cdn-telegram.org');
+    || hostMatches(h, 'telesco.pe') || hostMatches(h, 'telegram-cdn.org') || hostMatches(h, 'cdn-telegram.org')
+    || hostMatches(h, 'xhcdn.com');
 }
 
 /** RedGIFs gif id from a media link (media.redgifs.com/SomeName-mobile.mp4) or a watch page. */
@@ -68,7 +69,7 @@ async function fresh(row) {
   if (hostMatches(host, 'redgifs.com')) {
     const id = redgifsId(row);
     if (!id) return null;
-    const it = await registry.get('redgifs').resolve(`https://www.redgifs.com/watch/${id}`);
+    const it = await registry.get('redgifs').resolve(`https://www.redgifs.com/watch/${id}`, { fresh: true });
     return it && it.mediaUrl ? { mediaUrl: it.mediaUrl, previewUrl: it.previewUrl || null } : null;
   }
   if (hostMatches(host, 'twimg.com')) {
@@ -77,6 +78,15 @@ async function fresh(row) {
     const items = await registry.get('x').fetchTweet(id);
     const same = items.filter((it) => it.mediaType === row.media_type);
     const it = items[row.position || 0] && items[row.position || 0].mediaType === row.media_type ? items[row.position || 0] : same[0];
+    return it && it.mediaUrl ? { mediaUrl: it.mediaUrl, previewUrl: it.previewUrl || null } : null;
+  }
+  if (hostMatches(host, 'xhcdn.com') || row.platform === 'xhamster') {
+    // xHamster playlists are signed and expire within hours: re-read the video page for a current one.
+    const xh = registry.get('xhamster');
+    if (!xh || typeof xh.resolve !== 'function') return null;
+    const page = /^https?:/i.test(row.source_url || '') ? row.source_url : null;
+    if (!page) return null;
+    const it = await xh.resolve(page);
     return it && it.mediaUrl ? { mediaUrl: it.mediaUrl, previewUrl: it.previewUrl || null } : null;
   }
   if (hostMatches(host, 'telesco.pe') || hostMatches(host, 'telegram-cdn.org') || hostMatches(host, 'cdn-telegram.org') || row.platform === 'telegram') {

@@ -119,7 +119,9 @@ describe('no code path attributes by visual similarity', () => {
 
   test('the only files that request or store visual vectors are the vector store, the image worker plumbing and the read-only display routes', () => {
     const users = walk(SRC).filter((f) => VISUAL.test(code(f))).map(rel).sort();
-    assert.deepEqual(users, ['engine/visual.js', 'lib/imagefilter-core.js', 'lib/imagefilter.js', 'routes/public.js']);
+    // db/repo.js and db/schema.js only DELETE embeddings, to purge removed items (takedown, block, migration v22);
+    // they never read a vector or write one.
+    assert.deepEqual(users, ['db/repo.js', 'db/schema.js', 'engine/visual.js', 'lib/imagefilter-core.js', 'lib/imagefilter.js', 'routes/public.js']);
   });
 
   test('every module that attributes or follows anything is free of visual-similarity code', () => {
@@ -288,7 +290,7 @@ describe('schema: v17 is the Telegram migration, v18 is the look-alike retractio
     schema.MIGRATIONS[16](db); schema.MIGRATIONS[16](db); // twice: idempotent
     assert.ok(db.prepare('PRAGMA table_info(creators)').all().some((c) => c.name === 'bio_source'));
     assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'telegram_text'").get());
-    assert.equal(schema.MIGRATIONS.length, 21);
+    assert.ok(schema.MIGRATIONS.length >= 23, 'v17 and v18 sit at indexes 16 and 17; later migrations are appended');
     db.close();
   });
 });

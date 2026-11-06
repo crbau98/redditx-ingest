@@ -26,6 +26,7 @@ const SCHEMA = {
   untrustedUnclear: { type: 'enum', values: ['drop', 'review'], default: 'drop', label: 'Items from open searches/tags with no male wording at all: drop = discard, review = queue for a human' },
   autoTrack: { type: 'bool', default: true, label: 'Auto-follow creators discovered in communities' },
   autoTrackMinItems: { type: 'int', default: 2, min: 1, max: 20, label: 'Posts before a creator is auto-followed' },
+  profileRefreshDays: { type: 'int', default: 14, min: 0, max: 365, label: 'Re-read a followed creator\'s profile (avatar, bio, the links in it) every this many days, from the same feed (Bluesky, Mastodon, Misskey, Reddit, X, PeerTube; one extra request per creator per period; 0 = only on the first run and on manual runs)', group: 'sources' },
   autoLinkProfiles: { type: 'bool', default: true, label: 'Follow creators’ other public accounts found in their bios' },
   identityAutoMerge: { type: 'bool', default: true, label: 'Merge a creator’s accounts on their own when his profiles link to each other (or to the same OnlyFans / link page) and he uses the same name on both. Anything less certain waits in Creators → Same person?' },
   adaptiveScheduling: { type: 'bool', default: true, label: 'Adaptive scheduling: check busy feeds sooner, quiet ones less often' },
@@ -46,9 +47,10 @@ const SCHEMA = {
   imageSweep: { type: 'bool', default: true, label: 'Re-check the existing library (women in pictures, duplicate pictures) in the background', group: 'safety' },
   imageSweepPerTick: { type: 'int', default: 12, min: 0, max: 200, label: 'Items re-checked per minute by the image sweep', group: 'safety' },
   // --- body filter (v4.14) ---
-  physiqueFilter: { type: 'bool', default: true, label: 'Body filter: show only fit / athletic bodies — hides heavy or very large builds (on-device pose + silhouette, and words like "chubby", "gainer", "dad bod")', group: 'safety' },
+  physiqueFilter: { type: 'bool', default: true, label: 'Body filter: show only fit / athletic bodies — hides heavy or very large builds (on-device pose + silhouette, and words like "chubby", "gainer", "dad bod") and men who call themselves older (only unambiguous wording: "silver fox", a #oldman / #maturemen tag, or a stated age of 45+ such as "52yo" or "58 years old"; words only, never a guess from a face). Stored posts and creators are hidden, not deleted: switching it off shows them again. A new post that matches is dropped at ingest, as with the body words', group: 'safety' },
   physiqueThreshold: { type: 'int', default: 45, min: 20, max: 95, label: 'Body filter: heaviness score (0 = lean … 100 = very large) at which a picture is hidden — lower = stricter. Hidden, not deleted: moving it re-applies to the whole library', group: 'safety' },
   physiqueCreatorShare: { type: 'int', default: 30, min: 0, max: 100, label: 'Body filter: hide a creator (and pause their feeds) when this % of their measured pictures are hidden (at least 3 measured; 0 = never)', group: 'safety' },
+  autoRetireFeeds: { type: 'bool', default: true, label: 'Pause feeds the app made itself (seeds, discovered, linked) that have never worked — 12+ runs in the last 30 days (or the run history you keep, if shorter; it does nothing with under 14 days kept) and not one item added, ever. Never touches feeds you added, imported or joined, or a quiet feed that has added items before; paused, not deleted, and once you turn one back on it is never paused again', group: 'sources' },
   // --- discovery (v4.3) ---
   autoDiscover: { type: 'bool', default: true, label: 'Discover new creators automatically (mentions, follow graphs, web search)', group: 'discovery' },
   discoveryIntervalMin: { type: 'int', default: 60, min: 15, max: 1440, label: 'Discovery runs every (minutes)', group: 'discovery' },
@@ -58,8 +60,8 @@ const SCHEMA = {
   braveDailyBudget: { type: 'int', default: 40, min: 0, max: 2000, label: 'Metered web searches per day (Brave + Keenable + Bright Data budget; 0 = free search only — SearXNG, Bing, DuckDuckGo, and discovery then searches MORE per run)', group: 'discovery' },
   discoveryQueries: {
     type: 'text', group: 'discovery', label: 'Web-search topics (one per line; rotated, one per run)',
-    default: ['gay male model bluesky', 'male fitness model onlyfans x.com', 'gay creator linktree 18+', 'muscle model telegram channel', 'gay twink creator redgifs', 'muscle daddy creator onlyfans bluesky', 'gay amateur couple onlyfans twitter', 'male model throne wishlist',
-      'gay bodybuilder creator linktree', 'hairy gay creator onlyfans', 'gay jock creator link in bio', 'gay otter creator bluesky 18+', 'gay daddy creator mastodon nsfw', 'gay content creator tumblr nsfw', 'gay muscle videos peertube',
+    default: ['gay male model bluesky', 'male fitness model onlyfans x.com', 'gay creator linktree 18+', 'muscle model telegram channel', 'gay twink creator redgifs', 'muscle model creator onlyfans bluesky', 'gay amateur couple onlyfans twitter', 'male model throne wishlist',
+      'gay bodybuilder creator linktree', 'hairy gay creator onlyfans', 'gay jock creator link in bio', 'gay otter creator bluesky 18+', 'gay athlete creator mastodon nsfw', 'gay content creator tumblr nsfw', 'gay muscle videos peertube',
       'gay porn star official links', 'gay amateur creator allmylinks', 'gay athlete creator beacons.ai', 'gay fitness creator beacons.ai', 'ゲイ 筋肉 クリエイター', 'ゲイ 細マッチョ リンク', 'gay cam model linktree', 'male nude model portfolio',
       // OnlyFans / Fansly / JustFor.Fans pages in search results become leads (their snippet is the public bio); fit / athletic first
       'site:onlyfans.com gay muscle', 'site:onlyfans.com male fitness model', 'site:onlyfans.com gay athlete', 'site:onlyfans.com gay jock', 'site:onlyfans.com free gay',
@@ -73,6 +75,8 @@ const SCHEMA = {
   // --- link health (v4.8) ---
   linkHealth: { type: 'bool', default: true, label: 'Check media at the source and hide what has been removed there', group: 'maintenance' },
   linkHealthPerSweep: { type: 'int', default: 40, min: 0, max: 500, label: 'Items re-checked every 10 minutes', group: 'maintenance' },
+  linkHealthCohortPerSweep: { type: 'int', default: 200, min: 0, max: 500, label: 'Items from the rot hosts below re-checked every 10 minutes (their own rate; the other items keep linkHealthPerSweep)', group: 'maintenance' },
+  linkHealthRotHosts: { type: 'text', default: 'i.redd.it\npreview.redd.it', label: 'Hosts where media is known to disappear at the source (one per line). Their items are checked as a cohort, whatever their age', group: 'maintenance' },
   creatorSeeds: {
     type: 'text', group: 'discovery', label: 'Creators to find by name (one per line: a name, @handle or profile link). Each is looked up across every platform PRISM reads and his verified public accounts are followed; re-checked monthly',
     // empty under test: a lookup reaches every platform, which tests must not do by accident
@@ -115,9 +119,15 @@ const SCHEMA = {
   scrapflyAllowlist: { type: 'text', default: '', label: 'Scrapfly allowlist: the ONLY creators (ids or handles, one per line) the Scrapfly tier may spend credits on. Empty = Scrapfly never runs', group: 'sources' },
   scrapflyBudget: { type: 'int', default: 20, min: 0, max: 10000, label: 'Scrapfly: most requests per day (a clean read is 1 credit; an escalated read 25 to 80)', group: 'sources' },
   scrapflyMonthlyBudget: { type: 'int', default: 100, min: 0, max: 100000, label: 'Scrapfly: most requests per month (the FREE plan allows 1000 requests)', group: 'sources' },
-  scrapflyCreditBudget: { type: 'int', default: 30, min: 0, max: 1000000, label: 'Scrapfly: most credits per day. An escalation to 80 needs at least 80 here, so 30 means it never runs', group: 'sources' },
+  scrapflyCreditBudget: { type: 'int', default: 30, min: 0, max: 1000000, label: 'Scrapfly: most credits per day. The escalated tier (80 credits per page) only runs when this is at least 80; at 30 nothing escalates, and the run note says so', group: 'sources' },
   scrapflyMonthlyCreditBudget: { type: 'int', default: 120, min: 0, max: 1000000, label: 'Scrapfly: most credits per month (the FREE plan allows 1000 credits; keep it under what the account has left)', group: 'sources' },
   brightdataUnlockBudget: { type: 'int', default: 100, min: 0, max: 100000, label: 'Bright Data Unlocker: most unlocked requests per day (each one costs credit; 0 = none)', group: 'sources' },
+  // --- Free unblock tiers: the local Chrome (raw CDP) and the Jina reader run before any paid tier ---
+  challengeBrowser: { type: 'enum', values: ['off', 'fallback'], default: 'fallback', label: 'Local Chrome for challenges (FALLBACK by default, inert until CHALLENGE_BROWSER=1 or CHROME_PATH is set on the host): when a site REFUSES PRISM or shows a bot-challenge page, read it in a real Chrome driven directly over the DevTools protocol, waiting out a Cloudflare / DDoS-Guard / DataDome challenge. Free, runs before Bright Data and Scrapfly. Never used for takedowns, robots.txt disallows or login walls.', group: 'sources' },
+  jinaReader: { type: 'enum', values: ['off', 'fallback'], default: 'fallback', label: 'Jina Reader (FALLBACK by default, free and keyless): when the local Chrome did not get the page, read it through r.jina.ai, which renders it from Jina’s own addresses. Kept last among the free tiers; never used on a paid platform; capped by “Jina Reader: requests per day”.', group: 'sources' },
+  jinaDailyBudget: { type: 'int', default: 60, min: 0, max: 10000, label: 'Jina Reader: most page reads per day (the free tier is rate limited per address; 0 = none)', group: 'sources' },
+  captchaSolver: { type: 'enum', values: ['off', 'fallback'], default: 'off', label: 'Captcha solver (OFF by default, inert until CAPSOLVER_API_KEY is set): when a page still shows a Turnstile / hCaptcha / reCAPTCHA widget after the local Chrome has waited, buy one token so the page’s own check passes. Costs money per token; capped by “Captcha solver: tokens per day”.', group: 'sources' },
+  captchaSolverBudget: { type: 'int', default: 50, min: 0, max: 100000, label: 'Captcha solver: most tokens bought per day (each one is billed; 0 = none)', group: 'sources' },
   // --- AI (OpenAI by default, Claude with AI_PROVIDER=anthropic; needs OPENAI_API_KEY / ANTHROPIC_API_KEY on the host, inert without it) ---
   aiSearch: { type: 'bool', default: true, label: 'The AI reads searches the built-in rules cannot fully place (slang, descriptions, other languages, typos) and maps them onto the library\'s tags and filters. Only the typed words and the tag list are sent', group: 'search' },
   aiDiscovery: { type: 'bool', default: true, label: 'The AI plans new discovery searches once a day and triages discovered accounts from their public name and bio: boosts adult male creators, rejects possible minors, holds the rest for review', group: 'discovery' },

@@ -168,6 +168,31 @@ function creatorFirst(scored, now) {
   return out.sort((a, b) => b.score - a.score || b.row.seq - a.row.seq);
 }
 
+/**
+ * The candidate rows for a taste: the liked creators' best posts, the similar creators' posts, and the hottest posts carrying
+ * the liked tags. They depend on the taste, not on the visitor's seed, and gathering them is nearly all of rank()'s cost
+ * (~550 of ~600 ms on a 300k-post library: window functions over a prolific creator's posts, the tag walk). The home page asks with
+ * a fresh seed on every visit, so each visit re-ran identical queries. They are kept for CAND_TTL_MS, only while the
+ * library snapshot is the same object (it is replaced after writes), and never in tests (TTL 0). The rows are only read.
+ */
+const CAND_TTL_MS = 2 * 60000;
+const candCache = new Map(); // taste candidates key -> { at, lib, rows }
+function candidates(likedIds, neighbourIds, topTags, type, lib) {
+  const key = [likedIds.join(','), neighbourIds.join(','), topTags.join(','), type || ''].join('|');
+  const hit = candCache.get(key);
+  if (TTL > 0 && hit && hit.lib === lib && Date.now() - hit.at < Math.min(TTL, CAND_TTL_MS)) return hit.rows;
+  const rows = new Map();
+  for (const r of [...byCreators(likedIds, LIKED_PER_CREATOR, type), ...byCreators(neighbourIds, SIMILAR_PER_CREATOR, type), ...byTags(topTags, type)]) {
+    if (!rows.has(r.id)) rows.set(r.id, r);
+  }
+  if (TTL > 0) {
+    candCache.delete(key);
+    candCache.set(key, { at: Date.now(), lib, rows });
+    if (candCache.size > 12) candCache.delete(candCache.keys().next().value);
+  }
+  return rows;
+}
+
 function rank(t) {
   const lib = library();
   const tagW = normalise(t.tags); const creatorW = normalise(t.creators); const platW = normalise(t.platforms);
@@ -193,10 +218,7 @@ function rank(t) {
   const neighbourIds = [...neighbourW].sort((a, b) => b[1] - a[1]).slice(0, 30).map(([id]) => id);
 
   const topTags = [...tagW].sort((a, b) => b[1] - a[1]).slice(0, 16).map(([k]) => k);
-  const rows = new Map();
-  for (const r of [...byCreators(liked.map(([id]) => id), LIKED_PER_CREATOR, t.type), ...byCreators(neighbourIds, SIMILAR_PER_CREATOR, t.type), ...byTags(topTags, t.type)]) {
-    if (!rows.has(r.id)) rows.set(r.id, r);
-  }
+  const rows = candidates(liked.map(([id]) => id), neighbourIds, topTags, t.type, lib);
 
   const now = Date.now();
   const maxIdf = Math.max(1e-9, ...topTags.map((x) => sim.idfOf(lib, GENERIC_TAGS, x) || Math.log(2)));
@@ -277,7 +299,7 @@ let TTL = process.env.NODE_ENV === 'test' ? 0 : 5 * 60000;
 /** How long a scrolling session's served order is kept for its later pages. */
 const SESSION_MS = 60 * 60000;
 /** Tests only: keep ranked lists cached (to check what is filtered on the way out). */
-const setCacheTtl = (ms) => { TTL = ms; cache.clear(); };
+const setCacheTtl = (ms) => { TTL = ms; cache.clear(); candCache.clear(); };
 function keyOf(t) {
   const flat = (m) => [...m].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([k, w]) => `${k}:${Math.round(w * 100)}`).join(',');
   return [flat(t.tags), flat(t.creators), flat(t.platforms), [...t.avoidTags].sort().join(','), [...t.avoidCreators].sort().join(','), [...t.exclude].sort().join(','), t.video, t.type, t.seed, t.limit].join('|');
@@ -382,13 +404,34 @@ function recommend(t) {
 }
 
 /**
+ * The no-taste answer: creators in the stored popularity order, excluding who the visitor follows
+ * and who they asked to see less of. Freshness is part of the rank, so the rail is not a museum of
+ * old accounts. The reason never claims personalisation; it names the order.
+ */
+function popularFallback(t, limit) {
+  const avoid = [...new Set([...t.avoidCreators, ...t.exclude])].filter((id) => UUID.test(id)).slice(0, 200);
+  const yearAgo = new Date(Date.now() - 365 * 86400000).toISOString();
+  const rows = db.prepare(`${repo.SELECT_CREATOR_CARD}
+      WHERE c.status = 'active' AND c.scope != 'excluded' AND c.media_count > 0 AND c.last_media_at >= ?
+        ${avoid.length ? `AND c.id NOT IN (${marks(avoid)})` : ''}
+      ORDER BY c.popularity DESC, c.last_media_at DESC LIMIT ?`).all(yearAgo, ...avoid, limit);
+  return rows.map(repo.serializeCreator).map((c) => ({ ...c, reason: 'Popular here' }));
+}
+
+/**
  * Creators you might like: those most similar to the creators in your taste (weighted by how
  * much you like each), or matching your tags when you have no favourites yet; recent posting
  * breaks near-ties. Excludes creators
  * you already like, follow or asked to see less of.
  */
 function creatorsForYou(t, limit = 12) {
-  const lib = library();
+  const noTaste = !t.creators.size && !t.tags.size;
+  let lib;
+  try { lib = library(); } catch (e) {
+    // A first visitor does not need the similarity snapshot at all: the stored popularity rank answers.
+    if (noTaste && e.code === 'warming') return popularFallback(t, limit);
+    throw e;
+  }
   const creatorW = normalise(t.creators); const tagW = normalise(t.tags);
   const score = new Map(); const via = new Map();
   for (const [cid, w] of [...creatorW].sort((a, b) => b[1] - a[1]).slice(0, 15)) {
@@ -406,7 +449,9 @@ function creatorsForYou(t, limit = 12) {
     }
   }
   const top = [...score].sort((a, b) => b[1] - a[1]).slice(0, limit * 2).map(([id]) => id);
-  if (!top.length) return [];
+  // A brand-new visitor has no taste yet: answer with the site-wide popularity rank instead of an
+  // empty rail. Same exclusions apply (followed, "show less"), and the reason says what the order is.
+  if (!top.length) return popularFallback(t, limit);
   const found = db.prepare(`${repo.SELECT_CREATOR_CARD} WHERE c.id IN (${marks(top)}) AND c.status = 'active' AND c.scope != 'excluded' AND c.media_count > 0`).all(...top).map(repo.serializeCreator);
   // Among close matches, creators posting right now come first.
   const now = Date.now();
@@ -440,4 +485,4 @@ function tasteFromQuery(q, { clampInt }) {
   };
 }
 
-module.exports = { recommend, creatorsForYou, tasteFromQuery, parseWeighted, diversify, creatorFirst, setCacheTtl };
+module.exports = { recommend, creatorsForYou, popularFallback, tasteFromQuery, parseWeighted, diversify, creatorFirst, setCacheTtl };

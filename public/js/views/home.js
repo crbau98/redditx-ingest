@@ -1,14 +1,14 @@
 import { h, icon, fmt, emptyState } from '../dom.js';
 import { get, prefetch } from '../api.js';
 import { href } from '../router.js';
-import { platformLabel, platformColor, follows, searches, tastes, history as viewHistory, prefs, visits } from '../store.js';
+import { follows, tastes, history as viewHistory, prefs } from '../store.js';
 import { mediaCard } from '../components/card.js';
 import { creatorCard } from '../components/creator-card.js';
 import { createFeed } from '../components/feed.js';
 import { openLightbox, surpriseMe } from '../components/ondemand.js';
 import { smartSearch } from '../smart.js';
 import { attachSuggest } from '../components/suggest.js';
-import { topicCards, becauseRails } from '../components/topics.js';
+import { creatorRing } from '../components/creator-ring.js';
 
 /** "For you": a rail ranked from this device's taste, with the taste shown (and editable) right there. */
 async function forYouSection(open) {
@@ -36,31 +36,6 @@ async function forYouSection(open) {
     people.length >= 3 ? h('div', { class: 'stack', style: { marginTop: '18px' } },
       h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase' } }, 'Creators you might like'),
       h('div', { class: 'rail' }, people.map((c) => creatorCard(c, { mini: true, badge: c.reason })))) : null);
-}
-
-/**
- * "Since your last visit": what is new since this device was last here — from creators you follow,
- * across the library, and newly discovered creators — each one tap away. Hidden on a first visit
- * or when the last visit was under an hour ago (nothing meaningful to say).
- */
-async function sinceSection() {
-  const since = visits.since;
-  if (!since || Date.now() - Date.parse(since) < 3600000) return null;
-  const ids = follows.list().map((c) => c.id).slice(0, 100);
-  const [all, mine, fresh] = await Promise.all([
-    get('/api/media', { after: since, limit: 1 }).catch(() => null),
-    ids.length ? get('/api/media', { after: since, creators: ids.join(','), limit: 1 }).catch(() => null) : null,
-    get('/api/creators', { sort: 'new', limit: 48 }).catch(() => null),
-  ]);
-  const newCreators = fresh ? fresh.items.filter((c) => c.added_at && c.added_at > since).length : 0;
-  const tiles = [];
-  if (mine && mine.total) tiles.push(h('a', { class: 'since-tile hot', href: href('/following') }, h('b', { class: 'num' }, fmt.num(mine.total)), h('span', null, 'new from creators you follow')));
-  if (all && all.total) tiles.push(h('a', { class: 'since-tile', href: href('/explore', { after: since, sort: 'trending' }) }, h('b', { class: 'num' }, fmt.num(all.total)), h('span', null, `new post${all.total === 1 ? '' : 's'} in the library`)));
-  if (newCreators) tiles.push(h('a', { class: 'since-tile', href: href('/creators', { sort: 'new' }) }, h('b', { class: 'num' }, `${newCreators}${newCreators === 48 ? '+' : ''}`), h('span', null, `new creator${newCreators === 1 ? '' : 's'} discovered`)));
-  if (!tiles.length) return null;
-  return h('section', { class: 'section since' },
-    sectionHead('clock', 'Since your last visit', `${fmt.ago(since)} — here is what is new`),
-    h('div', { class: 'since-row' }, tiles));
 }
 
 /** First visit: let people pick a few interests so "For you" works from minute one. */
@@ -92,33 +67,6 @@ function interestPicker(tags, onDone) {
   return card;
 }
 
-/** Map a saved Explore search onto /api/media parameters. */
-function mediaQuery(q) {
-  const out = { ...q };
-  delete out.following;
-  if (out.sort === 'relevance') delete out.sort;
-  if (q.following) {
-    const ids = follows.list().map((c) => c.id).slice(0, 100);
-    out.creators = ids.length ? ids.join(',') : '00000000-0000-0000-0000-000000000000';
-  }
-  return out;
-}
-
-/** Saved searches with a live "N new since your last visit" count each. */
-function smartFeeds() {
-  const list = searches.list();
-  if (!list.length) return null;
-  const row = h('div', { class: 'smart-row' }, list.map((s) => {
-    const n = h('span', { class: 'zero' }, '…');
-    const chip = h('a', { class: 'smart-chip', href: href('/explore', s.query), onclick: () => searches.markSeen(s.id) }, icon('bookmark', 'sm'), s.name, n);
-    get('/api/media', { ...mediaQuery(s.query), after: s.seen, limit: 1 })
-      .then((r) => { if (r.total) n.replaceWith(h('span', { class: 'new' }, `${fmt.num(r.total)} new`)); else n.textContent = 'up to date'; })
-      .catch(() => { n.textContent = ''; });
-    return chip;
-  }));
-  return h('section', { class: 'section' }, sectionHead('bookmark', 'Your smart feeds', 'Saved searches, with what’s new since you last looked', { href: href('/saved', { tab: 'feeds' }), label: 'Manage' }), row);
-}
-
 let eagerRail = 4;
 function rail(items, { open }) {
   const n = eagerRail;
@@ -132,6 +80,16 @@ function sectionHead(iconName, title, sub, more) {
     more ? h('a', { class: 'link-more', href: more.href }, more.label, icon('chev-r', 'sm')) : null);
 }
 
+/** Niche chips that stay on the page: each one opens Explore filtered to that tag. Nothing here is dismissible. */
+function nicheRow(tags) {
+  const list = (tags || []).filter((t) => t && t.name).slice(0, 12);
+  if (!list.length) return null;
+  return h('nav', { class: 'niche-row', 'aria-label': 'Browse by niche' },
+    h('span', { class: 'niche-label' }, 'Niches'),
+    h('div', { class: 'niche-chips' },
+      list.map((t) => h('a', { class: 'chip sm', href: href('/explore', { tags: t.name }) }, `#${t.name}`))));
+}
+
 export async function home(root) {
   eagerRail = 4;
   const holder = h('div', { class: 'stack' }, h('div', { class: 'skeleton', style: { height: '320px' } }), h('div', { class: 'skeleton', style: { height: '260px' } }));
@@ -143,10 +101,7 @@ export async function home(root) {
   const open = (list) => (item) => openLightbox(list, Math.max(0, list.findIndex((x) => x.id === item.id)));
   const followIds = follows.list().map((c) => c.id).slice(0, 100);
   const followedP = followIds.length ? get('/api/media', { creators: followIds.join(','), sort: 'recent', limit: 14 }).then((r) => r.items, () => []) : Promise.resolve([]);
-  const sinceP = sinceSection();
   const forYouP = forYouSection(open).catch(() => null);
-  const becauseP = becauseRails(open).catch(() => []);
-  const topicsP = topicCards({ limit: 8 }).catch(() => null);
   prefetch('/api/media', { sort: 'recent', page: 0, limit: 36 }); // the first feed page, reused by createFeed below
   try { data = await get('/api/discover'); } catch (e) {
     root.replaceChildren(emptyState({ icon: 'alert', title: 'Couldn’t load', text: e.message, actions: [h('button', { class: 'btn primary', onclick: () => home(root) }, 'Try again')] }));
@@ -159,22 +114,17 @@ export async function home(root) {
   attachSuggest(input, { id: 'hero-suggest' });
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
 
-  // One calm hero: the promise, one search box, three actions. Counts live in the kicker once (no second stats row),
-  // the featured creators have their own section below, and nothing here animates or loads WebGL.
-  const copy = h('div', { class: 'hero-copy' },
-    h('div', { class: 'hero-kicker' }, h('span', { class: 'live-dot' }), `${fmt.num(s.total)} photos & videos · ${fmt.num(s.creators)} creators · ${data.platforms.length} sources`),
+  // One calm hero: the promise, one search box, three actions. Counts live in the kicker once, and nothing here animates.
+  const hero = h('section', { class: 'hero' }, h('div', { class: 'hero-copy' },
+    h('div', { class: 'hero-kicker' }, h('span', { class: 'live-dot' }), `${fmt.num(s.total)} posts from ${fmt.num(s.creators)} creators across ${data.platforms.length} sources`),
     h('h1', null, 'The Master Index for ', h('em', null, 'Gay OnlyFans & Male Creators')),
     h('p', { class: 'lead' }, 'Follow gay male creators across OnlyFans, GayForFans, Bluesky, Reddit and X in one place. Public posts only; paid pages link out.'),
     h('div', { class: 'hero-search' }, icon('search', 'lg'), input, h('button', { class: 'btn primary', onclick: go }, 'Search')),
     h('div', { class: 'hero-actions' },
-      h('a', { class: 'btn glass', href: href('/creators') }, icon('users', 'sm'), 'Find a creator'),
+      h('a', { class: 'btn glass', href: href('/creators') }, icon('users', 'sm'), 'Popular creators'),
       h('a', { class: 'btn glass', href: href('/reels') }, icon('film', 'sm'), 'Watch Reels'),
       h('button', { class: 'btn glass', onclick: surpriseMe }, icon('shuffle', 'sm'), 'Surprise me')),
-    h('p', { class: 'hero-note' }, 'Adults 18+ only. Male creators only. Report anything that doesn’t belong.'));
-  const hero = h('section', { class: 'hero' },
-    copy,
-    data.tags.length && !(!tastes.ready() && !prefs.introDone) ? h('div', { class: 'hero-chips' }, data.tags.slice(0, 8).map((t) => h('a', { class: 'chip', href: href('/explore', { tag: t.name }) }, `#${t.name}`, h('span', { class: 'n' }, fmt.num(t.count))))) : null);
-  const teardownHero = () => {};
+    h('p', { class: 'hero-note' }, 'Adults 18+ only. Male creators only. Report anything that doesn’t belong.')));
 
   if (!s.total) {
     root.replaceChildren(hero, emptyState({
@@ -182,34 +132,49 @@ export async function home(root) {
       text: 'Open the admin console to add creators and communities, then run a first sync. Content appears here as soon as it’s ingested.',
       actions: [h('a', { class: 'btn primary', href: href('/admin/sources') }, 'Open admin'), h('a', { class: 'btn', href: href('/creators') }, 'Browse creators')],
     }));
-    return teardownHero;
+    return () => {};
   }
 
-  // Newest posts from creators this device follows (the server never learns who you follow beyond this request).
-  const fromFollowed = await followedP; // the rail is optional: a failed request leaves it empty
-
+  // The page, in the order a visitor wants it: the most popular creators first, then what is new from people they follow,
+  // what is trending, a personal feed once there is taste to learn from, and the latest uploads at the bottom.
+  const top = data.topCreators || [];
   const parts = [hero];
-  // Fetched in parallel with the rest of the page; slotted in when ready.
-  const picker = interestPicker(data.tags, async () => { const sec = await forYouSection(open); if (picker.isConnected) { if (sec) picker.replaceWith(sec); else picker.remove(); } });
-  const since = await sinceP;
-  if (since) parts.push(since);
-  if (picker) parts.push(picker);
-  if (data.topCreators && data.topCreators.length) {
-    parts.push(h('section', { class: 'section suggested-spotlight' }, sectionHead('users', 'Featured OnlyFans Creators', 'Top creators with verified OnlyFans pages and media in the library — tap to open or follow', { href: href('/creators', { paid: 'onlyfans' }), label: 'All OnlyFans creators' }),
-      h('div', { class: 'rail' }, data.topCreators.map((c) => creatorCard(c, { spotlight: true })))));
+  // Niche chips persist under the hero: they are a way in, not a first-visit prompt, so they never go away.
+  const niches = nicheRow(data.tags);
+  if (niches) parts.push(niches);
+  // Order matters for the first screen: the creators come right after the hero and the niche row. The follow ring and the
+  // first-visit picker come after them, so neither pushes the first creator card below the fold at 390x844.
+  if (top.length) {
+    parts.push(h('section', { class: 'section suggested-spotlight' },
+      sectionHead('users', 'Popular creators', 'Ranked from engagement, platform breadth, archive size and freshness. Quiet for 90 days: left out.', { href: href('/creators'), label: 'See all' }),
+      h('div', { class: 'rail' }, top.map((c) => creatorCard(c, { spotlight: true, reason: 'Popular here' })))));
   }
-  const forYou = await forYouP;
-  if (forYou) parts.push(forYou);
-  const smart = smartFeeds();
-  if (smart) parts.push(smart);
+  // "Popular now" is only what the server computes: posts in the last 7 days against each creator's usual pace.
+  // It is hidden, not faked, when fewer than three creators qualify.
+  const popular = (data.rising || []).filter((c) => c.week_count > 0);
+  if (popular.length >= 3) {
+    parts.push(h('section', { class: 'section popular-now' },
+      sectionHead('trend', 'Popular now', 'Most posts this week against each creator’s usual pace. A sign of momentum, not a quality rank.', { href: href('/creators', { sort: 'popular', fresh: '7' }), label: 'See all' }),
+      h('div', { class: 'rail' }, popular.map((c) => creatorCard(c, { mini: true, reason: `${fmt.num(c.week_count)} ${c.week_count === 1 ? 'post' : 'posts'} this week` })))));
+  }
+  const ring = creatorRing([...top, ...(data.rising || []), ...(data.newCreators || [])], { label: 'More creators' });
+  if (ring) parts.push(ring);
+  const picker = interestPicker(data.tags, async () => { const sec = await forYouSection(open); if (picker.isConnected) { if (sec) picker.replaceWith(sec); else picker.remove(); } });
+  if (picker) parts.push(picker);
 
+  const fromFollowed = await followedP; // optional: a failed request leaves it empty
   if (fromFollowed.length) {
     parts.push(h('section', { class: 'section' }, sectionHead('heart', 'From creators you follow', 'Latest from the people you follow on this device', { href: href('/following'), label: 'See all' }), rail(fromFollowed, { open: open(fromFollowed) })));
   }
-  parts.push(...await becauseP);
+  if (data.trending.length) {
+    parts.push(h('section', { class: 'section' }, sectionHead('flame', 'Trending now', 'Top posts, OnlyFans creators first', { href: href('/explore', { sort: 'trending', paid: 'onlyfans' }), label: 'See all' }), rail(data.trending, { open: open(data.trending) })));
+  }
+  const forYou = await forYouP;
+  if (forYou) parts.push(forYou);
+
   const latestHead = h('div', { class: 'section-head' },
-    h('div', null, h('h2', null, icon('layers'), 'Latest uploads'), h('div', { class: 'sub' }, 'Filter by creator or browse everything across sources')),
-    h('a', { class: 'link-more', href: href('/explore') }, 'Explore everything', icon('chev-r', 'sm')));
+    h('div', null, h('h2', null, icon('layers'), 'Latest uploads'), h('div', { class: 'sub' }, 'Filter by creator, or open Explore for everything')),
+    h('a', { class: 'link-more', href: href('/explore') }, 'Explore', icon('chev-r', 'sm')));
   let activeCreatorId = '';
   const setFeedCreator = (cid) => {
     if (activeCreatorId === cid) return;
@@ -224,40 +189,16 @@ export async function home(root) {
     feed.destroy();
     feed = next;
   };
-  const pillCreators = [...(data.topCreators || []).slice(0, 12)];
+  const pillCreators = top.slice(0, 12);
   const creatorFilterBar = pillCreators.length ? h('div', { class: 'row', style: { gap: '8px', overflowX: 'auto', padding: '0 0 14px', scrollbarWidth: 'none' }, role: 'group', 'aria-label': 'Filter feed by creator' },
     h('button', { type: 'button', class: 'chip on', dataset: { cid: '' }, 'aria-pressed': 'true', onclick: () => setFeedCreator('') }, 'All creators'),
     ...pillCreators.map((c) => h('button', { type: 'button', class: 'chip', dataset: { cid: c.id }, 'aria-pressed': 'false', onclick: () => setFeedCreator(c.id), title: `${c.display_name || c.handle} (${c.media_count} posts)` },
       c.display_name || c.handle, h('span', { class: 'n' }, fmt.num(c.media_count)))),
     h('a', { class: 'chip', href: href('/find') }, icon('plus', 'sm'), 'Find a creator')) : null;
 
-
-  if (data.trending.length) {
-    parts.push(h('section', { class: 'section' }, sectionHead('flame', 'Trending OnlyFans & Creators', 'Top posts from verified OnlyFans and independent creators', { href: href('/explore', { sort: 'trending', paid: 'onlyfans' }), label: 'See all' }), rail(data.trending, { open: open(data.trending) })));
-  }
-  const topics = await topicsP;
-  if (topics) parts.push(h('section', { class: 'section' }, sectionHead('layers', 'Topics', 'Themes the library keeps coming back to — found from tags that travel together', { href: href('/browse'), label: 'Browse all' }), topics));
-  if (data.rising && data.rising.length) {
-    parts.push(h('section', { class: 'section' }, sectionHead('trend', 'Rising this week', 'Creators posting more — and getting more love — than usual', { href: href('/creators', { sort: 'recent' }), label: 'All creators' }),
-      h('div', { class: 'rail' }, data.rising.map((c) => creatorCard(c, { mini: true, badge: `+${c.week_count} this week` })))));
-  }
-  if (data.freshVideos.length) {
-    parts.push(h('section', { class: 'section' }, sectionHead('video', 'Fresh OnlyFans & Creator Clips', 'Newest creator video clips in the library', { href: href('/explore', { type: 'video', sort: 'recent', paid: 'onlyfans' }), label: 'More videos' }), rail(data.freshVideos, { open: open(data.freshVideos) })));
-  }
-  if (data.communities.length || data.platforms.length) {
-    parts.push(h('section', { class: 'section' }, sectionHead('compass', 'Browse by source'),
-      h('div', { class: 'row wrap' },
-        data.platforms.map((p) => h('a', { class: 'chip', href: href('/explore', { platform: p.platform }) }, h('span', { class: 'dot', style: { background: platformColor(p.platform) } }), platformLabel(p.platform), h('span', { class: 'n' }, fmt.num(p.count)))),
-        data.communities.slice(0, 14).map((c) => h('a', { class: 'chip', href: href('/explore', { community: c.name }) }, c.name, h('span', { class: 'n' }, fmt.num(c.count)))))));
-  }
-  if (data.newCreators.length) {
-    parts.push(h('section', { class: 'section' }, sectionHead('sparkle', 'New on PRISM', 'Recently discovered creators', { href: href('/creators', { sort: 'new' }), label: 'See more' }),
-      h('div', { class: 'rail' }, data.newCreators.map((c) => creatorCard(c, { mini: true })))));
-  }
-
   feed = createFeed({ query: { sort: 'recent' }, pageSize: 36 });
   parts.push(h('section', { class: 'section' }, latestHead, creatorFilterBar, feed.el));
 
   root.replaceChildren(...parts);
-  return () => { teardownHero(); if (feed) feed.destroy(); };
+  return () => { if (feed) feed.destroy(); };
 }

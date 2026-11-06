@@ -1,0 +1,309 @@
+/* ==========================================================================
+   v7 "Spectrum": mobile-first overhaul, loaded last in the cascade.
+
+   Direction
+   - A prism splits light into a spectrum, so the spectrum is PRISM's one structural device:
+     a five-hue ring around an avatar means "posted in the last 7 days". It carries information.
+   - Gradients are an accent, not the default (A1 Gallery: ~1 in 5 heroes, ~1 in 8 navs use one).
+     The primary button is flat, section icons stop glowing, the headline stops colouring one phrase.
+   - Phones get content in the first screen: a short masthead, a ring strip, creator rows instead of
+     650px-tall cards, 2-up Browse tiles.
+   - Cards keep the measured 16px median radius; borders do the separating, not shadows.
+   - Type is a 1.25 (major third) modular scale in rem, so the OS text-size setting applies where used.
+
+   Everything here is plain CSS layered on tokens.css / app.css / ux.css / v6.css. The infinite
+   animations rule still holds: nothing in this file loops, and the only transitions touch
+   transform / opacity / colour.
+   ========================================================================== */
+
+:root {
+  /* modular scale: base 1rem, ratio 1.25 */
+  --t-xs: .8rem;      /* 12.8 */
+  --t-sm: .875rem;    /* 14 */
+  --t-0: 1rem;        /* 16 */
+  --t-1: 1.25rem;     /* 20 */
+  --t-2: 1.5625rem;   /* 25 */
+  --t-3: 1.953rem;    /* 31 */
+  --t-4: 2.441rem;    /* 39 */
+  --t-5: 3.052rem;    /* 49 */
+  --pad: clamp(16px, 3vw, 32px);   /* 16px gutter on phones */
+  --au-r-media: 16px;
+  --au-r-panel: 22px;
+  /* the full visible spectrum, not the brand's pink-violet-amber blend */
+  --spectrum: conic-gradient(from 210deg, #8b5cf6, #ff5c8a, #ffb347, #34d399, #38bdf8, #8b5cf6);
+}
+
+/* ---------- foundations ---------- */
+html { -webkit-tap-highlight-color: transparent; }
+body {
+  /* one quiet wash at the top instead of two coloured aurora blobs */
+  background:
+    radial-gradient(1000px 420px at 50% -180px, color-mix(in srgb, var(--accent) 9%, transparent), transparent 70%),
+    var(--bg);
+  background-repeat: no-repeat;
+}
+.section-head h2 svg { filter: none; }              /* icons no longer glow */
+.section-head h2 { letter-spacing: -.02em; }
+
+/* gradients are an accent: the primary action is a flat, high-contrast fill */
+.btn.primary, .btn.primary:hover {
+  background-image: none;
+  background-color: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: none;
+}
+.btn.primary:hover { filter: brightness(1.1); }
+.brand span { background: none; color: var(--text); -webkit-text-fill-color: currentColor; }
+
+/* the intro picker is a panel, not a coloured banner */
+.intro-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--au-r-panel); }
+
+/* ---------- Home masthead ---------- */
+.hero { padding: 36px 0 6px; }
+.hero::before { opacity: .55; }
+.hero h1 { font-size: clamp(var(--t-3), 1.2rem + 3.4vw, 4rem); letter-spacing: -.04em; line-height: 1.02; }
+.hero h1 em {
+  font-style: normal; background: none; color: inherit; animation: none;
+  -webkit-background-clip: border-box; background-clip: border-box; -webkit-text-fill-color: currentColor;
+}
+.hero p.lead { color: var(--muted); }
+/* the counts are a plain sentence, not a pill */
+.hero-kicker {
+  background: none; border: 0; box-shadow: none; padding: 0; backdrop-filter: none; -webkit-backdrop-filter: none;
+  margin-bottom: 12px; color: var(--muted); font-size: var(--t-sm); font-weight: 500; letter-spacing: 0;
+}
+
+/* ---------- creator card: the avatar gets its own cell ----------
+   `.creator-head > div:not(.creator-actions)` (app.css) also matched the avatar <div> and outranked
+   `.creator-head > .avatar`, so on every card the avatar sat in the name cell under a 92% surface plate.
+   Same specificity as that rule, loaded later: the avatar goes back to its own column, with no plate. */
+.creator-head > div.avatar { grid-area: avatar; isolation: auto; }
+.creator-head > div.avatar::before { content: none; }
+
+/* ---------- Ring strip (creators as spectrum rings) ---------- */
+.ring-section { margin-top: 6px; }
+.ring-strip {
+  list-style: none; margin: 0 calc(var(--pad) * -1); padding: 6px var(--pad) 12px;
+  display: flex; gap: 14px; overflow-x: auto; scrollbar-width: none;
+  scroll-snap-type: x proximity; scroll-padding-inline: var(--pad); overscroll-behavior-x: contain;
+}
+.ring-strip::-webkit-scrollbar { display: none; }
+.ring-strip > li { flex: none; scroll-snap-align: start; }
+/* centred under the centred masthead when it fits; auto margins collapse to 0 when it scrolls, so nothing is cut off */
+@media (min-width: 640px) {
+  .ring-strip > li:first-child { margin-left: auto; }
+  .ring-strip > li:last-child { margin-right: auto; }
+}
+.ring-item { display: grid; justify-items: center; gap: 8px; width: 76px; min-height: 44px; color: var(--muted); font-size: var(--t-xs); text-align: center; border-radius: 16px; }
+.ring-item.following { color: var(--text); font-weight: 600; }
+.ring { display: grid; place-items: center; width: 72px; height: 72px; padding: 3px; border-radius: 50%; background: var(--line-strong); transition: transform var(--dur-base) var(--spring-snap); }
+.ring.fresh { background: var(--spectrum); }
+.ring .avatar { border: 3px solid var(--bg); }
+.ring-name { max-width: 76px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.25; }
+.ring-item:hover .ring { transform: scale(1.05); }
+.ring-item:active .ring { transform: scale(.94); }
+.ring-item:focus-visible { outline: 2px solid var(--focus); outline-offset: 4px; }
+.ring-item.add .ring { background: none; border: 2px dashed var(--line-strong); color: var(--muted); padding: 0; }
+.ring-item.add .ring svg { width: 24px; height: 24px; }
+
+/* filter row labels read as words, not tracked-out caps */
+.group-label, .filter-label { text-transform: none; letter-spacing: 0; font-size: var(--t-xs); font-weight: 600; }
+
+/* ---------- touch: every control 44px, tag chips included ---------- */
+@media (pointer: coarse) {
+  .tagcloud a, .tagcloud .chip, .chip.more { min-height: 44px; display: inline-flex; align-items: center; }
+  .reel-tag { min-width: 44px; }
+}
+
+/* ---------- phones ---------- */
+@media (max-width: 639px) {
+  main { padding-bottom: calc(var(--bottomnav-h) + 36px + env(safe-area-inset-bottom)); }
+  .appbar { gap: 8px; }
+
+  /* masthead: left-aligned, short, search first, actions as one swipeable row */
+  .hero { text-align: left; padding: 16px 0 4px; }
+  .hero::before, .hero::after { display: none; }
+  .hero-kicker { margin-bottom: 8px; }
+  .hero h1 { margin: 0; max-width: none; }
+  .hero p.lead { margin: 10px 0 0; max-width: none; font-size: var(--t-sm); line-height: 1.5; }
+  .hero-search { margin: 16px 0 0; max-width: none; }
+  .hero-search input { height: 52px; }
+  .hero-search .btn { height: 38px; }
+  .hero-actions {
+    flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; scrollbar-width: none;
+    margin: 12px calc(var(--pad) * -1) 0; padding: 0 var(--pad); scroll-snap-type: x proximity; scroll-padding-inline: var(--pad);
+  }
+  .hero-actions::-webkit-scrollbar { display: none; }
+  .hero-actions .btn { flex: none; scroll-snap-align: start; }
+  .hero-note { margin: 12px 0 0; text-align: left; }
+  .hero-chips { justify-content: flex-start; }
+
+  /* section heads: a one-line sub and a "see all" that never wraps */
+  .section { margin-top: 28px; }
+  .section-head { align-items: center; gap: 12px; margin-bottom: 12px; }
+  .section-head > div:first-child { min-width: 0; flex: 1; }
+  .section-head h2 { font-size: var(--t-1); gap: 8px; }
+  .section-head h2 svg { width: 18px; height: 18px; }
+  .section-head .sub { font-size: var(--t-xs); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .link-more { flex: none; white-space: nowrap; min-height: 44px; }
+
+  /* page heads: title, count, a two-line description */
+  .page-head { margin-bottom: 12px; }
+  .page-head h1 { font-size: var(--t-2); }
+  .page-head .sub { font-size: var(--t-sm); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .page-head .sub + .sub { display: none; }   /* Creators: the count stays, the long description waits for a wider screen */
+
+  /* Browse: 2-up tiles; the numbers fit their tile */
+  .browse-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .browse-tile { padding: 14px; border-radius: var(--au-r-media); min-height: 44px; }
+  .browse-tile .name { display: flex; align-items: center; gap: 6px; font-size: var(--t-sm); line-height: 1.25; }
+  .browse-tile .count { font-size: clamp(1.1rem, 5.2vw, 1.5rem); overflow-wrap: anywhere; }
+
+  /* Creator profile: less bare picture above the name, so the bio and stats start about 60px sooner */
+  .stage { padding-top: 88px; }
+  .stage.bare { padding-top: 56px; }
+  /* Reels: the one-time hint stays clear of the action rail instead of wrapping over the Save button */
+  .reel-hint { max-width: calc(100vw - 150px); }
+
+  /* Creators: search gets its own full-width row, so the four views (Top, OnlyFans only, Following, New) are all visible
+     without swiping (the input carries an inline max-width from creators.js, hence !important on that one property) */
+  .creator-filters .filter-scroll { flex-wrap: wrap; overflow: visible; margin: 0; padding: 0; -webkit-mask-image: none; mask-image: none; }
+  .creator-filters .filter-scroll > input[type='search'] { flex: 1 1 100%; max-width: none !important; }
+
+  /* Explore: a label and its chip row share one line (the rails carry inline padding from explore.js,
+     hence !important on the vertical padding only) */
+  .rail-group { display: flex; align-items: center; gap: 10px; }
+  .rail-group > .group-label { flex: none; }
+  .rail-group > :not(.group-label) { flex: 1 1 auto; min-width: 0; padding-top: 4px !important; padding-bottom: 4px !important; }
+
+  /* Creators: flat rows divided by hairlines (about 230px each, was about 650px) */
+  .creator-grid { grid-template-columns: 1fr; gap: 0; }
+  .creator-grid > .creator-card {
+    display: flex; flex-direction: column-reverse;      /* the picture strip reads after the name */
+    border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; padding: 12px 0; box-shadow: none;
+  }
+  .creator-grid > .creator-card:hover { transform: none; box-shadow: none; border-color: var(--line); }
+  .creator-grid > .creator-card .creator-thumbs { height: 64px; margin-top: 10px; grid-template-columns: repeat(3, 1fr); grid-template-rows: 1fr; gap: 6px; background: none; }
+  .creator-grid > .creator-card .creator-thumbs div { border-radius: 12px; }
+  .creator-grid > .creator-card .creator-thumbs div:first-child { grid-row: auto; }
+  .creator-grid > .creator-card .creator-body { margin-top: 0; padding: 0; }
+  .creator-grid > .creator-card .creator-head > .creator-meta::before,
+  .creator-grid > .creator-card .creator-head > div:not(.creator-actions)::before { display: none; }   /* no cover to read against */
+  .creator-grid > .creator-card .creator-body .avatar { border-color: var(--bg); }
+}
+
+/* ---------- light theme ---------- */
+:root[data-theme='light'] body {
+  background:
+    radial-gradient(1000px 420px at 50% -180px, color-mix(in srgb, var(--accent) 6%, transparent), transparent 70%),
+    var(--bg);
+  background-repeat: no-repeat;
+}
+:root[data-theme='light'] .btn.primary, :root[data-theme='light'] .btn.primary:hover { background-color: var(--accent); color: var(--accent-ink); }
+
+/* ---------- reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .ring, .ring-item:hover .ring, .ring-item:active .ring { transition: none; transform: none; }
+}
+
+/* ==========================================================================
+   v7.1 Phone & PWA polish (loaded last; every rule is phone / touch scoped, desktop is unchanged)
+   Measured with `node scripts/ui-audit.js <url> --phone` (see UI_CHANGELOG.md for before / after).
+   ========================================================================== */
+
+/* No 300 ms / double-tap-zoom delay on controls; panning and pinching are untouched. */
+a, button, summary, label, select, input, [role='button'] { touch-action: manipulation; }
+
+/* Nested scrollers keep their own momentum: reaching their end never scrolls (or pull-to-refreshes) the page behind. */
+.lb, .lb-info, .lb-strip, .modal, .overlay, .palette-list, .suggest, .coll-pick { overscroll-behavior: contain; }
+.rail, .follow-rail, .filter-scroll, .active-filters, .related-rail, .lb-more-strip, .lb-collab-strip, .ps-pills, .ps-paid, .tabs, .heatmap, .free-on-row { overscroll-behavior-x: contain; }
+
+/* iOS zooms the page when a field under 16px takes focus, and never zooms back out. */
+@media (pointer: coarse), (max-width: 899px) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='button']):not([type='submit']):not([type='file']),
+  select, textarea, .input, .select, .input.sm, .select.sm, .input.lg { font-size: 16px; }
+}
+
+@media (max-width: 899px) {
+  /* Nothing is smaller than 12px (labels, badges, chips on pictures, tab labels). */
+  .bottomnav a, .lb-lab, .follow-new, .reel-act, .reel-handle, .reel-of-chip,
+  .badge, .badge.of, .badge.fansly, .badge.jff, .card-foot .badge.plat, .find-cand-sub .badge.plat, .pill, .card-badges .pill,
+  .fresh-mark, .creator-fresh, .card-why, .rise, .smart-chip .new, .free-on-label, .menu-group, .suggest-label, .chart-axis,
+  .card-meta, .density-s .card-meta, .lb-dock-handle, .hero-kicker, .search .kbd { font-size: 12px; }
+
+  /* The sticky filter bar tucks away while scrolling down and returns on the first scroll up (components/scroll-chrome.js). */
+  .filterbar { transition: transform var(--dur-base) var(--spring-glide), visibility 0s linear 0s; }
+  .filterbar.bar-hidden { transform: translateY(-100%); visibility: hidden; transition: transform var(--dur-base) var(--spring-glide), visibility 0s linear var(--dur-base); }
+
+  /* With the keyboard up the floating tab bar would sit on the field. */
+  html.typing .bottomnav, html.typing .fab { display: none; }
+
+  /* Long lists: rows far off-screen skip layout and paint (heights are the measured phone sizes). */
+  .creator-grid > .creator-card { content-visibility: auto; contain-intrinsic-size: auto 253px; }
+  .browse-grid > .browse-tile { content-visibility: auto; contain-intrinsic-size: auto 101px; }
+
+  /* Reels top row at 360-430px: title, OnlyFans chip, one "what plays" button and the mute button must fit. */
+  .reels-top { gap: 6px; padding-left: max(10px, env(safe-area-inset-left)); padding-right: max(10px, env(safe-area-inset-right)); }
+  .reels-top .reels-title { flex: 1 1 0; min-width: 0; }
+}
+@media (max-width: 480px) {
+  .reels-top .select, .reels-top .select.sm { display: none; }   /* v6 `.select.sm` re-showed it beside the "what plays" button */
+  .reels-tune { padding: 0 10px; min-width: 44px; }
+  .reels-tune-lab { display: none; }
+}
+
+/* The end of the page clears the floating tab bar (a short page's footer used to sit under it). */
+@media (max-width: 899px) { .footer { padding-bottom: calc(var(--bottomnav-h) + 24px + env(safe-area-inset-bottom)); } }
+
+/* A bottom sheet taller than the screen scrolls; its buttons stay in reach above the home indicator instead of
+   sitting in the scrolled-away padding. */
+@media (max-width: 640px) {
+  .overlay.sheet .modal .actions { position: sticky; bottom: env(safe-area-inset-bottom); z-index: 2; padding-top: 14px; background: linear-gradient(to bottom, transparent, var(--bg-elev) 14px); }
+}
+
+/* Short segmented buttons ("All") reach 44px wide too. */
+@media (pointer: coarse) { .seg button { min-width: 44px; } }
+
+/* The age gate's "leave" link is a real tap target. */
+.age-card a.leave { display: flex; align-items: center; justify-content: center; min-height: 44px; }
+
+/* iPhone landscape: the notch sits at the side, not on top. */
+@media (max-width: 899px) and (orientation: landscape) {
+  main, .appbar, .footer { padding-left: max(var(--pad), env(safe-area-inset-left)); padding-right: max(var(--pad), env(safe-area-inset-right)); }
+}
+
+/* ---------- "You're offline" (components/pwa.js) ---------- */
+.offline-pill {
+  position: fixed; z-index: 70; left: 50%; transform: translateX(-50%);
+  top: calc(var(--appbar-h) + 10px); max-width: calc(100vw - 32px);
+  display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 14px; border-radius: 999px;
+  background: var(--bg-elev); color: var(--text); border: 1px solid var(--line-strong); box-shadow: var(--shadow-2);
+  font-size: var(--t-xs); font-weight: 600; pointer-events: none;
+}
+.offline-pill svg { color: var(--warn); flex: none; }
+@media (max-width: 899px) { .offline-pill { top: calc(var(--appbar-h) + env(safe-area-inset-top) + 10px); } }
+
+/* ---------- creator discovery (v7.2) ------------------------------------
+   Who is posting, in words: "Posted 2 days ago" with a live dot, quiet creators dimmed (never hidden),
+   one reason chip where the rail has a true reason, platform badges on every card, a persistent niche row
+   and the "Popular now" rail. Tokens only, both themes, 44px targets on touch, no new animation. */
+.creator-card .creator-when { font-size: var(--t-xs); color: var(--muted); white-space: nowrap; }
+.creator-card .creator-when.live { color: var(--text); }
+.creator-card .creator-when.live::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--good); vertical-align: middle; }
+.creator-card.is-quiet .creator-thumbs { filter: saturate(.45) brightness(.8); }
+.creator-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
+.creator-plats { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.reason-chip { display: inline-flex; align-items: center; min-height: 24px; padding: 0 10px; border-radius: var(--r-pill); font-size: var(--t-xs); font-weight: 600; color: var(--text); background: color-mix(in srgb, var(--accent) 16%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent); }
+:root[data-theme='light'] .reason-chip { color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.niche-row { display: flex; align-items: center; gap: 12px; min-width: 0; margin: 4px 0 16px; }
+.niche-label { flex: none; font-size: var(--t-xs); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.niche-chips { display: flex; gap: 8px; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; padding: 2px 0; }
+.niche-chips::-webkit-scrollbar { display: none; }
+.niche-chips .chip { flex: none; }
+@media (pointer: coarse) {
+  .niche-chips .chip { min-height: 44px; display: inline-flex; align-items: center; }
+}
+/* On a phone the Home spotlight's samples end above the bottom tab bar, so the first creator's pictures are readable without scrolling. */
+@media (max-width: 899px) {
+  .suggested-spotlight .creator-card.spotlight .creator-thumbs { height: 120px; }
+}

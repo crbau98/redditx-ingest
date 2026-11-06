@@ -283,6 +283,16 @@ function parseProfile(input, hint = {}) {
     }
   }
 
+  // xHamster gay creator page: an ingestible creator feed. The directory index, pagination and the
+  // newest/best sub-tabs stay ordinary web pages (robots.txt disallows most of them anyway).
+  if (matches(h, 'xhamster.com')) {
+    const m = url.pathname.match(/^\/gay\/creators\/([a-z0-9][a-z0-9_-]{1,60})\/?$/i);
+    if (m && !/^\d+$/.test(m[1]) && !/^(all|newest|best|most-commented|most-viewed|top|trending|countries|contest|categories|pornstars|videos|shorts|moments|channels)$/i.test(m[1])) {
+      const target = `https://xhamster.com/gay/creators/${m[1].toLowerCase()}`;
+      return { platform: 'xhamster', kind: 'user', target, ingestable: true, label: `${m[1].toLowerCase()} (xHamster)`, url: target };
+    }
+  }
+
   // OnlyFans: one canonical link per person (campaign / post links collapse to the profile); site pages are not links.
   if (matches(h, 'onlyfans.com')) {
     const handle = ofHandle(url.href);
@@ -300,6 +310,14 @@ function parseProfile(input, hint = {}) {
     }
     if ((parts[0] === 'c' || parts[0] === 'user') && parts[1] && /^[A-Za-z0-9._-]{2,60}$/.test(parts[1])) {
       return out('youtube', 'user', `@${parts[1]}`, { label: `@${parts[1]} (YouTube)`, url: `https://www.youtube.com/@${parts[1]}` });
+    }
+  }
+
+  // TikTok: the public embed is a feed; a profile URL or a single video link both point at the handle.
+  if (matches(h, 'tiktok.com')) {
+    const handle = parts[0] && parts[0].startsWith('@') ? parts[0].slice(1) : /^[A-Za-z0-9._]{2,40}$/.test(parts[0] || '') ? parts[0] : '';
+    if (/^[A-Za-z0-9._]{2,40}$/.test(handle)) {
+      return out('tiktok', 'user', handle, { label: `@${handle} (TikTok)`, url: `https://www.tiktok.com/@${handle}` });
     }
   }
 
@@ -390,6 +408,10 @@ function profileUrl(platform, kind, target) {
       if (/^UC[A-Za-z0-9_-]{10,40}$/.test(t)) return `https://www.youtube.com/channel/${t}`;
       if (/^@/.test(t)) return `https://www.youtube.com/${t}`;
       return null;
+    }
+    case 'tiktok': {
+      const t = String(target || '').replace(/^@/, '');
+      return /^[A-Za-z0-9._]{2,40}$/.test(t) ? `https://www.tiktok.com/@${t}` : null;
     }
     default: return null;
   }

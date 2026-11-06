@@ -28,12 +28,26 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-diag-'));
 process.env.DB_PATH = path.join(tmp, 'diag.db');
 process.env.SCHEDULER_ENABLED = 'false';
 
-const registry = require('../src/sources');
-const { checkItem } = require('../src/lib/safety');
-const { classify } = require('../src/lib/scope');
-const { hostOf, hostBlocked, hostTrusted, normalizeMediaUrl } = require('../src/lib/mediaurl');
-const { probeMedia } = require('../src/engine/probe');
-const vault = require('../src/lib/vault');
+let registry, checkItem, classify, hostOf, hostBlocked, hostTrusted, normalizeMediaUrl, probeMedia, vault;
+try {
+  registry = require('../src/sources');
+  ({ checkItem } = require('../src/lib/safety'));
+  ({ classify } = require('../src/lib/scope'));
+  ({ hostOf, hostBlocked, hostTrusted, normalizeMediaUrl } = require('../src/lib/mediaurl'));
+  ({ probeMedia } = require('../src/engine/probe'));
+  vault = require('../src/lib/vault');
+} catch (e) {
+  const msg = String((e && e.message) || e);
+  if (/NODE_MODULE_VERSION|ERR_DLOPEN_FAILED|was compiled against a different Node/.test(msg)) {
+    // The shared better-sqlite3 is a native build for one Node major. Say which one, not a stack trace.
+    const built = (msg.match(/using\s+NODE_MODULE_VERSION\s+(\d+)/) || [])[1];
+    console.error(`better-sqlite3 was built for a different Node.js version: this is ${process.version}${built ? `, the build is for NODE_MODULE_VERSION ${built}` : ''}.`);
+    console.error('Run the script with the Node that matches the build, e.g. /usr/local/bin/node scripts/diagnose-sources.js (Node 24),');
+    console.error('or rebuild the native module with `npm rebuild better-sqlite3` on the Node you want to use.');
+    process.exit(2);
+  }
+  throw e;
+}
 
 const LIMIT = parseInt(opt('limit'), 10) || 15;
 const TIMEOUT_MS = (parseInt(opt('timeout'), 10) || 60) * 1000;

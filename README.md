@@ -132,13 +132,17 @@ No system can enumerate "the whole web". PRISM grows its coverage in layers:
 | Tumblr | user (blog), tag | – | Public RSS. Reblogs skipped (`TUMBLR_REBLOGS=true` to include), images upgraded to the largest size. |
 | PeerTube | user, channel, tag, search | – | Documented public API; keyword search through Sepia Search (`PEERTUBE_SEARCH_URL`), tags across `PEERTUBE_INSTANCES`. MP4 up to 1080p, else HLS. |
 | YouTube | user, channel | – | Official channel RSS only (no key). Paste `@handle`, channel URL, or `UC…` channel_id. Videos appear as thumbnail cards linking out to YouTube. No search feeds. |
+| TikTok | user | – | The profile page is captcha-walled, but the public **embed** (`/embed/@handle`) is not: it ships the 10 newest videos server-side, with direct `playAddr` mp4s and covers. Paste `@handle` or a profile URL. No login, no key. |
+| xHamster | user (gay creator) | – | One public page per creator (`/gay/creators/<slug>`), newest videos first, HLS playback. No key, no login, no proxy; robots.txt allows the creator page itself. Signed playlists are refreshed at play time. |
 | Telegram | user (public channel) | – | Public web preview (`t.me/s/<channel>`); channels that disable it report an error. |
 | Telegram | channel (joined by your account) | `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, a one-time login (`scripts/telegram-login.js`), `MEDIA_STORE_*` | Every channel/group your account has joined, public or private (MTProto via GramJS): full history back-filled gradually, original photos and videos copied into your R2/B2 bucket (Telegram files cannot be hotlinked). Feeds are created and retired by the sync. |
 | RSS / Atom / JSON Feed | feed | – | Creator sites, Tumblr `/rss`, Mastodon `.rss`, Bluesky `/rss`, … Bulk import accepts **OPML** exported from any feed reader. |
 | Web page | page | – (optional Browser4) | OpenGraph, `<video>`, linked images; honours `robots.txt`. JavaScript-built pages (SPAs, infinite scroll, lazy galleries) are read in a real browser when [Browser4](#browser4-rendering-javascript-built-pages) is enabled. |
 | Link-in-bio | page | – (optional Browser4) | Discovers a creator's other accounts; never yields media itself. Hubs built by JavaScript are read in the browser. |
 
-**Paid pages:** paid/subscription platforms (OnlyFans, Fansly, Patreon…) are kept as link-outs on creator profiles so fans can support the creator directly, and pages a creator names in a post or bio are read like any other public page. PRISM does not reproduce paid content it does not have a lawful path to; everything it does ingest still passes the safety, male-only and takedown gates before it is stored.
+**Paid pages:** paid/subscription platforms (OnlyFans, Fansly, Patreon…) are kept as link-outs on creator profiles so fans can support the creator directly, and a paid page named by a creator in a post or bio — or surfaced by a web or image search — is read like any other public page and can contribute media. PRISM never signs in as a subscriber, never reuses a borrowed session, and never defeats a paywall; what a platform serves publicly to any visitor is fair game from any host (paid pages, mirror sites, leak/tube-rip/file-locker hosts), and everything it does ingest still passes the safety, male-only and takedown gates before it is stored.
+
+**Age and consent interstitials:** an adult site may put one in front of its pages ("verify you are 18 or older and accept our terms"). PRISM has its own age gate, so it passes that interstitial with the site's own confirmation parameter (JustFor.Fans: `?TermsAgree=yes`) and reads the page behind it. This unlocks nothing else: a paywall, a login and the site's own identity check stay out of reach, and no credential or session of anyone is reused.
 
 ---
 
@@ -230,11 +234,60 @@ It uses the Chrome channel by default. Where only Playwright's Chromium is insta
 
 ---
 
+## Captchas and challenges: the free tiers first
+
+A public page can refuse a server in several ways, and PRISM now has a ladder that starts at zero cost and only then spends
+money. The order is fixed in `sources/web.js` `unlockedRead` and named in every run note ("Chrome (CDP): …", "Jina
+Reader: …", "Bright Data Web Unlocker: …", "Scrapfly Unblocker: …", "… not used: …").
+
+1. **Plain download** (`lib/net.js`), then the local Browser4/Playwright browser when the page needs JavaScript.
+2. **The CDP browser** (`lib/chrome.js`, setting `challengeBrowser`, default `fallback`). It launches a system Chrome and
+   talks to its DevTools port directly - no Playwright, no driver in between, which is the shape anti-bot gates stopped
+   flagging (the 2026 benchmark of stealth tools against 31 live Cloudflare targets put only a raw-CDP driver at 28/31).
+   It waits out a managed challenge and hands back the finished DOM for the same `extractPage`, so robots.txt, opt-outs,
+   takedowns and every later gate behave identically. Every request still goes through PRISM's guard proxy.
+   *Needs a browser on the host and `CHALLENGE_BROWSER=1`.* The Docker image sets both (`apk add chromium`,
+   `CHROME_PATH=/usr/bin/chromium-browser`); on a Mac, set `CHALLENGE_BROWSER=1` and Chrome is found in `/Applications`
+   (`CHROME_PATH` points elsewhere if it is not). `CHALLENGE_BROWSER=0` or `challengeBrowser=off` disables it. `CHROME_HEADED=1` shows the window; `CHROME_TIMEOUT_MS`, `CHROME_CHALLENGE_WAIT_MS` (15 s) and
+   `CHROME_IDLE_MS` (4 min, then the browser closes) tune it.
+3. **Jina Reader** (`lib/jina.js`, setting `jinaReader`, default `fallback`, free and keyless). `r.jina.ai` renders the page
+   from Jina's own addresses, so a site that refuses PRISM's address often answers there. It never sees a paid platform and
+   never a private/loopback address, and `jinaDailyBudget` (default 60, 0 = none) caps it. `JINA_API_KEY` raises the rate
+   limit; `JINA_READER_BASE_URL`/`JINA_TIMEOUT_MS` exist for a mirror.
+4. **Bright Data** (paid, see the next section), then **Scrapfly** (paid, allowlist only).
+
+Two kinds of challenge are cleared without a browser or a credit:
+
+- **Anubis** ("Making sure you're not a bot!", now in front of many fediverse servers) is a SHA-256 proof of work. PRISM
+  solves the nonce in Node, trades it for the signed cookie and keeps the cookie per host for 40 minutes
+  (`lib/challenge.js`). The Mastodon adapter tries this before any paid tier.
+- **A captcha widget** (Cloudflare Turnstile, hCaptcha, reCAPTCHA) embedded in an otherwise real page is never mistaken for
+  a wall: the detector names the vendor and the CDP browser waits it out.
+
+**Captcha tokens (optional, paid):** when a widget still stands after the browser has waited, `lib/captchasolver.js` can buy
+one token from CapSolver (setting `captchaSolver`, default `off`, inert without `CAPSOLVER_API_KEY`; `captchaSolverBudget`,
+default 50 tokens a day, is a hard stop). Without a key nothing changes and no request is made.
+
+**What each tier actually cleared (measured 2026-11-06):**
+
+| Page | Result |
+|---|---|
+| `nowsecure.nl` (Cloudflare's own challenge demo) | CDP browser cleared it in ~5 s: 180 KB, no gate left |
+| `boyfriendtv.com` (Cloudflare, refused Jina with "Just a moment…") | CDP browser: 500 KB, 221 media URLs, in ~7.7 s |
+| `gayfr.social` API (Anubis 1.28.2, difficulty 2) | proof of work solved in Node, valid JSON returned, no browser |
+| TikTok profile | embed ships 10 videos with `playAddr`; a range request answered `206 video/mp4` |
+| `justthegays.com` via Jina Reader | 831 KB, 514 media URLs |
+| `gayforfans.com` (Cloudflare firewall rule, error 1019/1020) | **still blocked**: the WAF refuses the address itself; only the paid unblockers read it |
+
+**Bot-challenge pages are named, not guessed:** `lib/challenge.js` `detect()` recognises Anubis, a Cloudflare interstitial,
+a Cloudflare firewall block, DDoS-Guard, DataDome, PerimeterX, Imperva and the three captcha vendors, and a large page is
+content even when it embeds a Turnstile demo (Cloudflare's own demo site does).
+
 ## Bright Data: discovery and unblocking
 
 [Bright Data](https://brightdata.com) adds two separate things. Both need an account; neither is on by default.
 
-**1. Discover (search).** `BRIGHTDATA_API_TOKEN` adds Bright Data's *Discover* API as one more web-search provider (`SEARCH_PROVIDERS`, default `keenable,brave,brightdata,ddg,searxng,claude`). It ranks results by relevance to an **intent**, not by keywords, so discovery and creator lookup find public creator pages, galleries and link hubs the other engines rank poorly. The default intent (`BRIGHTDATA_DISCOVER_INTENT`) asks for public creator pages (paid pages named by creators included), and `BRIGHTDATA_MIN_RELEVANCE` can drop weak results. Each search costs credit and counts against the same *Metered web searches per day* budget as Brave and Keenable.
+**1. Discover (search).** `BRIGHTDATA_API_TOKEN` adds Bright Data's *Discover* API as one more web-search provider (`SEARCH_PROVIDERS`, default `keenable,brave,brightdata,bing,ddg,ddg-lite,searxng,claude`). It ranks results by relevance to an **intent**, not by keywords, so discovery and creator lookup find public creator pages, galleries and link hubs the other engines rank poorly. The default intent (`BRIGHTDATA_DISCOVER_INTENT`) asks for public creator pages (paid pages named by creators included), and `BRIGHTDATA_MIN_RELEVANCE` can drop weak results. Each search costs credit and counts against the same *Metered web searches per day* budget as Brave and Keenable.
 
 **2. Unblocking (paid).** Some public pages refuse a server's own requests. **Admin → Settings → Bright Data Unblocker** (`brightdataUnlocker`) is **`fallback` by default but does nothing until credentials exist**: it needs `BRIGHTDATA_API_TOKEN` + `BRIGHTDATA_UNLOCKER_ZONE` (or `BRIGHTDATA_BROWSER_WSS`). Once they are set, PRISM fetches a page that refused it through Bright Data's unblocking network instead, with no further switch to flip; set the setting to `off` to disable it:
 
@@ -380,7 +433,11 @@ Set `SENTRY_DSN` to enable sampled reports for HTTP errors reaching the final ha
 
 ## Refusals, identity and robots
 
-PRISM does not defeat a refusal by itself. It does not solve challenges, does not use credentials, cookies or logins, and does not spend on a paid unblocker unless the operator has switched that tier on (`brightdataUnlocker`, and for Scrapfly `scrapflyUnlocker` plus the `scrapflyAllowlist` of creators it may spend on). When a page refuses PRISM, it is skipped or handed to a tier the operator enabled, and the run note says which tier acted.
+PRISM never defeats a *login* or a *paywall*: it uses no credentials, no borrowed session and no cookies of anyone's, and a paid creator platform that refuses it always stays a link-out (see below). What it does defeat is a machine check on a public page, in a fixed order that starts at zero cost (README, "Captchas and challenges: the free tiers first"): the plain download, the local Browser4/Playwright browser, the raw-CDP Chrome that waits out a managed challenge, the free Jina reader, then Bright Data, then Scrapfly - and the paid tiers only when the operator has switched them on (`brightdataUnlocker`, and for Scrapfly `scrapflyUnlocker` plus the `scrapflyAllowlist` of creators it may spend on). When every tier is off or none gets the page, it is skipped, and the run note names the tier that acted or explains why none did.
+
+A paid creator platform that refuses PRISM is never handed to an unblocker, whatever the tiers are set to: the content there sits behind the platform's own gate, and spending credits to break a refusal is not something PRISM does on its own. The page stays a link-out and a read, and the run note says so.
+
+The render session (`BROWSER4_SESSION`, default `prism-ingest`) is a shared Chrome profile used for anonymous reading only. Nobody signs in in it: a login there would leave its cookies in every later render, including on paid hosts, and PRISM does not reuse anyone's session. Signed-in work happens elsewhere (Telegram's MTProto account, the operator's own browser).
 
 A browser user agent on a public page is not a defeat of a refusal. It is a normal read by a normal client, and it is allowed on one condition: robots.txt is honoured under the same identity. The robots.txt request carries the same user agent as the page request, so the robots PRISM obeys is the robots served to the identity it actually uses. A disallow under that identity skips the page. For GayForFans and JustTheGays this is the setting `gffBrowserAgent` (on by default). Off means PRISM's own agent for both robots and pages.
 
@@ -399,3 +456,41 @@ It is a fallback only: the direct download and the local browser still come firs
   The run note shows the credits each unlock used.
 - Off: set `scrapflyUnlocker` to `off`, or unset the key.
 - Every URL passes the local gate (takedowns, private hosts, non-http(s), embedded credentials) before it leaves the machine.
+
+## Yandex Images (keyword discovery, flag `YANDEX_IMAGES`)
+
+`lib/yandex.js` runs Yandex Images keyword searches as the first image provider in `lib/brave.js` `images()`.
+
+- **Flag:** `YANDEX_IMAGES` (default **on**; `YANDEX_IMAGES=0` turns it off). `YANDEX_BASE_URL` is for tests only.
+- **Parser:** the results page carries its data in `data-state` / `data-bem` attributes as HTML-escaped JSON. We parse those
+  attributes, walk the JSON for objects with `origUrl` and `snippet.url`, drop censored and non-http results, and deduplicate by
+  page. We never parse the whole page as HTML and never regex the markup.
+- **Ingestion target:** the page (`snippet.url`). The index's copy of the picture (`origUrl`) is never requested, and no
+  third-party CDN is hotlinked. Results come back with `imageUrl: null`; the web adapter reads the page, so robots, takedowns,
+  the safety gate, the male-only scope gate and the review queue all run on what is read.
+- **Robots:** `yandex.com/robots.txt` disallows `/images/*`. The owner accepted this deviation on 2026-11-05 and approved shipping
+  the provider default-on. This is the only provider that fetches a path its robots disallows by default; set `YANDEX_IMAGES=0`
+  to stop it.
+- **CAPTCHA:** a CAPTCHA page starts a 30-minute cooldown on this provider only (its own limiter key). Other providers are not
+  affected. The reason is reported in `yandex.status()`.
+- **Reverse image (mirror candidates):** `cbirSites(imageUrl)` reads the imageview page, follows its "sites" tab link, and
+  returns the source pages (`li.CbirSites-Item` title links). Those are review-queue candidates; the caller decides, and nothing
+  is merged into a creator automatically. It is not yet called from the image-match pass.
+
+## Policy: paid pages, mirrors and leak hosts
+
+Owner decision, 2026-11-05 (verbatim, this is the standing rule):
+
+> Paid pages, mirror sites, leak/tube-rip/file-locker hosts and personal pages are all allowed extraction targets whenever the
+> platform serves the content publicly to any visitor — free posts, previews, teasers, public CDN assets. Owner decision
+> 2026-11-05: every one of those host classes is in scope. Still hard: no paywall or entitlement bypass, no signing in as a fan,
+> no borrowed session cookie or token, no private or subscriber-only content, and the safety gate, male-only scope gate and
+> takedowns (NCII reports included) run on every single item.
+
+In code: `src/sources/_policy.js` allows every host. When a search result is a paid page (`src/lib/paid.js`), discovery still
+records the lead and the traced creator link-out card, and also registers the page as a public web page feed, so anything the page
+serves publicly is read like any other page.
+
+Measured 2026-11-05 with plain GETs (no login): OnlyFans returns a 608-byte login shell with no media. JustFor.Fans redirects to
+an age-verification interstitial with no media; PRISM does not click through it. Fansly's homepage and a creator page both return
+the same 19 KB generic shell with no media.

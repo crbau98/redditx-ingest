@@ -29,8 +29,9 @@ const realAllowed = browser4.assertAllowed;
 const TARGET = 'https://refused.example.net/performer/someone';
 const PAGE = '<html><head><title>Someone</title></head><body><video src="https://cdn.example.org/clip.mp4"></video></body></html>';
 
+// These cases are about the PAID order, so the free tiers (CDP Chrome, Jina) are switched off unless a case turns one on.
 function withSettings(over) {
-  settings.get = () => ({ ...realGet(), brightdataUnlocker: 'fallback', brightdataUnlockBudget: 100, scrapflyUnlocker: 'fallback', scrapflyAllowlist: 'creator-allow', scrapflyBudget: 20, scrapflyCreditBudget: 100, scrapflyMonthlyBudget: 300, scrapflyMonthlyCreditBudget: 400, ...over });
+  settings.get = () => ({ ...realGet(), challengeBrowser: 'off', jinaReader: 'off', brightdataUnlocker: 'fallback', brightdataUnlockBudget: 100, scrapflyUnlocker: 'fallback', scrapflyAllowlist: 'creator-allow', scrapflyBudget: 20, scrapflyCreditBudget: 100, scrapflyMonthlyBudget: 300, scrapflyMonthlyCreditBudget: 400, ...over });
 }
 function restore() {
   settings.get = realGet;
@@ -87,6 +88,55 @@ test('Scrapfly budget refusal is reported as a budget skip and does not rest the
   assert.equal(scrapflyCalls, 0, 'refused before any request');
   assert.ok(u && u.error && u.error.budget === true, 'the refusal is our budget, not the site');
   assert.equal(scrapfly.decide(new URL(TARGET).hostname).ok, true, 'host is not rested by our budget');
+  restore();
+});
+
+test('the free CDP browser runs first when the setting and the host allow it', async () => {
+  reset(); withSettings({ challengeBrowser: 'fallback' });
+  const chrome = require('../src/lib/chrome');
+  const real = { enabled: chrome.enabled, renderPages: chrome.renderPages };
+  chrome.enabled = () => true;
+  chrome.renderPages = async () => ({ pages: [{ html: PAGE, url: TARGET, scrolls: 0, challenge: null }], notes: [] });
+  brightdata.unlockerConfigured = () => true;
+  let bdCalls = 0; brightdata.unlock = async () => { bdCalls++; return { html: PAGE, status: 200 }; };
+  let sfCalls = 0; scrapfly.setRequester(async () => { sfCalls++; return scrapflyAnswer(PAGE, 1); });
+  const u = await web._unlockedRead(feed, 'media');
+  assert.equal(u.via, 'chrome-cdp');
+  assert.equal(u.page.media.length, 1);
+  assert.equal(bdCalls, 0, 'the paid tier is not reached');
+  assert.equal(sfCalls, 0);
+  chrome.enabled = real.enabled; chrome.renderPages = real.renderPages;
+  restore();
+});
+
+test('when the CDP browser gets a page with nothing, the free reader goes next', async () => {
+  reset(); withSettings({ challengeBrowser: 'fallback', jinaReader: 'fallback' });
+  const chrome = require('../src/lib/chrome');
+  const jina = require('../src/lib/jina');
+  const real = { enabled: chrome.enabled, renderPages: chrome.renderPages, read: jina.read };
+  chrome.enabled = () => true;
+  chrome.renderPages = async () => ({ pages: [{ html: '<html><body>nothing</body></html>', url: TARGET, scrolls: 0, challenge: null }], notes: [] });
+  jina.read = async () => ({ html: PAGE, status: 200, bytes: PAGE.length, blocked: false, ms: 1 });
+  brightdata.unlockerConfigured = () => false;
+  const u = await web._unlockedRead(feed, 'media');
+  assert.equal(u.via, 'jina-reader');
+  assert.equal(u.page.media.length, 1);
+  chrome.enabled = real.enabled; chrome.renderPages = real.renderPages; jina.read = real.read;
+  restore();
+});
+
+test('when every free tier comes back empty, the answer says which tiers ran', async () => {
+  reset(); withSettings({ challengeBrowser: 'fallback', jinaReader: 'fallback', brightdataUnlocker: 'off', scrapflyUnlocker: 'off' });
+  const chrome = require('../src/lib/chrome');
+  const jina = require('../src/lib/jina');
+  const real = { enabled: chrome.enabled, renderPages: chrome.renderPages, read: jina.read };
+  chrome.enabled = () => true;
+  chrome.renderPages = async () => ({ pages: [{ html: '<html><body>nothing</body></html>', url: TARGET, scrolls: 0, challenge: null }], notes: [] });
+  jina.read = async () => ({ html: '<html><body>still nothing</body></html>', status: 200, bytes: 40, blocked: false, ms: 1 });
+  const u = await web._unlockedRead(feed, 'media');
+  assert.equal(u.page.media.length, 0);
+  assert.deepEqual(u.tiers, ['Chrome (CDP)', 'Jina Reader'], 'the run note can name who tried');
+  chrome.enabled = real.enabled; chrome.renderPages = real.renderPages; jina.read = real.read;
   restore();
 });
 

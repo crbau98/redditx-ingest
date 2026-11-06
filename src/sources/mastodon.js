@@ -12,6 +12,7 @@
 const config = require('../config');
 const http = require('./http').forPlatform('mastodon', 600);
 const scrapfly = require('../lib/scrapfly');
+const challenge = require('../lib/challenge');
 const settingsStore = require('../settings');
 const { toIso, htmlToText, clip, originOf, errorDetail, repostsOn } = require('./util');
 const { extractLinks } = require('../lib/links');
@@ -105,9 +106,23 @@ const isRefusal = (e) => !!e && ([403, 429, 503].includes(e.status) || e.code ==
  * as a run note so the admin can see which servers are expensive.
  */
 async function getJson(url, host, ctx) {
+  const cookie = challenge.cachedCookie(host);
   try {
-    return await http.json(url, { headers: authHeaders(host) });
+    return await http.json(url, { headers: { ...authHeaders(host), ...(cookie ? { cookie } : {}) } });
   } catch (e) {
+    // Anubis (the "Making sure you're not a bot!" proof-of-work gate) is free to clear: no browser, no credits.
+    if (isRefusal(e)) {
+      try {
+        const solved = await challenge.solveAnubis(url, { headers: { ...authHeaders(host), accept: 'application/json' }, accept: 'application/json' });
+        if (solved) {
+          if (ctx && ctx.notes) ctx.notes.push(`${host}: cleared the Anubis proof-of-work gate (no credits spent)`);
+          return JSON.parse(solved.html);
+        }
+      } catch (pow) {
+        // A failure worth reporting is one the host answered (a rejected proof of work); a dead name is the Scrapfly tier's business.
+        if (ctx && ctx.notes && !pow.unsupported && pow.status) ctx.notes.push(`${host}: Anubis proof of work failed (${pow.message})`);
+      }
+    }
     const cfg = settingsStore.get();
     if (!isRefusal(e) || cfg.scrapflyUnlocker !== 'fallback' || !scrapfly.configured() || !scrapfly.allowedFor(ctx && ctx.feed)) throw e;
     const r = await scrapfly.read(url, { json: true, host, allowed: true, count: (v) => (v && typeof v === 'object' ? 1 : 0) });

@@ -154,22 +154,75 @@ const HEAVY_WORDS = /\b(?:chub|chubs|chubz|chunky|chunk|husky|portly|pudgy|tubby
 // Bears glued into handles and community names ("gaybear", "bearsgonewild", "musclebearsam"), never "beard".
 const GLUED_BEAR = /(?:gay|muscle|polar|chub|teddy|fat|big|daddy|hairy)bears?(?!d)|bears?(?:gonewild|cubs?|chasers?|week|daddy|daddies|ofinstagram)|cubbears?|bearcubs?/;
 
+/* ---------------------------------------------------------------------------------- older men (words only) */
+// Only what an item or a profile says about itself, and only where the wording is unambiguous: "silver fox" / "silver daddy",
+// a bare "grandpa", a #oldman / #maturemen tag, or a stated age of OLDER_MIN_AGE or more ("52yo", "I'm 58", "in my 50s").
+// There is deliberately NO visual age estimate: guessing a man's age from his face is unreliable and is not something this
+// app does. Precision matters more than recall here, because a false match hides a legitimate creator, so these are NOT matched:
+// "daddy" alone (a pet name at any age), spaced phrases like "older men" / "mature men" (a bio that says it likes them is not
+// about its own age), "old man" (also a lifting term), "my grandpa", elderly / grandfather / gramps / pensioner, "mature
+// content", "18+", "over 50 videos", "I'm 60 days out", "I'm 50 sets", "60 kg", or surnames like Goldman / Holderman.
+const OLDER_MIN_AGE = 45;
+const OLDER_GLUED = ['silverfox', 'silverdaddy', 'silverdaddies', 'greydaddy', 'graydaddy', 'greydaddies', 'graydaddies'];
+const OLDER_WORDS = new RegExp([
+  '\\bsilver (?:foxe?s?|daddy|daddies)\\b', '\\b(?:grey|gray) (?:daddy|daddies)\\b',
+  // a bare grandpa, not somebody's: "my grandpa taught me" is about someone else
+  '(?<!\\b(?:my|your|his|her|our|their|the|a|an)\\s)\\b(?:grandpas?|grandad|granddad)\\b',
+  // tags and handles, glued ("#maturemen"); the spaced phrases are deliberately not matched
+  '\\b(?:oldermen|olderman|oldmen|oldman|maturemen|matureman)\\b',
+].join('|'));
+const AGE_MIN = '(?:4[5-9]|[5-9]\\d)';
+// After "I'm 58" the clause must end or an age word must follow, so "I'm 60 days out", "I'm 50 sets", "I'm 50/50" are not ages.
+// A comma or full stop only ends the clause when no digit follows it: "I'm 50,000 followers strong" and "I'm 45.5 kg down" are quantities.
+const AGE_END = '(?=\\s*(?:$|\\n|[,.](?!\\d)|[;:!?|)\\]•·]|-\\s|and\\b|but\\b|with\\b|&|years?\\b|yrs?\\b|y[\\/ .]?o\\b|(?:male|man|guy|dad)\\b))';
+const OLDER_AGE = new RegExp([
+  // "52yo", "52 y/o", "52 y o", "52 years old", "52-year-old", "52 yr old"
+  `\\b${AGE_MIN}\\s*(?:y[\\/ .]?o|yrs?[- ]old|[- ]?years?[- ]?old)\\b`,
+  // "age 55", "aged: 58", "I'm 52", "im 52"
+  `\\b(?:age|aged|i['’]?m|i am|turning)\\s*:?\\s*${AGE_MIN}\\b${AGE_END}`,
+  // "in my 50s", "in my early 50s", "late 40s", "mid-60s" (not "mid 40s": that is 44 to 46, under the line)
+  `\\bin my (?:early |mid |late )?(?:50|60|70|80)['’]?s\\b`, `\\b(?:late[- ]?(?:40|50|60|70)|mid[- ]?(?:50|60|70)|early[- ]?(?:50|60|70))['’]?s\\b`,
+].join('|'));
+
+/** Does the text say its owner is an older man? @returns {string|null} the rule that matched, without a prefix */
+function olderCheck(t) {
+  for (const w of OLDER_GLUED) if (t.includes(w)) return `older:${w}`;
+  const w = t.match(OLDER_WORDS);
+  if (w) return `older:${w[0]}`;
+  const a = t.match(OLDER_AGE);
+  return a ? `older:${a[0].trim()}` : null;
+}
+
 /**
- * Does the text describe a heavy body / a chub community? Use it for titles, tags, handles, bios and channel names.
- * @returns {{heavy: boolean, rule: string|null}}
+ * Does the text describe a heavy body, a chub community, or a man who calls himself older? Use it for titles, tags, handles,
+ * bios and channel names. `kind` says which ('heavy' or 'older'); both hide the same reversible way.
+ * @returns {{heavy: boolean, rule: string|null, kind: string|null}}
  */
 function textCheck(...texts) {
   const flat = [].concat(texts).flat(Infinity).filter(Boolean).map(String);
-  const variants = [flat.join(' \n '), flat.map((s) => s.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ')).join(' \n ')].map(normalize);
+  const split = (s) => s.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ');
+  const variants = [flat.join(' \n '), flat.map(split).join(' \n ')].map(normalize);
   for (const t of variants) {
     if (!t) continue;
-    for (const w of HEAVY_SUBSTR) if (t.includes(w)) return { heavy: true, rule: `physique:${w.trim()}` };
+    for (const w of HEAVY_SUBSTR) if (t.includes(w)) return { heavy: true, rule: `physique:${w.trim()}`, kind: 'heavy' };
     const g = t.match(GLUED_BEAR);
-    if (g) return { heavy: true, rule: `physique:${g[0]}` };
+    if (g) return { heavy: true, rule: `physique:${g[0]}`, kind: 'heavy' };
     const m = t.match(HEAVY_WORDS);
-    if (m) return { heavy: true, rule: `physique:${m[0]}` };
+    if (m) return { heavy: true, rule: `physique:${m[0]}`, kind: 'heavy' };
   }
-  return { heavy: false, rule: null };
+  // A man's own words about his age are read one field at a time: `normalize` collapses whitespace, so a joined string has no
+  // field boundary left and "I'm 58" followed by an author name would no longer end its clause.
+  // and one LINE at a time too ("I'm 58\nfitness creator" is a bio with two lines)
+  for (const f of flat) {
+    for (const line of f.split(/\r?\n|\r|\u2028|\u2029/)) {
+      for (const t of [normalize(line), normalize(split(line))]) {
+        if (!t) continue;
+        const o = olderCheck(t);
+        if (o) return { heavy: true, rule: `physique:${o}`, kind: 'older' };
+      }
+    }
+  }
+  return { heavy: false, rule: null, kind: null };
 }
 
-module.exports = { measure, textCheck, segmentsCross, ANCHORS: { WS, WL } };
+module.exports = { measure, textCheck, segmentsCross, OLDER_MIN_AGE, ANCHORS: { WS, WL } };

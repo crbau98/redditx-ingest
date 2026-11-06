@@ -35,6 +35,7 @@ export function openDisplaySettings() {
         check('Play video previews in the grid', () => prefs.previews, (v) => { prefs.previews = v; }, 'On hover (desktop) or when mostly on screen (phone).'),
         check('Start videos with sound off', () => prefs.muted, (v) => { prefs.muted = v; }),
         check('Hide things I’ve already seen', () => prefs.hideSeen, (v) => { prefs.hideSeen = v; }),
+        ...('serviceWorker' in navigator ? [check('Keep what I browse for offline use', () => prefs.offlineContent, (v) => { prefs.offlineContent = v; }, 'Saves pages and pictures on this device so they open without a connection. Off by default. Turning it off, or clearing history, deletes them.')] : []),
         check('Pause history and learning', () => prefs.historyOff, (v) => { prefs.historyOff = v; }, 'Stops recording what you open, and stops “For you” from learning.')),
       h('button', { class: 'btn sm ghost', onclick: () => { tastes.reset(); toast('“For you” has been reset'); } }, icon('refresh', 'sm'), 'Reset “For you”')),
     actions: [h('button', { class: 'btn primary', onclick: () => m.close() }, 'Done')],

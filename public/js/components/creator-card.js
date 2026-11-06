@@ -1,31 +1,24 @@
 import { h, icon, proxied, fmt, avatar, toast } from '../dom.js';
+import { lazyBackground } from '../lazy-bg.js';
 import { platformLabel, platformColor, follows, bus } from '../store.js';
 import { href } from '../router.js';
-
-/** How fresh is he? "Today", "3d", "2mo" — and whether anything is from this year. */
-function freshness(lastMediaAt) {
-  if (!lastMediaAt) return null;
-  const ms = Date.now() - new Date(lastMediaAt).getTime();
-  if (!Number.isFinite(ms)) return null;
-  const days = ms / 86400000;
-  if (days < 1) return { label: 'Today', live: true };
-  if (days < 7) return { label: `${Math.round(days)}d`, live: true };
-  if (days < 35) return { label: `${Math.round(days / 7)}w`, live: false };
-  if (days < 365) return { label: `${Math.round(days / 30)}mo`, live: false };
-  return { label: fmt.ago(lastMediaAt), live: false };
-}
+import { postedWords } from './creator-words.js';
 
 /**
  * A creator card.
  *
- * mini is the small rail card, spotlight the large one on Home (bigger previews, a wider
- * name, the platforms he posts on, and how fresh his work is).
+ * Three variants share one markup: the default card (grids), `mini` (rails, 220px) and `spotlight` (Home's
+ * "Popular creators" rail, larger samples and name). Every card says when he last posted, in words, and dims its
+ * pictures when he has been quiet for a long time. Quiet creators stay visible.
+ *
+ * reason is one short line of why he is on this rail (for example "Popular here"). It is only shown when the
+ * caller has a true reason to give; the card never invents one.
  */
-export function creatorCard(c, { mini = false, badge = null, spotlight = false } = {}) {
+export function creatorCard(c, { mini = false, badge = null, spotlight = false, reason = null } = {}) {
   const thumbs = (c.previews || []).slice(0, 3);
   while (thumbs.length < 3) thumbs.push(null);
   const isNew = follows.has(c.id) && c.last_media_at && follows.seen(c.id) && c.last_media_at > follows.seen(c.id);
-  const fresh = freshness(c.last_media_at);
+  const when = postedWords(c.last_media_at);
 
   const fansly = Array.isArray(c.paid) ? c.paid.find((l) => l && (l.service === 'Fansly' || /fansly\.com/i.test(l.url || ''))) : null;
   const jff = Array.isArray(c.paid) ? c.paid.find((l) => l && (l.service === 'JustFor.Fans' || /justfor\.fans/i.test(l.url || ''))) : null;
@@ -85,25 +78,25 @@ export function creatorCard(c, { mini = false, badge = null, spotlight = false }
     },
   }, follows.has(c.id) ? 'Following' : 'Follow');
 
-  const freshMark = fresh && spotlight
-    ? h('span', { class: `fresh-mark${fresh.live ? ' live' : ''}`, title: `Last post ${fmt.ago(c.last_media_at)}` },
-      h('i', { 'aria-hidden': 'true' }), fresh.label)
-    : null;
-
   const totalPosts = c.media_count || 0;
   const videoCount = c.video_count || 0;
   const photoCount = Math.max(0, totalPosts - videoCount);
+  const platformCap = spotlight ? 5 : mini ? 3 : 4;
+
+  const whenEl = when
+    ? h('span', { class: `creator-when${when.live ? ' live' : ''}${when.quiet ? ' quiet' : ''}`, title: `Last post ${fmt.ago(c.last_media_at)}` }, when.text)
+    : null;
 
   return h('a', {
-    class: `creator-card${mini ? ' mini' : ''}${spotlight ? ' spotlight' : ''}`,
+    class: `creator-card${mini ? ' mini' : ''}${spotlight ? ' spotlight' : ''}${when && when.quiet ? ' is-quiet' : ''}`,
     href: href(`/creator/${c.id}`),
     'aria-label': c.display_name || c.handle,
     style: badge ? { position: 'relative' } : null,
   },
   badge ? h('span', { class: 'rise' }, icon('trend', 'sm'), badge) : null,
-  h('div', { class: 'creator-thumbs' },
-    thumbs.map((t) => h('div', { style: t ? { backgroundImage: `url("${proxied(t)}")` } : {} })),
-    freshMark),
+  // Three sample pictures, decorative: the card's link already names him. Each loads only when near the screen (lazy-bg.js).
+  h('div', { class: 'creator-thumbs', 'aria-hidden': 'true' },
+    thumbs.map((t) => lazyBackground(h('div'), t ? proxied(t) : null))),
   h('div', { class: 'creator-body' },
     h('div', { class: 'creator-head' },
       avatar(c, spotlight ? 64 : 56),
@@ -117,7 +110,13 @@ export function creatorCard(c, { mini = false, badge = null, spotlight = false }
       h('span', { class: 'stat-item', title: `${fmt.int(totalPosts)} total posts` }, h('b', null, fmt.num(totalPosts)), ' posts'),
       videoCount > 0 ? h('span', { class: 'stat-item stat-videos', title: `${fmt.int(videoCount)} videos` }, icon('video', 'sm'), ' ', h('b', null, fmt.num(videoCount))) : null,
       photoCount > 0 ? h('span', { class: 'stat-item stat-photos', title: `${fmt.int(photoCount)} photos` }, icon('image', 'sm'), ' ', h('b', null, fmt.num(photoCount))) : null,
-      fresh && !spotlight ? h('span', { class: `creator-fresh${fresh.live ? ' live' : ''}`, title: `Last post ${fmt.ago(c.last_media_at)}` }, fresh.label)
-        : (c.last_media_at ? h('span', { class: 'creator-last-post' }, fmt.ago(c.last_media_at)) : null)),
-    !mini && c.platforms && c.platforms.length ? h('div', { class: 'row wrap', style: { gap: '6px' } }, c.platforms.slice(0, spotlight ? 5 : 4).map((p) => h('span', { class: 'badge plat', style: { '--c': platformColor(p) } }, platformLabel(p)))) : null));
+      whenEl),
+    reason || (c.platforms && c.platforms.length)
+      ? h('div', { class: 'creator-foot' },
+        reason ? h('span', { class: 'reason-chip' }, reason) : null,
+        c.platforms && c.platforms.length
+          ? h('div', { class: 'creator-plats', 'aria-label': `Posts on ${c.platforms.map(platformLabel).join(', ')}` },
+            c.platforms.slice(0, platformCap).map((p) => h('span', { class: 'badge plat', style: { '--c': platformColor(p) } }, platformLabel(p))))
+          : null)
+      : null));
 }

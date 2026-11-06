@@ -112,6 +112,37 @@ describe('physique words', () => {
   });
 });
 
+describe('older men: words and stated ages only', () => {
+  test('a man who calls himself older, or states an age of 45 or more, is matched', () => {
+    for (const t of ['silver fox', '#silverdaddy', 'GreyDaddy', 'Grandpa', 'Grandpa fucks twink', 'your new grandad', '#oldman', '#maturemen', '52yo', '52 y/o', '52 y o', '52 years old', '52-year-old', 'Age: 55', 'aged 58', "I'm 58", "I'm 58, gym rat", "I'm 52 and lifting", 'I am 61 years old', 'in my 50s', 'in my early 50s', 'late 40s', 'mid-60s', 'Looking good at 61 yrs old']) {
+      const r = textCheck(t);
+      assert.equal(r.heavy, true, t); assert.equal(r.kind, 'older', t); assert.match(r.rule, /^physique:older:/, t);
+    }
+  });
+  test('look-alikes, younger stated ages and plain "daddy" are not matched', () => {
+    for (const t of ['Goldman', 'Holderman', 'age 24', "I'm 24", '24yo', '31 y/o', '44 years of age', 'turning 25', 'age 18', '19yo', 'in my 20s', '18+ only', 'mature content',
+      '50 years of experience', "I'm 60 kg", "I'm 50% done", 'over 50 videos', 'sugar daddy', 'gym daddy', 'daddy', 'old school gym', 'Old Spice', 'Class of 2010', 'gay muscle jock'])
+      assert.equal(textCheck(t).heavy, false, t);
+  });
+  test('regressions from an independent review: comp-prep and fitness lines, other people, and attraction are not an older man', () => {
+    for (const t of [
+      // "I'm NN" followed by something other than an age
+      "I'm 48 hours into fasting", 'I am 60 days out from my first show', "I'm 60 days into my cut", 'Im 46 days into keto', "I'm 45 days sober", "I'm 50 weeks out",
+      "I'm 50 sets", "I'm 50 pounds down", "I'm 50/50", "I'm 70 percent there", 'Age: 45 days to go', 'turning 50 pages', 'im 50 Meter Becken', '27 | natural | I am 60 days out from my first show',
+      "I'm 50,000 followers strong", "I'm 45.5 kg down", 'Age: 45.5 days into prep', "I'm 60.5 kg",
+      // somebody else, or a thing, not himself
+      'my old man taught me to lift', 'Raised by my grandpa', 'My grandfather got me into lifting', 'Grandfather clock', 'gramps hoodie giveaway', 'Elderly care worker, 29',
+      'Old Man Strength lifts', 'OldManStrength', 'Gray Fox Gaming', 'Grey fox sneakers', 'pensioner discount',
+      // liking older men is not being one, and 44 to 46 is under the line
+      'Seeking older men', 'I love older men (19yo twink)', 'Into mature men', "Mature men's skincare brand", 'mid 40s'])
+      assert.equal(textCheck(t).heavy, false, t);
+  });
+  test('the rule is words only: it never reads a picture, and the age line is a constant', () => {
+    assert.equal(require('../src/lib/physique').OLDER_MIN_AGE, 45);
+    assert.equal(textCheck('silver fox').kind, 'older'); assert.equal(textCheck('chubby').kind, 'heavy');
+  });
+});
+
 /* ------------------------------------------------------------------ policy */
 let mock; let imagefilter; let repo; let pipeline; let maintenance; let physique; let feed; let n = 0;
 const assets = (f) => path.join(__dirname, '..', 'node_modules', '@vladmandic', 'human', 'assets', f);
@@ -291,6 +322,228 @@ describe('body filter policy (model replaced by a fake)', () => {
     for (const id of ids) assert.equal(repo.media.get(id).publish_state, 'hidden');
     physique.reapply(settings);
     assert.equal(repo.creators.get(c.id).status, 'active');
+  });
+
+  test('the sweep SHOWS AGAIN what an earlier, broader list hid (after the body sweep measures it), keeps what still matches, and never undoes a person', async () => {
+    const base = (k, extra) => repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: k, source_key: `reddit:${k}:0`, post_key: `reddit:${k}`, source_url: `https://reddit.com/${k}`,
+      media_type: 'image', media_url: `https://i.redd.it/${k}.jpg`, preview_url: `https://i.redd.it/${k}.jpg`, hash: `h-${k}`, publish_state: 'hidden', ...extra });
+    // hidden by the old rule for "I am 60 days out": the current rules do not match it, so it is shown again
+    const stale = base('stale1', { title: 'I am 60 days out from my first show', physique: 101, review_reason: "physique:text:older:i am 60" });
+    const staleHeavy = base('stale2', { title: 'I am 60 days out from my first show', physique: 101, review_reason: "physique:text:older:i am 60" });
+    // still matches: stays hidden
+    const still = base('still1', { title: 'silver fox at the gym', physique: 101, review_reason: 'physique:text:older:silver fox' });
+    // hidden by a person for another reason: never touched, even though its words are harmless
+    const person = base('person1', { title: 'I am 60 days out from my first show', physique: null, review_reason: 'reported:spam' });
+    fake({ 'https://i.redd.it/stale1.jpg': 10, 'https://i.redd.it/stale2.jpg': 88, 'https://i.redd.it/still1.jpg': 10, 'https://i.redd.it/person1.jpg': 10 });
+    await physique.textSweep(settings, { force: true });
+    assert.equal(repo.media.get(stale).publish_state, 'hidden', 'not shown on the strength of words alone: it has no measured picture yet');
+    const r = await maintenance.physiqueSweep({ limit: 500, settings });  // the text sweep rewound it to these rows
+    assert.ok(r.restored >= 2, JSON.stringify(r));
+    assert.equal(repo.media.get(stale).publish_state, 'published'); assert.equal(repo.media.get(stale).physique, 10);
+    assert.equal(repo.media.get(staleHeavy).publish_state, 'hidden', 'a heavy picture stays hidden, now for the body reason');
+    assert.equal(repo.media.get(staleHeavy).physique, 88); assert.equal(repo.media.get(staleHeavy).review_reason, 'physique:88');
+    physique.reapply(settings);
+    assert.equal(repo.media.get(stale).publish_state, 'published', 'and it stays shown after the next boot');
+    assert.equal(repo.media.get(still).publish_state, 'hidden');
+    assert.equal(repo.media.get(person).publish_state, 'hidden'); assert.equal(repo.media.get(person).review_reason, 'reported:spam');
+  });
+
+  test('restoring a word-hidden item never throws away a MEASURED score: heavy stays hidden (with the body reason), light is shown', async () => {
+    fake({});
+    const base = (k, extra) => repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: k, source_key: `reddit:${k}:0`, post_key: `reddit:${k}`, source_url: `https://reddit.com/${k}`,
+      media_type: 'image', media_url: `https://i.redd.it/${k}.jpg`, hash: `h-${k}`, publish_state: 'hidden', title: 'I am 60 days out from my first show', ...extra });
+    // the body sweep replaced the word marker (101) with a measured score but left the old text reason on the row
+    const heavy = base('meas-heavy', { physique: 88, review_reason: 'physique:text:older:i am 60' });
+    const light = base('meas-light', { physique: 20, review_reason: 'physique:text:older:i am 60' });
+    const r = await physique.textSweep(settings, { force: true });
+    assert.equal(repo.media.get(heavy).publish_state, 'hidden', 'a measured heavy picture must not be published');
+    assert.equal(repo.media.get(heavy).physique, 88, 'and its measured score is kept');
+    assert.equal(repo.media.get(heavy).review_reason, 'physique:88', 'now hidden for the right reason');
+    assert.equal(repo.media.get(light).publish_state, 'published'); assert.equal(repo.media.get(light).physique, 20);
+    assert.ok(r.restored >= 1);
+    physique.reapply(settings);
+    assert.equal(repo.media.get(heavy).publish_state, 'hidden'); assert.equal(repo.media.get(light).publish_state, 'published');
+  });
+
+  test('the restore decision uses the threshold as it is NOW, not the sweep\'s starting snapshot', async () => {
+    fake({});
+    const id = repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: 'snap1', source_key: 'reddit:snap1:0', post_key: 'reddit:snap1', source_url: 'https://reddit.com/snap1',
+      media_type: 'image', media_url: 'https://i.redd.it/snap1.jpg', hash: 'h-snap1', publish_state: 'hidden', title: 'I am 60 days out from my first show', physique: 50, review_reason: 'physique:text:older:i am 60' });
+    const store = require('../src/settings');
+    const before = store.get().physiqueThreshold;
+    store.update({ physiqueFilter: true, physiqueThreshold: 40 });  // an admin lowered it; the sweep still holds `settings` (threshold 60)
+    try {
+      await physique.textSweep({ ...settings, physiqueThreshold: 60 }, { force: true });
+      assert.equal(repo.media.get(id).publish_state, 'hidden', 'measured 50 is over the current threshold 40, so it stays hidden');
+    } finally { store.update({ physiqueThreshold: before }); }
+  });
+
+  test('an item the filter\'s off/on path left as "physique:101" (word marker, body reason) is re-read too; a person\'s hide is not', async () => {
+    const base = (k, extra) => repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: k, source_key: `reddit:${k}:0`, post_key: `reddit:${k}`, source_url: `https://reddit.com/${k}`,
+      media_type: 'image', media_url: `https://i.redd.it/${k}.jpg`, preview_url: `https://i.redd.it/${k}.jpg`, hash: `h-${k}`, publish_state: 'hidden', title: 'I am 60 days out from my first show', ...extra });
+    const legacy = base('legacy101', { physique: 101, review_reason: 'physique:101' });
+    const person = base('person101', { physique: 101, review_reason: 'reported:spam' });
+    fake({ 'https://i.redd.it/legacy101.jpg': 12, 'https://i.redd.it/person101.jpg': 12 });
+    await physique.textSweep(settings, { force: true });
+    await maintenance.physiqueSweep({ limit: 500, settings });
+    assert.equal(repo.media.get(legacy).publish_state, 'published'); assert.equal(repo.media.get(legacy).physique, 12);
+    physique.reapply(settings);
+    assert.equal(repo.media.get(legacy).publish_state, 'published', 'and it stays shown');
+    assert.equal(repo.media.get(person).publish_state, 'hidden', 'a person\'s decision stands');
+  });
+
+  test('a word-marker row is measured again: the body sweep cursor moves back to it, and never forward', async () => {
+    fake({});
+    const base = (k, extra) => repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: k, source_key: `reddit:${k}:0`, post_key: `reddit:${k}`, source_url: `https://reddit.com/${k}`,
+      media_type: 'image', media_url: `https://i.redd.it/${k}.jpg`, hash: `h-${k}`, publish_state: 'hidden', title: 'I am 60 days out from my first show', ...extra });
+    const id = base('rewind1', { physique: 101, review_reason: 'physique:text:older:i am 60' });
+    const seqOf = (i) => repo.db.prepare('SELECT seq FROM media WHERE id = ?').get(i).seq;
+    const seq = seqOf(id);
+    repo.settings.set('physique_sweep_seq', String(seq + 5000));            // the body sweep is already far past this row
+    const r = await physique.textSweep(settings, { force: true });
+    assert.equal(repo.media.get(id).publish_state, 'hidden', 'still hidden until it is measured');
+    assert.equal(repo.settings.get('physique_sweep_seq'), String(seq - 1), 'the cursor is just before the row');
+    assert.equal(r.rewound, seq - 1);
+    repo.settings.set('physique_sweep_seq', '0');                           // a cursor that has not reached it yet stays where it is
+    const id2 = base('rewind2', { physique: 101, review_reason: 'physique:text:older:i am 60' });
+    await physique.textSweep(settings, { force: true });
+    assert.equal(repo.settings.get('physique_sweep_seq'), '0');
+    assert.ok(seqOf(id2) > 0);
+  });
+
+  test('a marker row stays hidden whenever no measurement happens (sweep off, no model, a failed analysis) and no torso in view shows it as unmeasured', async () => {
+    const store = require('../src/settings');
+    const base = (k) => repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: k, source_key: `reddit:${k}:0`, post_key: `reddit:${k}`, source_url: `https://reddit.com/${k}`,
+      media_type: 'image', media_url: `https://i.redd.it/${k}.jpg`, preview_url: `https://i.redd.it/${k}.jpg`, hash: `h-${k}`, publish_state: 'hidden', title: 'I am 60 days out from my first show', physique: 101, review_reason: 'physique:text:older:i am 60' });
+    const id = base('nomodel1');
+    await physique.textSweep(settings, { force: true });
+    // the model is missing or fails: the analysis returns an error / unavailable, so nothing is measured and nothing is shown
+    for (const status of ['unavailable', 'error']) {
+      imagefilter._setAnalyzer(async () => ({ status }));
+      await physique.textSweep(settings, { force: true });
+      await maintenance.physiqueSweep({ limit: 500, settings });
+      assert.equal(repo.media.get(id).publish_state, 'hidden', status); assert.equal(repo.media.get(id).physique, 101);
+    }
+    // the image sweep is switched off: the body sweep is never run by the timer, and the text sweep alone shows nothing
+    const was = store.get().imageSweep; store.update({ imageSweep: false });
+    try { await physique.textSweep(settings, { force: true }); } finally { store.update({ imageSweep: was }); }
+    assert.equal(repo.media.get(id).publish_state, 'hidden');
+    // a picture with no torso in view is a real analysis: it is shown, unmeasured, like any other such picture
+    fake({});
+    await physique.textSweep(settings, { force: true });
+    await maintenance.physiqueSweep({ limit: 500, settings });
+    assert.equal(repo.media.get(id).publish_state, 'published'); assert.equal(repo.media.get(id).physique, null);
+  });
+
+  test('the cursor rewind is kept when the filter is switched off between restore batches', async () => {
+    fake({});
+    const store = require('../src/settings');
+    const ids = [];
+    for (let i = 0; i < 501; i++) ids.push(repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: `bt${i}`, source_key: `reddit:bt${i}:0`, post_key: `reddit:bt${i}`, source_url: `https://reddit.com/bt${i}`,
+      media_type: 'image', media_url: `https://i.redd.it/bt${i}.jpg`, hash: `h-bt${i}`, publish_state: 'hidden', title: 'I am 60 days out from my first show', physique: 101, review_reason: 'physique:text:older:i am 60' }));
+    const lowest = repo.db.prepare('SELECT MIN(seq) AS s FROM media WHERE id IN (' + ids.map(() => '?').join(',') + ')').get(...ids).s;
+    const far = String(lowest + 100000);
+    repo.settings.set('physique_sweep_seq', far); repo.settings.set('physique_text_sweep_version', '');
+    const realSI = global.setImmediate;
+    // off right after the first restore batch (once the cursor has moved), i.e. between two batches
+    global.setImmediate = (fn, ...a) => { if (repo.settings.get('physique_sweep_seq') !== far && store.get().physiqueFilter) store.update({ physiqueFilter: false }); return realSI(fn, ...a); };
+    try { await physique.textSweep(settings, { force: true }); } finally { global.setImmediate = realSI; store.update({ physiqueFilter: true }); }
+    assert.equal(repo.settings.get('physique_sweep_seq'), String(lowest - 1), 'the first batch\'s rewind was applied before the abort');
+    assert.notEqual(repo.settings.get('physique_text_sweep_version'), '4', 'and the pass really was cut short (not marked done)');
+    repo.db.prepare('DELETE FROM media WHERE id IN (' + ids.map(() => '?').join(',') + ')').run(...ids); // leave the shared library as it was
+  });
+
+  test('the body sweep keeps a cursor that was moved BACK while its batch awaited the model', async () => {
+    const id = repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: 'race1', source_key: 'reddit:race1:0', post_key: 'reddit:race1', source_url: 'https://reddit.com/race1',
+      media_type: 'image', media_url: 'https://i.redd.it/race1.jpg', preview_url: 'https://i.redd.it/race1.jpg', hash: 'h-race1', publish_state: 'published' });
+    const seq = repo.db.prepare('SELECT seq FROM media WHERE id = ?').get(id).seq;
+    repo.settings.set('physique_sweep_seq', String(seq - 1));
+    imagefilter._setAnalyzer(async () => { repo.settings.set('physique_sweep_seq', '3'); return { status: 'ok', faces: male, body: { decided: true, score: 5 } }; }); // a text sweep rewinds meanwhile
+    await maintenance.physiqueSweep({ limit: 1, settings });
+    assert.equal(repo.settings.get('physique_sweep_seq'), '3', 'the rewind was not overwritten by this batch\'s own position');
+    repo.settings.set('physique_sweep_seq', String(seq));
+  });
+
+  test('a row an admin changed while the model was working is not restored or overwritten from the stale snapshot', async () => {
+    const base = (k) => repo.media.insert({ feed_id: feed.id, platform: 'reddit', source_id: k, source_key: `reddit:${k}:0`, post_key: `reddit:${k}`, source_url: `https://reddit.com/${k}`,
+      media_type: 'image', media_url: `https://i.redd.it/${k}.jpg`, preview_url: `https://i.redd.it/${k}.jpg`, hash: `h-${k}`, publish_state: 'hidden', title: 'I am 60 days out from my first show', physique: 101, review_reason: 'physique:text:older:i am 60' });
+    const approved = base('mid-approve'); const reported = base('mid-report'); const retitled = base('mid-title');
+    const first = repo.db.prepare('SELECT MIN(seq) AS s FROM media WHERE id IN (?, ?, ?)').get(approved, reported, retitled).s;
+    repo.settings.set('physique_sweep_seq', String(first - 1));
+    imagefilter._setAnalyzer(async (url) => {
+      if (url.includes('mid-approve')) { repo.media.setPhysique(approved, physique.APPROVED); repo.media.setState(approved, 'published', null, { exact: true }); }   // approved meanwhile
+      if (url.includes('mid-report')) repo.media.setState(reported, 'hidden', 'reported:spam', { exact: true });                                                 // taken down for another reason meanwhile
+      if (url.includes('mid-title')) repo.db.prepare('UPDATE media SET title = ? WHERE id = ?').run('chubby gainer progress', retitled);                  // its words changed to something the policy really matches
+      return { status: 'ok', faces: male, body: { decided: true, score: 5 } };
+    });
+    await maintenance.physiqueSweep({ limit: 500, settings });
+    assert.equal(repo.media.get(retitled).publish_state, 'hidden', 'the text is re-read after the model call, so changed words are judged');
+    assert.equal(repo.media.get(approved).physique, physique.APPROVED, 'an approval is not overwritten'); assert.equal(repo.media.get(approved).publish_state, 'published');
+    assert.equal(repo.media.get(reported).publish_state, 'hidden'); assert.equal(repo.media.get(reported).review_reason, 'reported:spam', 'and a hide for another reason is not republished');
+  });
+
+  test('hiding many posts of one creator recounts that creator ONCE per pass, and the counts are right afterwards', async () => {
+    fake({});
+    const c = repo.creators.create({ handle: 'statsbatch', origin: 'admin' });
+    const ids = [];
+    for (let i = 0; i < 6; i++) ids.push(repo.media.insert({ feed_id: feed.id, creator_id: c.id, platform: 'reddit', source_id: `sb${i}`, source_key: `reddit:sb${i}:0`, post_key: `reddit:sb${i}`, source_url: `https://reddit.com/sb${i}`,
+      media_type: 'image', media_url: `https://i.redd.it/sb${i}.jpg`, hash: `h-sb${i}`, publish_state: 'published', title: i < 4 ? 'chubby gainer progress' : 'leg day' }));
+    repo.creators.refreshStats(c.id);
+    assert.equal(repo.creators.get(c.id).media_count, 6);
+    const real = repo.creators.refreshStats; let calls = 0;
+    repo.creators.refreshStats = (id) => { if (id === c.id) calls++; return real(id); };
+    try { await physique.textSweep(settings, { force: true }); } finally { repo.creators.refreshStats = real; }
+    assert.equal(calls, 1, 'four hidden posts, one recount');
+    assert.equal(repo.creators.get(c.id).media_count, 2, 'the two posts left published');
+    for (const id of ids.slice(0, 4)) assert.equal(repo.media.get(id).publish_state, 'hidden');
+  });
+
+  test('a stated age is still read when other fields follow it: "I\'m 58" then an author name', () => {
+    for (const args of [["I'm 58", '', '', '', 'someauthor'], ["I'm 58", 'bio text', ['tag1', 'tag2'], 'community', 'author'], ['Age 52', null, null, 'r/fitness', 'x']]) {
+      const r = physique.textCheck(...args);
+      assert.equal(r.heavy, true, JSON.stringify(args)); assert.equal(r.kind, 'older');
+    }
+    for (const args of [["I'm 60 days out", 'prep', '', '', 'author'], ["I'm 50,000 followers strong", 'x', '', '', 'author']]) assert.equal(physique.textCheck(...args).heavy, false, JSON.stringify(args));
+  });
+
+  test('a stated age on its own LINE inside one field is read ("I\'m 58\\nfitness creator"), and a line that continues the number is not', () => {
+    for (const bio of ["I'm 58\nfitness creator", "fitness creator\nAge: 58\nDM for collabs", "I'm 58\r\nlifting", "I'm 58\u2028coach"]) {
+      assert.equal(physique.textCheck('title', bio).heavy, true, JSON.stringify(bio));
+    }
+    for (const bio of ["I'm 60 days out\nfitness creator", "I'm 58 kg\nfitness creator"]) assert.equal(physique.textCheck('title', bio).heavy, false, JSON.stringify(bio));
+  });
+
+  test('a feed this policy paused whose name no longer matches runs again, unless a person acted on it', async () => {
+    const ok = repo.feeds.upsert({ platform: 'reddit', kind: 'community', target: 'plainlifters', enabled: 0, trusted: 1, origin: 'admin' }).feed;
+    repo.logAction('feed', ok.id, 'physique-feed-off', 'body filter: "older:i am 60"', 'system');
+    const matches = repo.feeds.upsert({ platform: 'reddit', kind: 'community', target: 'gainerhub2', enabled: 0, trusted: 1, origin: 'admin' }).feed;
+    repo.logAction('feed', matches.id, 'physique-feed-off', 'body filter: "gainer"', 'system');
+    const touched = repo.feeds.upsert({ platform: 'reddit', kind: 'community', target: 'plainlifters2', enabled: 0, trusted: 1, origin: 'admin' }).feed;
+    repo.logAction('feed', touched.id, 'physique-feed-off', 'body filter: "older:i am 60"', 'system');
+    repo.logAction('feed', touched.id, 'disable', 'I turned it off', 'admin');
+    await physique.textSweep(settings, { force: true });
+    assert.equal(repo.feeds.get(ok.id).enabled, 1, 'no longer matches: runs again');
+    assert.equal(repo.feeds.get(matches.id).enabled, 0, 'still matches: stays paused');
+    assert.equal(repo.feeds.get(touched.id).enabled, 0, 'a person acted last: left alone');
+  });
+
+  test('a post that calls its man older is excluded before any download, and a "daddy" post is not', async () => {
+    let looked = 0;
+    imagefilter._setAnalyzer(async () => { looked++; return { status: 'ok', faces: male, body: { decided: true, score: 0 } }; });
+    const r = await pipeline.processItem(item({ title: 'Silver fox at the gym' }), feed, null, settings);
+    assert.equal(r.outcome, 'excluded'); assert.match(r.reason, /^physique:older:silver fox/);
+    assert.equal(looked, 0, 'the picture was never fetched');
+    assert.equal((await pipeline.processItem(item({ title: 'gym daddy leg day' }), feed, null, settings)).outcome, 'added', '"daddy" alone is not about age');
+  });
+
+  test('a creator whose profile says he is older is hidden, and shown again when the filter is switched off', () => {
+    const c = repo.creators.create({ handle: 'foxsam', origin: 'admin' });
+    const f = repo.feeds.upsert({ platform: 'reddit', kind: 'user', target: 'foxsam', creatorId: c.id, enabled: 1, trusted: 1, origin: 'admin' }).feed;
+    const r = require('../src/engine/creators').applyProfile(repo.feeds.get(f.id), { displayName: 'Sam', bio: '54yo, lifting since 90s' }, settings);
+    assert.equal(r.hidden, true); assert.equal(repo.creators.get(c.id).status, 'hidden');
+    physique.reapply({ ...settings, physiqueFilter: false });
+    assert.equal(repo.creators.get(c.id).status, 'active', 'reversible: it only undoes its own decision');
+    assert.equal(repo.feeds.get(f.id).enabled, 1);
   });
 
   test('a refreshed profile that now reads chub hides the creator', () => {

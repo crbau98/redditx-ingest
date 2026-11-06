@@ -85,6 +85,25 @@ export async function explore(root, { query }) {
     title: 'Show photos only',
     onclick: () => set({ type: f.type === 'image' ? '' : 'image' }),
   }, icon('image', 'sm'), 'Photos');
+  // One-tap sorts for the things people come here for: popular, hot this week, newest.
+  const popularChip = h('button', {
+    class: `chip${f.sort === 'trending' && !f.since ? ' on' : ''}`,
+    'aria-pressed': String(f.sort === 'trending' && !f.since),
+    title: 'Most popular posts first',
+    onclick: () => set({ sort: 'trending', since: '' }),
+  }, icon('flame', 'sm'), 'Popular');
+  const hotWeekChip = h('button', {
+    class: `chip${f.sort === 'trending' && f.since === 'week' ? ' on' : ''}`,
+    'aria-pressed': String(f.sort === 'trending' && f.since === 'week'),
+    title: 'Popular posts from the past week',
+    onclick: () => set({ sort: 'trending', since: f.sort === 'trending' && f.since === 'week' ? '' : 'week' }),
+  }, icon('trend', 'sm'), 'Hot this week');
+  const newChip = h('button', {
+    class: `chip${f.sort === 'recent' ? ' on' : ''}`,
+    'aria-pressed': String(f.sort === 'recent'),
+    title: 'Newest posts first',
+    onclick: () => set({ sort: 'recent', since: '' }),
+  }, icon('sparkle', 'sm'), 'New');
   const topRatedChip = h('button', {
     class: `chip${f.sort === 'top' ? ' on' : ''}`,
     'aria-pressed': String(f.sort === 'top'),
@@ -173,7 +192,7 @@ export async function explore(root, { query }) {
     btn.addEventListener('click', () => { open = !open; panel.hidden = !open; btn.setAttribute('aria-expanded', String(open)); });
     return [btn, panel];
   })() : [];
-  const bar = h('div', { class: 'filterbar', role: 'toolbar', 'aria-label': 'Explore filters' }, h('div', { class: 'filter-scroll' }, h('span', { class: 'group-label filter-label' }, 'Type'), allChip, ofChip, videosChip, photosChip, topRatedChip, followChip, sortSel, ...filtersDisclosure), h('span', { class: 'spacer' }), active.length ? h('div', { class: 'active-filters' }, active) : null);
+  const bar = h('div', { class: 'filterbar', role: 'toolbar', 'aria-label': 'Explore filters' }, h('div', { class: 'filter-scroll' }, h('span', { class: 'group-label filter-label' }, 'Type'), allChip, ofChip, videosChip, photosChip, popularChip, hotWeekChip, newChip, topRatedChip, followChip, sortSel, ...filtersDisclosure), h('span', { class: 'spacer' }), active.length ? h('div', { class: 'active-filters' }, active) : null);
 
   // Tag rail: with tags in play, show tags that go with them (click narrows); otherwise the most used tags.
   // Required tags (tags= / tag=) are what a refinement narrows, so suggestions are measured against

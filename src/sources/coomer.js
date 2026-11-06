@@ -65,9 +65,17 @@ function iconUrl(service, handle) {
   return `${IMG_BASE}/icons/${encodeURIComponent(service)}/${encodeURIComponent(handle)}`;
 }
 
+/**
+ * 'video' | 'image' | null. A post's attachments are not all pictures or videos (archives, voice messages, documents, files with no
+ * extension): those are not media and must not become items (they used to be filed as pictures that never load).
+ */
 function mediaTypeOf(name) {
-  return /\.(mp4|webm|mov|m4v|avi)$/i.test(String(name || '')) ? 'video' : 'image';
+  const n = String(name || '');
+  if (/\.(mp4|webm|mov|m4v|avi|mkv)$/i.test(n)) return 'video';
+  if (/\.(jpe?g|png|gif|webp|avif|bmp)$/i.test(n)) return 'image';
+  return null;
 }
+const typeOfFile = (f) => mediaTypeOf(f && f.path) || mediaTypeOf(f && f.name);
 
 /** One coomer post -> up to N media items (file + attachments), newest page order preserved. */
 function itemsFromPost(post, feed) {
@@ -80,12 +88,13 @@ function itemsFromPost(post, feed) {
   const text = `${post.title || ''} ${(post.content || post.substring || '').replace(/<[^>]*>/g, ' ')}`.trim();
   const permalink = post.id ? `${BASE}/${svc}/user/${author}/${post.id}` : `${BASE}/${svc}/user/${author}`;
   // If a post has both an image and a video, use the image's thumbnail as the video's poster; otherwise fall back to the creator's banner.
-  const firstImg = files.find((f) => f && f.path && mediaTypeOf(f.name || f.path) === 'image');
+  const firstImg = files.find((f) => f && f.path && typeOfFile(f) === 'image');
   const videoPoster = firstImg ? thumbUrl(firstImg.path) : (author ? bannerUrl(svc, author) : null);
   files.forEach((f, i) => {
     const url = fileUrl(f.path);
     if (!url) return;
-    const type = mediaTypeOf(f.name || f.path);
+    const type = typeOfFile(f);
+    if (!type) return;
     const preview = type === 'image' ? thumbUrl(f.path) : videoPoster;
     out.push({
       sourceId: `coomer-${svc}-${post.id || author}-${i}`.slice(0, 220),
@@ -101,6 +110,9 @@ function itemsFromPost(post, feed) {
       mediaUrl: url,
       previewUrl: preview,
       thumbnailUrl: preview,
+      // a video has no poster of its own here: it borrows the post's picture or the creator's banner, shared with its siblings, so the
+      // pipeline must not take the poster's perceptual hash for the video's (it collapsed a creator's videos into one)
+      ...(type === 'video' ? { posterShared: true } : {}),
       tags: [],
       nsfw: 'explicit',
       trusted: true, // API-provided media URL on coomer's own host; scope trust is decided per feed
@@ -119,6 +131,7 @@ async function api(path, { retries = 2, timeout = 12000 } = {}) {
 const pastEnd = (e) => /bigger than total count/i.test(String(e && e.message || ''));
 
 module.exports = {
+  itemsFromPost,
   platform: 'coomer',
   label: 'Coomer',
   color: '#f59e0b',

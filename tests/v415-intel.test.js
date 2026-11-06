@@ -236,7 +236,18 @@ describe('recommendations v2', () => {
     assert.match(r.json.find((c) => c.id === world.b.id).reason, /^Like @surfer_alpha$/);
     const ex = await pub(`/api/recommend/creators?creators=${world.a.id}:5&exclude=${world.b.id}`);
     assert.ok(!ex.json.some((c) => c.id === world.b.id));
-    assert.deepEqual((await pub('/api/recommend/creators')).json, [], 'no taste, no guesses');
+    // No taste, no guesses: the stored popularity rank answers, and says so.
+    const popularity = require('../src/engine/popularity');
+    await popularity.recompute({ force: true });
+    const fallback = await pub('/api/recommend/creators?limit=8');
+    assert.ok(fallback.json.length > 0, 'a new visitor gets the popular fallback, not an empty rail');
+    assert.ok(fallback.json.every((c) => c.reason === 'Popular here'));
+    assert.ok(fallback.json.some((c) => c.id === world.a.id), 'the most active creator is offered');
+    assert.ok(!fallback.json.some((c) => c.id === world.d.id), 'hidden creator stays out');
+    const pops = fallback.json.map((c) => c.popularity);
+    assert.deepEqual(pops, [...pops].sort((x, y) => y - x), 'popular order');
+    const fallbackEx = await pub(`/api/recommend/creators?limit=8&exclude=${world.b.id}`);
+    assert.ok(!fallbackEx.json.some((c) => c.id === world.b.id), 'show-less applies to the fallback');
   });
 
   test('similar creators rank by shared distinctive style', () => {

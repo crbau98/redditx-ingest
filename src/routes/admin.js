@@ -19,10 +19,13 @@ const identity = require('../engine/identity');
 const browser4 = require('../lib/browser4');
 const brightdata = require('../lib/brightdata');
 const expand = require('../engine/expand');
-const { adminRateLimit, adminCredentialAuth } = require('../middleware/auth');
+const { adminRateLimit, adminCredentialAuth, adminKeyValid } = require('../middleware/auth');
 
 const router = express.Router();
-router.use(adminRateLimit, adminCredentialAuth);
+// The brute-force guard counts every request that does not finish with a success. The live event stream never finishes (it ends when
+// the page is left), so each visit to a screen that listens to it used up one of the 20 attempts: 21 page changes in ten minutes locked
+// the owner out. A stream that already carries the right key has nothing to guess, so it skips the guard; a wrong key still counts.
+router.use((req, res, next) => (req.path === '/stream' && adminKeyValid(req) ? next() : adminRateLimit(req, res, next)), adminCredentialAuth);
 
 const int = repo.clampInt;
 const page = (req, max = 200) => ({ page: int(req.query.page, 0, 100000, 0), limit: int(req.query.limit, 1, max, 50) });
@@ -40,7 +43,8 @@ router.get('/stream', (req, res) => {
 
 /* ------------------------------------------------------------------ engine */
 router.get('/engine', (req, res) => res.json({ ...engine.status(), logs: events.getLogs(150) }));
-router.get('/logs', (req, res) => res.json(events.getLogs(int(req.query.limit, 1, 600, 300))));
+// ?level=problems: only warnings and errors, from a ring that INFO chatter cannot push them out of
+router.get('/logs', (req, res) => res.json(req.query.level === 'problems' ? events.getProblems(int(req.query.limit, 1, 300, 100)) : events.getLogs(int(req.query.limit, 1, 600, 300))));
 router.delete('/logs', (req, res) => { events.clearLogs(); res.json({ ok: true }); });
 
 router.post('/engine/run', (req, res) => {
@@ -55,7 +59,9 @@ router.post('/engine/pause', (req, res) => { engine.pause(); res.json({ ok: true
 router.post('/engine/resume', (req, res) => { engine.resume(); res.json({ ok: true }); });
 router.post('/engine/breakers/reset', (req, res) => { breaker.reset(); res.json({ ok: true }); });
 
-router.get('/runs', (req, res) => res.json(repo.runs.recent({ feedId: req.query.feedId, limit: int(req.query.limit, 1, 200, 60) })));
+// `error_kind`: why a run or feed failed (blocked / not_found / rate_limited / parse / timeout / network / server / config / other), see engine/errorclass
+const errorKind = (text) => (text ? require('../engine/errorclass').classify(text).kind : null);
+router.get('/runs', (req, res) => res.json(repo.runs.recent({ feedId: req.query.feedId, limit: int(req.query.limit, 1, 200, 60) }).map((r) => ({ ...r, error_kind: errorKind(r.error) }))));
 
 /* ----------------------------------------------------------------- sources */
 router.get('/sources', (req, res) => {
@@ -66,25 +72,39 @@ router.get('/sources', (req, res) => {
 });
 /** Feed-level health: failing, stale, dead (ran often, added nothing in a month) and top feeds. */
 router.get('/sources/health', (req, res) => res.json({ ...require('../engine/sourcehealth').report(), thumbnails: require('../engine/thumbs').progress() }));
+/** Feeds the app paused on its own (auto-retire) and that are still paused, newest first. The overview offers one tap to turn one back on. */
+router.get('/sources/retired', (req, res) => {
+  const days = int(req.query.days, 1, 90, 14);
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const rows = repo.db.prepare(`SELECT f.id, f.platform, f.kind, f.target, f.label, f.origin, f.last_error, a.created_at AS retired_at, a.reason AS why
+    FROM feeds f JOIN moderation_actions a ON a.target_type = 'feed' AND a.target_id = f.id
+    WHERE f.enabled = 0 AND a.action = 'auto-retire' AND a.created_at >= ?
+      AND a.id = (SELECT MAX(id) FROM moderation_actions WHERE target_type = 'feed' AND target_id = f.id)
+    ORDER BY a.created_at DESC`).all(since);
+  res.json({ days, total: rows.length, items: rows.slice(0, 50) });
+});
 
 /* ---------------------------------------------------------------- browser4 */
 router.get('/browser4', async (req, res) => {
   const cfg = settingsStore.get();
   res.json({
     ...(await browser4.status()), mode: cfg.browser4Mode, expand: expand.status(),
-    render: await require('../lib/render').status(),       // which engine reads pages (Browser4 or Playwright), and both engines' state
+    render: await require('../lib/render').status(),       // which engine reads pages (Browser4, Playwright or Chrome), and every engine's state
     strategy: require('../engine/hoststrategy').summary(),   // what PRISM has learned about which hosts need a browser
     brightdata: {   // booleans and usage only: the token, zone and browser endpoint are never returned
       discover: { configured: brightdata.configured(), usage: brightdata.usage() },
       unlocker: { mode: cfg.brightdataUnlocker, budgetPerDay: cfg.brightdataUnlockBudget, configured: brightdata.unlockerConfigured(), browserApi: brightdata.browserConfigured(), usage: brightdata.unlockUsage() },
     },
+    // The free tiers after the browser, and the optional token service. Booleans and counts only.
+    jina: { mode: cfg.jinaReader, budgetPerDay: cfg.jinaDailyBudget, configured: require('../lib/jina').configured(), usage: require('../lib/jina').usage() },
+    captcha: { mode: cfg.captchaSolver, budgetPerDay: cfg.captchaSolverBudget, configured: require('../lib/captchasolver').configured(), usage: require('../lib/captchasolver').usage() },
   });
 });
 /** Read a page in the browser and add the pages it links to (same site) as feeds. Runs in the background; see GET /browser4. */
 router.post('/browser4/expand', async (req, res) => {
   const { url, depth, limit, trusted } = req.body || {};
   if (typeof url !== 'string' || !/^https?:\/\//i.test(url.trim())) return bad(res, 'A full http(s) URL is required');
-  if (!require('../lib/render').enabled()) return bad(res, 'No browser engine is enabled on this server (set BROWSER4_ENABLED=1 or PLAYWRIGHT_ENABLED=1)', 409);
+  if (!require('../lib/render').enabled()) return bad(res, 'No browser engine is enabled on this server (set BROWSER4_ENABLED=1, PLAYWRIGHT_ENABLED=1, or CHALLENGE_BROWSER=1 with CHROME_PATH)', 409);
   try { await browser4.assertAllowed(url.trim()); } catch (e) { return bad(res, e.message, e.skip ? 400 : 502); }
   const r = expand.start(url.trim(), { depth, limit, trustSeed: !!trusted });
   return r.started ? res.status(202).json({ ok: true }) : bad(res, r.reason, 409);
@@ -114,7 +134,8 @@ router.post('/ai/triage', async (req, res) => {
 /* ------------------------------------------------------------------- feeds */
 router.get('/feeds', (req, res) => {
   const { platform, kind, status, q, creatorId, enabled } = req.query;
-  res.json(repo.feeds.list({ platform, kind, status, q, creatorId, enabled, ...page(req, 500) }));
+  const out = repo.feeds.list({ platform, kind, status, q, creatorId, enabled, ...page(req, 500) });
+  res.json({ ...out, items: out.items.map((f) => ({ ...f, last_error_kind: errorKind(f.last_error) })) });
 });
 
 router.post('/feeds', (req, res) => {
@@ -248,10 +269,13 @@ router.post('/media/:id/moderate', (req, res) => {
 });
 
 router.post('/media/bulk', (req, res) => {
-  const { ids, action, reason } = req.body || {};
+  const { ids, action, reason, reasons } = req.body || {};
   if (!Array.isArray(ids) || !action) return bad(res, 'ids array and action required');
+  // `reasons` (optional): { id: reason } for items that each carry their own (an undo puts every item back under the hold reason it
+  // had), so a mixed batch is still ONE transaction: all of it applies or none of it. Others fall back to `reason`.
+  const own = (id) => (reasons && typeof reasons === 'object' && typeof reasons[id] === 'string' && reasons[id].slice(0, 200)) || null;
   let updated = 0;
-  repo.db.transaction(() => { for (const id of ids.slice(0, 500)) if (targets.moderate(String(id), action, reason || 'bulk')) updated++; })();
+  repo.db.transaction(() => { for (const id of ids.slice(0, 500)) if (targets.moderate(String(id), action, own(String(id)) || reason || 'bulk')) updated++; })();
   res.json({ ok: true, updated });
 });
 
@@ -457,7 +481,7 @@ router.post('/maintenance/image-sweep', async (req, res) => {
 /* ---------------------------------------------------------------- telegram (joined channels) */
 router.get('/telegram', (req, res) => {
   const sync = require('../services/telegram-sync');
-  res.json({ ...sync.status(), store: require('../lib/objectstore').describe() });
+  res.json({ ...sync.status(), backfillMax: config.telegram.backfillMax, maxMb: config.telegram.maxMb, store: require('../lib/objectstore').describe() });
 });
 router.post('/telegram/sync', async (req, res) => {
   try { res.json({ ok: true, ...(await require('../services/telegram-sync').sync()) }); }

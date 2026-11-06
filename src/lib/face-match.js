@@ -229,7 +229,12 @@ function decideWebMatch(id, action, actor = 'admin') {
     try {
       const { parseProfile } = require('./links');
       const spec = parseProfile(row.page_url) || { platform: 'web', kind: 'page', target: row.page_url, ingestable: true, label: new URL(row.page_url).host };
-      if (!spec.external) require('../services/targets').addSpec(spec, { creatorId: row.creator_id, origin: 'discovered', trusted: true });
+      if (spec.external) {
+        // A paid page is a public page too (owner decision 2026-11-05): read it.
+        require('../engine/paidpage').registerPaidPage(row.page_url, { creatorId: row.creator_id, origin: 'face-match-confirm' });
+      } else {
+        require('../services/targets').addSpec(spec, { creatorId: row.creator_id, origin: 'discovered', trusted: true });
+      }
     } catch { /* best effort */ }
     repo.logAction('creator', row.creator_id, 'web-match-confirm', `${row.match_kind} → ${row.page_url}`, actor);
     return { ...row, status: 'confirmed' };

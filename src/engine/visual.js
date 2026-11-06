@@ -206,13 +206,29 @@ function similarCreators(id, k = 24) {
 }
 
 /* ---------------------------------------------------------------- backfill */
+/**
+ * The items that still need a picture, newest first.
+ *
+ * The old statement asked the whole library for "published, in scope, without a vector" and sorted it by
+ * seq DESC: on the live database that sorted 389k rows into a temporary B-tree on the MAIN thread, every
+ * minute, for 8-16 seconds — the server could not answer a request while it ran.
+ *
+ * media.seq is the INTEGER PRIMARY KEY, so it IS the rowid: walking the table backwards is exactly the same
+ * order, and it needs no sort at all. `NOT INDEXED` tells SQLite to take that walk instead of hopping
+ * through the publish_state index and sorting the result afterwards. Same rows, same order, no sort.
+ *
+ * The walk stops as soon as it has `limit` rows. It only crosses the whole library when there is genuinely
+ * nothing left to embed, which is the one moment the old statement was cheap to avoid but the new one is not.
+ */
 function pending(limit) {
   ensureTable();
   const retry = new Date(Date.now() - FAIL_RETRY_DAYS * 86400000).toISOString();
-  return db.prepare(`SELECT m.id, m.media_type, m.media_url, m.preview_url, m.thumbnail_url, m.source_url, m.creator_id, m.post_key FROM media m
+  // NOT INDEXED: walk the table newest first and stop at the first `limit` rows. Left to itself the planner takes
+  // ix_media_state and sorts every published row (about 2 s per minute on 260k rows, 0.3 s this way).
+  return db.prepare(`SELECT m.id, m.media_type, m.media_url, m.preview_url, m.thumbnail_url, m.source_url, m.creator_id, m.post_key FROM media m NOT INDEXED
       WHERE m.publish_state = 'published' AND m.scope != 'excluded'
         AND NOT EXISTS (SELECT 1 FROM media_embeddings e WHERE e.media_id = m.id AND (e.model = ? OR (e.model = 'fail' AND e.created_at > ?)))
-      ORDER BY m.seq DESC LIMIT ?`).all(MODEL_ID, retry, limit);
+      ORDER BY m.rowid DESC LIMIT ?`).all(MODEL_ID, retry, limit);
 }
 
 const save = () => db.prepare(`INSERT INTO media_embeddings (media_id, model, vec) VALUES (?, ?, ?)
@@ -264,4 +280,4 @@ function status() {
 /** Tests: forget the in-memory index and cached answers. */
 function _reset() { ix = null; profiles = null; cache.clear(); }
 
-module.exports = { similar, similarCreators, backfill, start, stop, status, ensureTable, _reset, _nearest: nearest, _index: index };
+module.exports = { similar, similarCreators, backfill, start, stop, status, ensureTable, _reset, _nearest: nearest, _index: index, _pending: pending, _MODEL_ID: MODEL_ID };

@@ -1,5 +1,12 @@
 'use strict';
 const BACKFILL_PAGES = 2; // extra pages of a creator's older GIFs per run
+// RedGIFs throttling (429): a platform-wide hold of 10 minutes after a 429 (a longer Retry-After still wins), and
+// 30 minutes when another 429 lands within 10 minutes of the last one. Calls are spaced 2 s apart.
+const REDGIFS_MIN_INTERVAL_MS = 2000;
+const REDGIFS_PENALTY = { ms: 10 * 60 * 1000, repeatMs: 30 * 60 * 1000, repeatWindowMs: 10 * 60 * 1000 };
+// Creator (user) feeds ask for 40 GIFs a page: the extra 40 per call were mostly items already ingested, and the request was heavier.
+const REDGIFS_USER_PAGE_CAP = 40;
+const REDGIFS_PAGE_CAP = 80;
 /**
  * RedGIFs adapter (public v2 API with a temporary guest token).
  *
@@ -10,11 +17,19 @@ const BACKFILL_PAGES = 2; // extra pages of a creator's older GIFs per run
  * Searches are untrusted: items must carry a male signal, see lib/scope.
  */
 const config = require('../config');
-const http = require('./http').forPlatform('redgifs', 700);
+const http = require('./http').forPlatform('redgifs', REDGIFS_MIN_INTERVAL_MS, { penalty: REDGIFS_PENALTY });
 const { toIso, clip } = require('./util');
 
 const base = config.baseUrls.redgifs;
 let cached = null;
+
+const RESOLVE_TTL_MS = 15 * 60 * 1000;
+const resolved = new Map(); // gif id -> { at, item | gone }
+const inflight = new Map(); // gif id -> the promise of the lookup being made right now (concurrent callers share it)
+function remember(id, v) {
+  if (resolved.size >= 2000) for (const k of [...resolved.keys()].slice(0, 500)) resolved.delete(k);
+  resolved.set(id, { at: Date.now(), ...v });
+}
 
 async function authHeaders() {
   if (!cached || Date.now() > cached.expires) {
@@ -148,6 +163,9 @@ async function lookupUser(username) {
 }
 
 module.exports = {
+  REDGIFS_MIN_INTERVAL_MS,
+  REDGIFS_PENALTY,
+  REDGIFS_USER_PAGE_CAP,
   searchCreators,
   nicheCreators,
   tallyCreators,
@@ -161,15 +179,36 @@ module.exports = {
   profileFromUser,
   isConfigured: () => ({ ok: true }),
 
-  async resolve(url) {
+  /**
+   * One gif by its page or embed link. The answer is remembered for RESOLVE_TTL_MS: the same clip is linked from many posts
+   * (crossposts, several communities in one run) and every lookup is a call 2 s apart and a 429 risk. A gif that is gone (404/410)
+   * is remembered as gone; a rate limit or an outage is not. `{ fresh: true }` (the playback refresh: the stored link stopped
+   * working) always asks again and replaces what is remembered.
+   */
+  async resolve(url, { fresh = false } = {}) {
     const id = idFromUrl(url);
     if (!id) return null;
-    const json = await api(`/v2/gifs/${encodeURIComponent(id)}`);
-    return itemFromGif(json.gif || json, null);
+    const hit = resolved.get(id);
+    if (!fresh && hit && Date.now() - hit.at < RESOLVE_TTL_MS) { if (hit.gone) throw hit.gone; return hit.item ? { ...hit.item } : null; }
+    // Pipeline workers resolve in parallel: all of them miss the cache before the first answer is back, so each would queue its own
+    // authentication and lookup 2 s apart. A lookup already under way is joined instead (a refresh always makes its own).
+    let p = !fresh ? inflight.get(id) : null;
+    if (!p) {
+      p = (async () => {
+        try { const json = await api(`/v2/gifs/${encodeURIComponent(id)}`); const item = itemFromGif(json.gif || json, null); remember(id, { item }); return item; } catch (e) {
+          if (e && (e.status === 404 || e.status === 410)) remember(id, { gone: e });
+          throw e;
+        }
+      })();
+      inflight.set(id, p);
+      p.finally(() => { if (inflight.get(id) === p) inflight.delete(id); }).catch(() => {});
+    }
+    const item = await p;
+    return item ? { ...item } : null;
   },
 
   async fetch(feed, ctx) {
-    const count = Math.min(ctx.limit || 40, 80);
+    const count = Math.min(ctx.limit || 40, feed.kind === 'user' ? REDGIFS_USER_PAGE_CAP : REDGIFS_PAGE_CAP);
     const cursor = ctx.cursor || {};
     let path;
     if (feed.kind === 'user') path = `/v2/users/${encodeURIComponent(feed.target)}/search?order=recent&count=${count}`;

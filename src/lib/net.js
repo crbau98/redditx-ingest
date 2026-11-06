@@ -229,12 +229,15 @@ class HttpError extends Error {
   }
 }
 
+// A server that says "come back in an hour" means it: clamping that to two minutes made PRISM knock again after 120 s,
+// which deepens a throttle. Six hours is the most a single answer can ask for.
+const MAX_RETRY_AFTER_MS = 6 * 3600 * 1000;
 function parseRetryAfter(h) {
   if (!h) return 0;
   const secs = Number(h);
-  if (Number.isFinite(secs)) return Math.min(secs * 1000, 120000);
+  if (Number.isFinite(secs)) return Math.max(0, Math.min(secs * 1000, MAX_RETRY_AFTER_MS));
   const date = Date.parse(h);
-  return Number.isFinite(date) ? Math.max(0, Math.min(date - Date.now(), 120000)) : 0;
+  return Number.isFinite(date) ? Math.max(0, Math.min(date - Date.now(), MAX_RETRY_AFTER_MS)) : 0;
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -267,6 +270,7 @@ function open(url, { method: method0 = 'GET', headers = {}, timeout = 20000, max
     let hops = 0;
     let method = method0;
     let body = body0;
+    const jar = []; // cookies set by redirect hops (see below)
     const go = (target, hdrs) => {
       let parsed;
       try { parsed = new URL(target); } catch (e) { return reject(new HttpError('Invalid URL', { url: String(target) })); }
@@ -310,9 +314,24 @@ function open(url, { method: method0 = 'GET', headers = {}, timeout = 20000, max
             delete nextHdrs.authorization; delete nextHdrs.Authorization;
             delete nextHdrs.cookie; delete nextHdrs.Cookie;
           }
+          // Cookies a redirect hop set (Anubis, a login bounce) belong in the jar the way a browser keeps them: carry
+          // them into the next hop on the same site, and expose them so a caller can keep them for later requests.
+          for (const raw of [].concat(res.headers['set-cookie'] || [])) {
+            const kv = String(raw).split(';')[0].trim();
+            if (!kv || !kv.includes('=')) continue;
+            const name = kv.slice(0, kv.indexOf('='));
+            const at = jar.findIndex((c) => c.slice(0, c.indexOf('=')) === name);
+            if (at >= 0) jar[at] = kv; else jar.push(kv);
+          }
+          if (next.host === parsed.host && jar.length) {
+            const kept = String(hdrs.cookie || '').split(';').map((c) => c.trim()).filter(Boolean)
+              .filter((c) => !jar.some((j) => j.slice(0, j.indexOf('=')) === c.slice(0, c.indexOf('='))));
+            nextHdrs.cookie = [...kept, ...jar].join('; ');
+          }
           return go(next.toString(), nextHdrs);
         }
         res.finalUrl = parsed.toString();
+        res.redirectCookies = jar.slice();
         resolve({ res, req });
       });
       req.on('error', (e) => reject(new HttpError(e.message, { url: target, code: e.code || '' })));
@@ -361,6 +380,7 @@ async function requestOnce(url, opts = {}) {
           status: res.statusCode,
           headers: res.headers,
           url: res.finalUrl || url,
+          cookies: res.redirectCookies || [],
           body: decode(res, Buffer.concat(chunks), url),
         });
       } catch (e) { reject(e); }
