@@ -5,7 +5,7 @@ import { platformLabel, follows } from '../store.js';
 import { find } from './find.js';
 import { creatorCard } from '../components/creator-card.js';
 
-const SORTS = [['popular', 'Popular here'], ['media', 'Most posts'], ['score', 'Top rated'], ['recent', 'Recently active'], ['new', 'Newest'], ['name', 'A–Z']];
+const SORTS = [['popular', 'Popular here'], ['media', 'Most posts'], ['score', 'Top rated'], ['recent', 'Recently active'], ['new', 'New & rising'], ['name', 'A–Z']];
 /** "Posted in the last …": who is publishing right now. */
 const FRESH = [['', 'Any time'], ['7', 'This week'], ['30', 'This month'], ['90', 'Last 3 months'], ['365', 'This year']];
 
@@ -54,9 +54,17 @@ export async function creators(root, { query }) {
     type: 'button',
     class: `chip${isAll ? ' on' : ''}`,
     'aria-pressed': String(isAll),
-    title: 'Popular here: engagement, platform breadth, archive size and how recently he posted',
+    title: 'Popular here: engagement, platform breadth, archive size and freshness. Creators who have not posted in 90 days are left out.',
     onclick: () => { search.value = ''; navigate('/creators', {}, { replace: true }); },
   }, icon('flame', 'sm'), 'Popular');
+
+  const hotChip = h('button', {
+    type: 'button',
+    class: `chip${f.fresh === '7' ? ' on' : ''}`,
+    'aria-pressed': String(f.fresh === '7'),
+    title: 'Creators who posted in the last 7 days, most popular first',
+    onclick: () => set({ sort: 'popular', fresh: f.fresh === '7' ? '' : '7' }),
+  }, icon('trend', 'sm'), 'Hot this week');
 
   const followingChip = h('button', {
     type: 'button',
@@ -78,9 +86,9 @@ export async function creators(root, { query }) {
     type: 'button',
     class: `chip${f.sort === 'new' ? ' on' : ''}`,
     'aria-pressed': String(f.sort === 'new'),
-    title: 'Sort by newly discovered creators',
+    title: 'Newest creators added to PRISM',
     onclick: () => set({ sort: f.sort === 'new' ? 'popular' : 'new' }),
-  }, icon('sparkle', 'sm'), 'New');
+  }, icon('sparkle', 'sm'), 'New & rising');
 
   // The other sorts live in the Filters panel as one menu instead of three more chips.
   const sortSel = h('select', {
@@ -115,7 +123,7 @@ export async function creators(root, { query }) {
 
   // Secondary disclosure for Source and Activity
   const moreFilters = [field('Sort', sortSel), field('Source', platSel), field('Activity', freshSel)].filter(Boolean);
-  const activeExtraCount = (f.platform ? 1 : 0) + (f.fresh ? 1 : 0) + (f.sort !== 'popular' && f.sort !== 'new' ? 1 : 0);
+  const activeExtraCount = (f.platform ? 1 : 0) + (f.fresh && f.fresh !== '7' ? 1 : 0) + (f.sort !== 'popular' && f.sort !== 'new' ? 1 : 0);
   const filtersDisclosure = (() => {
     let open = window.matchMedia('(min-width: 900px)').matches && activeExtraCount > 0;
     const panel = h('div', { class: 'filter-more', hidden: !open }, moreFilters);
@@ -154,6 +162,7 @@ export async function creators(root, { query }) {
       h('div', { class: 'filter-scroll' },
         search,
         allChip,
+        hotChip,
         ofChip,
         followingChip,
         newChip,
