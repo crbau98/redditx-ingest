@@ -132,6 +132,11 @@ export function createFeed({ query = {}, endpoint = '/api/media', fetchPage = nu
   const offDensity = bus.on('density', (d) => { if (!destroyed) masonry.setDensity(d); });
 
   async function refresh() {
+    // A pull can land while a page is still in flight. Let it finish first: otherwise loadPage()
+    // below returns at once on `loading`, and the old page's items would be appended to the
+    // cleared grid with the page counter already back at zero (duplicates on the next load).
+    if (inflight) { try { await inflight; } catch { /* loadPage reports its own errors */ } }
+    if (destroyed) return;
     page = 0;
     total = null;
     done = false;
