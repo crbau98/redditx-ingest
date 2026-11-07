@@ -1,5 +1,5 @@
 import { h, icon, emptyState } from '../dom.js';
-import { get } from '../api.js';
+import { get, clearApiCache } from '../api.js';
 import { prefs, history, bus } from '../store.js';
 import { createMasonry } from './masonry.js';
 import { mediaCard } from './card.js';
@@ -144,6 +144,9 @@ export function createFeed({ query = {}, endpoint = '/api/media', fetchPage = nu
     hidden = 0;
     fetched = 0;
     seed = Math.floor(Math.random() * 1e6);
+    // A pull asks for what is new now: api.js keeps public GETs for 30 s, so without this the
+    // "refresh" would re-render the response the page already had.
+    clearApiCache();
     masonry.clear();
     dropFeedStash(routeKey());
     return loadPage();

@@ -17,6 +17,7 @@ describe('feed refresh', () => {
 
   test('refresh resets the paging state and drops the route stash', () => {
     assert.match(refreshBody, /page = 0/);
+    assert.match(refreshBody, /clearApiCache\(\)/);
     assert.match(refreshBody, /masonry\.clear\(\)/);
     assert.match(refreshBody, /dropFeedStash\(routeKey\(\)\)/);
     assert.match(refreshBody, /return loadPage\(\)/);
