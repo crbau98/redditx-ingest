@@ -41,6 +41,15 @@ describe('requests started while the page loads (theme-init.js + api.js)', () =>
     assert.ok((await early('#/')).opts.every((o) => o.credentials === 'same-origin'));
   });
 
+  test('reels starts its trending page early only for a visitor without taste', async () => {
+    const url = '/api/media?type=video&sort=trending&page=0&limit=12';
+    assert.deepEqual((await early('#/reels')).urls, ['/api/meta', url]);
+    const fresh = { getItem: () => null };
+    assert.deepEqual((await early('#/reels', { storage: fresh })).urls, ['/api/meta', url]);
+    const picked = { getItem: () => JSON.stringify({ events: 4, t: { gym: 3 }, c: {}, seeds: {} }) };
+    assert.deepEqual((await early('#/reels', { storage: picked })).urls, ['/api/meta'], 'a "For you" opener asks /api/recommend itself');
+  });
+
   test('a visitor who has not passed the age gate gets no list requests (they would be 403s and console errors)', async () => {
     for (const hash of ['#/', '#/explore', '#/browse']) {
       assert.deepEqual((await early(hash, { gate: { enforce: true, verified: false } })).urls, ['/api/meta'], hash);

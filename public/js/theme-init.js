@@ -53,7 +53,14 @@
     } else if (seg === 'creators') {
       lists.push('/api/creators?sort=popular&page=0&limit=36');
     } else if (seg === 'reels') {
-      lists.push('/api/media?type=video&sort=trending&page=0&limit=12');
+      // Reels opens on "For you" once there is taste (views/reels.js), which is a /api/recommend
+      // POST query we cannot build here; only a visitor without taste asks /api/media?sort=trending.
+      var hasTaste = false;
+      try {
+        var t = JSON.parse(localStorage.getItem('prism.taste') || '{}');
+        hasTaste = ((t.events || 0) >= 3 || Object.keys(t.seeds || {}).length >= 2) && (Object.keys(t.t || {}).length > 0 || Object.keys(t.c || {}).length > 0);
+      } catch (e) { /* storage blocked: no taste */ }
+      if (!hasTaste) lists.push('/api/media?type=video&sort=trending&page=0&limit=12');
     } else if (seg === 'browse') { // views/browse.js
       lists.push('/api/tags?limit=200', '/api/communities', '/api/platforms', '/api/topics', '/api/creators?onlyfans=1&limit=1', '/api/media?paid=onlyfans&limit=1', '/api/creators?paid=fansly&limit=1');
     }
