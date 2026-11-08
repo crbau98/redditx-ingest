@@ -307,8 +307,20 @@ router.post('/push/unsubscribe', age.requireAge, (req, res) => {
 /* -------------------------------------------------------- age-gated content */
 router.use(['/discover', '/stats', '/suggest', '/search', '/recommend', '/graph', '/understand', '/topics', '/media', '/creators', '/tags', '/communities', '/subreddits', '/platforms', '/stream', '/lookup', '/push'], age.requireAge);
 
-router.get('/discover', asyncRoute(async (req, res) => res.json(await discoverView())));
-router.get('/stats', asyncRoute(async (req, res) => res.json(await snapshot('stats'))));
+/** Snapshot-based endpoints are computed on a worker thread and safe to cache briefly.
+ *  Stale-while-revalidate lets browsers show cached data while we recompute in background. */
+const cacheSnapshot = (fn) => async (req, res) => {
+  const data = await fn(req, res);
+  if (!res.headersSent) {
+    res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
+    res.set('Vary', 'Accept-Encoding');
+  }
+  return typeof data === 'object' && !res.headersSent ? res.json(data) : data;
+};
+
+router.get('/discover', asyncRoute(cacheSnapshot(async () => await discoverView())));
+router.get('/stats', asyncRoute(cacheSnapshot(async () => await snapshot('stats'))));
+router.get('/graph', asyncRoute(cacheSnapshot(async () => await graphView())));
 
 router.get('/media', (req, res) => {
   const r = repo.media.list(mediaFilters(req.query));
@@ -459,7 +471,7 @@ router.get('/recommend/creators', (req, res) => {
   res.json(recs.creatorsForYou(t, repo.clampInt(req.query.limit, 1, 30, 12)).map((c) => ({ ...publicCreator(c), reason: c.reason })));
 });
 
-router.get('/graph', asyncRoute(async (req, res) => res.json(await graphView())));
+router.get('/graph', asyncRoute(cacheSnapshot(async () => await graphView())));
 
 /** /api/understand's answer for an understood query. */
 function understoodPayload(u) {
@@ -534,7 +546,7 @@ router.get('/tags/related', (req, res) => {
   res.json(repo.tagIntel.related(names, repo.clampInt(req.query.limit, 1, 30, 12), { all: req.query.mode !== 'any' }));
 });
 
-router.get('/topics', asyncRoute(async (req, res) => res.json(await snapshot('topics'))));
+router.get('/topics', asyncRoute(cacheSnapshot(async () => await snapshot('topics'))));
 
 router.get('/creators/:id/activity', (req, res) => {
   const c = repo.creators.get(req.params.id);
@@ -543,9 +555,9 @@ router.get('/creators/:id/activity', (req, res) => {
 });
 
 router.get('/tags', asyncRoute(async (req, res) => res.json((await snapshot('tags')).slice(0, repo.clampInt(req.query.limit, 1, 200, 100)))));
-router.get('/communities', asyncRoute(async (req, res) => res.json(await snapshot('communities'))));
+router.get('/communities', asyncRoute(cacheSnapshot(async () => await snapshot('communities'))));
 router.get('/subreddits', asyncRoute(async (req, res) => res.json((await snapshot('communities')).filter((c) => c.platform === 'reddit').map((c) => c.name))));
-router.get('/platforms', asyncRoute(async (req, res) => res.json(await snapshot('platforms'))));
+router.get('/platforms', asyncRoute(cacheSnapshot(async () => await snapshot('platforms'))));
 
 router.get('/stream', (req, res) => events.subscribe('public', req, res));
 
