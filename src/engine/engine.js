@@ -671,8 +671,11 @@ function start() {
   state.session.startedAt = new Date().toISOString();
   repo.runs.abandonRunning();
   const cfg = settingsStore.get();
-  state.timer = setInterval(tick, cfg.tickSeconds * 1000);
-  state.timer.unref();
+  // Let the health probe answer (Railway gives ~10s) before the feed engine starts firing:
+  // on a 5000-feed box the first tick schedules many concurrent requests that can stall the event loop.
+  setTimeout(() => {
+    state.timer = setInterval(tick, cfg.tickSeconds * 1000);
+    state.timer.unref();
   state.hotTimer = setInterval(() => {
     // Chunked: the refresh rewrites every published row whose score drifted, and one statement
     // for the whole library blocks the event loop for minutes on a large one.
@@ -685,6 +688,7 @@ function start() {
     try { seedDefaults(); } catch (e) { events.log('ERR', `seed: ${e.message}`); }
     tick();
   }, 2000).unref();
+  }); // end setTimeout delay for engine start
   // The first hot-score pass after a restart reads every published row, cold on a fresh container. It used to run at
   // 2 s, on top of the seed and the warm-up: a 12 s run of main-thread work. It now runs after the warm-up (30 s); the
   // 10-minute timer above keeps the scores current in between.
