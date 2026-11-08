@@ -966,6 +966,31 @@ const SORTS = {
   ingested: 'm.ingested_at DESC, m.seq DESC',
 };
 const SINCE_DAYS = { day: 1, week: 7, month: 30, year: 365 };
+// Cursor paging is stable across inserts: the token carries the last row's sort key and seq.
+const CURSOR_SORTS = { recent: 'm.posted_at', oldest: 'm.posted_at', top: 'm.score', trending: 'm.hot', ingested: 'm.ingested_at' };
+const CURSOR_DIR = { recent: 'DESC', oldest: 'ASC', top: 'DESC', trending: 'DESC', ingested: 'DESC' };
+
+function encodeMediaCursor(sort, row) {
+  const col = CURSOR_SORTS[sort];
+  if (!col || !row) return null;
+  const key = row[col.slice(2)];
+  if (key === null || key === undefined) return null;
+  return Buffer.from(JSON.stringify({ s: sort, k: key, q: row.seq }), 'utf8').toString('base64url');
+}
+
+function decodeMediaCursor(token, sort) {
+  if (!token || typeof token !== 'string' || token.length > 240) return null;
+  if (!CURSOR_SORTS[sort]) return null;
+  try {
+    const d = JSON.parse(Buffer.from(token, 'base64url').toString('utf8'));
+    if (!d || d.s !== sort || d.q === null || d.q === undefined) return null;
+    const q = Number(d.q);
+    if (!Number.isFinite(q)) return null;
+    if (typeof d.k !== 'string' && typeof d.k !== 'number') return null;
+    return { s: sort, k: d.k, q };
+  } catch { return null; }
+}
+
 // BM25 column weights for media_fts(title, author, community, tags_text, description, ocr_text).
 const FTS_WEIGHTS = '5.0, 4.0, 2.0, 4.0, 1.0, 1.0';
 
@@ -1261,7 +1286,11 @@ const media = {
 
   list(f = {}) {
     const limit = clampInt(f.limit, 1, 200, 48);
-    const page = clampInt(f.page, 0, 100000, 0);
+    const requestedSort = SORTS[f.sort] ? f.sort : 'recent';
+    const cursorSort = !f.ids && (!f.q || f.sort) && f.sort !== 'random' && f.sort !== 'relevance' ? requestedSort : null;
+    const cursor = cursorSort ? decodeMediaCursor(f.cursor, cursorSort) : null;
+    const useCursor = !!cursor;
+    const page = useCursor ? 0 : clampInt(f.page, 0, 100000, 0);
     const { where, params } = buildMediaWhere(f);
     const match = ftsQuery(f.q);
     let join = false;
@@ -1284,6 +1313,12 @@ const media = {
       if (f.sort === 'random') { order = 'hash_seed(m.id, ?) ASC, m.seq'; }
       else order = SORTS[f.sort] || SORTS.recent;
     }
+    if (useCursor) {
+      const col = CURSOR_SORTS[cursor.s];
+      const cmp = CURSOR_DIR[cursor.s] === 'ASC' ? '>' : '<';
+      where.push(`(${col} ${cmp} ? OR (${col} = ? AND m.seq ${cmp} ?))`);
+      params.push(cursor.k, cursor.k, cursor.q);
+    }
     const orderParams = order.startsWith('hash_seed') ? [clampInt(f.seed, 0, 2147483647, 1)] : [];
     const whereSql = where.join(' AND ');
     const forced = !join && f.sort !== 'random' ? sortIndexFor(f, SORTS[f.sort] ? f.sort : 'recent', where) : null;
@@ -1293,12 +1328,13 @@ const media = {
       : `FROM media m${forced ? ` INDEXED BY ${forced}` : ''} LEFT JOIN creators c ON c.id = m.creator_id WHERE ${whereSql}`;
     // Count with an IN-subquery, never the FTS join: with the join SQLite may drive the loop from
     // media and re-run the MATCH once per row (minutes on a large library instead of milliseconds).
-    const total = f.noCount ? null : (join
+    const total = (f.noCount || useCursor) ? null : (join
       ? cachedCount(`SELECT COUNT(*) AS n FROM media m WHERE m.seq IN (SELECT rowid FROM media_fts WHERE media_fts MATCH ?) AND ${whereSql}`, [...joinParams, ...params])
       : cachedCount(`SELECT COUNT(*) AS n FROM media m${countIndexFor(f) ? ` INDEXED BY ${countIndexFor(f)}` : ''} WHERE ${whereSql}`, params));
     const rows = db.prepare(`SELECT m.*, c.handle AS creator_handle, c.display_name AS creator_name, c.avatar_url AS creator_avatar, c.links AS creator_links ${base}
       ORDER BY ${order} LIMIT ? OFFSET ?`).all(...joinParams, ...params, ...orderParams, limit, page * limit);
-    return { items: rows.map(serializeMedia), total, page, limit };
+    const nextCursor = cursorSort && rows.length === limit ? encodeMediaCursor(cursorSort, rows[rows.length - 1]) : null;
+    return { items: rows.map(serializeMedia), total, page, limit, nextCursor };
   },
 
   /**

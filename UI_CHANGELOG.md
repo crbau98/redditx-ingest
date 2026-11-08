@@ -1,5 +1,12 @@
 # UI changelog
 
+## 2026-11-08 — Cursor paging: no duplicates while the library moves
+
+- **The media feed now pages by cursor** for the `recent`, `oldest`, `top`, `trending` and `ingested` sorts. The cursor carries the last row’s sort key and sequence number, so a new post arriving mid-scroll cannot push a duplicate into the next page or skip an old one.
+- **Offset paging stays as the fallback** for fixed-id feeds, custom POST feeds, relevance/random sorts, and any server that does not return `nextCursor`. Existing page-based callers keep working.
+- **The count is skipped after page one** in cursor mode, matching the old `nocount` behaviour; the first page still returns the total.
+- **Verified:** repository and HTTP cursor tests (`tests/cursor-pagination.test.js`) plus a live Chromium scroll: two cursor requests, 82 cards, no console errors.
+
 ## 2026-11-08 — Search inside pictures (OCR)
 
 - **Text in pictures becomes searchable.** A rate-limited background job reads new pictures (and video posters) with Tesseract and stores only the words in `media.ocr_text`; the existing FTS index now includes them. An image-only post can be found by its caption text without copying the image.

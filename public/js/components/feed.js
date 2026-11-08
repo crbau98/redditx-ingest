@@ -44,6 +44,12 @@ export function createFeed({ query = {}, endpoint = '/api/media', fetchPage = nu
   let fetched = 0; // raw items received (masonry may hold fewer when hiding seen ones)
   let seed = Math.floor(Math.random() * 1e6);
   let limit = pageSize || (prefs.density === 's' ? 48 : 36);
+  // Cursor mode is used where the server offers a stable key (media sorts). Fixed-id feeds and
+  // custom fetchPage callers keep offset paging; an older server without nextCursor falls back too.
+  const cursorSort = query.sort || 'recent';
+  const canCursor = !ids && !fetchPage && endpoint === '/api/media' && ['recent', 'oldest', 'top', 'trending', 'ingested'].includes(cursorSort);
+  let cursorMode = canCursor;
+  let cursor = null;
   // what makes two feeds "the same list": per-visit random seeds and exclusions don't count
   const { seed: _s, exclude: _e, ...stable } = query;
   const stashKey = `${routeKey()}|${endpoint}|${JSON.stringify(stable)}|${hideSeen ? 1 : 0}|${ids ? hashIds(ids) : ''}`;
@@ -67,20 +73,33 @@ export function createFeed({ query = {}, endpoint = '/api/media', fetchPage = nu
     sentinel.replaceChildren(h('div', { class: 'spinner' }));
     try {
       const idSlice = ids ? ids.slice(page * limit, (page + 1) * limit) : undefined;
-      const params = { ...query, page: ids ? 0 : page, limit, seed: query.sort === 'random' ? seed : query.seed, ids: idSlice ? idSlice.join(',') : undefined, nocount: !ids && page > 0 ? '1' : undefined };
+      const usingCursor = cursorMode && !!cursor;
+      const params = { ...query, limit, seed: query.sort === 'random' ? seed : query.seed, ids: idSlice ? idSlice.join(',') : undefined,
+        ...(ids
+          ? { page: 0 }
+          : usingCursor
+            ? { cursor, nocount: '1' }
+            : { page, ...(page > 0 ? { nocount: '1' } : {}) }) };
       // fetchPage: a feed whose request is not a plain GET (e.g. a follow list in a POST body)
       const res = await (fetchPage ? fetchPage(params) : get(endpoint, params));
       if (destroyed) return;
       if (ids) res.items.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id)); // keep "most recently saved first"
       if (ids) total = ids.length; else if (res.total !== null && res.total !== undefined) total = res.total;
       if (onTotal && (page === 0 || ids)) onTotal(total);
+      // The first cursor-capable response decides the mode. A server without nextCursor keeps offset paging.
+      if (!ids && cursorMode && !usingCursor && !('nextCursor' in res)) cursorMode = false;
+      if (!ids && cursorMode) cursor = res.nextCursor || null;
       // "Hide seen": drop anything this device already opened. Paging still follows the server's pages.
       const fresh = hideSeen ? res.items.filter((it) => !history.has(it.id)) : res.items;
       hidden += res.items.length - fresh.length;
       fetched += res.items.length;
       if (fresh.length) masonry.add(fresh);
       page++;
-      done = ids ? page * limit >= ids.length : (res.items.length < limit || fetched >= total);
+      done = ids
+        ? page * limit >= ids.length
+        : cursorMode
+          ? (res.items.length < limit || !res.nextCursor)
+          : (res.items.length < limit || fetched >= total);
       if (!masonry.items.length && done && hidden) {
         sentinel.replaceChildren(emptyState({ icon: 'eye', title: 'You’ve seen everything here', text: `${hidden} item${hidden === 1 ? ' is' : 's are'} hidden because you already opened ${hidden === 1 ? 'it' : 'them'}. Turn off “Hide seen” to show them again.` }));
       } else if (!masonry.items.length && done) {
@@ -115,7 +134,7 @@ export function createFeed({ query = {}, endpoint = '/api/media', fetchPage = nu
   const keep = saved ? (hideSeen ? saved.items.filter((it) => !history.has(it.id)) : saved.items) : [];
   const restored = !!(saved && keep.length && Date.now() - saved.at < STASH_MS);
   if (restored) {
-    ({ page, total, done, fetched, hidden, seed, limit } = saved); // its own page size: density may have changed since
+    ({ page, total, done, fetched, hidden, seed, limit, cursor, cursorMode } = saved); // its own page size: density may have changed since
     hidden += saved.items.length - keep.length;
     masonry.add(keep);
     if (done && !quietEnd) sentinel.replaceChildren(h('span', { class: 'muted' }, 'You’ve reached the end'));
@@ -144,6 +163,8 @@ export function createFeed({ query = {}, endpoint = '/api/media', fetchPage = nu
     hidden = 0;
     fetched = 0;
     seed = Math.floor(Math.random() * 1e6);
+    cursor = null;
+    cursorMode = canCursor;
     // A pull asks for what is new now: api.js keeps public GETs for 30 s, so without this the
     // "refresh" would re-render the response the page already had.
     clearApiCache();
@@ -160,7 +181,7 @@ export function createFeed({ query = {}, endpoint = '/api/media', fetchPage = nu
     refresh,
     destroy() {
       if (!destroyed && masonry.items.length && !errored) {
-        stash.set(stashKey, { at: Date.now(), items: masonry.items, page, total, done, fetched, hidden, seed, limit });
+        stash.set(stashKey, { at: Date.now(), items: masonry.items, page, total, done, fetched, hidden, seed, limit, cursor, cursorMode });
         while (stash.size > STASH_MAX) stash.delete(stash.keys().next().value);
       }
       destroyed = true; io.disconnect(); offDensity(); masonry.destroy();

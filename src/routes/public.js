@@ -76,13 +76,14 @@ function mediaFilters(q) {
     ids: typeof q.ids === 'string' ? q.ids.split(',').filter((x) => /^[0-9a-f-]{36}$/i.test(x)).slice(0, 100) : undefined,
     q: str(q.q, 100),
     sort, seed: q.seed,
+    cursor: typeof q.cursor === 'string' ? q.cursor.slice(0, 240) : undefined,
     since: ['day', 'week', 'month', 'year'].includes(q.since) ? q.since : undefined,
     level: q.level === 'explicit' || q.level === 'suggestive' ? q.level : undefined,
     // "on Fansly": creators with a page on that paid platform; "athletic": measured lean or athletic
     paidHost: Object.prototype.hasOwnProperty.call(PAID, q.paid || '') ? PAID[q.paid].host : undefined,
     build: q.build === 'fit' ? 'fit' : undefined,
     // Infinite scroll only needs the total once; later pages skip the COUNT(*).
-    noCount: q.nocount === '1' && repo.clampInt(q.page, 0, 100000, 0) > 0,
+    noCount: (q.nocount === '1' && repo.clampInt(q.page, 0, 100000, 0) > 0) || (typeof q.cursor === 'string' && q.cursor.length > 0),
     // "new since" for saved searches: an ISO timestamp, normalised so it compares correctly as text
     after: typeof q.after === 'string' && !Number.isNaN(Date.parse(q.after)) ? new Date(q.after).toISOString() : undefined,
   };
