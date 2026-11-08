@@ -86,6 +86,16 @@ export async function enableFor(id) {
   return creators.length;
 }
 
+/** Turn alerts on for every creator already followed (capped by the server's 200-id list). */
+export async function enableForAll(ids) {
+  const creators = [...new Set((ids || []).map(String))].slice(0, 200);
+  if (!creators.length) throw new Error('follow a creator first');
+  const sub = await enablePush();
+  await save(sub, creators);
+  writeCreators(creators);
+  return creators.length;
+}
+
 export async function disableFor(id) {
   const creators = readCreators().filter((x) => x !== String(id));
   const sub = await current();

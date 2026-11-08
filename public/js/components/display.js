@@ -1,6 +1,6 @@
 import { h, icon, openModal, toast } from '../dom.js';
-import { prefs, tastes } from '../store.js';
-import { pushSupported, pushCreators, disablePush } from '../push.js';
+import { prefs, tastes, follows } from '../store.js';
+import { pushSupported, pushCreators, enableForAll, disablePush } from '../push.js';
 
 const ACCENTS = [
   ['prism', 'Prism', 'linear-gradient(135deg, #8b5cf6, #ff5c8a 55%, #ffb347)'],
@@ -42,7 +42,11 @@ export function openDisplaySettings() {
         const count = pushCreators().length;
         const line = h('div', { class: 'muted', style: { fontSize: '12.5px' } }, count ? `Watching ${count} creator${count === 1 ? '' : 's'}.` : 'Tap the bell on a creator page to get a notification when he posts.');
         const off = count ? h('button', { class: 'btn sm ghost', onclick: async () => { await disablePush(); } }, 'Turn off all') : null;
-        return h('div', { class: 'display-row' }, h('label', null, 'Alerts'), h('div', null, line, off));
+        const all = !count && follows.count() ? h('button', { class: 'btn sm', onclick: async () => {
+          try { const n = await enableForAll(follows.list().map((c) => c.id)); toast(`Alerts on for ${n} creator${n === 1 ? '' : 's'}`); line.textContent = `Watching ${n} creator${n === 1 ? '' : 's'}.`; }
+          catch (e) { toast(String(e.message || e), 'err'); }
+        } }, 'Alert me about follows') : null;
+        return h('div', { class: 'display-row' }, h('label', null, 'Alerts'), h('div', null, line, all, off));
       })() : null,
     ),
     actions: [
