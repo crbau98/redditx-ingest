@@ -81,6 +81,8 @@ function createCoreTables(db) {
       author TEXT,
       title TEXT,
       description TEXT,
+      ocr_text TEXT,
+      ocr_at TEXT,
       media_type TEXT NOT NULL CHECK(media_type IN ('image','video')),
       media_url TEXT NOT NULL,
       preview_url TEXT,
@@ -198,22 +200,22 @@ function createCoreTables(db) {
 function createSearch(db) {
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS media_fts USING fts5(
-      title, author, community, tags_text, description,
+      title, author, community, tags_text, description, ocr_text,
       content='media', content_rowid='seq', tokenize='unicode61 remove_diacritics 2'
     );
     CREATE TRIGGER IF NOT EXISTS media_fts_ai AFTER INSERT ON media BEGIN
-      INSERT INTO media_fts(rowid, title, author, community, tags_text, description)
-      VALUES (new.seq, new.title, new.author, new.community, new.tags_text, new.description);
+      INSERT INTO media_fts(rowid, title, author, community, tags_text, description, ocr_text)
+      VALUES (new.seq, new.title, new.author, new.community, new.tags_text, new.description, new.ocr_text);
     END;
     CREATE TRIGGER IF NOT EXISTS media_fts_ad AFTER DELETE ON media BEGIN
-      INSERT INTO media_fts(media_fts, rowid, title, author, community, tags_text, description)
-      VALUES ('delete', old.seq, old.title, old.author, old.community, old.tags_text, old.description);
+      INSERT INTO media_fts(media_fts, rowid, title, author, community, tags_text, description, ocr_text)
+      VALUES ('delete', old.seq, old.title, old.author, old.community, old.tags_text, old.description, old.ocr_text);
     END;
-    CREATE TRIGGER IF NOT EXISTS media_fts_au AFTER UPDATE OF title, author, community, tags_text, description ON media BEGIN
-      INSERT INTO media_fts(media_fts, rowid, title, author, community, tags_text, description)
-      VALUES ('delete', old.seq, old.title, old.author, old.community, old.tags_text, old.description);
-      INSERT INTO media_fts(rowid, title, author, community, tags_text, description)
-      VALUES (new.seq, new.title, new.author, new.community, new.tags_text, new.description);
+    CREATE TRIGGER IF NOT EXISTS media_fts_au AFTER UPDATE OF title, author, community, tags_text, description, ocr_text ON media BEGIN
+      INSERT INTO media_fts(media_fts, rowid, title, author, community, tags_text, description, ocr_text)
+      VALUES ('delete', old.seq, old.title, old.author, old.community, old.tags_text, old.description, old.ocr_text);
+      INSERT INTO media_fts(rowid, title, author, community, tags_text, description, ocr_text)
+      VALUES (new.seq, new.title, new.author, new.community, new.tags_text, new.description, new.ocr_text);
     END;
   `);
 }
@@ -904,7 +906,54 @@ function v26(db) {
 }
 v26.ddlOnly = true;
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26];
+/**
+ * v27: OCR text. `ocr_text` is the words read out of a picture (never copied media), indexed in FTS
+ * so an image-only post becomes searchable. `ocr_at` marks an attempt, successful or not, so a dead
+ * image is not retried forever. The FTS table gains the same column and its triggers are rebuilt.
+ */
+function v27(db) {
+  const mediaCols = db.prepare('PRAGMA table_info(media)').all().map((c) => c.name);
+  if (!mediaCols.includes('ocr_text')) db.exec('ALTER TABLE media ADD COLUMN ocr_text TEXT');
+  if (!mediaCols.includes('ocr_at')) db.exec('ALTER TABLE media ADD COLUMN ocr_at TEXT');
+  const ftsCols = db.prepare('PRAGMA table_info(media_fts)').all().map((c) => c.name);
+  if (!ftsCols.includes('ocr_text')) {
+    // SQLite cannot ALTER an FTS5 virtual table: drop the triggers and rebuild the index with the
+    // extra column. It is an index only — the media rows are untouched.
+    db.exec(`
+      DROP TRIGGER IF EXISTS media_fts_ai;
+      DROP TRIGGER IF EXISTS media_fts_ad;
+      DROP TRIGGER IF EXISTS media_fts_au;
+      DROP TABLE IF EXISTS media_fts;
+      CREATE VIRTUAL TABLE media_fts USING fts5(
+        title, author, community, tags_text, description, ocr_text,
+        content='media', content_rowid='seq', tokenize='unicode61 remove_diacritics 2'
+      );
+    `);
+  }
+  db.exec(`
+    DROP TRIGGER IF EXISTS media_fts_ai;
+    DROP TRIGGER IF EXISTS media_fts_ad;
+    DROP TRIGGER IF EXISTS media_fts_au;
+    CREATE TRIGGER media_fts_ai AFTER INSERT ON media BEGIN
+      INSERT INTO media_fts(rowid, title, author, community, tags_text, description, ocr_text)
+      VALUES (new.seq, new.title, new.author, new.community, new.tags_text, new.description, new.ocr_text);
+    END;
+    CREATE TRIGGER media_fts_ad AFTER DELETE ON media BEGIN
+      INSERT INTO media_fts(media_fts, rowid, title, author, community, tags_text, description, ocr_text)
+      VALUES ('delete', old.seq, old.title, old.author, old.community, old.tags_text, old.description, old.ocr_text);
+    END;
+    CREATE TRIGGER media_fts_au AFTER UPDATE OF title, author, community, tags_text, description, ocr_text ON media BEGIN
+      INSERT INTO media_fts(media_fts, rowid, title, author, community, tags_text, description, ocr_text)
+      VALUES ('delete', old.seq, old.title, old.author, old.community, old.tags_text, old.description, old.ocr_text);
+      INSERT INTO media_fts(rowid, title, author, community, tags_text, description, ocr_text)
+      VALUES (new.seq, new.title, new.author, new.community, new.tags_text, new.description, new.ocr_text);
+    END;
+    INSERT INTO media_fts(media_fts) VALUES ('rebuild');
+  `);
+}
+v27.ddlOnly = true;
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

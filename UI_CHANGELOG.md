@@ -1,5 +1,12 @@
 # UI changelog
 
+## 2026-11-08 — Search inside pictures (OCR)
+
+- **Text in pictures becomes searchable.** A rate-limited background job reads new pictures (and video posters) with Tesseract and stores only the words in `media.ocr_text`; the existing FTS index now includes them. An image-only post can be found by its caption text without copying the image.
+- **Optional by design.** The Docker image installs `tesseract-ocr`; a development machine without it reports OCR as unavailable and the rest of ingestion is untouched. Admin → Settings controls the rate (default 20 pictures/minute), language codes and an on/off switch.
+- **No retry storm.** Each picture gets an `ocr_at` marker whether the read succeeds or fails, so a dead origin is not retried forever.
+- **Verified:** migration v27 (column plus FTS triggers), 5 new tests (`tests/ocr.test.js`) for the schema, normalization, sweep, failure marker and off switch.
+
 ## 2026-11-08 — Alerts: a push notification when a creator posts
 
 - **Bell on the creator profile.** One tap asks the browser for notification permission, creates a push subscription, and adds that creator to the watched list; a second tap removes him. A watched creator shows the bell in its on state.

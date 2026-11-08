@@ -966,8 +966,8 @@ const SORTS = {
   ingested: 'm.ingested_at DESC, m.seq DESC',
 };
 const SINCE_DAYS = { day: 1, week: 7, month: 30, year: 365 };
-// BM25 column weights for media_fts(title, author, community, tags_text, description).
-const FTS_WEIGHTS = '5.0, 4.0, 2.0, 4.0, 1.0';
+// BM25 column weights for media_fts(title, author, community, tags_text, description, ocr_text).
+const FTS_WEIGHTS = '5.0, 4.0, 2.0, 4.0, 1.0, 1.0';
 
 const MEDIA_SELECT = `SELECT m.*, c.handle AS creator_handle, c.display_name AS creator_name, c.avatar_url AS creator_avatar, c.links AS creator_links
   FROM media m LEFT JOIN creators c ON c.id = m.creator_id`;
@@ -976,6 +976,8 @@ function serializeMedia(row) {
   if (!row) return null;
   const out = { ...row, has_audio: !!row.has_audio };
   delete out.seq;
+  delete out.ocr_text;
+  delete out.ocr_at;
   return out;
 }
 

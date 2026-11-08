@@ -115,6 +115,9 @@ const SCHEMA = {
   reposts: { type: 'bool', default: true, label: 'Keep reposts (Tumblr reblogs, X reposts and quotes, Bluesky reposts, Reddit crossposts), credited to the original poster', group: 'sources' },
   thumbnails: { type: 'bool', default: true, label: 'Make small thumbnails (kept in the media store) and a colour tint for every picture, so grids load fast', group: 'sources' },
   thumbnailsPerMinute: { type: 'int', default: 30, min: 0, max: 600, label: 'Thumbnails made per minute in the background', group: 'sources' },
+  ocr: { type: 'bool', default: true, label: 'Read text in pictures (OCR): store the words only and add them to search, so an image-only post can still be found', group: 'sources' },
+  ocrPerMinute: { type: 'int', default: 20, min: 0, max: 300, label: 'Pictures read per minute by OCR in the background', group: 'sources' },
+  ocrLang: { type: 'text', default: 'eng', label: 'OCR language codes (tesseract -l, e.g. eng or eng+spa)', group: 'sources' },
   // --- Browser4 rendering (needs BROWSER4_ENABLED=1 on the host; see README) ---
   browser4Mode: { type: 'enum', values: ['off', 'fallback', 'always'], default: 'fallback', label: 'Browser rendering (Browser4 or Playwright): read web pages in a real browser — off, fallback = only when the plain download shows no media (JavaScript-built pages), always = every web page. Needs BROWSER4_ENABLED=1 or PLAYWRIGHT_ENABLED=1 (RENDER_ENGINE picks)', group: 'sources' },
   browser4Scrolls: { type: 'int', default: 8, min: 0, max: 40, label: 'Browser rendering: times a page is scrolled to the bottom to load more (infinite scroll, lazy galleries)', group: 'sources' },
