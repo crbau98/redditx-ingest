@@ -162,7 +162,7 @@ function start() {
       wait = Math.min(30, 2 ** failures);
       if (failures === 1) events.log('WARN', `Thumbnails: ${e.message}`);
     } finally { busy = false; }
-  }, 60 * 1000);
+  }, 75 * 1000);
   timer.unref();
 }
 function stop() { clearInterval(timer); timer = null; }

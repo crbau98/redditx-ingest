@@ -12,7 +12,7 @@ const settingsStore = require('../settings');
 const net = require('../lib/net');
 const ocr = require('../lib/ocr');
 
-const TICK_MS = 60 * 1000;
+const TICK_MS = 90 * 1000;
 const MAX_PIXELS_BYTES = 8 * 1024 * 1024;
 let timer = null;
 let running = false;
