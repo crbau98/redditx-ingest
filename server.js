@@ -41,6 +41,7 @@ require('./src/services/telegram-sync').start();
 require('./src/lib/diskguard').start(); // pauses bulk writes before the data volume fills
 require('./src/engine/memwatch').start({ onCritical: () => shutdown('memory') });
 require('./src/engine/thumbs').start(); // small thumbnails and a tint per picture, newest first
+require('./src/engine/push').start(); // web push alerts for followed creators (no media copied)
 
 function shutdown(signal) {
   console.log(`\n[${signal}] shutting down…`);
@@ -53,6 +54,7 @@ function shutdown(signal) {
   require('./src/engine/visual').stop();
   require('./src/services/telegram-sync').stop();
   require('./src/engine/thumbs').stop();
+  require('./src/engine/push').stop();
   require('./src/engine/memwatch').stop();
   require('./src/lib/diskguard').stop();
   require('./src/lib/imagefilter').shutdown().catch(() => {});

@@ -1,5 +1,13 @@
 # UI changelog
 
+## 2026-11-08 — Alerts: a push notification when a creator posts
+
+- **Bell on the creator profile.** One tap asks the browser for notification permission, creates a push subscription, and adds that creator to the watched list; a second tap removes him. A watched creator shows the bell in its on state.
+- **One subscription, not one per creator.** The server keeps a single row per browser endpoint with the creator ids to watch. The three-minute job reads the existing media table, sends one summary notification ("New from X"), and moves its cursor forward. No media is copied to the server or the device.
+- **Lock-screen friendly.** The payload carries the creator name, a generic "Tap to see the new post." body, and the profile URL — no explicit title, no thumbnail.
+- **Display → Alerts** shows how many creators are watched and turns every alert off; dead endpoints (404/410) are disabled instead of retried forever.
+- **Verified:** 6 new tests (`tests/push-alerts.test.js`) cover the key, subscription lifecycle, creator filtering, the summary job and gone-endpoint handling; full suite 1,839 pass / 4 skipped.
+
 ## 2026-11-06 — Sources: Pornhub gay models and pornstars
 
 - **Pornhub joins the source list** (Admin → Sources) as a keyless source: paste `https://www.pornhub.com/model/<slug>` or `/pornstar/<slug>` anywhere a link is pasted and it becomes a creator feed. Only the cards the site itself labels `gay` are read, so a mixed model page cannot pull a straight scene in. Its blurb, the feed counts and a *Sync all* button come with it; the README's source table lists it too.

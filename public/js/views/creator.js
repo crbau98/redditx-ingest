@@ -9,6 +9,7 @@ import { landAvatar } from '../components/transitions.js';
 import { openReport } from '../components/ondemand.js';
 import { platformSwitcher } from '../components/platform-switcher.js';
 import { paidPages, openElsewhere } from '../components/elsewhere.js';
+import { pushSupported, pushIsOn, enableFor, disableFor } from '../push.js';
 
 /** Year-long posting heatmap, source split and usual posting hours (UTC → local). */
 function activityPanel(a) {
@@ -150,6 +151,30 @@ export async function creator(root, { params, query }) {
   const off = bus.on('follow', () => { if (followBtn.isConnected) paintFollow(); else off(); });
   if (follows.has(c.id)) follows.markSeen(c.id);
 
+  // Alerts: one browser subscription, this creator added to the watched list. The button stays in
+  // step with what this device stored, so a second tap turns that creator's alerts off.
+  const alertBtn = pushSupported() ? h('button', { class: 'btn icon', 'aria-label': 'Alerts', title: 'Notify me when he posts' }, icon('bell')) : null;
+  const paintAlert = () => {
+    if (!alertBtn) return;
+    const on = pushIsOn(c.id);
+    alertBtn.classList.toggle('on', on);
+    alertBtn.setAttribute('aria-label', on ? 'Alerts on' : 'Alerts');
+    alertBtn.title = on ? 'Alerts on — tap to turn off' : 'Notify me when he posts';
+  };
+  if (alertBtn) {
+    alertBtn.addEventListener('click', async () => {
+      alertBtn.disabled = true;
+      try {
+        if (pushIsOn(c.id)) { await disableFor(c.id); toast('Alerts off'); }
+        else { await enableFor(c.id); toast('Alerts on for this creator'); }
+        paintAlert();
+      } catch (e) { toast(String(e.message || e), 'err'); }
+      finally { alertBtn.disabled = false; }
+    });
+    paintAlert();
+    bus.on('follow', () => { if (alertBtn.isConnected) paintAlert(); });
+  }
+
   // "Free on": every account where his posts cost nothing, his free OnlyFans included, as lit pills.
   const freeOn = (c.accounts || []).map((a) => h('a', { class: 'free-pill', href: a.url, target: '_blank', rel: 'noopener noreferrer nofollow', style: { '--c': platformColor(a.platform) } }, h('span', { class: 'dot' }), h('b', null, platformLabel(a.platform)), h('span', { class: 'h' }, String(a.label).replace(/^[@/]?(?:u\/)?/, ''))));
   if (c.onlyfans && c.onlyfans.free) freeOn.unshift(h('a', { class: 'free-pill of', href: c.onlyfans.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), h('b', null, 'OnlyFans'), h('span', { class: 'h' }, 'free')));
@@ -171,7 +196,7 @@ export async function creator(root, { params, query }) {
     h('div', { class: `avatar-ring${fresh ? ' live' : ''}`, title: fresh ? `Posted ${fmt.ago(c.last_media_at)}` : null }, headAvatar),
     h('div', { class: 'profile-info' }, h('h1', null, c.display_name || c.handle, c.verified ? icon('verified', 'fill') : null), h('div', { class: 'creator-handle' }, `@${c.handle}`),
       aka.length ? h('div', { class: 'aka' }, 'Also goes by ', aka.join(', ')) : null),
-    h('div', { class: 'profile-actions' }, followBtn,
+    h('div', { class: 'profile-actions' }, followBtn, alertBtn,
       c.onlyfans ? h('a', { class: `btn of-cta${c.onlyfans.free ? ' free' : c.onlyfans.trial ? ' trial' : c.onlyfans.promo ? ' promo' : ''}`, href: c.onlyfans.url, target: '_blank', rel: 'noopener noreferrer nofollow', title: `onlyfans.com/${c.onlyfans.handle}` },
         h('span', { class: 'of-mark', 'aria-hidden': 'true' }), c.onlyfans.trial ? 'Free Trial' : c.onlyfans.promo ? 'OnlyFans · Sale' : c.onlyfans.free ? 'Free OnlyFans' : 'OnlyFans', icon('external', 'sm')) : null,
       ...paidCtas,

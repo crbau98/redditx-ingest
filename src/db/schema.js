@@ -879,7 +879,32 @@ function v25(db) {
 }
 v25.ddlOnly = true;
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25];
+/**
+ * v26: web push alerts. One row per browser endpoint, with the creators that browser asked to watch.
+ * Media itself is not copied: the push job reads the existing media table and notifies, then moves
+ * last_checked_at forward. A dead endpoint (404/410) is disabled, not deleted, so a re-subscribe
+ * from the same browser simply turns it back on.
+ */
+function v26(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id TEXT PRIMARY KEY,
+      endpoint TEXT NOT NULL UNIQUE,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      creator_ids TEXT NOT NULL DEFAULT '[]',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (${NOW}),
+      updated_at TEXT NOT NULL DEFAULT (${NOW}),
+      last_checked_at TEXT,
+      last_error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ix_push_enabled ON push_subscriptions(enabled, last_checked_at);
+  `);
+}
+v26.ddlOnly = true;
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

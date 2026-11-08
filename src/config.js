@@ -302,6 +302,12 @@ module.exports = {
   // --- media cache for proxied images --------------------------------
   mediaCacheMb: int(env.MEDIA_CACHE_MB, 512),
 
+  // --- web push alerts (lib/webpush, engine/push) -----------------------------------------------------------------------
+  // The VAPID key pair is generated once and kept in the data volume (vapid.json, mode 600), so no secrets belong in the
+  // environment. PUSH_ENABLED=0 turns alerts off completely.
+  pushEnabled: bool(env.PUSH_ENABLED, true),
+  vapidSubject: String(env.VAPID_SUBJECT || 'mailto:alerts@prism.app').trim(),
+
   // --- data volume watchdog (lib/diskguard) -----------------------------------------------------------------------------
   // At pauseAtPct (or when less than minFreeMb is free) everything that writes bulk data to the volume stops; it resumes under
   // resumeAtPct. DISK_BUDGET_GB caps what PRISM may use below the volume's real size (0 = the whole volume).
