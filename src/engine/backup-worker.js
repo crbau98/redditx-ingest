@@ -15,9 +15,9 @@ const Database = require('better-sqlite3');
     db.pragma('journal_mode = WAL');
     let size = 0;
     if (workerData.file) {
-      // 1500 pages/s is roughly 6 MB/s at 4 KB pages: a multi-GB backup takes minutes, not a
-      // minute of CPU starvation. The backup API yields between steps.
-      await db.backup(workerData.file, { rate: 1500 });
+      // 400 pages/s ≈ 1.6 MB/s at 4 KB pages: gentle on a 1-vCPU Railway box. The backup API yields
+      // between steps and never holds the read lock continuously; previous 1500 pages/s still starved the main thread.
+      await db.backup(workerData.file, { rate: 400 });
       size = require('fs').statSync(workerData.file).size;
     }
     db.pragma('optimize');

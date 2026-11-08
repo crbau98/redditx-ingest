@@ -109,13 +109,15 @@ function start() {
   if (timer || !enabled()) return;
   timer = setInterval(() => { nightly().catch(() => {}); }, 24 * 3600 * 1000);
   timer.unref();
-  // Take the first backup shortly after boot if the newest is older than a day.
+  // First backup not shortly after boot: the deploy itself already restarted SQLite and the first backup
+  // with ONLINE BACKUP still holds a read transaction that makes every main-thread query wait up to busy_timeout
+  // (10s). That showed as a 55s stall on the 700k-row prod DB. Wait 30 min, then only if the newest is older than a day.
   setTimeout(() => {
     const newest = list()[0];
     if (settingsStore.get().backupEnabled && (!newest || Date.now() - new Date(newest.createdAt) > 23 * 3600 * 1000)) {
       nightly().catch(() => {});
     }
-  }, 90 * 1000).unref();
+  }, 30 * 60 * 1000).unref();
 }
 
 function stop() { clearInterval(timer); timer = null; }
