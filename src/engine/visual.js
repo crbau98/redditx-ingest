@@ -259,13 +259,15 @@ async function backfill(limit = PER_TICK) {
 let timer = null; let busy = false; let gaveUp = false;
 function start() {
   if (timer || !PER_TICK) return;
+  const blockwatch = require('../lib/blockwatch');
   timer = setInterval(async () => {
     if (busy || gaveUp) return;
+    blockwatch.work('embed');
     busy = true;
     try {
       const r = await backfill(PER_TICK);
       if (r.unavailable) { gaveUp = true; events.log('WARN', `Visual search: image model unavailable (${r.unavailable}); "More like this" uses tags only`); }
-    } catch (e) { events.log('WARN', `Visual search backfill: ${e.message}`); } finally { busy = false; }
+    } catch (e) { events.log('WARN', `Visual search backfill: ${e.message}`); } finally { busy = false; blockwatch.work('idle'); }
   }, 60 * 1000);
   timer.unref();
 }

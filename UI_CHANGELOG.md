@@ -1,5 +1,10 @@
 # UI changelog
 
+## 2026-11-08 — Health now says WHICH job blocked the loop
+
+- **`/api/health` reports the blocking job, not just the pause:** `event loop blocked 1400 ms during imageSweep`. Every background job (feed runs, image/face/hash/physique sweeps, thumbnails, OCR, embeddings, popularity, discovery) tags itself, a 250 ms sampler records the tag that was active when the loop stopped, and blocks over a second are also written to the log.
+- **Verified:** 3 new tests (`tests/blockwatch.test.js`); full suite 1894/1894.
+
 ## 2026-11-08 — Trending scores off the request thread
 
 - **The hot-score refresh moved to the maintenance worker.** It rewrites thousands of rows every ten minutes (plus once after boot); on the main thread it was one of the stalls `/api/health` reported. Shared SQL functions now live in `src/db/functions.js` so both connections register them.

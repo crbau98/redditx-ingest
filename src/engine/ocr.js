@@ -9,6 +9,7 @@
  */
 const repo = require('../db/repo');
 const settingsStore = require('../settings');
+const blockwatch = require('../lib/blockwatch');
 const net = require('../lib/net');
 const ocr = require('../lib/ocr');
 
@@ -75,7 +76,7 @@ async function tick({ limit } = {}) {
 
 function start() {
   if (timer) return;
-  timer = setInterval(() => { tick().catch(() => {}); }, TICK_MS);
+  timer = setInterval(() => { blockwatch.work('ocr'); tick().catch(() => {}).finally(() => blockwatch.work('idle')); }, TICK_MS);
   if (timer.unref) timer.unref();
 }
 

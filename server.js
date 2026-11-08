@@ -24,6 +24,7 @@ const server = app.listen(config.port, () => {
   console.log(`  ${line}\n`);
 });
 
+require('./src/lib/blockwatch').start(); // names the job behind every multi-second loop stall (see /api/health)
 engine.start();
 maintenance.startupSweepIfNeeded();
 // The warm-up waits for the first health answer (src/lib/ready.js): it is main-thread work, and a probe that arrives

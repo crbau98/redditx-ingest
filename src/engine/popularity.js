@@ -183,7 +183,8 @@ function start() {
     }
   } catch { /* the column is added by a migration; a failed check just skips the warm run */ }
   timer = setInterval(() => {
-    recompute().catch(() => {});
+    require('../lib/blockwatch').work('popularity');
+    recompute().catch(() => {}).finally(() => require('../lib/blockwatch').work('idle'));
   }, 60 * 60 * 1000);
   timer.unref();
 }

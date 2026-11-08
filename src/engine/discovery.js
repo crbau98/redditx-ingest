@@ -1911,6 +1911,7 @@ let stopFlag = false;
 async function run({ trigger = 'schedule' } = {}) {
   if (running) return { skipped: 'already running' };
   running = true; stopFlag = false;
+  require('../lib/blockwatch').work('discovery');
   const s = settingsStore.get();
   const aborted = () => stopFlag;
   const started = Date.now();
@@ -1960,6 +1961,7 @@ async function run({ trigger = 'schedule' } = {}) {
     report.error = e.message;
     events.log('ERR', `Discovery failed: ${e.message}`);
   } finally {
+    require('../lib/blockwatch').work('idle');
     report.durationMs = Date.now() - started;
     repo.discoveryState.set('lastRun', JSON.stringify(report));
     running = false;

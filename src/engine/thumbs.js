@@ -147,10 +147,12 @@ function progress() { return { remaining: q.left.get().n, waiting: retry.size };
 let timer = null; let busy = false; let failures = 0; let wait = 0;
 function start() {
   if (timer || !sharp()) return;
+  const blockwatch = require('../lib/blockwatch');
   timer = setInterval(async () => {
     const s = settingsStore.get();
     if (busy || !s.thumbnails || !s.thumbnailsPerMinute) return;
     if (wait > 0) { wait--; return; }
+    blockwatch.work('thumbs'); // only once there is real work, so the label never goes stale
     busy = true;
     try {
       const r = await sweep({ limit: s.thumbnailsPerMinute });
@@ -161,7 +163,7 @@ function start() {
       failures++;
       wait = Math.min(30, 2 ** failures);
       if (failures === 1) events.log('WARN', `Thumbnails: ${e.message}`);
-    } finally { busy = false; }
+    } finally { busy = false; blockwatch.work('idle'); }
   }, 75 * 1000);
   timer.unref();
 }

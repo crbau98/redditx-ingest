@@ -183,7 +183,9 @@ router.get('/health', (req, res) => {
   const loop = { p99Ms: Math.round(loopDelay.percentile(99) / 1e6), maxMs: Math.round(loopDelay.max / 1e6) };
   loopDelay.reset();
   const disk = require('../lib/diskguard').status();
+  const block = require('../lib/blockwatch').lastBlock(); // the job that was running, not just how long
   const warnings = [];
+  if (block && block.ms > 1000) warnings.push(`event loop blocked ${block.ms} ms during ${block.job}`);
   if (loop.maxMs > 5000) warnings.push(`event loop stalled ${loop.maxMs} ms since the last health check`);
   else if (loop.maxMs > 1000) warnings.push(`event loop paused ${loop.maxMs} ms since the last health check`);
   try {

@@ -399,6 +399,7 @@ function retireDeadFeeds(now = Date.now()) {
 /** Slow background loop: a few items a minute, only while there is work and the model is usable. */
 function startImageSweep() {
   if (sweepTimer) return;
+  const blockwatch = require('../lib/blockwatch');
   sweepTimer = setInterval(async () => {
     try { retireDeadFeeds(); } catch (e) { events.log('WARN', `Feed retirement: ${e.message}`); }
     if (sweepBusy) return;
@@ -407,12 +408,12 @@ function startImageSweep() {
     // what makes creator matching useful on the existing library.
     if (s.faceMatch && s.faceSweepPerMinute > 0) {
       sweepBusy = true;
-      try { await faceSweep({ limit: s.faceSweepPerMinute, settings: s }); } catch (e) { events.log('WARN', `Face sweep: ${e.message}`); } finally { sweepBusy = false; }
+      try { await blockwatch.around('faceSweep', () => faceSweep({ limit: s.faceSweepPerMinute, settings: s })); } catch (e) { events.log('WARN', `Face sweep: ${e.message}`); } finally { sweepBusy = false; }
     }
     if (!s.imageSweep || !s.imageSweepPerTick) return;
     sweepBusy = true;
     try {
-      if (s.dedupe) await hashSweep({ limit: s.imageSweepPerTick * 2, settings: s });
+      if (s.dedupe) await blockwatch.around('hashSweep', () => hashSweep({ limit: s.imageSweepPerTick * 2, settings: s }));
       if ((!s.imageFilter && !s.physiqueFilter) || sweepGaveUp) return;
       if (!(await imagefilter.available())) { sweepGaveUp = true; return; } // logged once by the filter itself
       // The body sweep reads faces in the same pass, so while it has work the face-only sweep would download and analyse the
@@ -420,7 +421,7 @@ function startImageSweep() {
       if (s.physiqueFilter) {
         const cursor = (k) => parseInt(repo.settings.get(k) || '0', 10) || 0;
         const before = cursor('physique_sweep_seq');
-        const r = await physiqueSweep({ limit: s.imageSweepPerTick, settings: s });
+        const r = await blockwatch.around('physiqueSweep', () => physiqueSweep({ limit: s.imageSweepPerTick, settings: s }));
         if (!r.done) {
           // only when the face sweep had reached the same point: the rows in between were just checked for faces too
           if (s.imageFilter && repo.settings.get('image_sweep_version') === IMAGE_SWEEP_VERSION && cursor('image_sweep_seq') >= before) {
@@ -429,7 +430,7 @@ function startImageSweep() {
           return;
         }
       }
-      if (s.imageFilter) await imageSweep({ limit: s.imageSweepPerTick, settings: s });
+      if (s.imageFilter) await blockwatch.around('imageSweep', () => imageSweep({ limit: s.imageSweepPerTick, settings: s }));
     } catch (e) { events.log('WARN', `Image sweep: ${e.message}`); } finally { sweepBusy = false; }
   }, 60 * 1000);
   sweepTimer.unref();
