@@ -386,6 +386,20 @@ router.get('/creators', (req, res) => {
   res.json({ ...r, items: r.items.map(publicCreator) });
 });
 
+// Deep pull status + start: the profile's "Pull from the web" button (rate-limited like lookup).
+const pullLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 12, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many web pulls from this address, try again later' } });
+router.get('/creators/:id/pull', (req, res) => {
+  const c = repo.creators.get(req.params.id);
+  if (!c || c.status !== 'active' || c.scope === 'excluded') return res.status(404).json({ error: 'Not found' });
+  res.json(require('../engine/deepsearch').status(c.id));
+});
+router.post('/creators/:id/pull', pullLimiter, (req, res) => {
+  const c = repo.creators.get(req.params.id);
+  if (!c || c.status !== 'active' || c.scope === 'excluded') return res.status(404).json({ error: 'Not found' });
+  const out = require('../engine/deepsearch').kick(c.id, { trigger: 'manual', force: true });
+  res.status(out.error ? 404 : 200).json(out);
+});
+
 router.get('/creators/:id', (req, res) => {
   const c = repo.creators.detail(req.params.id);
   if (!c || c.status !== 'active' || c.scope === 'excluded') return res.status(404).json({ error: 'Not found' });
@@ -576,6 +590,8 @@ router.post('/lookup', lookupLimiter, async (req, res) => {
     const q = String((req.body && (req.body.query || req.body.q)) || '').trim().slice(0, 200);
     if (!q) return res.status(400).json({ error: 'Type a name, a handle or a profile link' });
     const out = await require('../engine/lookup').lookup(q);
+    // Resolved to a creator we follow? Keep sweeping the web for his profiles, pictures and videos.
+    try { require('../engine/deepsearch').fromLookup(out, q); } catch { /* the pull reports its own errors */ }
     res.status(out.error ? 400 : 200).json(out);
   } catch (e) { res.status(500).json({ error: String((e && e.message) || e).slice(0, 200) }); }
 });

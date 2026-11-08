@@ -145,7 +145,8 @@ async function seedCrawlCreator(creator, { maxPages = 2 } = {}) {
  * One creator: search, read the candidate pictures (and video keyframes), register the pages his content appears on.
  * @returns {Promise<{checked:number, matched:number, pages:number, pictures:number}>}
  */
-async function matchCreator(creator, { budget = 40, aborted = () => false, service = null, paidHandle = null } = {}) {
+async function matchCreator(creator, { budget = 40, aborted = () => false, service = null, paidHandle = null,
+  maxQueries = 4, maxPages = PAGES_PER_CREATOR, cbirRefs = 1, onPhase = null } = {}) {
   const out = { checked: 0, matched: 0, pages: 0, pictures: 0 };
   const refs = reference(creator.id);
   const s = settingsStore.get();
@@ -159,8 +160,9 @@ async function matchCreator(creator, { budget = 40, aborted = () => false, servi
   const existing = new Set(repo.feeds.list({ platform: 'web', creatorId: creator.id, limit: 500 }).items.map((f) => String(f.target).toLowerCase()));
   const seenPages = new Set();
 
-  for (const q of queries.slice(0, 4)) {
-    if (aborted() || out.pages >= PAGES_PER_CREATOR) break;
+  for (const q of queries.slice(0, Math.max(1, maxQueries))) {
+    if (aborted() || out.pages >= maxPages) break;
+    if (onPhase) onPhase('image');
     let hits = [];
     try {
       hits = await brave.images(q, { count: HITS_PER_QUERY, budget, preferKeyless: true });
@@ -170,7 +172,7 @@ async function matchCreator(creator, { budget = 40, aborted = () => false, servi
       continue;
     }
     for (const hit of hits) {
-      if (aborted() || out.checked >= HITS_PER_QUERY || out.pages >= PAGES_PER_CREATOR) break;
+      if (aborted() || out.checked >= HITS_PER_QUERY || out.pages >= maxPages) break;
       const pageUrl = hit.pageUrl || hit.url;
       const isVid = hit.mediaType === 'video' || hit.type === 'video' || /\.(mp4|webm|mov|m3u8)(\?|#|$)/i.test(hit.mediaUrl || '');
       const img = hit.imageUrl
@@ -279,9 +281,14 @@ async function matchCreator(creator, { budget = 40, aborted = () => false, servi
   try {
     const yx = require('../lib/yandex');
     if (config.yandexImages && refs.length) {
-      const ref = db.prepare(`SELECT id, media_url FROM media WHERE creator_id = ? AND publish_state = 'published'
-        AND media_url LIKE 'http%' AND media_url NOT LIKE '%' || ? || '%' ORDER BY COALESCE(posted_at, ingested_at) DESC LIMIT 1`)
-        .get(creator.id, config.storeHost);
+      // Several of his recent pictures, not just the newest: different poses and sites surface
+      // different hosts. cbirRefs=1 keeps the background rotation exactly as cheap as it was.
+      const refRows = db.prepare(`SELECT id, media_url FROM media WHERE creator_id = ? AND publish_state = 'published'
+        AND media_url LIKE 'http%' AND media_url NOT LIKE '%' || ? || '%' ORDER BY COALESCE(posted_at, ingested_at) DESC LIMIT ?`)
+        .all(creator.id, config.storeHost, Math.max(1, cbirRefs));
+      for (const ref of refRows) {
+      if (aborted()) break;
+      if (onPhase) onPhase('reverse');
       if (ref && ref.media_url) {
         const sites = await yx.cbirSites(ref.media_url, { count: 20 });
         for (const site of sites) {
@@ -301,6 +308,7 @@ async function matchCreator(creator, { budget = 40, aborted = () => false, servi
           });
           out.pages++;
         }
+      }
       }
     }
   } catch (e) {

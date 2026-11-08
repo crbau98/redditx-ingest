@@ -1,5 +1,15 @@
 # UI changelog
 
+## 2026-11-08 — Deep pull: search a creator and the whole web is swept for him
+
+- **Searching a creator now sweeps the web for him automatically.** When a search (Creators → search, or Admin → Lookup) resolves to a creator PRISM already follows, a background pull reads eight rotating text queries for his name and handle — every platform PRISM reads (`x.com`, Reddit, TikTok, YouTube, Telegram, Tumblr, RedGIFs, Bluesky, video sites, link hubs, mirrors, his paid pages) — plus video search, image search with same-picture (pHash) and face matching, and Yandex reverse-image over several of his own pictures. It starts on its own (6-hour cooldown) and shows nothing until it has proof.
+- **New button on his profile: the magnifier, "Pull from the web".** It starts a pull immediately (force, 15-minute cooldown) and the button lights up with the phase it is in; when it finishes it says how many new pages and matched pictures it found and reloads the profile to show them. Progress is also readable at `GET /api/creators/:id/pull`.
+- **Nothing is followed on a guess.** A profile page becomes his only when its handle is under his own name, a web page only when the page itself names him, and every result still passes the safety, male-only, body-filter, takedown, robots and blocklist gates. A page that only *mentions* him is skipped; reverse-image hits go to the review queue as before. Paid pages are registered as public pages (owner decision 2026-11-05).
+- **Toggle:** Settings → Discovery → "Deep pull" (on by default). The background image match is unchanged; a pull simply asks it for more queries (6 instead of 4) and three reverse-image lookups instead of one.
+- **Verified:** 8 new tests (`tests/deepsearch.test.js`) covering the query bank, rotation, corroboration, registration, cooldown, progress and lookup triggering; full suite 1890/1890.
+
+## 2026-11-08 — Reliability: backups off the request thread, stalls surfaced, colder paths warmed
+
 ## 2026-11-08 — Reliability: backups off the request thread, stalls surfaced, colder paths warmed
 
 - **Backups and nightly SQLite maintenance now run on a worker thread.** `VACUUM INTO`, planner optimize and the WAL checkpoint used to run on the serving event loop; production reported stalls up to 37.8 seconds. The admin “Back up now” action awaits the worker and reports its result.

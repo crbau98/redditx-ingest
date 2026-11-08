@@ -430,6 +430,14 @@ router.post('/discovery/onlyfans/:handle', (req, res) => {
   return bad(res, 'action must be retry or reject');
 });
 
+/* ------------------------------------------------------------- deep pull */
+// Sweep the whole web for this creator now (text + video + image + reverse-image), in the background.
+router.post('/creators/:id/pull', (req, res) => {
+  const out = require('../engine/deepsearch').kick(req.params.id, { trigger: 'manual', force: req.body?.force !== false });
+  res.status(out.error ? 404 : 200).json(out);
+});
+router.get('/creators/:id/pull', (req, res) => res.json(require('../engine/deepsearch').status(req.params.id)));
+
 /* ------------------------------------------------------------ creator lookup */
 // Find a person by name, performer name, handle or link across platforms (read-only), then follow the chosen accounts.
 router.post('/lookup', async (req, res) => {
@@ -437,6 +445,8 @@ router.post('/lookup', async (req, res) => {
     const q = String((req.body && req.body.query) || '').trim();
     if (!q) return res.status(400).json({ error: 'Type a name, a handle or a profile link' });
     const out = await lookup.lookup(q);
+    // The search resolved to a creator we already follow: sweep the web for everything else of his.
+    try { require('../engine/deepsearch').fromLookup(out, q); } catch { /* the pull reports its own errors */ }
     res.status(out.error ? 400 : 200).json(out);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

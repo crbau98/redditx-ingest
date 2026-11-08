@@ -1,5 +1,5 @@
 import { h, icon, fmt, proxied, avatar, toast, copyText, emptyState, debounce } from '../dom.js';
-import { get } from '../api.js';
+import { get, post } from '../api.js';
 import { navigate, href } from '../router.js';
 import { follows, platformColor, platformLabel, bus } from '../store.js';
 import { createFeed } from '../components/feed.js';
@@ -175,6 +175,48 @@ export async function creator(root, { params, query }) {
     bus.on('follow', () => { if (alertBtn.isConnected) paintAlert(); });
   }
 
+  // Deep pull: sweep the whole web for this man — profiles, pictures and videos (engine/deepsearch.js).
+  // Starts at once and reports back through GET .../pull, so the button shows the phase until it finishes.
+  const pullBtn = h('button', { class: 'btn icon', 'aria-label': 'Pull from the web', title: 'Search the whole web for his profiles, pictures and videos' }, icon('search', 'sm'));
+  let pullTimer = null;
+  let sawRunning = false;
+  const foundLine = (st) => (st && st.found && (st.found.feeds || st.found.pictures))
+    ? ` — ${st.found.feeds || 0} new page(s), ${st.found.pictures || 0} picture(s) matched` : '';
+  const stopPullPoll = () => { if (pullTimer) { clearInterval(pullTimer); pullTimer = null; } };
+  const paintPull = (st) => {
+    if (!pullBtn.isConnected) return stopPullPoll();
+    if (st && st.running) {
+      sawRunning = true;
+      pullBtn.classList.add('on');
+      pullBtn.title = `Sweeping the web… ${st.phase ? `(${st.phase})` : ''}`;
+      pullBtn.setAttribute('aria-label', 'Sweeping the web');
+      if (!pullTimer) pullTimer = setInterval(pollPull, 3000);
+      return;
+    }
+    pullBtn.classList.remove('on');
+    if (st && sawRunning && st.done) {
+      sawRunning = false;
+      const f = st.found || {};
+      toast(f.feeds ? `Found ${f.feeds} new page${f.feeds === 1 ? '' : 's'} of his` : 'Sweep finished — nothing new yet', 'ok');
+      if (f.feeds || f.pictures) navigate(`/creator/${c.id}`, { type, sort, platform, q: qFilter }); // show what it found
+    }
+    if (st) pullBtn.title = st.lastAt
+      ? `Last web sweep ${fmt.ago(st.lastAt)}${foundLine(st)}`
+      : 'Search the whole web for his profiles, pictures and videos';
+  };
+  function pollPull() { get(`/api/creators/${c.id}/pull`).then(paintPull, stopPullPoll); }
+  pullBtn.addEventListener('click', async () => {
+    pullBtn.disabled = true;
+    try {
+      const r = await post(`/api/creators/${c.id}/pull`);
+      if (r && r.started) { sawRunning = true; toast('Sweeping the web for him…', 'ok'); paintPull({ running: true, phase: 'text' }); }
+      else if (r && r.reason === 'cooldown') toast('Already swept recently — try again in a bit');
+      else toast(String((r && (r.error || r.reason)) || 'Could not start'), 'err');
+    } catch (e) { toast(String(e.message || e), 'err'); }
+    finally { pullBtn.disabled = false; }
+  });
+  get(`/api/creators/${c.id}/pull`).then(paintPull, () => {});
+
   // "Free on": every account where his posts cost nothing, his free OnlyFans included, as lit pills.
   const freeOn = (c.accounts || []).map((a) => h('a', { class: 'free-pill', href: a.url, target: '_blank', rel: 'noopener noreferrer nofollow', style: { '--c': platformColor(a.platform) } }, h('span', { class: 'dot' }), h('b', null, platformLabel(a.platform)), h('span', { class: 'h' }, String(a.label).replace(/^[@/]?(?:u\/)?/, ''))));
   if (c.onlyfans && c.onlyfans.free) freeOn.unshift(h('a', { class: 'free-pill of', href: c.onlyfans.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), h('b', null, 'OnlyFans'), h('span', { class: 'h' }, 'free')));
@@ -196,7 +238,7 @@ export async function creator(root, { params, query }) {
     h('div', { class: `avatar-ring${fresh ? ' live' : ''}`, title: fresh ? `Posted ${fmt.ago(c.last_media_at)}` : null }, headAvatar),
     h('div', { class: 'profile-info' }, h('h1', null, c.display_name || c.handle, c.verified ? icon('verified', 'fill') : null), h('div', { class: 'creator-handle' }, `@${c.handle}`),
       aka.length ? h('div', { class: 'aka' }, 'Also goes by ', aka.join(', ')) : null),
-    h('div', { class: 'profile-actions' }, followBtn, alertBtn,
+    h('div', { class: 'profile-actions' }, followBtn, alertBtn, pullBtn,
       c.onlyfans ? h('a', { class: `btn of-cta${c.onlyfans.free ? ' free' : c.onlyfans.trial ? ' trial' : c.onlyfans.promo ? ' promo' : ''}`, href: c.onlyfans.url, target: '_blank', rel: 'noopener noreferrer nofollow', title: `onlyfans.com/${c.onlyfans.handle}` },
         h('span', { class: 'of-mark', 'aria-hidden': 'true' }), c.onlyfans.trial ? 'Free Trial' : c.onlyfans.promo ? 'OnlyFans · Sale' : c.onlyfans.free ? 'Free OnlyFans' : 'OnlyFans', icon('external', 'sm')) : null,
       ...paidCtas,
@@ -281,5 +323,5 @@ export async function creator(root, { params, query }) {
     root.style.setProperty('--grad-soft', `linear-gradient(120deg, hsl(${(col.h + 322) % 360} ${col.s}% ${col.l}% / .22), hsl(${col.h} ${col.s}% ${col.l}% / .2) 55%, hsl(${(col.h + 32) % 360} ${col.s}% ${col.l}% / .16))`);
     root.classList.add('tinted');
   });
-  return () => { feed.destroy(); off(); TINT_VARS.forEach((v) => root.style.removeProperty(v)); root.classList.remove('tinted'); };
+  return () => { stopPullPoll(); feed.destroy(); off(); TINT_VARS.forEach((v) => root.style.removeProperty(v)); root.classList.remove('tinted'); };
 }

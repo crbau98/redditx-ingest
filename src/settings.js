@@ -108,6 +108,7 @@ const SCHEMA = {
   faceMatchThreshold: { type: 'int', default: 78, min: 55, max: 98, label: 'Face match: cosine similarity threshold (55–98%) required to attribute when corroborated by name/handle evidence (lower matches down to threshold−8% enter the review queue)', group: 'discovery' },
   faceSweepPerMinute: { type: 'int', default: 6, min: 0, max: 120, label: 'Face enrolment sweep: pictures read per minute, newest first (0 = new media only)', group: 'discovery' },
   creatorSeedCrawl: { type: 'bool', default: true, label: 'Seeded creator crawl: crawl public link hubs, bios, search result pages, and aggregator/repost links for active creators within feed caps', group: 'discovery' },
+  deepSearch: { type: 'bool', default: true, label: 'Deep pull: when you search a creator PRISM already follows, sweep the whole web for him in the background — text and video search on his name and handle, image search with same-picture and face matching, and reverse-image on his own pictures — and turn what proves itself into feeds (also the "Pull from the web" button on his profile)', group: 'discovery' },
   discoveryExpand: { type: 'bool', default: true, label: 'Find creators Bluesky suggests (its "similar accounts", from the follow graph) and search Bluesky and RedGIFs for new people', group: 'discovery' },
   discoveryAutoCommunities: { type: 'bool', default: true, label: 'Auto-follow strong communities and feeds (their posts are still checked one by one)', group: 'discovery' },
   // --- sources and playback (v5) ---
