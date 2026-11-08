@@ -299,6 +299,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
       const c = repo.creators.get(feed.creator_id);
       return !!c && c.status !== 'active';
     };
+    let handled = 0; // items finished across the workers, for the yield above
     const worker = async () => {
       for (;;) {
         if (ctx.aborted() || Date.now() > itemDeadline) return;
@@ -327,12 +328,18 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
         }
         if (r.outcome === 'blocked' && /^safety:/.test(r.reason || '')) events.log('WARN', `Blocked by safety gate (${r.reason}) in ${tag}`);
         entry.added = stats.added; entry.fetched = stats.fetched;
+        // Every few items, hand the event loop a turn. A run's own synchronous work (SQLite writes,
+        // FTS updates, dedupe lookups, creator stats) runs back-to-back otherwise, and /api/health
+        // reports the whole burst as one multi-second block — production measured 4.1 s during a
+        // single coomer run. setImmediate is a macrotask, so pending HTTP requests are answered here.
+        if (++handled % 3 === 0) await new Promise((res) => setImmediate(res));
       }
     };
     await Promise.all(Array.from({ length: Math.min(ITEM_CONCURRENCY, items.length) }, worker));
+    await new Promise((res) => setImmediate(res)); // breathe before the bookkeeping below
     if (result.profile && !hadCreator && feed.creator_id) applyProfile(feed, result.profile, { ...cfg, liveBody: true });
 
-    for (const id of touched) repo.creators.refreshStats(id);
+    for (const id of touched) { repo.creators.refreshStats(id); if (++handled % 10 === 0) await new Promise((res) => setImmediate(res)); }
     if (feed.creator_id) repo.creators.refreshStats(feed.creator_id);
     if (feed.kind !== 'user') autoTrack(touched, cfg);
     else if (waysIn.originals.size) autoTrack(waysIn.originals, cfg); // creators this account reposts
