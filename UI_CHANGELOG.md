@@ -1,5 +1,10 @@
 # UI changelog
 
+## 2026-11-08 — Trending scores off the request thread
+
+- **The hot-score refresh moved to the maintenance worker.** It rewrites thousands of rows every ten minutes (plus once after boot); on the main thread it was one of the stalls `/api/health` reported. Shared SQL functions now live in `src/db/functions.js` so both connections register them.
+- **Verified:** the worker pass updated 5,000 rows in 45 ms with nothing on the serving thread; full suite 1891/1891.
+
 ## 2026-11-08 — Deep pull: search a creator and the whole web is swept for him
 
 - **Searching a creator now sweeps the web for him automatically.** When a search (Creators → search, or Admin → Lookup) resolves to a creator PRISM already follows, a background pull reads eight rotating text queries for his name and handle — every platform PRISM reads (`x.com`, Reddit, TikTok, YouTube, Telegram, Tumblr, RedGIFs, Bluesky, video sites, link hubs, mirrors, his paid pages) — plus video search, image search with same-picture (pHash) and face matching, and Yandex reverse-image over several of his own pictures. It starts on its own (6-hour cooldown) and shows nothing until it has proof.

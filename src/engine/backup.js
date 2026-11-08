@@ -49,9 +49,9 @@ function runInline(file) {
 }
 
 /** Production path: backup + optimize + checkpoint on their own connection and thread. */
-function runOnWorker(file) {
+function runOnWorker(file, task = 'backup') {
   return new Promise((resolve, reject) => {
-    const w = new Worker(path.join(__dirname, 'backup-worker.js'), { workerData: { dbPath: config.dbPath, file } });
+    const w = new Worker(path.join(__dirname, 'backup-worker.js'), { workerData: { dbPath: config.dbPath, file, task } });
     let settled = false;
     const finish = (fn, value) => { if (settled) return; settled = true; clearTimeout(timer); fn(value); };
     const timer = setTimeout(() => {
@@ -61,7 +61,7 @@ function runOnWorker(file) {
     if (timer.unref) timer.unref();
     w.on('message', (msg) => {
       if (!msg || !msg.ok) return finish(reject, new Error((msg && msg.error) || 'backup worker failed'));
-      finish(resolve, { name: file ? path.basename(file) : null, size: msg.size || 0 });
+      finish(resolve, { name: file ? path.basename(file) : null, size: msg.size || 0, updated: msg.updated || 0 });
     });
     w.on('error', (e) => finish(reject, e));
     w.on('exit', (code) => { if (code !== 0) finish(reject, new Error(`backup worker exited ${code}`)); });
@@ -97,6 +97,12 @@ function run({ backup = true } = {}) {
   });
 }
 
+/** The trending-score refresh, off the serving thread (engine/engine.js calls this every ten minutes). */
+function hotScore() {
+  if (!enabled() || config.isTest || process.env.PRISM_BACKUP_INLINE === '1') return Promise.resolve({ updated: 0 });
+  return runOnWorker(null, 'hot');
+}
+
 /** Daily housekeeping: backup (if enabled), planner stats and WAL trim on the worker. */
 async function nightly() {
   try {
@@ -122,4 +128,4 @@ function start() {
 
 function stop() { clearInterval(timer); timer = null; }
 
-module.exports = { run, list, prune, nightly, start, stop, dir };
+module.exports = { run, hotScore, list, prune, nightly, start, stop, dir };

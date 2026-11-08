@@ -666,6 +666,17 @@ function backfillCreatorStats(db, chunk = 5) { // a few creators per tick: 25 bl
   });
 }
 
+/**
+ * Refresh the trending scores. In production the rewrite runs on the maintenance worker thread: it is
+ * thousands of row updates every ten minutes and used to be one of the loop stalls /api/health reported.
+ * Tests and `:memory:` databases keep the inline path so they stay deterministic.
+ */
+function refreshHot() {
+  if (config.isTest || config.dbPath === ':memory:' || process.env.PRISM_BACKUP_INLINE === '1') return repo.media.recomputeHotChunked();
+  return require('./backup').hotScore().then((r) => (r && r.updated) || 0)
+    .catch((e) => { events.log('WARN', `hot refresh on worker failed (${e.message}); retrying inline`); return repo.media.recomputeHotChunked(); });
+}
+
 function start() {
   if (state.timer) return;
   state.session.startedAt = new Date().toISOString();
@@ -679,7 +690,7 @@ function start() {
   state.hotTimer = setInterval(() => {
     // Chunked: the refresh rewrites every published row whose score drifted, and one statement
     // for the whole library blocks the event loop for minutes on a large one.
-    repo.media.recomputeHotChunked().then(() => { try { repo.settings.set('hot_recomputed_at', new Date().toISOString()); } catch { /* ignore */ } }).catch((e) => events.log('ERR', `maintenance: ${e.message}`));
+    refreshHot().then(() => { try { repo.settings.set('hot_recomputed_at', new Date().toISOString()); } catch { /* ignore */ } }).catch((e) => events.log('ERR', `maintenance: ${e.message}`));
     try { repo.runs.prune(settingsStore.get().keepRunHistoryDays); } catch (e) { events.log('ERR', `maintenance: ${e.message}`); }
   }, 10 * 60000);
   state.hotTimer.unref();
@@ -697,7 +708,7 @@ function start() {
     let last = 0;
     try { last = Date.parse(repo.settings.get('hot_recomputed_at') || '') || 0; } catch { last = 0; }
     if (Date.now() - last < 30 * 60 * 1000) return;
-    repo.media.recomputeHotChunked().then(() => { try { repo.settings.set('hot_recomputed_at', new Date().toISOString()); } catch { /* ignore */ } }).catch(() => { /* ignore */ });
+    refreshHot().then(() => { try { repo.settings.set('hot_recomputed_at', new Date().toISOString()); } catch { /* ignore */ } }).catch(() => { /* ignore */ });
   }, 30000).unref();
 }
 

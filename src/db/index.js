@@ -37,16 +37,8 @@ db.function('hash_seed', { deterministic: true }, (id, seed) => {
   return h;
 });
 
-// Time-decayed popularity used by the "Trending" sort.
-db.function('hot_score', { deterministic: true }, (score, likes, views, postedAtMs, nowMs) => {
-  const ageDays = Math.max(0, (nowMs - postedAtMs) / 86400000);
-  const pop = Math.log1p(Math.max(0, score || 0)) + 1.5 * Math.log1p((likes || 0) * 5 + (views || 0) * 0.2) + 1;
-  return pop / Math.pow(ageDays + 1.5, 0.9);
-});
-db.function('epoch_ms', { deterministic: true }, (iso) => {
-  const t = Date.parse(iso);
-  return Number.isFinite(t) ? t : 0;
-});
+// Time-decayed popularity used by the "Trending" sort — shared with the maintenance worker.
+require('./functions').hotScore(db);
 
 const migration = READONLY ? null : migrate(db);
 
