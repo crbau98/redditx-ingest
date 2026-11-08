@@ -102,7 +102,7 @@ function prime() {
   // Search needs vocabulary and the library before a first visitor types; home wants discover. Put
   // those first, then everything else in declared order. Previously vocabulary was last, so the
   // first search after boot could wait through every other snapshot (measured 11.6 s).
-  const first = ['discover', 'vocabulary', 'library']; // home is the most common first visit
+  const first = ['discover', 'mediaTotal', 'vocabulary', 'library']; // home is the most common first visit
   const names = [...first, ...Object.keys(JOB_FNS).filter((n) => !first.includes(n))];
   const next = () => {
     const name = names.shift();

@@ -234,6 +234,8 @@ const creators = {
     hosts.add(patch.avatarUrl || patch.avatar_url, patch.bannerUrl || patch.banner_url);
     sets.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')");
     db.prepare(`UPDATE creators SET ${sets.join(', ')} WHERE id = @id`).run(params);
+    // A status/scope change changes which media the public lists count (hidden creator hides their posts).
+    if (params.status !== undefined || params.scope !== undefined) countCache.clear();
     return creators.get(id);
   },
 
@@ -1255,6 +1257,7 @@ const media = {
     (exact ? mediaQ.stateExact : mediaQ.state).run(state, reason || null, id);
     // `deferStats`: a bulk caller refreshes each affected creator once itself (refreshStats recounts all of a creator's media)
     if (m && m.creator_id && !deferStats) creators.refreshStats(m.creator_id);
+    countCache.clear(); // a hide/restore must be visible in the next total at once
     notifyState(id, state);
   },
 
@@ -1273,6 +1276,7 @@ const media = {
     db.prepare(`UPDATE media SET ${sets.join(', ')} WHERE id = @id`).run(params);
     const m = db.prepare('SELECT creator_id FROM media WHERE id = ?').get(id);
     if (m && m.creator_id) creators.refreshStats(m.creator_id);
+    if (params.publish_state || params.scope) countCache.clear(); // visibility changed: the next total must see it
     if (params.publish_state) notifyState(id, params.publish_state);
     return media.get(id);
   },
@@ -1291,6 +1295,7 @@ const media = {
       logAction('media', id, 'block', reason, actor);
       if (m.creator_id) creators.refreshStats(m.creator_id);
     })();
+    countCache.clear();
     notifyState(id, 'removed');
     if (m.phash) notifyBlocked(m.phash);
     return true;

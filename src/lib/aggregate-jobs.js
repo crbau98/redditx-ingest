@@ -20,6 +20,9 @@ const JOB_FNS = {
   library: () => repo.libraryWithIndex(),
   // the query-understanding vocabulary: three library-wide queries, run on the worker (was on the main thread at boot)
   vocabulary: () => repo.tagIntel.vocabulary(),
+  // Warm the home-feed total on the worker: the first COUNT on a cold volume reads the whole published index
+  // (3-7 s on the 400k-row production library) and warmed the OS page cache for the main connection too.
+  mediaTotal: () => repo.media.list({ sort: 'recent', limit: 1 }).total,
 };
 
 /** How long a computed value is served before a background refresh starts. */
@@ -33,6 +36,7 @@ const JOB_TTL_MS = {
   topics: 10 * 60000,
   library: 60000,
   vocabulary: 60000,
+  mediaTotal: 30000,
 };
 
 module.exports = { JOB_FNS, JOB_TTL_MS };
