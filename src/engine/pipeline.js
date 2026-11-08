@@ -550,6 +550,9 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   if (faceList && faceList.length && state === 'published' && settings.faceMatch) {
     try { require('../lib/face-match').saveMediaFaces(mediaId, faceList); } catch { /* best effort */ }
   }
+  if (wantFaces && settings.faceMatch) {
+    try { repo.db.prepare('UPDATE media SET face_at = ? WHERE id = ?').run(new Date().toISOString(), mediaId); } catch { /* best effort */ }
+  }
 
   if (physiqueScore != null && creator) physique.reviewCreator(creator.id, body); // consistently heavy creators drop out too
 

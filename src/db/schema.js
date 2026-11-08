@@ -83,6 +83,7 @@ function createCoreTables(db) {
       description TEXT,
       ocr_text TEXT,
       ocr_at TEXT,
+      face_at TEXT,
       media_type TEXT NOT NULL CHECK(media_type IN ('image','video')),
       media_url TEXT NOT NULL,
       preview_url TEXT,
@@ -953,7 +954,19 @@ function v27(db) {
 }
 v27.ddlOnly = true;
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27];
+/**
+ * v28: face-enrolment marker. `face_at` records that a picture was looked at for male face descriptors,
+ * successful or not, so the newest-first face sweep does not retry dead pictures forever. It stores no
+ * biometric data itself; the vectors live in `media_faces` and are purged on takedown.
+ */
+function v28(db) {
+  const cols = db.prepare('PRAGMA table_info(media)').all().map((c) => c.name);
+  if (!cols.includes('face_at')) db.exec('ALTER TABLE media ADD COLUMN face_at TEXT');
+  db.exec('CREATE INDEX IF NOT EXISTS ix_media_face_todo ON media(seq DESC) WHERE face_at IS NULL AND publish_state = \'published\'');
+}
+v28.ddlOnly = true;
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

@@ -464,9 +464,7 @@ router.post('/maintenance/sweep', async (req, res) => {
 });
 router.get('/maintenance/image-filter', async (req, res) => {
   const s = settingsStore.get();
-  let faces = { media: 0, descriptors: 0 };
-  try { faces = repo.db.prepare('SELECT COUNT(DISTINCT media_id) AS media, COUNT(*) AS descriptors FROM media_faces').get(); } catch { /* table not migrated yet */ }
-  res.json({ enabled: s.imageFilter, threshold: s.imageFilterThreshold, sweep: { enabled: s.imageSweep, perMinute: s.imageSweepPerTick, ...maintenance.imageSweepProgress() }, faceMatch: { enabled: s.faceMatch, threshold: s.faceMatchThreshold, ...faces }, physique: { ...physique.stats(s), sweep: maintenance.physiqueSweepProgress() }, dedupe: { enabled: s.dedupe, distance: s.dedupeDistance, ...maintenance.hashSweepProgress() }, thumbnails: { enabled: s.thumbnails, perMinute: s.thumbnailsPerMinute, ...require('../engine/thumbs').progress() }, model: { available: await imagefilter.available(), ...imagefilter.status() } });
+  res.json({ enabled: s.imageFilter, threshold: s.imageFilterThreshold, sweep: { enabled: s.imageSweep, perMinute: s.imageSweepPerTick, ...maintenance.imageSweepProgress() }, faceMatch: { enabled: s.faceMatch, threshold: s.faceMatchThreshold, perMinute: s.faceSweepPerMinute, ...maintenance.faceSweepProgress() }, physique: { ...physique.stats(s), sweep: maintenance.physiqueSweepProgress() }, dedupe: { enabled: s.dedupe, distance: s.dedupeDistance, ...maintenance.hashSweepProgress() }, thumbnails: { enabled: s.thumbnails, perMinute: s.thumbnailsPerMinute, ...require('../engine/thumbs').progress() }, model: { available: await imagefilter.available(), ...imagefilter.status() } });
 });
 router.post('/maintenance/physique-sweep', async (req, res) => {
   try {
@@ -478,6 +476,12 @@ router.post('/maintenance/image-sweep', async (req, res) => {
   try {
     const n = Math.min(Math.max(parseInt(req.body && req.body.limit, 10) || 50, 1), 300);
     res.json({ ok: true, ...(await maintenance.imageSweep({ limit: n })), ...maintenance.imageSweepProgress() });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+router.post('/maintenance/face-sweep', async (req, res) => {
+  try {
+    const n = Math.min(Math.max(parseInt(req.body && req.body.limit, 10) || 50, 1), 300);
+    res.json({ ok: true, ...(await maintenance.faceSweep({ limit: n })), ...maintenance.faceSweepProgress() });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 /* ---------------------------------------------------------------- telegram (joined channels) */
