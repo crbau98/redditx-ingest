@@ -278,7 +278,7 @@ async function pull(creatorId, { trigger = 'manual', force = false, aborted = ()
       try {
         const r = await imagematch.matchCreator(creator, {
           budget, aborted, service: paid.service || null, paidHandle: paid.handle || null,
-          maxQueries: 6, maxPages: MAX_PAGES, cbirRefs: 3,
+          maxQueries: 6, maxPages: MAX_PAGES, cbirRefs: 3, maxCbir: 12,
         });
         found.pictures += r.pictures || 0;
         found.reviews += r.cbir || 0;                       // reverse-image rows: review queue, no feed

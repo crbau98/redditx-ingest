@@ -146,7 +146,7 @@ async function seedCrawlCreator(creator, { maxPages = 2 } = {}) {
  * @returns {Promise<{checked:number, matched:number, pages:number, pictures:number}>}
  */
 async function matchCreator(creator, { budget = 40, aborted = () => false, service = null, paidHandle = null,
-  maxQueries = 4, maxPages = PAGES_PER_CREATOR, cbirRefs = 1, onPhase = null } = {}) {
+  maxQueries = 4, maxPages = PAGES_PER_CREATOR, cbirRefs = 1, maxCbir = 20, onPhase = null } = {}) {
   const out = { checked: 0, matched: 0, pages: 0, pictures: 0, cbir: 0 };
   const refs = reference(creator.id);
   const s = settingsStore.get();
@@ -293,6 +293,9 @@ async function matchCreator(creator, { budget = 40, aborted = () => false, servi
         const sites = await yx.cbirSites(ref.media_url, { count: 20 });
         for (const site of sites) {
           if (takedowns.checkUrl(site.pageUrl)) continue;
+          // Review-queue rows: a deep pull asks three pictures, which would otherwise bury the queue in
+          // 60 near-duplicate site rows. The bound applies before anything is written or registered.
+          if (out.cbir >= maxCbir) break;
           const paidPage = require('../engine/paidpage').paidPageUrl(site.pageUrl);
           if (paidPage) require('../engine/paidpage').registerPaidPage(site.pageUrl, { creatorId: creator.id, origin: 'cbir' });
           faceMatch.recordWebMatch({
