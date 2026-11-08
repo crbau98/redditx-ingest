@@ -1927,6 +1927,7 @@ async function run({ trigger = 'schedule' } = {}) {
     if (websearch.configured() && (free || s.braveDailyBudget > 0)) {
       report.aiQueries = await require('./ai').planQueries();
       report.identity = await braveIdentity({ creators: free ? 10 : 5, budget: s.braveDailyBudget, aborted });
+      try { report.linkhubs = await require('./creators').crawlLinkHubs({ limit: 6 }); } catch (e) { report.linkhubs = { error: e.message }; }
       report.topics = await braveTopics({ queries: free ? 3 : 1, budget: s.braveDailyBudget, aborted });
     }
     report.seeds = await seedCreators({ aborted });

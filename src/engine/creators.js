@@ -126,4 +126,46 @@ function autoTrack(creatorIds, settings) {
   return enabled;
 }
 
-module.exports = { applyProfile, autoTrack };
+async function crawlLinkHubs({ limit = 5 } = {}) {
+  const settings = require('../settings').get();
+  if (!settings.autoLinkProfiles) return { checked: 0, linked: 0, feeds: 0 };
+  const http = require('../sources/http').forPlatform('linkhub', 800);
+  const cheerio = require('cheerio');
+  const { extractLinks, isLinkHubUrl, parseProfile } = require('../lib/links');
+  const repo = require('../db/repo');
+  const registry = require('../sources');
+  const LINKABLE_KINDS = new Set(['user','feed','page']);
+  const seen = new Set(JSON.parse(repo.discoveryState.get('linkhub.seen', '[]') || '[]'));
+  let checked=0, linked=0, feeds=0;
+  // creators whose stored links contain a hub
+  const rows = repo.db.prepare("SELECT id, handle, links FROM creators WHERE links LIKE '%linktr.ee%' OR links LIKE '%allmylinks%' OR links LIKE '%beacons%' OR links LIKE '%lnk.bio%' OR links LIKE '%solo.to%' LIMIT ?").all(limit*4);
+  for (const row of rows) {
+    if (checked>=limit) break;
+    let links=[]; try{links=JSON.parse(row.links||'[]')}catch{}
+    for (const l of links) {
+      if (checked>=limit) break;
+      const url = l.url || l.href || '';
+      if (!url || !isLinkHubUrl(url) || seen.has(url)) continue;
+      seen.add(url); checked++;
+      try {
+        const html = await http.text(url, { timeout: 9000 });
+        const $ = cheerio.load(html);
+        // hrefs + hydration JSON (__NEXT_DATA__, JSON-LD) — extractLinks already handles raw hrefs
+        const hrefs = $('a[href]').map((_,a)=>$(a).attr('href')).get().join(' ');
+        const scripts = $('script[type="application/json"], script[id="__NEXT_DATA__"], script[type="application/ld+json"]').map((_,e)=>$(e).html()).get().join(' ');
+        const extra = extractLinks(hrefs + ' ' + scripts + ' ' + html);
+        for (const spec of extra) {
+          if (!spec.ingestable || !LINKABLE_KINDS.has(spec.kind) || spec.platform==='web') continue;
+          const adapter=registry.get(spec.platform);
+          if (!adapter || !adapter.kinds.includes(spec.kind)) continue;
+          const r = repo.feeds.upsert({ platform: spec.platform, kind: spec.kind, target: spec.target, label: spec.label, creatorId: row.id, trusted: 1, origin: 'linked', intervalMin: (adapter.intervalMin && adapter.intervalMin[spec.kind]) || 240 });
+          if (r.created) feeds++;
+          linked++;
+        }
+      } catch {}
+    }
+  }
+  repo.discoveryState.set('linkhub.seen', JSON.stringify([...seen].slice(-500)));
+  return { checked, linked, feeds };
+}
+module.exports = { applyProfile, autoTrack, crawlLinkHubs };

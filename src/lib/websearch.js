@@ -209,13 +209,22 @@ const PROVIDERS = {
   ddg: {
     configured: () => config.ddgEnabled && Date.now() >= ddgCooldownUntil,
     async search(q, { count = 20 } = {}) {
-      try {
-        const url = ddgHtmlUrl(q);
+      const fetchPage = async (offs) => {
+        const base = ddgHtmlUrl(q);
+        const url = offs ? `${base}&s=${offs}&dc=${offs}` : base;
+        const body = offs ? `${ddgPostBody(q)}&s=${offs}&dc=${offs}` : ddgPostBody(q);
         const html = await ddgHttp.text(url, {
-          method: 'POST', body: ddgPostBody(q), timeout: 8000, retries: 0, headers: ddgPostHeaders(ddgOrigin(url)),
+          method: 'POST', body, timeout: 8000, retries: 0, headers: ddgPostHeaders(ddgOrigin(url)),
         });
-        const parsed = parseDdg(html);
+        return parseDdg(html);
+      };
+      try {
+        let parsed = await fetchPage(0);
         if (!parsed.length) throw new Error('DuckDuckGo /html/ answered without results (bot challenge)');
+        // Free pagination: DDG html paginates with s/dc offsets — one extra POST doubles results without any key or cost
+        if (parsed.length < count) {
+          try { const more = await fetchPage(parsed.length); parsed = dedupe([...parsed, ...more]); } catch { /* first page is enough */ }
+        }
         return parsed.slice(0, count);
       } catch (e) {
         if (wall(e.message)) {
@@ -277,6 +286,7 @@ const PROVIDERS = {
       // instead of a silent empty list that reads as "nothing out there".
       const failing = (json.unresponsive_engines || []).map((e) => (Array.isArray(e) ? `${e[0]} (${e[1]})` : String(e)));
       health.searxng.engines = failing;
+      if (!results.length && searxngUrl() && !config.searxngEngines && failing.length) events.log('WARN', `SearXNG: consider SEARXNG_ENGINES=yandex,duckduckgo,bing to include Yandex`)
       if (!results.length && failing.length) throw new Error(`SearXNG found nothing: its engines are failing: ${failing.join(', ')}`);
       return results;
     },
