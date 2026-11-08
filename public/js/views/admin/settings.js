@@ -187,7 +187,7 @@ export async function render(root, { overview } = {}) {
       action('Recompute “Trending”', 'Happens every 10 minutes on its own.', h('button', { class: 'btn', type: 'button', onclick: (e) => act(e.currentTarget, () => adminPost('/maintenance/recompute'), 'Recomputed') }, 'Recompute'))));
   adminGet('/maintenance/image-filter').then((m) => {
     if (!maintStatus.isConnected) return;
-    maintStatus.textContent = [`Safety sweep: ${fmt.int(m.sweep.remaining)} left`, m.thumbnails && m.thumbnails.enabled === false ? 'Thumbnails: off' : `Thumbnails: ${fmt.int(m.thumbnails.remaining)} left`, `Near-duplicates: ${fmt.int(m.dedupe.remaining)} left`].join(' · ');
+    maintStatus.textContent = [`Safety sweep: ${fmt.int(m.sweep.remaining)} left`, m.thumbnails && m.thumbnails.enabled === false ? 'Thumbnails: off' : `Thumbnails: ${fmt.int(m.thumbnails.remaining)} left`, `Near-duplicates: ${fmt.int(m.dedupe.remaining)} left`, m.faceMatch && m.faceMatch.enabled ? `Face descriptors: ${fmt.int(m.faceMatch.descriptors)}` : 'Face match: off'].join(' · ');
   }).catch(() => { maintStatus.textContent = ''; });
 
   const toolbar = h('div', { class: 'a-toolbar' },

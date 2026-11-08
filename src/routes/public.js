@@ -184,6 +184,12 @@ router.get('/health', (req, res) => {
   loopDelay.reset();
   const disk = require('../lib/diskguard').status();
   const warnings = [];
+  if (loop.maxMs > 5000) warnings.push(`event loop stalled ${loop.maxMs} ms since the last health check`);
+  else if (loop.maxMs > 1000) warnings.push(`event loop paused ${loop.maxMs} ms since the last health check`);
+  try {
+    const lim = require('../engine/memwatch').limits();
+    if (lim.soft && mem.rss > lim.soft) warnings.push(`memory ${mb(mem.rss)} MB is above the ${mb(lim.soft)} MB refresh threshold`);
+  } catch { /* watchdog not loaded in some tests */ }
   if (!disk.known) warnings.push('disk size unknown: the volume watchdog cannot protect the data volume');
   else if (disk.level === 'paused') warnings.push(`data volume ${disk.usedPct}% full: ingestion is paused`);
   else if (disk.level === 'warn') warnings.push(`data volume ${disk.usedPct}% full`);

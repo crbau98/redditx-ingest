@@ -1,5 +1,13 @@
 # UI changelog
 
+## 2026-11-08 — Reliability: backups off the request thread, stalls surfaced, colder paths warmed
+
+- **Backups and nightly SQLite maintenance now run on a worker thread.** `VACUUM INTO`, planner optimize and the WAL checkpoint used to run on the serving event loop; production reported stalls up to 37.8 seconds. The admin “Back up now” action awaits the worker and reports its result.
+- **`/api/health` now warns about stalls and memory**, not just disk: a loop pause over 1 second and RSS above the memwatch refresh threshold appear in `warnings` while the endpoint stays HTTP 200.
+- **Cold search starts warmer.** The snapshot prime order now builds vocabulary and the library before the heavier graph/topics jobs, tag-only searches query the tag index directly instead of building the full style library, and the SQLite page cache rose from 32 MB to 128 MB with a 1 GB mmap window.
+- **Face matching is on by default.** New published media enrols male face descriptors at ingest; the image sweep enrols older media in the same pass as the woman check, and the sweep rate rose to 24 items/minute. Matches need handle/text corroboration or go to review; takedown purges the descriptors.
+- **Verified:** backup worker exercised in a production-mode script (487 KB copy in 17 ms on a demo DB); full suite and UI audit to follow.
+
 ## 2026-11-08 — Cursor paging: no duplicates while the library moves
 
 - **The media feed now pages by cursor** for the `recent`, `oldest`, `top`, `trending` and `ingested` sorts. The cursor carries the last row’s sort key and sequence number, so a new post arriving mid-scroll cannot push a duplicate into the next page or skip an old one.

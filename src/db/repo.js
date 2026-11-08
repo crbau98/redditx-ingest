@@ -322,6 +322,21 @@ const creators = {
     return { items, total, page, limit };
   },
 
+  /** Creators who post ALL of these tags, most posts first. Used by tag-only search before the full library snapshot. */
+  byTags(tags, limit = 8) {
+    const list = [...new Set((Array.isArray(tags) ? tags : []).map(cleanTag).filter(Boolean))].slice(0, 6);
+    if (!list.length) return [];
+    const marks = list.map(() => '?').join(',');
+    return db.prepare(`SELECT c.id FROM creators c
+      JOIN media m ON m.creator_id = c.id AND m.publish_state = 'published' AND m.scope != 'excluded'
+      JOIN media_tags mt ON mt.media_id = m.id
+      JOIN tags t ON t.id = mt.tag_id
+      WHERE t.name IN (${marks}) AND c.status = 'active' AND c.scope != 'excluded'
+      GROUP BY c.id HAVING COUNT(DISTINCT t.name) = ?
+      ORDER BY COUNT(*) DESC, c.media_count DESC LIMIT ?`)
+      .all(...list, list.length, limit).map((r) => r.id);
+  },
+
   detail(id) {
     const c = db.prepare(`${SELECT_CREATOR_CARD} WHERE c.id = ?`).get(id);
     if (!c) return null;

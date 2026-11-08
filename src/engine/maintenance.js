@@ -13,6 +13,7 @@ const { hostBlocked, hostOf, isJunkTitle } = require('../lib/mediaurl');
 const { probeMedia } = require('./probe');
 const imagefilter = require('../lib/imagefilter');
 const dedupe = require('../services/dedupe');
+const faceMatch = require('../lib/face-match');
 const physique = require('./physique');
 const settingsStore = require('../settings');
 
@@ -92,7 +93,7 @@ const IMAGE_SWEEP_VERSION = '1'; // bump to re-check the whole library (e.g. aft
  */
 async function imageSweep({ limit = 12, settings } = {}) {
   const s = settings || settingsStore.get();
-  const res = { checked: 0, removed: 0, undecided: 0, errors: 0, done: false };
+  const res = { checked: 0, removed: 0, undecided: 0, errors: 0, faces: 0, done: false };
   if (repo.settings.get('image_sweep_version') !== IMAGE_SWEEP_VERSION) {
     repo.settings.set('image_sweep_version', IMAGE_SWEEP_VERSION); repo.settings.set('image_sweep_seq', '0');
   }
@@ -108,6 +109,11 @@ async function imageSweep({ limit = 12, settings } = {}) {
     if (v.female) { repo.media.block(row.id, 'image sweep: picture shows a woman', 'system'); res.removed++; }
     else if (v.status === 'error' || v.status === 'unavailable') res.errors++;
     else if (!v.decided) res.undecided++;
+    // Face matching on the existing library: the same model pass that checks for women also returns male
+    // descriptors, so this is the cheap place to enrol old media without a second download.
+    if (s.faceMatch && v.faceList && v.faceList.length) {
+      try { res.faces += faceMatch.saveMediaFaces(row.id, v.faceList); } catch { /* best effort */ }
+    }
   }
   repo.settings.set('image_sweep_seq', String(after));
   if (res.removed) events.log('OK', `Image sweep: removed ${res.removed} of ${res.checked} checked (women in the picture)`);
@@ -149,6 +155,9 @@ async function physiqueSweep({ limit = 12, settings } = {}) {
     if (!cur) continue;
     if (v.female) { repo.media.block(row.id, 'physique sweep: picture shows a woman', 'system'); res.removed++; continue; }
     if (v.status === 'error' || v.status === 'unavailable') { res.errors++; continue; }
+    if (now.faceMatch && v.faceList && v.faceList.length) {
+      try { res.faces = (res.faces || 0) + faceMatch.saveMediaFaces(row.id, v.faceList); } catch { /* best effort */ }
+    }
     // A row hidden for its WORDS that the current word list no longer matches (the text sweep leaves it hidden and rewinds this
     // sweep to it): it is shown again only now, after a real measurement, with the stored verdict: hidden with a body reason if
     // heavy, published otherwise. No torso in view leaves it unmeasured, as the pipeline publishes any other such picture.
