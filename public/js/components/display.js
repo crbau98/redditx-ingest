@@ -1,5 +1,6 @@
 import { h, icon, openModal, toast } from '../dom.js';
-import { prefs, tastes } from '../store.js';
+import { prefs, tastes, follows } from '../store.js';
+import { pushSupported, pushCreators, enableForAll, disablePush } from '../push.js';
 
 const ACCENTS = [
   ['prism', 'Prism', 'linear-gradient(135deg, #8b5cf6, #ff5c8a 55%, #ffb347)'],
@@ -36,7 +37,18 @@ export function openDisplaySettings() {
         check('Start videos with sound off', () => prefs.muted, (v) => { prefs.muted = v; }),
         check('Hide things I’ve already seen', () => prefs.hideSeen, (v) => { prefs.hideSeen = v; }),
         ...('serviceWorker' in navigator ? [check('Keep what I browse for offline use', () => prefs.offlineContent, (v) => { prefs.offlineContent = v; }, 'Saves pages and pictures on this device so they open without a connection. Off by default. Turning it off, or clearing history, deletes them.')] : []),
-        check('Pause history and learning', () => prefs.historyOff, (v) => { prefs.historyOff = v; }, 'Stops recording what you open, and stops “For you” from learning.'))),
+        check('Pause history and learning', () => prefs.historyOff, (v) => { prefs.historyOff = v; }, 'Stops recording what you open, and stops “For you” from learning.')),
+      pushSupported() ? (() => {
+        const count = pushCreators().length;
+        const line = h('div', { class: 'muted', style: { fontSize: '12.5px' } }, count ? `Watching ${count} creator${count === 1 ? '' : 's'}.` : 'Tap the bell on a creator page to get a notification when he posts.');
+        const off = count ? h('button', { class: 'btn sm ghost', onclick: async () => { await disablePush(); } }, 'Turn off all') : null;
+        const all = !count && follows.count() ? h('button', { class: 'btn sm', onclick: async () => {
+          try { const n = await enableForAll(follows.list().map((c) => c.id)); toast(`Alerts on for ${n} creator${n === 1 ? '' : 's'}`); line.textContent = `Watching ${n} creator${n === 1 ? '' : 's'}.`; }
+          catch (e) { toast(String(e.message || e), 'err'); }
+        } }, 'Alert me about follows') : null;
+        return h('div', { class: 'display-row' }, h('label', null, 'Alerts'), h('div', null, line, all, off));
+      })() : null,
+    ),
     actions: [
       h('button', { class: 'btn sm ghost', onclick: () => { tastes.reset(); toast('“For you” has been reset'); } }, icon('refresh', 'sm'), 'Reset “For you”'),
       h('button', { class: 'btn primary', onclick: () => m.close() }, 'Done'),

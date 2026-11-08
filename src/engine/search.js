@@ -40,6 +40,11 @@ function creatorsFor(u, paidHost, limit) {
   if (u.creator) add(cards([u.creator.id], paidHost), 'name');
   if (u.text) add(repo.creators.list({ q: u.text, limit, paidHost }).items, 'name');
   if (u.tags.length) {
+    // A plain tag search is a tag index lookup, not a reason to build the whole style library.
+    if (!u.text && !u.creator && !paidHost) {
+      const direct = cards(repo.creators.byTags(u.tags, limit), paidHost);
+      if (direct.length >= Math.min(4, limit)) return direct;
+    }
     const lib = library();
     const weights = new Map(u.tags.map((t) => [t, 1]));
     // With a paid platform, narrow the style matches to its creators before taking the top few.

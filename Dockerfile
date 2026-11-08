@@ -7,7 +7,7 @@ WORKDIR /app
 # Chromium backs the raw-CDP challenge browser (lib/chrome.js): it is the only local engine that gets past a
 # managed Cloudflare / DDoS-Guard / DataDome challenge, and it costs nothing per page. ttf-freefont gives it fonts,
 # so a challenge page's canvas/WebGL fingerprint looks like a real desktop.
-RUN apk add --no-cache python3 make g++ wget chromium ttf-freefont
+RUN apk add --no-cache python3 make g++ wget chromium ttf-freefont tesseract-ocr tesseract-ocr-data-eng
 
 COPY package*.json ./
 RUN npm ci --omit=dev || npm install --omit=dev

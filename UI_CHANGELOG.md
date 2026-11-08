@@ -1,5 +1,35 @@
 # UI changelog
 
+## 2026-11-08 — Reliability: backups off the request thread, stalls surfaced, colder paths warmed
+
+- **Backups and nightly SQLite maintenance now run on a worker thread.** `VACUUM INTO`, planner optimize and the WAL checkpoint used to run on the serving event loop; production reported stalls up to 37.8 seconds. The admin “Back up now” action awaits the worker and reports its result.
+- **`/api/health` now warns about stalls and memory**, not just disk: a loop pause over 1 second and RSS above the memwatch refresh threshold appear in `warnings` while the endpoint stays HTTP 200.
+- **Cold search starts warmer.** The snapshot prime order now builds vocabulary and the library before the heavier graph/topics jobs, tag-only searches query the tag index directly instead of building the full style library, and the SQLite page cache rose from 32 MB to 128 MB with a 1 GB mmap window.
+- **Face matching is on by default.** New published media enrols male face descriptors at ingest; the image sweep enrols older media in the same pass as the woman check, and the sweep rate rose to 24 items/minute. Matches need handle/text corroboration or go to review; takedown purges the descriptors.
+- **Verified:** backup worker exercised in a production-mode script (487 KB copy in 17 ms on a demo DB); full suite and UI audit to follow.
+
+## 2026-11-08 — Cursor paging: no duplicates while the library moves
+
+- **The media feed now pages by cursor** for the `recent`, `oldest`, `top`, `trending` and `ingested` sorts. The cursor carries the last row’s sort key and sequence number, so a new post arriving mid-scroll cannot push a duplicate into the next page or skip an old one.
+- **Offset paging stays as the fallback** for fixed-id feeds, custom POST feeds, relevance/random sorts, and any server that does not return `nextCursor`. Existing page-based callers keep working.
+- **The count is skipped after page one** in cursor mode, matching the old `nocount` behaviour; the first page still returns the total.
+- **Verified:** repository and HTTP cursor tests (`tests/cursor-pagination.test.js`) plus a live Chromium scroll: two cursor requests, 82 cards, no console errors.
+
+## 2026-11-08 — Search inside pictures (OCR)
+
+- **Text in pictures becomes searchable.** A rate-limited background job reads new pictures (and video posters) with Tesseract and stores only the words in `media.ocr_text`; the existing FTS index now includes them. An image-only post can be found by its caption text without copying the image.
+- **Optional by design.** The Docker image installs `tesseract-ocr`; a development machine without it reports OCR as unavailable and the rest of ingestion is untouched. Admin → Settings controls the rate (default 20 pictures/minute), language codes and an on/off switch.
+- **No retry storm.** Each picture gets an `ocr_at` marker whether the read succeeds or fails, so a dead origin is not retried forever.
+- **Verified:** migration v27 (column plus FTS triggers), 5 new tests (`tests/ocr.test.js`) for the schema, normalization, sweep, failure marker and off switch.
+
+## 2026-11-08 — Alerts: a push notification when a creator posts
+
+- **Bell on the creator profile.** One tap asks the browser for notification permission, creates a push subscription, and adds that creator to the watched list; a second tap removes him. A watched creator shows the bell in its on state.
+- **One subscription, not one per creator.** The server keeps a single row per browser endpoint with the creator ids to watch. The three-minute job reads the existing media table, sends one summary notification ("New from X"), and moves its cursor forward. No media is copied to the server or the device.
+- **Lock-screen friendly.** The payload carries the creator name, a generic "Tap to see the new post." body, and the profile URL — no explicit title, no thumbnail.
+- **Display → Alerts** shows how many creators are watched and turns every alert off; dead endpoints (404/410) are disabled instead of retried forever.
+- **Verified:** 6 new tests (`tests/push-alerts.test.js`) cover the key, subscription lifecycle, creator filtering, the summary job and gone-endpoint handling; full suite 1,839 pass / 4 skipped.
+
 ## 2026-11-06 — Sources: Pornhub gay models and pornstars
 
 - **Pornhub joins the source list** (Admin → Sources) as a keyless source: paste `https://www.pornhub.com/model/<slug>` or `/pornstar/<slug>` anywhere a link is pasted and it becomes a creator feed. Only the cards the site itself labels `gay` are read, so a mixed model page cannot pull a straight scene in. Its blurb, the feed counts and a *Sync all* button come with it; the README's source table lists it too.

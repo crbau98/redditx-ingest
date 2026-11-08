@@ -99,9 +99,11 @@ function snapshot(name) {
 /** Fill every snapshot once, in order, so the first visitors after boot never wait for a cold one. */
 function prime() {
   if (!USE_WORKER) return;
-  // discover first: the home page needs it on the first visit, while the tag vocabulary (tags, topics) can wait for
-  // the next jobs. Everything else keeps its declared order.
-  const names = ['discover', ...Object.keys(JOB_FNS).filter((n) => n !== 'discover')];
+  // Search needs vocabulary and the library before a first visitor types; home wants discover. Put
+  // those first, then everything else in declared order. Previously vocabulary was last, so the
+  // first search after boot could wait through every other snapshot (measured 11.6 s).
+  const first = ['vocabulary', 'library', 'discover'];
+  const names = [...first, ...Object.keys(JOB_FNS).filter((n) => !first.includes(n))];
   const next = () => {
     const name = names.shift();
     if (!name) return;

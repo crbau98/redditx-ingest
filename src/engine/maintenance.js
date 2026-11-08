@@ -13,6 +13,7 @@ const { hostBlocked, hostOf, isJunkTitle } = require('../lib/mediaurl');
 const { probeMedia } = require('./probe');
 const imagefilter = require('../lib/imagefilter');
 const dedupe = require('../services/dedupe');
+const faceMatch = require('../lib/face-match');
 const physique = require('./physique');
 const settingsStore = require('../settings');
 
@@ -92,7 +93,7 @@ const IMAGE_SWEEP_VERSION = '1'; // bump to re-check the whole library (e.g. aft
  */
 async function imageSweep({ limit = 12, settings } = {}) {
   const s = settings || settingsStore.get();
-  const res = { checked: 0, removed: 0, undecided: 0, errors: 0, done: false };
+  const res = { checked: 0, removed: 0, undecided: 0, errors: 0, faces: 0, done: false };
   if (repo.settings.get('image_sweep_version') !== IMAGE_SWEEP_VERSION) {
     repo.settings.set('image_sweep_version', IMAGE_SWEEP_VERSION); repo.settings.set('image_sweep_seq', '0');
   }
@@ -108,6 +109,12 @@ async function imageSweep({ limit = 12, settings } = {}) {
     if (v.female) { repo.media.block(row.id, 'image sweep: picture shows a woman', 'system'); res.removed++; }
     else if (v.status === 'error' || v.status === 'unavailable') res.errors++;
     else if (!v.decided) res.undecided++;
+    // Face matching on the existing library: the same model pass that checks for women also returns male
+    // descriptors, so this is the cheap place to enrol old media without a second download.
+    if (s.faceMatch && v.faceList && v.faceList.length) {
+      try { res.faces += faceMatch.saveMediaFaces(row.id, v.faceList); } catch { /* best effort */ }
+    }
+    if (s.faceMatch) { try { repo.db.prepare('UPDATE media SET face_at = ? WHERE id = ?').run(new Date().toISOString(), row.id); } catch { /* best effort */ } }
   }
   repo.settings.set('image_sweep_seq', String(after));
   if (res.removed) events.log('OK', `Image sweep: removed ${res.removed} of ${res.checked} checked (women in the picture)`);
@@ -149,6 +156,10 @@ async function physiqueSweep({ limit = 12, settings } = {}) {
     if (!cur) continue;
     if (v.female) { repo.media.block(row.id, 'physique sweep: picture shows a woman', 'system'); res.removed++; continue; }
     if (v.status === 'error' || v.status === 'unavailable') { res.errors++; continue; }
+    if (now.faceMatch && v.faceList && v.faceList.length) {
+      try { res.faces = (res.faces || 0) + faceMatch.saveMediaFaces(row.id, v.faceList); } catch { /* best effort */ }
+    }
+    if (now.faceMatch) { try { repo.db.prepare('UPDATE media SET face_at = ? WHERE id = ?').run(new Date().toISOString(), row.id); } catch { /* best effort */ } }
     // A row hidden for its WORDS that the current word list no longer matches (the text sweep leaves it hidden and rewinds this
     // sweep to it): it is shown again only now, after a real measurement, with the stored verdict: hidden with a body reason if
     // heavy, published otherwise. No torso in view leaves it unmeasured, as the pipeline publishes any other such picture.
@@ -321,6 +332,46 @@ function imageSweepProgress() {
   return { cursor, checkedUpTo: q('<='), remaining: q('>'), version: IMAGE_SWEEP_VERSION };
 }
 
+/* ------------------------------------------------------------- face enrolment */
+/**
+ * Newest-first face enrolment for the existing library. New posts get descriptors at ingest; this
+ * sweep gives old posts the same treatment, starting with the freshest so active creators become
+ * matchable quickly. `face_at` marks every attempt, successful or not, so a dead picture is not
+ * downloaded every minute. Vectors live in `media_faces`; takedown purges them.
+ */
+async function faceSweep({ limit = 12, settings } = {}) {
+  const s = settings || settingsStore.get();
+  const res = { checked: 0, enrolled: 0, errors: 0, done: false };
+  if (!s.faceMatch) return { ...res, off: true };
+  if (!(await imagefilter.available())) return { ...res, unavailable: true };
+  const rows = repo.db.prepare(`SELECT id, media_type, media_url, preview_url, thumbnail_url
+    FROM media
+    WHERE face_at IS NULL AND publish_state = 'published' AND scope != 'excluded'
+      AND (media_type = 'image' OR preview_url IS NOT NULL OR thumbnail_url IS NOT NULL)
+    ORDER BY posted_at DESC, seq DESC LIMIT ?`).all(Math.max(1, Math.min(120, Number(limit) || 12)));
+  if (!rows.length) return { ...res, done: true };
+  for (const row of rows) {
+    res.checked++;
+    const now = new Date().toISOString();
+    let v;
+    try {
+      v = await imagefilter.checkItem({ mediaType: row.media_type, mediaUrl: row.media_url, previewUrl: row.preview_url, thumbnailUrl: row.thumbnail_url }, { faces: true, hash: false });
+    } catch { res.errors++; repo.db.prepare('UPDATE media SET face_at = ? WHERE id = ?').run(now, row.id); continue; }
+    if (v.status === 'error' || v.status === 'unavailable') res.errors++;
+    if (v.faceList && v.faceList.length) {
+      try { res.enrolled += faceMatch.saveMediaFaces(row.id, v.faceList); } catch { /* best effort */ }
+    }
+    repo.db.prepare('UPDATE media SET face_at = ? WHERE id = ?').run(now, row.id);
+  }
+  return res;
+}
+
+function faceSweepProgress() {
+  const row = repo.db.prepare("SELECT COUNT(*) AS remaining FROM media WHERE face_at IS NULL AND publish_state = 'published' AND scope != 'excluded' AND (media_type = 'image' OR preview_url IS NOT NULL OR thumbnail_url IS NOT NULL)").get();
+  const faces = repo.db.prepare('SELECT COUNT(DISTINCT media_id) AS media, COUNT(*) AS descriptors FROM media_faces').get();
+  return { remaining: row.remaining, ...faces };
+}
+
 let sweepTimer = null; let sweepBusy = false; let sweepGaveUp = false;
 const RETIRE_EVERY_MS = 24 * 3600 * 1000;
 const RETIRE_RETRY_MS = 3600 * 1000;
@@ -352,6 +403,12 @@ function startImageSweep() {
     try { retireDeadFeeds(); } catch (e) { events.log('WARN', `Feed retirement: ${e.message}`); }
     if (sweepBusy) return;
     const s = settingsStore.get();
+    // Face enrolment gets its own small newest-first pass even when the image sweep is off: it is
+    // what makes creator matching useful on the existing library.
+    if (s.faceMatch && s.faceSweepPerMinute > 0) {
+      sweepBusy = true;
+      try { await faceSweep({ limit: s.faceSweepPerMinute, settings: s }); } catch (e) { events.log('WARN', `Face sweep: ${e.message}`); } finally { sweepBusy = false; }
+    }
     if (!s.imageSweep || !s.imageSweepPerTick) return;
     sweepBusy = true;
     try {
@@ -398,4 +455,4 @@ function startupSweepIfNeeded() {
   }, 1500).unref();
 }
 
-module.exports = { clearBorrowedPosterHashes, repairSharedPosterCollapse, retireDeadFeeds, sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, physiqueSweep, physiqueSweepProgress, hashSweep, hashSweepProgress, startImageSweep, stopImageSweep };
+module.exports = { clearBorrowedPosterHashes, repairSharedPosterCollapse, retireDeadFeeds, sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, faceSweep, faceSweepProgress, physiqueSweep, physiqueSweepProgress, hashSweep, hashSweepProgress, startImageSweep, stopImageSweep };

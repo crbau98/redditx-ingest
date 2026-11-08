@@ -17,7 +17,7 @@
  *
  * Everything is same-origin and capped, and the caches hold only what this device already showed. Posting
  * {type:'prism-clear-caches'} to the worker (the app does on "Clear history") empties them all. */
-const VERSION = 'prism-shell-v10';
+const VERSION = 'prism-shell-v11';
 const API_CACHE = 'prism-api-v1';
 const IMG_CACHE = 'prism-img-v1';
 const FLAGS_CACHE = 'prism-flags-v1';
@@ -120,6 +120,39 @@ async function navigation(req) {
     return (await shell()) || (await caches.match('/offline.html', { cacheName: VERSION })) || Response.error();
   }
 }
+
+/* Push alerts: one notification per message. The server sends only a title, a generic body and a
+ * creator URL, so a lock screen never shows explicit text. Clicking focuses an open PRISM tab. */
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch { data = {}; }
+  const title = String(data.title || 'PRISM');
+  const options = {
+    body: String(data.body || 'Tap to see the new post.'),
+    icon: data.icon || '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
+    tag: data.tag || 'prism-new',
+    renotify: false,
+    data: { url: data.url || '/' },
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = new URL((event.notification.data && event.notification.data.url) || '/', self.location.origin).href;
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of windows) {
+      if (client.url.startsWith(self.location.origin)) {
+        await client.focus();
+        if ('navigate' in client) await client.navigate(url).catch(() => {});
+        return;
+      }
+    }
+    await self.clients.openWindow(url);
+  })());
+});
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;

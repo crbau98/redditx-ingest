@@ -46,6 +46,16 @@ function createApp() {
   }));
   app.use(compression({ filter: (req, res) => (req.path.startsWith('/api/stream') || req.path.startsWith('/api/admin/stream') || req.path === '/api/proxy' ? false : compression.filter(req, res)) }));
   if (!config.isTest) app.use(morgan(config.isProd ? 'tiny' : 'dev', { skip: (req) => req.path === '/api/health' || req.path === '/api/proxy' }));
+  // A slow API request is logged once, with its duration: the health endpoint only shows the worst pause
+  // between checks; this says which request caused it.
+  if (!config.isTest) app.use((req, res, next) => {
+    const t0 = process.hrtime.bigint();
+    res.on('finish', () => {
+      const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+      if (ms >= 500 && req.path.startsWith('/api') && req.path !== '/api/health') console.warn(`[slow] ${req.method} ${req.originalUrl.split('?')[0]} ${ms.toFixed(0)}ms ${res.statusCode}`);
+    });
+    next();
+  });
   // Auth runs before the large body parser so unauthenticated uploads are rejected without being read.
   app.use('/api/admin/import', adminCredentialAuth);
   app.use('/api/admin/import', express.json({ limit: '12mb' })); // curated configs can be large; everything else stays at 1mb

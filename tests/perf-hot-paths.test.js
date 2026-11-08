@@ -73,10 +73,13 @@ describe('schema v24: covering indexes for the whole-library scans', () => {
     d.pragma('user_version = 23');
     d.prepare("INSERT INTO media (id, platform, media_type, media_url, hash) VALUES ('m1', 'reddit', 'image', 'https://x/1.jpg', 'h1')").run();
     const before = d.prepare('SELECT COUNT(*) AS n, total_changes() AS c FROM media').get();
-    assert.deepEqual(migrate(d), { from: 23, to: MIGRATIONS.length });
+    MIGRATIONS[23](d); // v24 itself: indexes only, no row rewrite
     for (const name of ['ix_media_pub_count', 'ix_media_pub_comm']) assert.ok(d.prepare("SELECT 1 FROM sqlite_master WHERE name = ?").get(name));
     assert.equal(d.prepare('SELECT COUNT(*) AS n FROM media').get().n, before.n);
     assert.equal(d.prepare('SELECT total_changes() AS c').get().c, before.c, 'creating the indexes rewrites no row');
+    assert.equal(d.pragma('user_version', { simple: true }), 23);
+    assert.deepEqual(migrate(d), { from: 23, to: MIGRATIONS.length });
+    assert.equal(d.prepare('SELECT COUNT(*) AS n FROM media').get().n, before.n);
     assert.deepEqual(migrate(d), { from: MIGRATIONS.length, to: MIGRATIONS.length });
     MIGRATIONS[23](d); // CREATE INDEX IF NOT EXISTS: safe to repeat
   });

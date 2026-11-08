@@ -17,6 +17,7 @@ const settingsStore = require('../settings');
 const { creatorOnlyFans } = require('../lib/onlyfans');
 const { creatorPaid } = require('../lib/paid');
 const { normAlias } = require('../lib/alias');
+const webpush = require('../lib/webpush');
 
 const router = express.Router();
 
@@ -75,13 +76,14 @@ function mediaFilters(q) {
     ids: typeof q.ids === 'string' ? q.ids.split(',').filter((x) => /^[0-9a-f-]{36}$/i.test(x)).slice(0, 100) : undefined,
     q: str(q.q, 100),
     sort, seed: q.seed,
+    cursor: typeof q.cursor === 'string' ? q.cursor.slice(0, 240) : undefined,
     since: ['day', 'week', 'month', 'year'].includes(q.since) ? q.since : undefined,
     level: q.level === 'explicit' || q.level === 'suggestive' ? q.level : undefined,
     // "on Fansly": creators with a page on that paid platform; "athletic": measured lean or athletic
     paidHost: Object.prototype.hasOwnProperty.call(PAID, q.paid || '') ? PAID[q.paid].host : undefined,
     build: q.build === 'fit' ? 'fit' : undefined,
     // Infinite scroll only needs the total once; later pages skip the COUNT(*).
-    noCount: q.nocount === '1' && repo.clampInt(q.page, 0, 100000, 0) > 0,
+    noCount: (q.nocount === '1' && repo.clampInt(q.page, 0, 100000, 0) > 0) || (typeof q.cursor === 'string' && q.cursor.length > 0),
     // "new since" for saved searches: an ISO timestamp, normalised so it compares correctly as text
     after: typeof q.after === 'string' && !Number.isNaN(Date.parse(q.after)) ? new Date(q.after).toISOString() : undefined,
   };
@@ -182,6 +184,12 @@ router.get('/health', (req, res) => {
   loopDelay.reset();
   const disk = require('../lib/diskguard').status();
   const warnings = [];
+  if (loop.maxMs > 5000) warnings.push(`event loop stalled ${loop.maxMs} ms since the last health check`);
+  else if (loop.maxMs > 1000) warnings.push(`event loop paused ${loop.maxMs} ms since the last health check`);
+  try {
+    const lim = require('../engine/memwatch').limits();
+    if (lim.soft && mem.rss > lim.soft) warnings.push(`memory ${mb(mem.rss)} MB is above the ${mb(lim.soft)} MB refresh threshold`);
+  } catch { /* watchdog not loaded in some tests */ }
   if (!disk.known) warnings.push('disk size unknown: the volume watchdog cannot protect the data volume');
   else if (disk.level === 'paused') warnings.push(`data volume ${disk.usedPct}% full: ingestion is paused`);
   else if (disk.level === 'warn') warnings.push(`data volume ${disk.usedPct}% full`);
@@ -229,8 +237,75 @@ router.post('/report', reportLimiter, (req, res) => {
   res.status(201).json({ ok: true, id });
 });
 
+/* ------------------------------------------------------------ push alerts */
+// The public key is not a secret and is needed before the first permission prompt.
+router.get('/push/key', (req, res) => res.json(webpush.descriptor()));
+
+/** Validate the browser's PushSubscription and the creator list it wants alerts for. */
+function readPushBody(body) {
+  const sub = body && body.subscription;
+  if (!sub || typeof sub !== 'object') return { error: 'subscription is required' };
+  const endpoint = String(sub.endpoint || '').trim();
+  const p256dh = String((sub.keys && sub.keys.p256dh) || '').trim();
+  const auth = String((sub.keys && sub.keys.auth) || '').trim();
+  if (!/^https:\/\//i.test(endpoint) || endpoint.length > 2048) return { error: 'subscription.endpoint must be an https URL' };
+  if (!p256dh || p256dh.length > 512 || !auth || auth.length > 512) return { error: 'subscription.keys are required' };
+  const requested = Array.isArray(body.creators) ? body.creators.slice(0, 200).map(String) : [];
+  const creators = [...new Set(requested)].filter((id) => {
+    const c = repo.creators.get(id);
+    return !!(c && c.status === 'active' && c.scope !== 'excluded');
+  });
+  return { endpoint, p256dh, auth, creators };
+}
+
+function savePushSubscription({ endpoint, p256dh, auth, creators }) {
+  const now = repo.nowIso();
+  const list = JSON.stringify(creators.slice(0, 200));
+  const existing = repo.db.prepare('SELECT id FROM push_subscriptions WHERE endpoint = ?').get(endpoint);
+  if (existing) {
+    repo.db.prepare(`UPDATE push_subscriptions SET p256dh = ?, auth = ?, creator_ids = ?, enabled = 1,
+        updated_at = ?, last_error = NULL WHERE id = ?`).run(p256dh, auth, list, now, existing.id);
+    return existing.id;
+  }
+  const id = crypto.randomUUID();
+  repo.db.prepare(`INSERT INTO push_subscriptions (id, endpoint, p256dh, auth, creator_ids, enabled, created_at, updated_at, last_checked_at)
+      VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)`).run(id, endpoint, p256dh, auth, list, now, now, now);
+  return id;
+}
+
+router.post('/push/subscribe', age.requireAge, (req, res) => {
+  const body = readPushBody(req.body || {});
+  if (body.error) return res.status(400).json({ error: body.error });
+  const id = savePushSubscription(body);
+  res.status(201).json({ ok: true, id, creators: body.creators.length });
+});
+
+/** The creator list changes when the person follows or unfollows someone. */
+router.post('/push/creators', age.requireAge, (req, res) => {
+  const endpoint = String((req.body && req.body.endpoint) || '').trim();
+  if (!/^https:\/\//i.test(endpoint)) return res.status(400).json({ error: 'endpoint is required' });
+  const row = repo.db.prepare('SELECT id, creator_ids FROM push_subscriptions WHERE endpoint = ?').get(endpoint);
+  if (!row) return res.status(404).json({ error: 'not subscribed' });
+  const requested = Array.isArray(req.body.creators) ? req.body.creators.slice(0, 200).map(String) : [];
+  const creators = [...new Set(requested)].filter((id) => {
+    const c = repo.creators.get(id);
+    return !!(c && c.status === 'active' && c.scope !== 'excluded');
+  });
+  const now = repo.nowIso();
+  repo.db.prepare('UPDATE push_subscriptions SET creator_ids = ?, updated_at = ?, last_error = NULL WHERE id = ?')
+    .run(JSON.stringify(creators), now, row.id);
+  res.json({ ok: true, creators: creators.length });
+});
+
+router.post('/push/unsubscribe', age.requireAge, (req, res) => {
+  const endpoint = String((req.body && req.body.endpoint) || '').trim();
+  if (!/^https:\/\//i.test(endpoint)) return res.status(400).json({ error: 'endpoint is required' });
+  repo.db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(endpoint);
+  res.json({ ok: true });
+});
+
 /* -------------------------------------------------------- age-gated content */
-router.use(['/discover', '/stats', '/suggest', '/search', '/recommend', '/graph', '/understand', '/topics', '/media', '/creators', '/tags', '/communities', '/subreddits', '/platforms', '/stream', '/lookup'], age.requireAge);
+router.use(['/discover', '/stats', '/suggest', '/search', '/recommend', '/graph', '/understand', '/topics', '/media', '/creators', '/tags', '/communities', '/subreddits', '/platforms', '/stream', '/lookup', '/push'], age.requireAge);
 
 router.get('/discover', asyncRoute(async (req, res) => res.json(await discoverView())));
 router.get('/stats', asyncRoute(async (req, res) => res.json(await snapshot('stats'))));

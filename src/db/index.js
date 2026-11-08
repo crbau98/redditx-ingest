@@ -18,8 +18,8 @@ if (!READONLY) {
 }
 db.pragma('foreign_keys = ON');
 db.pragma('busy_timeout = 5000');
-db.pragma('cache_size = -32000');
-db.pragma('mmap_size = 268435456');
+db.pragma('cache_size = -131072'); // 128 MB page cache (was 32 MB: cold searches paid for disk reads)
+db.pragma('mmap_size = 1073741824');
 db.pragma('temp_store = MEMORY');
 
 // Deterministic pseudo-random order that is stable for a given seed, so
