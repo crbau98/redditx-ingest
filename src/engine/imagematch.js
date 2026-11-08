@@ -147,7 +147,7 @@ async function seedCrawlCreator(creator, { maxPages = 2 } = {}) {
  */
 async function matchCreator(creator, { budget = 40, aborted = () => false, service = null, paidHandle = null,
   maxQueries = 4, maxPages = PAGES_PER_CREATOR, cbirRefs = 1, onPhase = null } = {}) {
-  const out = { checked: 0, matched: 0, pages: 0, pictures: 0 };
+  const out = { checked: 0, matched: 0, pages: 0, pictures: 0, cbir: 0 };
   const refs = reference(creator.id);
   const s = settingsStore.get();
   const useFaces = !!s.faceMatch;
@@ -306,7 +306,7 @@ async function matchCreator(creator, { budget = 40, aborted = () => false, servi
             evidence: 'Yandex reverse-image: the same picture appears on this page (review before any link)',
             status: 'review',
           });
-          out.pages++;
+          out.pages++; out.cbir++; // reverse-image rows are review candidates, not registered pages
         }
       }
       }

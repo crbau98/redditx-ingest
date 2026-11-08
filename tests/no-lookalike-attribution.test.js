@@ -69,7 +69,7 @@ describe('image match: the same picture, never a look-alike', () => {
     const out = await imagematch.matchCreator(c, { budget: 40 });
     assert.equal(state.analyzed, 1, 'the picture was hashed');
     assert.equal(state.embedCalls, 0, 'no visual vector was ever requested');
-    assert.deepEqual(out, { checked: 1, matched: 0, pages: 0, pictures: 0 });
+    assert.deepEqual(out, { checked: 1, matched: 0, pages: 0, pictures: 0, cbir: 0 }); // cbir: reverse-image rows, all 0 here
     assert.ok(!repo.feeds.find('web', 'page', 'https://gallery.example.test/zed-lookalike-pics'), 'no feed was registered');
     assert.equal(imageMatchActions(c.id).length, 0, 'and nothing was logged as an attribution');
   });

@@ -42,6 +42,8 @@ const COOLDOWN_MS = { manual: 15 * 60 * 1000, lookup: 6 * 60 * 60 * 1000 };
 const MAX_TEXT_QUERIES = 8;
 const MAX_VIDEO_QUERIES = 3;
 const MAX_PAGES = 8;
+/** One pull may add this many feeds: each new feed is a feed the scheduler now polls for ever. */
+const MAX_FEEDS = 10;
 const MAX_RESULTS_PER_QUERY = 20;
 
 /** Site shapes rotate so repeated pulls keep widening the sweep instead of re-asking the same eight. */
@@ -232,6 +234,7 @@ async function pull(creatorId, { trigger = 'manual', force = false, aborted = ()
     const ctx = { paidHandle: paid.handle || null };
     const { text, video, rotate } = buildQueries(creator);
     const budget = s.braveDailyBudget;
+    writeProgress(creatorId, { phase: 'text', queries: [...text, ...video], found: { pages: 0, feeds: 0, paid: 0, pictures: 0, reviews: 0, results: 0 } });
 
     // 1. text
     for (const q of text) {
@@ -244,9 +247,10 @@ async function pull(creatorId, { trigger = 'manual', force = false, aborted = ()
         continue;
       }
       for (const hit of results) {
-        if (found.pages >= MAX_PAGES || aborted()) break;
+        if (found.pages >= MAX_PAGES || found.feeds >= MAX_FEEDS || aborted()) break;
         found.results++;
         const r = await takeResult(hit, creator, found, ctx);
+        if (found.feeds + r.feeds > MAX_FEEDS) r.feeds = Math.max(0, MAX_FEEDS - found.feeds);
         found.feeds += r.feeds; found.paid += r.paid;
         if (r.pages) found.pages++;
       }
@@ -259,9 +263,10 @@ async function pull(creatorId, { trigger = 'manual', force = false, aborted = ()
       let results = [];
       try { results = await videoFn(q, { count: 12, budget }); } catch { continue; }
       for (const hit of results) {
-        if (found.pages >= MAX_PAGES) break;
+        if (found.pages >= MAX_PAGES || found.feeds >= MAX_FEEDS) break;
         found.results++;
         const r = await takeResult({ ...hit, url: hit.pageUrl || hit.url }, creator, found, ctx);
+        if (found.feeds + r.feeds > MAX_FEEDS) r.feeds = Math.max(0, MAX_FEEDS - found.feeds);
         found.feeds += r.feeds; found.paid += r.paid;
         if (r.pages) found.pages++;
       }
@@ -276,8 +281,10 @@ async function pull(creatorId, { trigger = 'manual', force = false, aborted = ()
           maxQueries: 6, maxPages: MAX_PAGES, cbirRefs: 3,
         });
         found.pictures += r.pictures || 0;
-        found.pages += r.pages || 0;
-        found.feeds += r.pages || 0;
+        found.reviews += r.cbir || 0;                       // reverse-image rows: review queue, no feed
+        const registered = Math.max(0, (r.pages || 0) - (r.cbir || 0));
+        found.pages += registered;
+        found.feeds = Math.min(MAX_FEEDS, found.feeds + registered);
       } catch (e) { events.log('WARN', `Deep pull: image match — ${e.message}`); }
     }
 
@@ -286,7 +293,7 @@ async function pull(creatorId, { trigger = 'manual', force = false, aborted = ()
     writeProgress(creatorId, {
       phase: 'done', done: true, error: null, lastAt: new Date().toISOString(), found: { ...found },
     });
-    events.log('OK', `Deep pull ${creator.display_name || creator.handle}: ${found.feeds} new feed(s), ${found.pages} page(s), ${found.pictures} picture(s) matched, ${found.results} result(s) read`);
+    events.log('OK', `Deep pull ${creator.display_name || creator.handle}: ${found.feeds} new feed(s) (cap ${MAX_FEEDS}), ${found.pictures} picture(s) matched, ${found.reviews} review row(s), ${found.results} result(s) read`);
     return { ok: true, ...found };
   })().catch((e) => {
     writeProgress(creatorId, { phase: 'done', done: true, error: String(e.message || e).slice(0, 200), lastAt: new Date().toISOString() });
