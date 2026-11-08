@@ -315,26 +315,38 @@ async function blueskyGraph({ creators = 4, aborted = () => false } = {}) {
 
 /** Find a known creator's other accounts by searching the web for their exact handle. */
 async function braveIdentity({ creators = 3, budget, aborted = () => false } = {}) {
-  const targets = repo.discoveryTargets({ prefix: 'brave.identity.', staleDays: 30, limit: creators, minMedia: 3, maxAccounts: 2 })
-    .filter((t) => coreHandle(t.handle).length >= 5);
+  const targets = repo.discoveryTargets({ prefix: 'brave.identity.', staleDays: 14, limit: creators, minMedia: 2, maxAccounts: 4 })
+    .filter((t) => coreHandle(t.handle).length >= 4);
   let linked = 0; let searched = 0;
   for (const t of targets) {
     if (aborted()) break;
     const core = coreHandle(t.handle);
+    const namePart = String(t.display_name || '').trim().split(/\s+/).slice(0, 2).join(' ');
+    const nameQ = namePart && namePart.length >= 3 ? ` OR "${namePart}"` : '';
     let results;
-    try { results = await websearch.search(`"${core}" (onlyfans OR fansly OR "justfor.fans" OR bluesky OR twitter OR reddit OR redgifs OR telegram OR linktree)`, { budget }); searched++; } catch (e) {
+    try { results = await websearch.search(`("${core}"${nameQ}) (onlyfans OR fansly OR "justfor.fans" OR manyvids OR loyalfans OR fanvue OR patreon OR bluesky OR twitter OR x.com OR reddit OR redgifs OR telegram OR linktree OR allmylinks OR beacons)`, { budget }); searched++; } catch (e) {
       if (e.budget || e.skip) break; // out of budget: try this creator again next time
       events.log('WARN', `Discovery: web search for ${t.handle} failed — ${e.message}`);
       results = [];
     }
     repo.discoveryState.set(`brave.identity.${t.id}`, new Date().toISOString());
     for (const r of results) {
-      const spec = parseProfile(r.url);
-      if (!usable(spec) || spec.kind === 'community') continue;
-      const handle = spec.platform === 'linkinbio' ? (linkHubHandle(spec.target) || new URL(spec.target).pathname.split('/').filter(Boolean)[0]) : spec.target;
-      if (coreHandle(handle) !== core) continue;
-      const c = consider(spec, 'identity', t.id, { displayName: t.display_name, creatorId: t.id });
-      if (c) linked++;
+      if (takedowns.checkUrl(r.url)) continue;
+      const snippet = `${r.title || ''} ${r.description || ''}`;
+      const specs = [parseProfile(r.url), ...extractLinks(snippet)];
+      for (const spec of specs) {
+        if (!usable(spec) || spec.kind === 'community') continue;
+        const handle = spec.platform === 'linkinbio' ? (linkHubHandle(spec.target) || (() => { try { return new URL(spec.target).pathname.split('/').filter(Boolean)[0] || ''; } catch { return ''; } })()) : spec.target;
+        const same = handle && coreHandle(handle) === core;
+        // Same handle = strong identity signal; different handle on a page that mentions the core name/handle is still a lead, attributed to this creator
+        if (!same && !snippet.toLowerCase().includes(core.toLowerCase()) && !String(t.display_name || '').toLowerCase().split(/\s+/).some((w) => w.length >= 4 && snippet.toLowerCase().includes(w.toLowerCase()))) continue;
+        const c = consider(spec, 'identity', t.id, { displayName: t.display_name, creatorId: t.id });
+        if (c) linked++;
+      }
+      // Paid page in search becomes ingestible public page + traced to free accounts in the same run (discovery does this already via noteSearchedPaid)
+      const svc = paid.serviceOf(r.url);
+      const ph = svc ? paid.paidHandle(svc, r.url) : null;
+      if (svc && ph) noteSearchedPaid(svc, ph, r);
     }
   }
   return { searched, linked };
@@ -1914,7 +1926,7 @@ async function run({ trigger = 'schedule' } = {}) {
     const free = websearch.PROVIDERS.searxng.configured() || s.braveDailyBudget === 0 || !brave.configured();
     if (websearch.configured() && (free || s.braveDailyBudget > 0)) {
       report.aiQueries = await require('./ai').planQueries();
-      report.identity = await braveIdentity({ creators: free ? 5 : 3, budget: s.braveDailyBudget, aborted });
+      report.identity = await braveIdentity({ creators: free ? 10 : 5, budget: s.braveDailyBudget, aborted });
       report.topics = await braveTopics({ queries: free ? 3 : 1, budget: s.braveDailyBudget, aborted });
     }
     report.seeds = await seedCreators({ aborted });
