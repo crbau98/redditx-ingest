@@ -19,7 +19,9 @@ try {
     size = require('fs').statSync(workerData.file).size;
   }
   db.pragma('optimize');
-  db.pragma('wal_checkpoint(TRUNCATE)');
+  // PASSIVE, not TRUNCATE: TRUNCATE waits for every reader and can stall live requests. The WAL is
+  // still bounded by SQLite's automatic checkpoint; this just recycles pages without a global wait.
+  db.pragma('wal_checkpoint(PASSIVE)');
   db.close();
   db = null;
   parentPort.postMessage({ ok: true, size });

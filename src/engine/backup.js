@@ -44,7 +44,7 @@ function stamp() {
 function runInline(file) {
   if (file) db.prepare('VACUUM INTO ?').run(file);
   db.pragma('optimize');
-  db.pragma('wal_checkpoint(TRUNCATE)');
+  db.pragma('wal_checkpoint(PASSIVE)');
   return file ? { name: path.basename(file), size: fs.statSync(file).size } : { name: null, size: 0 };
 }
 
