@@ -324,6 +324,8 @@ router.get('/graph', asyncRoute(cacheSnapshot(async () => await graphView())));
 
 router.get('/media', (req, res) => {
   const r = repo.media.list(mediaFilters(req.query));
+  // Short cache: lists are cheap but the browser can reuse them while the user moves between views.
+  res.set('Cache-Control', 'public, max-age=15, stale-while-revalidate=60');
   res.json({ ...r, items: r.items.map(publicMedia) });
 });
 
@@ -380,6 +382,7 @@ router.get('/creators', (req, res) => {
     paidHost: Object.prototype.hasOwnProperty.call(PAID, req.query.paid || '') ? PAID[req.query.paid].host : undefined,
     ids: typeof req.query.ids === 'string' && req.query.ids ? req.query.ids.split(',').map((x) => x.trim()).filter(Boolean).slice(0, 200) : undefined,
   });
+  res.set('Cache-Control', 'public, max-age=15, stale-while-revalidate=60');
   res.json({ ...r, items: r.items.map(publicCreator) });
 });
 

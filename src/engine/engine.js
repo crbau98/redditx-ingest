@@ -679,7 +679,7 @@ function start() {
   state.hotTimer = setInterval(() => {
     // Chunked: the refresh rewrites every published row whose score drifted, and one statement
     // for the whole library blocks the event loop for minutes on a large one.
-    repo.media.recomputeHotChunked().catch((e) => events.log('ERR', `maintenance: ${e.message}`));
+    repo.media.recomputeHotChunked().then(() => { try { repo.settings.set('hot_recomputed_at', new Date().toISOString()); } catch { /* ignore */ } }).catch((e) => events.log('ERR', `maintenance: ${e.message}`));
     try { repo.runs.prune(settingsStore.get().keepRunHistoryDays); } catch (e) { events.log('ERR', `maintenance: ${e.message}`); }
   }, 10 * 60000);
   state.hotTimer.unref();
@@ -691,8 +691,14 @@ function start() {
   }); // end setTimeout delay for engine start
   // The first hot-score pass after a restart reads every published row, cold on a fresh container. It used to run at
   // 2 s, on top of the seed and the warm-up: a 12 s run of main-thread work. It now runs after the warm-up (30 s); the
-  // 10-minute timer above keeps the scores current in between.
-  setTimeout(() => { repo.media.recomputeHotChunked().catch(() => { /* ignore */ }); }, 30000).unref();
+  // 10-minute timer above keeps the scores current in between. Skip it when the scores were already refreshed in the
+  // last 30 minutes (a deploy restart does not need a second full pass).
+  setTimeout(() => {
+    let last = 0;
+    try { last = Date.parse(repo.settings.get('hot_recomputed_at') || '') || 0; } catch { last = 0; }
+    if (Date.now() - last < 30 * 60 * 1000) return;
+    repo.media.recomputeHotChunked().then(() => { try { repo.settings.set('hot_recomputed_at', new Date().toISOString()); } catch { /* ignore */ } }).catch(() => { /* ignore */ });
+  }, 30000).unref();
 }
 
 function shutdown() {

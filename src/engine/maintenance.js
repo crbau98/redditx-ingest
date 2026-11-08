@@ -439,7 +439,18 @@ function stopImageSweep() { if (sweepTimer) clearInterval(sweepTimer); sweepTime
 /** Run the safety sweep once per rule-set version, in the background after boot. */
 function startupSweepIfNeeded() {
   setTimeout(() => {
-    try { physique.migrateDefaults(); physique.reapply(settingsStore.get()); } catch (e) { events.log('WARN', `Body filter: ${e.message}`); }
+    try {
+      physique.migrateDefaults();
+      // The body filter is OFF in production and unchanged across most deploys. Re-applying it walks every
+      // measured picture and every creator with a physique row, on the boot path where the health probe is
+      // still settling (a multi-second main-thread pass). Run it only when the on/off state or threshold changed.
+      const s = settingsStore.get();
+      const sig = `${physique.enabled(s) ? 1 : 0}|${physique.threshold(s)}`;
+      if (String(repo.settings.get('physique_boot_reapply_sig') || '') !== sig) {
+        physique.reapply(s);
+        repo.settings.set('physique_boot_reapply_sig', sig);
+      }
+    } catch (e) { events.log('WARN', `Body filter: ${e.message}`); }
     physique.textSweep(settingsStore.get()).catch((e) => events.log('WARN', `Body filter: ${e.message}`));
   }, 3000).unref();
   setTimeout(() => {

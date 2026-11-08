@@ -286,7 +286,7 @@ const PROVIDERS = {
       // instead of a silent empty list that reads as "nothing out there".
       const failing = (json.unresponsive_engines || []).map((e) => (Array.isArray(e) ? `${e[0]} (${e[1]})` : String(e)));
       health.searxng.engines = failing;
-      if (!results.length && searxngUrl() && !config.searxngEngines && failing.length) events.log('WARN', `SearXNG: consider SEARXNG_ENGINES=yandex,duckduckgo,bing to include Yandex`)
+      if (!results.length && searxngUrl() && !config.searxngEngines && failing.length) console.warn('[websearch] SearXNG: set SEARXNG_ENGINES=yandex,duckduckgo,bing to include Yandex')
       if (!results.length && failing.length) throw new Error(`SearXNG found nothing: its engines are failing: ${failing.join(', ')}`);
       return results;
     },

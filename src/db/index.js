@@ -21,6 +21,12 @@ db.pragma('busy_timeout = 5000');
 db.pragma('cache_size = -131072'); // 128 MB page cache (was 32 MB: cold searches paid for disk reads)
 db.pragma('mmap_size = 1073741824');
 db.pragma('temp_store = MEMORY');
+// WAL tuning for a write-heavy ingest on a small box: checkpoint less often (fewer I/O pauses) and cap the
+// WAL at 256 MB so a long ingestion cannot grow it without bound (the nightly worker checkpoints it anyway).
+if (!READONLY) {
+  db.pragma('wal_autocheckpoint = 4000');
+  db.pragma('journal_size_limit = 268435456');
+}
 
 // Deterministic pseudo-random order that is stable for a given seed, so
 // "shuffle" can be paginated without repeats.
