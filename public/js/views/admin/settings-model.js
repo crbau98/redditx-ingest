@@ -53,7 +53,7 @@ const CATALOG = {
   platformDailyMb: ['ingest', 'Daily download cap per platform (MB)', 'Limits how much media is copied into storage per platform each UTC day, like “telegram=5000”.'],
   platformDailyRuns: ['ingest', 'Daily run cap per platform', 'Optional limit on feed runs per platform per day, like “x=300”; empty means no cap.'],
 
-  redditEnabled: ['sources', 'Read Reddit', 'Off by default: without Reddit app keys every run just fails. Turn on once the keys are set; nothing is deleted while it is off.'],
+  redditEnabled: ['sources', 'Read Reddit', 'On: Reddit posts are stored and shown. Their text is not sent to a hosted model. Off pauses reads and deletes nothing. App keys make the reads reliable.'],
   xMonthlyReadBudget: ['sources', 'X posts read per month', 'Match this to your X plan so the monthly allowance is not overspent.'],
   xKeylessSearchesPerDay: ['sources', 'X searches per day without a key', 'Web searches used to find X posts when there is no token; keeps the search engines from blocking this server.'],
   telegramPublic: ['sources', 'Telegram: read public channels', 'Reads public channels by name with the logged-in account; off means only joined channels.'],

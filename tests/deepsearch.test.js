@@ -105,11 +105,26 @@ describe('the pull', () => {
     assert.ok(again.until, 'it says when the next one may run');
   });
 
+  test('a proven link-out profile becomes an alias, never a feed', () => {
+    const c = creator('aliasguy', 'Alias Guy');
+    deepsearch._setSearchers(async (q) => {
+      if (q.includes('nude')) return [{ url: 'https://www.instagram.com/aliasguy/', title: 'Alias Guy on Instagram', description: 'Alias Guy official' }];
+      return [];
+    }, async () => []);
+    return deepsearch.pull(c.id, { trigger: 'manual', force: true }).then((out) => {
+      assert.ok((out.aliases || 0) >= 1, `expected the instagram handle as an alias, got ${JSON.stringify(out)}`);
+      const aliases = require('../src/engine/identity').aliasesOf(c.id).map((a) => (a.alias || a.handle || a).toString().toLowerCase());
+      assert.ok(aliases.includes('aliasguy'), `alias recorded: ${JSON.stringify(aliases)}`);
+      const igFeeds = repo.feeds.list({ creatorId: c.id, limit: 50 }).items.filter((f) => /instagram/.test(f.target || ''));
+      assert.equal(igFeeds.length, 0, 'instagram is a link-out: no feed');
+    });
+  });
+
   test('an empty search is still a finished, clean run', async () => {
     const c = creator('empty', 'Empty Guy');
     deepsearch._setSearchers(async () => [], async () => []);
     const out = await deepsearch.pull(c.id, { trigger: 'manual', force: true });
-    assert.deepEqual(out, { ok: true, pages: 0, feeds: 0, paid: 0, pictures: 0, reviews: 0, results: 0 });
+    assert.deepEqual(out, { ok: true, pages: 0, feeds: 0, paid: 0, pictures: 0, reviews: 0, results: 0, aliases: 0 });
   });
 
   test('fromLookup sweeps the creator the search resolved to', () => {

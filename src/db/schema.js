@@ -978,7 +978,22 @@ function v29(db) {
 }
 v29.ddlOnly = true;
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29];
+/**
+ * v30 (owner, 2026-11-09): Reddit posts stay in the library. `reddit_text` is the restart-safe
+ * copy of text read from Reddit, so lib/aiguard can keep it off hosted models. The stored
+ * `redditEnabled` flag is set on once here. An admin can switch it off afterwards and this
+ * migration will not turn it on again.
+ */
+function v30(db) {
+  db.exec(`CREATE TABLE IF NOT EXISTS reddit_text (norm TEXT PRIMARY KEY, at TEXT NOT NULL DEFAULT (${NOW}))`);
+  // Tests keep the off default so a suite that never asked for Reddit does not hit the network.
+  // Every other database (the production volume included) is switched on once. An admin can turn it off later.
+  if (process.env.NODE_ENV === 'test') return;
+  db.prepare(`INSERT INTO settings (key, value) VALUES ('redditEnabled', 'true')
+    ON CONFLICT(key) DO UPDATE SET value = 'true', updated_at = ${NOW}`).run();
+}
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

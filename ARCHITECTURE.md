@@ -45,6 +45,7 @@ media / creators / feeds tables ──> src/routes/public.js serves them
 
 ## Settings, safety, config
 
+- `src/config.js` reads env. `src/middleware` is request middleware. `src/services` is budgets, store migration, and the other helpers the engine calls. `src/lib` is shared mechanics (disk guard, AI guard, object store).
 - `src/settings.js` — every toggle with a plain-language label; groups render in Admin → Settings.
 - Safety gates in one pipeline place (above); takedowns `lib/takedowns.js`, robots honoured per fetch tier.
 - Reader tiers for refused pages (`src/sources/web.js`): plain HTTP → local Chrome (raw CDP, `lib/chrome.js`) → Jina reader (`lib/jina.js`) → paid unlockers last, never on a paid platform.
@@ -60,6 +61,7 @@ media / creators / feeds tables ──> src/routes/public.js serves them
 
 ## Ops
 
-- Deploys: GitHub `main` → Railway auto-deploy. DB on a Railway volume (`/data`). Disk guard pauses ingestion at 80%.
+- Deploys: GitHub `main` → Railway auto-deploy. DB on a Railway volume (`/data`). Disk guard pauses ingestion at 80% (`src/lib/diskguard.js`, on `main` since `33925ba`).
+- Reddit and Telegram posts are stored and shown. Their text never goes to a hosted model (`src/lib/aiguard.js`). Migration v30 turns Reddit reads on once outside tests. Kill switches, each already a setting: `redditEnabled`, `faceMatch`, `faceSweepPerMinute` (0 stops the sweep), `deepPullPerHour` (0 stops the rotation). Physique (`src/lib/physique.js`, `src/engine/physique.js`) does not read faces. Corroborated auto-alias is not shipped.
 - Health: `GET /api/health` (loop p99, stall attribution). Bench: `stall-bench` (dev-only) reproduces prod-scale stalls locally.
 - Tests: `npm test` (~1900). Node 22 (shared runtime: `OpenBot/Shared/node22/.../bin/node`).

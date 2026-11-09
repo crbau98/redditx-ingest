@@ -42,7 +42,7 @@ router.get('/stream', (req, res) => {
 });
 
 /* ------------------------------------------------------------------ engine */
-router.get('/engine', (req, res) => res.json({ ...engine.status(), logs: events.getLogs(150) }));
+router.get('/engine', (req, res) => res.json({ ...engine.status(), visual: require('../engine/visual').status(), logs: events.getLogs(150) }));
 // ?level=problems: only warnings and errors, from a ring that INFO chatter cannot push them out of
 router.get('/logs', (req, res) => res.json(req.query.level === 'problems' ? events.getProblems(int(req.query.limit, 1, 300, 100)) : events.getLogs(int(req.query.limit, 1, 600, 300))));
 router.delete('/logs', (req, res) => { events.clearLogs(); res.json({ ok: true }); });

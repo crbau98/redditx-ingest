@@ -85,7 +85,7 @@ function status(creatorId) {
     startedAt: p ? p.startedAt || null : null,
     lastAt: p ? p.lastAt || null : null,
     error: p ? p.error || null : null,
-    found: p ? p.found || { pages: 0, feeds: 0, pictures: 0, reviews: 0, results: 0 } : null,
+    found: p ? p.found || { pages: 0, feeds: 0, paid: 0, pictures: 0, reviews: 0, results: 0, aliases: 0 } : null,
     queries: p ? p.queries || [] : [],
     cooldownMs: lastAt ? Math.max(0, lastAt + cooldown - Date.now()) : 0,
     enabled: !!settingsStore.get().deepSearch,
@@ -148,11 +148,36 @@ function passesGates(hit) {
  * One text/video search result → registered pages, feeds and review rows.
  * @returns {Promise<{feeds:number, pages:number, paid:number}>}
  */
+/** Platforms PRISM deliberately only link-outs: a proven profile there becomes an alias, never a feed. */
+const LINK_OUT_SERVICES = new Set(['Instagram', 'Snapchat', 'Twitch']);
+const OK_HANDLE = /^[A-Za-z0-9._]{3,30}$/;
+
 async function takeResult(hit, creator, out, ctx) {
-  const res = { feeds: 0, pages: 0, paid: 0 };
-  if (!passesGates(hit)) return res;
+  const res = { feeds: 0, pages: 0, paid: 0, aliases: 0 };
+  if (!hit || !hit.url) return res;
+  // The cheap text gates first: a takedown or a safety block kills the result outright.
+  if (takedowns.checkUrl(hit.url)) return res;
+  if (checkText(hit.title, hit.description, hit.url).level === 'block') return res;
+  if (femaleCheck(hit.title, hit.description).level === 'hard') return res;
   const text = `${hit.title || ''} ${hit.description || ''}`;
   const specs = [parseProfile(hit.url), ...extractLinks(text)].filter(Boolean);
+  // A proven profile on a link-out platform (Instagram, Threads, …): remember the handle as HIS
+  // alias so lookup, identity and the graph connect him later. Never a feed, never a fetch — and
+  // deliberately BEFORE the fetch gates: a host we refuse to read still teaches us who he is.
+  for (const spec of specs) {
+    if (!spec || !spec.external) continue;
+    const host = (() => { try { return new URL(spec.url || spec.target || '').hostname; } catch { return ''; } })();
+    const linkOut = LINK_OUT_SERVICES.has(spec.service) || /(^|\.)(threads\.(net|com)|instagram\.com|tiktok\.com)$/i.test(host);
+    const handle = String(spec.handle || (spec.label || '').split('·')[1] || '').trim().replace(/^@/, '')
+      || (() => { try { return decodeURIComponent(new URL(spec.url || spec.target || '').pathname.split('/').filter(Boolean)[0] || ''); } catch { return ''; } })();
+    if (linkOut && OK_HANDLE.test(handle) && samePerson(creator, handle, hit.title, hit.description, spec.target)) {
+      try {
+        require('./identity').addAlias(creator.id, handle.toLowerCase(), { kind: 'handle', source: 'lookup', evidenceUrl: hit.url });
+        res.aliases++;
+      } catch { /* alias bookkeeping must never fail a pull */ }
+    }
+  }
+  if (!passesGates(hit)) return res;
   for (const spec of specs) {
     if (!spec) continue;
     // A paid page is a public page (owner decision 2026-11-05): read it, never drop it.
@@ -227,14 +252,14 @@ async function pull(creatorId, { trigger = 'manual', force = false, aborted = ()
   const startedAt = new Date().toISOString();
   writeProgress(creatorId, { startedAt, phase: 'text', done: false, error: null, lastAt: startedAt });
   const work = (async () => {
-    const found = { pages: 0, feeds: 0, paid: 0, pictures: 0, reviews: 0, results: 0 };
+    const found = { pages: 0, feeds: 0, paid: 0, pictures: 0, reviews: 0, results: 0, aliases: 0 };
     const s = settingsStore.get();
     const of = require('../lib/onlyfans').creatorOnlyFans(creator);
     const paid = of ? { service: 'onlyfans', handle: of.handle } : (require('../lib/paid').creatorPaid(creator)[0] || {});
     const ctx = { paidHandle: paid.handle || null };
     const { text, video, rotate } = buildQueries(creator);
     const budget = s.braveDailyBudget;
-    writeProgress(creatorId, { phase: 'text', queries: [...text, ...video], found: { pages: 0, feeds: 0, paid: 0, pictures: 0, reviews: 0, results: 0 } });
+    writeProgress(creatorId, { phase: 'text', queries: [...text, ...video], found: { pages: 0, feeds: 0, paid: 0, pictures: 0, reviews: 0, results: 0, aliases: 0 } });
 
     // 1. text
     for (const q of text) {
@@ -251,7 +276,7 @@ async function pull(creatorId, { trigger = 'manual', force = false, aborted = ()
         found.results++;
         const r = await takeResult(hit, creator, found, ctx);
         if (found.feeds + r.feeds > MAX_FEEDS) r.feeds = Math.max(0, MAX_FEEDS - found.feeds);
-        found.feeds += r.feeds; found.paid += r.paid;
+        found.feeds += r.feeds; found.paid += r.paid; found.aliases += r.aliases || 0;
         if (r.pages) found.pages++;
       }
     }
@@ -267,7 +292,7 @@ async function pull(creatorId, { trigger = 'manual', force = false, aborted = ()
         found.results++;
         const r = await takeResult({ ...hit, url: hit.pageUrl || hit.url }, creator, found, ctx);
         if (found.feeds + r.feeds > MAX_FEEDS) r.feeds = Math.max(0, MAX_FEEDS - found.feeds);
-        found.feeds += r.feeds; found.paid += r.paid;
+        found.feeds += r.feeds; found.paid += r.paid; found.aliases += r.aliases || 0;
         if (r.pages) found.pages++;
       }
     }

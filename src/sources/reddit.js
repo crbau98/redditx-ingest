@@ -28,6 +28,7 @@ const rss = require('./rss');
 const events = require('../engine/events');
 const { toIso, decodeHtml, pickWidth, clip, repostsOn } = require('./util');
 const { hostOf, hostBlocked, hostMatches, normalizeMediaUrl, looksLikeDirectMedia } = require('../lib/mediaurl');
+const aiguard = require('../lib/aiguard');
 
 const base = config.baseUrls.reddit;
 const oldBase = base.includes('www.reddit.com') ? base.replace('www.reddit.com', 'old.reddit.com') : base;
@@ -38,10 +39,10 @@ const VREDDIT = /^https?:\/\/v\.redd\.it\/([a-z0-9]+)\/?$/i;
 const X_STATUS = /^https?:\/\/(?:www\.|mobile\.)?(?:x|twitter|fxtwitter|vxtwitter|fixupx)\.com\/[A-Za-z0-9_]{1,15}\/status\/\d+/i;
 
 /* ----------------------------------------------------------------- OAuth */
-// Reddit is OFF unless the setting redditEnabled is on (it answers 403/429 to every unauthenticated transport, so each run only
-// fails). The switch is checked INSIDE this module, at every function that can reach the network (the engine's feed runs, the
-// discovery searches, profile reads, every transport), not only where feeds are scheduled: "off" means zero requests.
-const OFF_NOTE = 'Reddit is switched off (setting redditEnabled): turn it on once REDDIT_CLIENT_ID/SECRET are set';
+// Reddit reads are on unless an admin sets redditEnabled off. The switch is checked INSIDE this module, at every function that
+// can reach the network (the engine's feed runs, the discovery searches, profile reads, every transport): "off" means zero
+// requests, and nothing already stored is deleted. Text read while it is on is registered with lib/aiguard and never sent to a hosted model.
+const OFF_NOTE = 'Reddit is switched off (setting redditEnabled): feeds wait, nothing is deleted';
 const enabled = () => !!require('../settings').get().redditEnabled;
 function assertOn() { if (!enabled()) throw Object.assign(new Error(OFF_NOTE), { skip: true }); }
 
@@ -131,6 +132,7 @@ function parsePost(post) {
     tags: d.link_flair_text ? [d.link_flair_text] : [],
     trusted: true,
   };
+  aiguard.mark([base.title, base.text, base.permalink, base.community], 'reddit');
   const prev = previewOf(src);
   const items = [];
 
@@ -375,6 +377,7 @@ async function fetchProfile(name) {
       : await http.json(`${base}/user/${encodeURIComponent(name)}/about.json?raw_json=1`, { headers: { 'user-agent': config.redditUserAgent } });
     const d = json.data || {};
     const sr = d.subreddit || {};
+    aiguard.mark([sr.public_description, sr.title], 'reddit');
     return {
       displayName: sr.title || d.name || name,
       bio: sr.public_description || null,
@@ -398,10 +401,13 @@ async function searchSubreddits(q, limit = 25) {
   for (const attempt of tries) {
     try {
       const json = await attempt();
-      return ((json.data && json.data.children) || []).map((c) => c.data).filter((d) => d && d.display_name).map((d) => ({
-        name: d.display_name, title: d.title || null, description: d.public_description || null, subscribers: d.subscribers || 0,
-        over18: !!d.over18, icon: decodeHtml(d.community_icon || d.icon_img || '').split('?')[0] || null,
-      }));
+      return ((json.data && json.data.children) || []).map((c) => c.data).filter((d) => d && d.display_name).map((d) => {
+        aiguard.mark([d.title, d.public_description], 'reddit');
+        return {
+          name: d.display_name, title: d.title || null, description: d.public_description || null, subscribers: d.subscribers || 0,
+          over18: !!d.over18, icon: decodeHtml(d.community_icon || d.icon_img || '').split('?')[0] || null,
+        };
+      });
     } catch (e) { lastErr = e; if (e.status === 404) break; }
   }
   throw lastErr || new Error('Reddit search unavailable');
@@ -423,16 +429,19 @@ async function searchPosts(q, limit = 15) {
   for (const attempt of tries) {
     try {
       const json = await attempt();
-      return ((json.data && json.data.children) || []).map((c) => c.data).filter(Boolean).map((d) => ({
-        id: d.id,
-        author: d.author,
-        title: d.title || '',
-        selftext: d.selftext || '',
-        url: d.url || '',
-        subreddit: d.subreddit || '',
-        permalink: d.permalink || '',
-        over18: !!d.over_18,
-      })).filter((p) => p.author && p.author !== '[deleted]' && p.author !== 'AutoModerator');
+      return ((json.data && json.data.children) || []).map((c) => c.data).filter(Boolean).map((d) => {
+        aiguard.mark([d.title, d.selftext, d.permalink], 'reddit');
+        return {
+          id: d.id,
+          author: d.author,
+          title: d.title || '',
+          selftext: d.selftext || '',
+          url: d.url || '',
+          subreddit: d.subreddit || '',
+          permalink: d.permalink || '',
+          over18: !!d.over_18,
+        };
+      }).filter((p) => p.author && p.author !== '[deleted]' && p.author !== 'AutoModerator');
     } catch (e) { lastErr = e; if (e.status === 404) break; }
   }
   throw lastErr || new Error('Reddit post search unavailable');
@@ -448,7 +457,7 @@ module.exports = {
   intervalMin: { community: 90, user: 240 },
   parsePost, fromRssEntry,
   isConfigured() {
-    // Off by default (setting redditEnabled): the engine skips these feeds without counting a failure or tripping the breaker.
+    // When redditEnabled is off the engine skips these feeds without counting a failure or tripping the breaker.
     if (!enabled()) return { ok: false, note: OFF_NOTE };
     return config.creds.redditClientId && config.creds.redditClientSecret
       ? { ok: true, note: 'OAuth enabled' }

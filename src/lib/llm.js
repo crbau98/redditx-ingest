@@ -26,7 +26,7 @@ function status() {
 module.exports = {
   provider, label, model, keyName, status,
   configured: () => impl().configured(),
-  // Telegram text never goes to a model (lib/aiguard): Telegram-derived elements are dropped, or the request is refused.
+  // Telegram and Reddit text never go to a model (lib/aiguard): those elements are dropped, or the request is refused. The posts stay stored.
   json: async (purpose, opts) => impl().json(purpose, { ...opts, input: aiguard.scrub(opts && opts.input, purpose) }),
   usage: () => impl().usage(),
   budgetLeft: () => impl().budgetLeft(),

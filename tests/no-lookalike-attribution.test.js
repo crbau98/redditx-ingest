@@ -6,7 +6,7 @@
  *  - "More like this" and "Guys with a similar look" (engine/visual.js) stay, as read-only recommendations: nothing there
  *    writes to a creator, feed or media row, and nothing that attributes imports it;
  *  - the schema migration retracts what the look-alike path had attributed (feeds disabled, items hidden, one audit entry);
- *  - Reddit is switched off by default (setting redditEnabled) and a switched-off Reddit feed is skipped, never a failure.
+ *  - Reddit is switched off by default in tests (setting redditEnabled) and a switched-off Reddit feed is skipped, never a failure.
  */
 const { test, describe, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
@@ -120,8 +120,9 @@ describe('no code path attributes by visual similarity', () => {
   test('the only files that request or store visual vectors are the vector store, the image worker plumbing and the read-only display routes', () => {
     const users = walk(SRC).filter((f) => VISUAL.test(code(f))).map(rel).sort();
     // db/repo.js and db/schema.js only DELETE embeddings, to purge removed items (takedown, block, migration v22);
-    // they never read a vector or write one.
-    assert.deepEqual(users, ['db/repo.js', 'db/schema.js', 'engine/visual.js', 'lib/imagefilter-core.js', 'lib/imagefilter.js', 'routes/public.js']);
+    // they never read a vector or write one. routes/admin.js only reads visual.status() — the row COUNTS for the
+    // admin console, never a vector, never an attribution.
+    assert.deepEqual(users, ['db/repo.js', 'db/schema.js', 'engine/visual.js', 'lib/imagefilter-core.js', 'lib/imagefilter.js', 'routes/admin.js', 'routes/public.js']);
   });
 
   test('every module that attributes or follows anything is free of visual-similarity code', () => {

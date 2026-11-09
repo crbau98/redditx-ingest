@@ -36,7 +36,7 @@ const SCHEMA = {
   backupEnabled: { type: 'bool', default: config.isProd, label: 'Back up the database nightly' },
   backupKeep: { type: 'int', default: 3, min: 1, max: 30, label: 'Backups to keep' },
   keepRunHistoryDays: { type: 'int', default: 30, min: 1, max: 365, label: 'Run history retention (days)' },
-  redditEnabled: { type: 'bool', default: false, label: 'Reddit: read Reddit feeds (communities and users). OFF by default: without REDDIT_CLIENT_ID/SECRET every Reddit transport answers 403/429, so each run only fails. Turn on once the OAuth app is set up; nothing is deleted while it is off, feeds just wait' },
+  redditEnabled: { type: 'bool', default: false, label: 'Reddit: read Reddit feeds (communities and users). On: posts are stored and shown. Text from those posts is not sent to a hosted model. Switch off to pause reads; nothing is deleted. OAuth (REDDIT_CLIENT_ID/SECRET) is the reliable path; without it the public archive is used. A production database is switched on once by migration v30' },
   xMonthlyReadBudget: { type: 'int', default: 10000, min: 0, max: 10000000, label: 'X API: max posts read per month (match your plan)' },
   xKeylessSearchesPerDay: { type: 'int', default: 150, min: 0, max: 5000, label: 'X without a token: web searches per day used to find X posts (keeps the search engines from blocking this server)' },
   // --- image filter (v4.10) ---

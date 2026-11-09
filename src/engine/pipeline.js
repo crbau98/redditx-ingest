@@ -510,6 +510,7 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   const description = item.text && item.text !== item.title ? item.text.slice(0, 500) : null;
   const tags = [...item.tags, item.community, platform, item.query];
   if (platform === 'telegram') require('../lib/aiguard').mark([...(item.tags || []), item.community]); // its tags are Telegram-derived: never an AI input
+  if (platform === 'reddit') require('../lib/aiguard').mark([...(item.tags || []), item.community, item.title, item.text, item.permalink], 'reddit');
   const mediaId = repo.media.insert({
     creator_id: creator ? creator.id : null,
     feed_id: feed.id,
