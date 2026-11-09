@@ -318,17 +318,19 @@ function extractPage(html, pageUrl0, opts = {}) {
   // JSON-LD structured data (VideoObject, ImageObject, SocialMediaPosting, sameAs)
   $('script[type="application/ld+json"]').each((_, s) => {
     const txt = $(s).contents().text().trim();
-    if (!txt) return;
+    if (!txt || txt.length > 2_000_000) return; // same bound as hydration: parse time must stay bounded
     try {
       const parsed = JSON.parse(txt);
       walkJsonLdNode(parsed, pageUrl, push, rawUrls, ldMeta);
     } catch { /* ignore malformed JSON-LD */ }
   });
 
-  // Next.js / Nuxt / link-hub hydration JSON (__NEXT_DATA__, application/json scripts)
+  // Next.js / Nuxt / link-hub hydration JSON (__NEXT_DATA__, application/json/json+ld scripts).
+  // A hydration blob past ~2 MB is nav/state junk that costs seconds of synchronous parse+walk on
+  // the serving thread (the "feed linkinbio" stalls): skip it, the page's own markup still counts.
   $('script#__NEXT_DATA__, script[type="application/json"]').each((_, s) => {
     const txt = $(s).contents().text().trim();
-    if (!txt) return;
+    if (!txt || txt.length > 2_000_000) return;
     try {
       const parsed = JSON.parse(txt);
       walkHydrationJson(parsed, pageUrl, rawUrls, ldMeta, 0);

@@ -64,7 +64,10 @@ function addTo(x, id, creatorId, postKey, vec) {
  */
 function finish(x) {
   if (!x.dirty) return;
-  const full = !x.mean || x.n > x.meanN * 1.05 + 10;
+  // A full re-mean costs one pass over every vector: at library scale that is seconds of sync work.
+  // 25% growth between full passes (was 5%) keeps the incremental path (constants against the
+  // current mean) doing nearly all the work; a recommender does not need a fresher mean than that.
+  const full = !x.mean || x.n > x.meanN * 1.25 + 50;
   if (full) {
     const mean = new Float64Array(DIM);
     for (let i = 0; i < x.n; i++) { const s = x.scale[i]; const o = i * DIM; for (let j = 0; j < DIM; j++) mean[j] += s * x.q[o + j]; }
@@ -281,11 +284,27 @@ function status() {
 
 /**
  * Build the in-memory index once, at boot (called from the warm-up after the first health answer), so the first
- * "More like this" visitor does not pay the cold build. Measured on 150k media / 51.6k vectors on the same
- * machine: cold build 333 ms, first similar request 477 ms, second 42 ms. Revisit moving this to the aggregate worker
- * only if production vectors pass about 150k.
+ * "More like this" visitor does not pay the cold build. Chunked and yielding: on a library with hundreds of
+ * thousands of vectors the synchronous build was one uninterrupted multi-second-to-minutes block right after
+ * boot (the ~119 s deploy stall). Measured on 150k media / 51.6k vectors: cold build 333 ms, first similar
+ * request 477 ms, second 42 ms. Revisit moving this to the aggregate worker only if production passes ~150k rows
+ * AND the chunked build still shows up in blockwatch.
  */
-function warmIndex() { try { return index().n; } catch (e) { return 0; } }
+async function warmIndex() {
+  ensureTable();
+  if (!ix) {
+    const x = emptyIndex();
+    let n = 0;
+    for (const r of db.prepare(`SELECT e.media_id, e.vec, m.creator_id, m.post_key FROM media_embeddings e JOIN media m ON m.id = e.media_id
+        WHERE e.model = ? AND m.publish_state = 'published' ORDER BY m.seq`).iterate(MODEL_ID)) {
+      addTo(x, r.media_id, r.creator_id, r.post_key, r.vec);
+      if (++n % 20000 === 0) await new Promise((res) => setImmediate(res)); // let requests (and the health check) through
+    }
+    ix = x;
+  }
+  finish(ix);
+  return ix ? ix.n : 0;
+}
 
 /** Tests: forget the in-memory index and cached answers. */
 function _reset() { ix = null; profiles = null; cache.clear(); }
