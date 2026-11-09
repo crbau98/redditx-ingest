@@ -38,7 +38,7 @@ const KEY = (id) => `deepsearch.${id}`;
 const ROTATE_KEY = 'deepsearch.rotate';
 
 /** Manual pulls may repeat sooner than the automatic ones a search triggers. */
-const COOLDOWN_MS = { manual: 15 * 60 * 1000, lookup: 6 * 60 * 60 * 1000 };
+const COOLDOWN_MS = { manual: 15 * 60 * 1000, lookup: 6 * 60 * 60 * 1000, rotation: 24 * 60 * 60 * 1000 };
 const MAX_TEXT_QUERIES = 8;
 const MAX_VIDEO_QUERIES = 3;
 const MAX_PAGES = 8;
@@ -340,4 +340,36 @@ function fromLookup(result, query) {
   return kicked.started ? id : null;
 }
 
-module.exports = { pull, kick, fromLookup, status, buildQueries, samePerson, readProgress, _setSearchers, _resetSearchers };
+/**
+ * Whole-library rotation: nobody should wait for a user to search for him to get the whole-web
+ * sweep. Every hour (maintenance tick) a bounded number of followed creators are kicked in a
+ * priority order — creatorSeeds names first (the owner's focus list), then creators with a
+ * claimed paid page, then whoever has the most live feeds — each at most once a day, so the
+ * free search budget stretches across everyone in about two weeks.
+ * @returns {{started: number, kicked: string[], skipped: string}}
+ */
+function rotate({ limit = 2 } = {}) {
+  if (!settingsStore.get().deepSearch) return { started: 0, kicked: [], skipped: 'off in Settings' };
+  const seeds = String(settingsStore.get().creatorSeeds || '')
+    .split(/\n+/).map((s) => compact(s)).filter((s) => s.length >= 3);
+  const rows = repo.db.prepare(`SELECT c.id, c.display_name, c.handle, c.media_count,
+      (SELECT COUNT(*) FROM feeds f WHERE f.creator_id = c.id AND f.enabled = 1) AS feeds,
+      EXISTS(SELECT 1 FROM onlyfans_leads o WHERE o.creator_id = c.id AND o.status = 'claimed') AS paid
+    FROM creators c WHERE c.status = 'active' AND c.media_count >= 0
+    ORDER BY c.media_count DESC LIMIT 600`).all();
+  const scored = rows.map((r) => {
+    const blob = compact(`${r.display_name} ${r.handle}`);
+    const seed = seeds.some((s) => s && (blob.includes(s) || s.includes(blob)));
+    return { ...r, score: (seed ? 3 : 0) + (r.paid ? 2 : 0) + (r.feeds > 0 ? 1 : 0) };
+  }).sort((a, b) => b.score - a.score || b.feeds - a.feeds);
+  const kicked = [];
+  for (const r of scored) {
+    if (kicked.length >= limit) break;
+    const out = kick(r.id, { trigger: 'rotation' });
+    if (out.started) kicked.push(r.display_name || r.handle);
+  }
+  if (kicked.length) events.log('OK', `Deep-pull rotation: ${kicked.join(', ')}`);
+  return { started: kicked.length, kicked };
+}
+
+module.exports = { pull, kick, fromLookup, rotate, status, buildQueries, samePerson, readProgress, _setSearchers, _resetSearchers };

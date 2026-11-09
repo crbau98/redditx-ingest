@@ -121,3 +121,21 @@ describe('the pull', () => {
     assert.equal(deepsearch.fromLookup({ candidates: [] }, 'zzzz-unknown-name'), null, 'nobody we follow, nothing to sweep');
   });
 });
+
+describe('whole-library rotation', () => {
+  test('kicks seeded names first, then honours the day cooldown', async () => {
+    deepsearch._setSearchers(async () => [], async () => []);
+    settings.update({ creatorSeeds: 'Jake Doe\nRandom Seed', deepPullPerHour: 5 });
+    const seeded = creator('jakedoe2', 'Jake Doe');          // a seed name
+    const big = creator('bigacct', 'Big Account');           // not a seed
+    repo.db.prepare('UPDATE creators SET media_count = 500 WHERE id = ?').run(big.id); // he sorts first on size
+    const first = deepsearch.rotate({ limit: 1 });
+    assert.ok(first.kicked.includes('Jake Doe'), `seed beats raw size: ${JSON.stringify(first)}`);
+    // simulate the kicked pull finishing (rotate is fire-and-forget; only its done-state gates the cooldown)
+    repo.discoveryState.set(`deepsearch.${seeded.id}`, JSON.stringify({ lastAt: new Date().toISOString(), done: true }));
+    const second = deepsearch.rotate({ limit: 5 });          // Jake is on his day cooldown now
+    assert.ok(!second.kicked.includes('Jake Doe'), 'a creator pulled today is skipped');
+    assert.ok(second.kicked.length >= 1, 'rotation continues down the list');
+    settings.update({ creatorSeeds: '' });
+  });
+});

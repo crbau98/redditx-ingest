@@ -16,6 +16,7 @@ const dedupe = require('../services/dedupe');
 const faceMatch = require('../lib/face-match');
 const physique = require('./physique');
 const buildbias = require('../lib/buildbias');
+const deepsearch = require('./deepsearch');
 const settingsStore = require('../settings');
 
 // Bump whenever the safety or male-only scope rules get stricter: existing libraries are re-swept once.
@@ -474,6 +475,15 @@ function startImageSweep() {
     if (s.leanPreference) {
       sweepBusy = true;
       try { await blockwatch.around('leanBias', () => leanBiasSweep({ limit: 4000, settings: s })); } catch (e) { events.log('WARN', `Lean bias sweep: ${e.message}`); } finally { sweepBusy = false; }
+    }
+    // Universal whole-web sweep: every hour a couple of creators get a deep pull (seeds first),
+    // so nobody's coverage depends on somebody searching for him. Kicks are fire-and-forget.
+    if (s.deepPullPerHour > 0) {
+      const lastRotate = parseInt(repo.settings.get('deepsearch_rotate_at') || '0', 10) || 0;
+      if (Date.now() - lastRotate > 60 * 60 * 1000) {
+        repo.settings.set('deepsearch_rotate_at', String(Date.now()));
+        try { deepsearch.rotate({ limit: s.deepPullPerHour }); } catch (e) { events.log('WARN', `Deep-pull rotation: ${e.message}`); }
+      }
     }
     if (!s.imageSweep || !s.imageSweepPerTick) return;
     sweepBusy = true;
