@@ -330,6 +330,10 @@ const PHYSIQUE_KEYS = ['physiqueFilter', 'physiqueThreshold', 'physiqueCreatorSh
 router.put('/settings', (req, res) => {
   const before = settingsStore.get();
   const values = settingsStore.update(req.body || {});
+  // Lean preference switched off: forget the stored biases right away (chunked, off this request),
+  // so Trending returns to the plain score; switched on: rewind the bias sweep to re-judge everyone.
+  if (values.leanPreference === false && before.leanPreference !== false) maintenance.clearLeanBias().catch((e) => events.log('WARN', `Lean preference: ${e.message}`));
+  if (values.leanPreference && !before.leanPreference) repo.settings.set('lean_bias_seq', '0');
   // The body filter hides, it never deletes: a new threshold (or switching it off) re-applies to the stored library at once.
   if (PHYSIQUE_KEYS.some((k) => values[k] !== before[k])) {
     const applied = physique.reapply(values);

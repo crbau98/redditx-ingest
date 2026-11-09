@@ -15,6 +15,7 @@ const { canonicalUrl, hostOf, hostBlocked, hostTrusted, looksLikeDirectMedia, no
 const { probeMedia } = require('./probe');
 const imagefilter = require('../lib/imagefilter');
 const physique = require('./physique');
+const buildbias = require('../lib/buildbias');
 const dedupe = require('../services/dedupe');
 const events = require('./events');
 const paid = require('../lib/paid');
@@ -541,6 +542,9 @@ async function processItemInner(rawItem, feed, adapter, settings) {
     posted_at: item.postedAt || new Date().toISOString(),
     phash,
     physique: physiqueScore,
+    // the owner's type preference as a ranking multiplier (lib/buildbias): words + the measured build, never a face guess
+    lean_bias: buildbias.biasFor(physiqueScore, [item.title, description, item.community, item.author, ...(Array.isArray(item.tags) ? item.tags : [])],
+      settings.leanPreference !== false),
   }, tags);
   if (!mediaId) {
     if (keptKey) require('../lib/objectstore').remove(keptKey).catch(() => {}); // the copy belongs to nobody

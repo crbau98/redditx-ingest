@@ -966,7 +966,19 @@ function v28(db) {
 }
 v28.ddlOnly = true;
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28];
+/**
+ * v29 (PRISM 4.19): lean preference. A per-row multiplier on the trending score (NULL =
+ * neutral) so lean / athletic men rank a little higher and heavy / bear content a little
+ * lower without anything being hidden — the body filter itself stays off (owner decision
+ * of 2026-11-02). Written by the ingest pipeline and the maintenance bias sweep.
+ */
+function v29(db) {
+  const cols = db.prepare('PRAGMA table_info(media)').all().map((c) => c.name);
+  if (!cols.includes('lean_bias')) db.exec('ALTER TABLE media ADD COLUMN lean_bias REAL');
+}
+v29.ddlOnly = true;
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

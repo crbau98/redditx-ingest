@@ -13,8 +13,8 @@ const Database = require('better-sqlite3');
 
 /** The trending score, chunked (same SQL as repo.media.recomputeHotChunked). */
 async function recomputeHot(db, { tolerance = 0.02, chunk = 2000 } = {}) {
-  const stmt = db.prepare(`UPDATE media SET hot = hot_score(score, likes, views, epoch_ms(posted_at), @now)
-    WHERE seq > @from AND seq <= @to AND publish_state = 'published' AND abs(hot - hot_score(score, likes, views, epoch_ms(posted_at), @now)) > @tol * hot_score(score, likes, views, epoch_ms(posted_at), @now)`);
+  const stmt = db.prepare(`UPDATE media SET hot = hot_score(score, likes, views, epoch_ms(posted_at), @now) * COALESCE(lean_bias, 1.0)
+    WHERE seq > @from AND seq <= @to AND publish_state = 'published' AND abs(hot - hot_score(score, likes, views, epoch_ms(posted_at), @now) * COALESCE(lean_bias, 1.0)) > @tol * (hot_score(score, likes, views, epoch_ms(posted_at), @now) * COALESCE(lean_bias, 1.0))`);
   const max = db.prepare("SELECT MAX(seq) AS m FROM media WHERE publish_state = 'published'").get();
   const top = max && max.m ? max.m : 0;
   const now = Date.now();

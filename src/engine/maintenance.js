@@ -15,6 +15,7 @@ const imagefilter = require('../lib/imagefilter');
 const dedupe = require('../services/dedupe');
 const faceMatch = require('../lib/face-match');
 const physique = require('./physique');
+const buildbias = require('../lib/buildbias');
 const settingsStore = require('../settings');
 
 // Bump whenever the safety or male-only scope rules get stricter: existing libraries are re-swept once.
@@ -193,6 +194,59 @@ function physiqueSweepProgress() {
   const cursor = parseInt(repo.settings.get('physique_sweep_seq') || '0', 10) || 0;
   const remaining = repo.db.prepare("SELECT COUNT(*) AS n FROM media WHERE publish_state IN ('published','review','hidden') AND seq > ?").get(cursor).n;
   return { cursor, remaining, version: PHYSIQUE_SWEEP_VERSION };
+}
+
+/* ------------------------------------------------------------ lean-preference bias sweep */
+/**
+ * Give every stored row its lean-preference ranking multiplier (lib/buildbias): oldest first,
+ * cursor `lean_bias_seq`, words on the row's own text plus any measured build score. Rows that
+ * stay neutral keep NULL and are never rewritten; a biased row's trending score folds the
+ * multiplier in on the next drift refresh. Bounded per tick, one small pass a minute.
+ */
+async function leanBiasSweep({ limit = 4000, settings } = {}) {
+  const s = settings || settingsStore.get();
+  const res = { judged: 0, biased: 0, done: false };
+  if (!s.leanPreference) { res.done = true; return res; }
+  let after = parseInt(repo.settings.get('lean_bias_seq') || '0', 10) || 0;
+  const rows = repo.db.prepare(`SELECT seq, id, title, description, tags_text, community, author, physique FROM media
+    WHERE lean_bias IS NULL AND seq > ? ORDER BY seq LIMIT ?`).all(after, limit);
+  if (!rows.length) { res.done = true; return res; }
+  const upd = repo.db.prepare('UPDATE media SET lean_bias = ? WHERE id = ?');
+  for (const row of rows) {
+    const bias = buildbias.biasFor(row.physique, [row.title, row.description, row.tags_text, row.community, row.author]);
+    if (bias != null) { upd.run(bias, row.id); res.biased++; }
+    after = row.seq;
+    res.judged++;
+  }
+  repo.settings.set('lean_bias_seq', String(after));
+  return res;
+}
+
+function leanBiasProgress() {
+  const cursor = parseInt(repo.settings.get('lean_bias_seq') || '0', 10) || 0;
+  const remaining = repo.db.prepare('SELECT COUNT(*) AS n FROM media WHERE lean_bias IS NULL AND seq > ?').get(cursor).n;
+  return { cursor, remaining };
+}
+
+/**
+ * The preference was switched off: forget every stored bias (chunked, yielded) so ranking
+ * returns to the plain trending score. New rows stay neutral too — the sweep stops on its own.
+ */
+async function clearLeanBias() {
+  const upd = repo.db.prepare('UPDATE media SET lean_bias = NULL WHERE seq > @from AND seq <= @to AND lean_bias IS NOT NULL');
+  const max = repo.db.prepare('SELECT MAX(seq) AS m FROM media').get();
+  const top = (max && max.m) || 0;
+  let from = 0;
+  let cleared = 0;
+  while (from < top) {
+    const to = Math.min(from + 20000, top);
+    cleared += upd.run({ from, to }).changes;
+    from = to;
+    await new Promise((r) => setImmediate(r));
+  }
+  repo.settings.set('lean_bias_seq', '0'); // a later re-enable re-judges the whole library
+  events.log('OK', `Lean preference off: ${cleared} stored biases cleared`);
+  return cleared;
 }
 
 /* ------------------------------------------------------------- hash sweep */
@@ -416,6 +470,11 @@ function startImageSweep() {
       sweepBusy = true;
       try { await blockwatch.around('faceSweep', () => faceSweep({ limit: s.faceSweepPerMinute, settings: s })); } catch (e) { events.log('WARN', `Face sweep: ${e.message}`); } finally { sweepBusy = false; }
     }
+    // The lean-preference bias pass needs no model and no network: pure word/score reads, a bounded chunk a minute.
+    if (s.leanPreference) {
+      sweepBusy = true;
+      try { await blockwatch.around('leanBias', () => leanBiasSweep({ limit: 4000, settings: s })); } catch (e) { events.log('WARN', `Lean bias sweep: ${e.message}`); } finally { sweepBusy = false; }
+    }
     if (!s.imageSweep || !s.imageSweepPerTick) return;
     sweepBusy = true;
     try {
@@ -473,4 +532,4 @@ function startupSweepIfNeeded() {
   }, 1500).unref();
 }
 
-module.exports = { clearBorrowedPosterHashes, repairSharedPosterCollapse, retireDeadFeeds, sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, faceSweep, faceSweepProgress, physiqueSweep, physiqueSweepProgress, hashSweep, hashSweepProgress, startImageSweep, stopImageSweep };
+module.exports = { clearBorrowedPosterHashes, repairSharedPosterCollapse, retireDeadFeeds, sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, faceSweep, faceSweepProgress, physiqueSweep, physiqueSweepProgress, leanBiasSweep, leanBiasProgress, clearLeanBias, hashSweep, hashSweepProgress, startImageSweep, stopImageSweep };
