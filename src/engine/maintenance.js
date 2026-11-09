@@ -103,6 +103,7 @@ async function imageSweep({ limit = 12, settings } = {}) {
   if (!rows.length) { res.done = true; return res; }
   for (const row of rows) {
     after = row.seq;
+    await new Promise((res2) => setImmediate(res2)); // never a whole pass in one blocking stretch (see faceSweep)
     const v = await imagefilter.checkItem({ mediaType: row.media_type, mediaUrl: row.media_url, previewUrl: row.preview_url, thumbnailUrl: row.thumbnail_url },
       { threshold: (s.imageFilterThreshold || 50) / 100 });
     res.checked++;
@@ -143,6 +144,7 @@ async function physiqueSweep({ limit = 12, settings } = {}) {
   if (!rows.length) { res.done = true; return res; }
   const creators = new Set();
   for (const row of rows) {
+    await new Promise((res2) => setImmediate(res2)); // one picture at a time: never a whole pass in one block
     const v = await imagefilter.checkItem({ mediaType: row.media_type, mediaUrl: row.media_url, previewUrl: row.preview_url, thumbnailUrl: row.thumbnail_url },
       { threshold: (s.imageFilterThreshold || 50) / 100, faces: s.imageFilter === true, body: true });
     // the settings may have changed while the model was busy (that request already re-applied the library): judge this row
@@ -226,6 +228,7 @@ async function hashSweep({ limit = 12, settings } = {}) {
   if (!rows.length) { res.done = true; return res; }
   for (const row of rows) {
     after = row.seq; res.checked++;
+    await new Promise((res2) => setImmediate(res2)); // hashing and the dedupe lookup are synchronous: yield between rows
     if (borrowedPoster(row)) {
       // a hash the OLD sweep took from the borrowed poster is wrong: drop it, from the database and from the dedupe index, so it cannot
       // make an unrelated video with a similar poster look like a duplicate
@@ -352,6 +355,9 @@ async function faceSweep({ limit = 12, settings } = {}) {
   if (!rows.length) return { ...res, done: true };
   for (const row of rows) {
     res.checked++;
+    // Hand the event loop a turn between pictures: when the model runs in-process (IMAGE_WORKERS=0, or a
+    // worker pool that could not start) inference is synchronous, and a whole pass in one go was a 14 s stall.
+    await new Promise((res2) => setImmediate(res2));
     const now = new Date().toISOString();
     let v;
     try {

@@ -121,7 +121,9 @@ function warm() {
   // Statement prep is the expensive part of SQLite's first run of a query shape (~0.4 s here):
   // touching the hot list queries once at boot keeps the first page load fast for real users.
   // the visual index is built once here, after the first health answer, so the first 'More like this' visitor does not pay it
-  const queue = [...prep, ...warmers, () => require('../engine/visual').warmIndex()];
+  // The dedupe index loads every stored hash lazily on first use — a multi-second synchronous build that used to
+  // land inside the first feed run of the morning. Load it here, after the first health answer, with the rest.
+  const queue = [...prep, ...warmers, () => { try { require('../services/dedupe').load(); } catch { /* index optional */ } }, () => require('../engine/visual').warmIndex()];
   const next = () => { const g = queue.shift(); if (!g) return; try { g(); } catch (e) { console.error('[warm]', e.message); } setImmediate(next); };
   setImmediate(next);
 }
@@ -183,7 +185,9 @@ router.get('/health', (req, res) => {
   const loop = { p99Ms: Math.round(loopDelay.percentile(99) / 1e6), maxMs: Math.round(loopDelay.max / 1e6) };
   loopDelay.reset();
   const disk = require('../lib/diskguard').status();
-  const block = require('../lib/blockwatch').lastBlock(); // the job that was running, not just how long
+  const blockwatch = require('../lib/blockwatch');
+  const block = blockwatch.lastBlock(); // the job that was running, not just how long
+  blockwatch.reset(); // next reader sees the next window, not all-time history
   const warnings = [];
   if (block && block.ms > 1000) warnings.push(`event loop blocked ${block.ms} ms during ${block.job}`);
   if (loop.maxMs > 5000) warnings.push(`event loop stalled ${loop.maxMs} ms since the last health check`);
