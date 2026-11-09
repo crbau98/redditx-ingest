@@ -243,12 +243,18 @@ async function backfill(limit = PER_TICK) {
   const rows = pending(limit);
   const stmt = save();
   const res = { embedded: 0, failed: 0 };
+  // Attribution honesty: the 'embed' watchdog tag must only cover THIS job's synchronous work.
+  // Each item's network+model await yields the loop, so while we wait, the tag goes idle — any
+  // block during the wait belongs to whatever actually ran (a request, another job), not to us.
+  const bw = (() => { try { return require('./blockwatch'); } catch { return null; } })();
   for (const m of rows) {
     const url = imagefilter.imageUrlOf({ mediaType: m.media_type, mediaUrl: m.media_url, previewUrl: m.preview_url, thumbnailUrl: m.thumbnail_url });
     if (!url) { stmt.run(m.id, 'fail', null); res.failed++; continue; }
     let referer;
     try { referer = `${new URL(m.source_url || url).origin}/`; } catch { /* none */ }
+    if (bw) bw.work('idle');
     const r = await imagefilter.embedUrl(url, { referer });
+    if (bw) bw.work('embed');
     if (r.status === 'unavailable') { res.unavailable = r.reason; break; }
     if (r.status !== 'ok' || !emb.unpack(r.vec)) { stmt.run(m.id, 'fail', null); res.failed++; continue; }
     stmt.run(m.id, MODEL_ID, r.vec);
