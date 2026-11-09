@@ -155,7 +155,13 @@ function start() {
     blockwatch.work('thumbs'); // only once there is real work, so the label never goes stale
     busy = true;
     try {
-      const r = await sweep({ limit: s.thumbnailsPerMinute });
+      // Backlog-aware bite size: the per-minute setting is the CALM rate. With a large unpaid
+      // thumbnail debt (hundreds of thousands of rows would take a year at the calm rate) the
+      // round grows up to 6x — sharp renders off the loop, and the failure backoff below still
+      // applies — then shrinks back as the debt clears. Ceiling keeps a 1-vCPU box sane.
+      const remaining = q.left.get().n;
+      const scale = remaining > 50000 ? 6 : remaining > 5000 ? 3 : 1;
+      const r = await sweep({ limit: Math.min(Math.round(s.thumbnailsPerMinute * scale), 240) });
       // a round where nothing could be read (network down) backs off instead of retrying the same items every minute
       failures = r.checked && r.retry === r.checked ? failures + 1 : 0;
       wait = failures ? Math.min(30, 2 ** failures) : 0;
