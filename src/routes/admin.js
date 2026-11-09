@@ -144,7 +144,10 @@ router.post('/feeds', (req, res) => {
   if (!spec) return bad(res, 'Provide an `input` (link or handle) or platform + kind + target');
   const adapter = registry.get(spec.platform);
   if (!adapter || !adapter.kinds.includes(spec.kind)) return bad(res, `${spec.platform} does not support ${spec.kind} feeds`);
-  const r = targets.addSpec(spec, { trusted: b.trusted, origin: 'admin' });
+  // creatorId: attach the new feed to a creator you already follow (editorial pages, own-site hubs).
+  const creatorId = b.creatorId != null ? String(b.creatorId) : null;
+  if (creatorId && !repo.creators.get(creatorId)) return bad(res, 'creatorId not found', 404);
+  const r = targets.addSpec(spec, { trusted: b.trusted, origin: 'admin', creatorId });
   if (r.status === 'invalid' || r.status === 'conflict') return bad(res, r.reason, r.status === 'conflict' ? 409 : 400);
   if (r.feed) { if (b.intervalMin) repo.feeds.update(r.feed.id, { intervalMin: b.intervalMin }); if (b.run !== false) engine.enqueue([r.feed.id]); }
   res.status(r.status === 'created' ? 201 : 200).json(r);
