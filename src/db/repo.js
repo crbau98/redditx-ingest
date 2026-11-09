@@ -1267,6 +1267,15 @@ const media = {
   update(id, patch) {
     const allowed = ['title', 'description', 'nsfw_level', 'scope'];
     const sets = []; const params = { id };
+    let movedFrom = null;
+    if (patch.creator_id !== undefined) {
+      // Re-attribute a row to another creator (an admin fixing a page that was named after its
+      // site instead of the man in it). Unknown creator id: refuse by leaving the row untouched.
+      if (patch.creator_id && !db.prepare('SELECT id FROM creators WHERE id = ?').get(patch.creator_id)) return media.get(id);
+      const cur = db.prepare('SELECT creator_id FROM media WHERE id = ?').get(id);
+      movedFrom = cur ? cur.creator_id : null;
+      if ((movedFrom || null) !== (patch.creator_id || null)) { sets.push('creator_id = @creator_id'); params.creator_id = patch.creator_id || null; }
+    }
     for (const k of allowed) {
       if (patch[k] === undefined) continue;
       if (k === 'scope' && !['in', 'uncertain', 'excluded'].includes(patch[k])) continue;
@@ -1279,6 +1288,7 @@ const media = {
     db.prepare(`UPDATE media SET ${sets.join(', ')} WHERE id = @id`).run(params);
     const m = db.prepare('SELECT creator_id FROM media WHERE id = ?').get(id);
     if (m && m.creator_id) creators.refreshStats(m.creator_id);
+    if (movedFrom && movedFrom !== (m && m.creator_id)) creators.refreshStats(movedFrom);
     if (params.publish_state || params.scope) countCache.clear(); // visibility changed: the next total must see it
     if (params.publish_state) notifyState(id, params.publish_state);
     return media.get(id);

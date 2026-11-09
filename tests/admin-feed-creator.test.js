@@ -40,4 +40,19 @@ describe('admin feed creation with creatorId', () => {
     const r = await call('/api/admin/feeds', { method: 'POST', body: { platform: 'web', kind: 'page', target: 'https://editorial.example.com/nope', creatorId: 'no-such-id' } });
     assert.equal(r.status, 404);
   });
+  test('a feed and its media can be re-attached to the right creator', async () => {
+    settings.update({ physiqueFilter: false });
+    const mag = repo.creators.create({ handle: 'mensvariety', displayName: "Men's Variety", origin: 'test' });
+    const man = repo.creators.create({ handle: 'yerger-test', displayName: 'Michael Yerger Test', origin: 'test' });
+    const f = await call('/api/admin/feeds', { method: 'POST', body: { platform: 'web', kind: 'page', target: 'https://editorial.example.com/yerger-bio', creatorId: mag.id } });
+    const fid = f.json.feed.id;
+    const mediaId = repo.media.insert({ feed_id: fid, creator_id: mag.id, platform: 'web', source_id: 'mv1', source_key: 'web:mv1', post_key: 'web:mv1', title: 'bio spread', media_type: 'image', media_url: 'https://editorial.example.com/m1.jpg', hash: 'mvhash1', score: 3 }, []);
+    const pf = await call(`/api/admin/feeds/${fid}`, { method: 'PATCH', body: { creatorId: man.id } });
+    assert.equal(pf.json.creator_id ?? pf.json.feed?.creator_id ?? null, man.id, 'feed re-attached');
+    const pm = await call(`/api/admin/media/${mediaId}`, { method: 'PATCH', body: { creator_id: man.id } });
+    assert.equal(pm.json.creator_id, man.id, 'media re-attributed');
+    const bad = await call(`/api/admin/media/${mediaId}`, { method: 'PATCH', body: { creator_id: 'no-such' } });
+    assert.equal(bad.status, 404, 'unknown creator refused');
+    assert.equal(repo.media.get(mediaId).creator_id, man.id, 'row untouched by the refused patch');
+  });
 });

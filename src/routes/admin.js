@@ -167,6 +167,13 @@ router.patch('/feeds/:id', (req, res) => {
   // logged, so automatic pauses (e.g. the body filter) never undo an admin's own switch later
   const was = repo.feeds.get(req.params.id);
   if (b.enabled !== undefined && !!b.enabled !== !!was.enabled) repo.logAction('feed', was.id, b.enabled ? 'enable' : 'disable', 'admin', 'admin');
+  // creatorId: re-attach the feed to another creator (empty string clears). A page that was
+  // named after its site belongs to the man in it, not to the magazine.
+  if (b.creatorId !== undefined) {
+    const cid = b.creatorId ? String(b.creatorId) : null;
+    if (cid && !repo.creators.get(cid)) return bad(res, 'creatorId not found', 404);
+    repo.db.prepare('UPDATE feeds SET creator_id = ? WHERE id = ?').run(cid, req.params.id);
+  }
   res.json(repo.feeds.update(req.params.id, { label: b.label, enabled: b.enabled, trusted: b.trusted, intervalMin: b.intervalMin, priority: b.priority, resetErrors: !!b.resetErrors, runNow: !!b.runNow }));
 });
 
@@ -260,6 +267,7 @@ router.get('/media', (req, res) => {
 
 router.patch('/media/:id', (req, res) => {
   if (!repo.media.get(req.params.id)) return bad(res, 'Not found', 404);
+  if (req.body && req.body.creator_id !== undefined && req.body.creator_id && !repo.creators.get(req.body.creator_id)) return bad(res, 'creator not found', 404);
   res.json(repo.media.update(req.params.id, req.body || {}));
 });
 
