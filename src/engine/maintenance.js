@@ -279,7 +279,7 @@ async function hashSweep({ limit = 12, settings } = {}) {
   const s = settings || settingsStore.get();
   const res = { checked: 0, hashed: 0, collapsed: 0, errors: 0, done: false };
   let after = parseInt(repo.settings.get('hash_sweep_seq') || '0', 10) || 0;
-  const rows = repo.db.prepare(`SELECT seq, id, creator_id, platform, post_key, source_url, author, community, posted_at, media_type, media_url, preview_url, thumbnail_url, width, height, phash FROM media
+  const rows = repo.db.prepare(`SELECT seq, id, creator_id, platform, post_key, source_url, author, community, posted_at, media_type, media_url, preview_url, thumbnail_url, width, height, phash FROM media NOT INDEXED
     WHERE publish_state IN ('published','review') AND seq > ? ORDER BY seq LIMIT ?`).all(after, limit);
   if (!rows.length) { res.done = true; return res; }
   const byId = repo.db.prepare("SELECT seq FROM media WHERE id = ? AND publish_state IN ('published','review')");
