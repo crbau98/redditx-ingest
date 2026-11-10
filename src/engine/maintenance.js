@@ -27,7 +27,7 @@ async function sweep({ probe = false, limit = 1_000_000 } = {}) {
   const res = { checked: 0, blocked: 0, review: 0, hidden: 0, dead: 0, female: 0, femaleReview: 0, femaleCreators: 0, femaleFeeds: 0 };
   let after = 0;
   const stmt = repo.db.prepare(`SELECT seq, id, platform, title, description, tags_text, community, author, media_url, media_type, publish_state
-    FROM media WHERE publish_state IN ('published','review') AND seq > ? ORDER BY seq LIMIT 500`);
+    FROM media NOT INDEXED WHERE publish_state IN ('published','review') AND seq > ? ORDER BY seq LIMIT 500`);
   events.log('INFO', 'Sweeping library against current safety and quality rules…');
   for (;;) {
     const rows = stmt.all(after);
@@ -100,7 +100,7 @@ async function imageSweep({ limit = 12, settings } = {}) {
     repo.settings.set('image_sweep_version', IMAGE_SWEEP_VERSION); repo.settings.set('image_sweep_seq', '0');
   }
   let after = parseInt(repo.settings.get('image_sweep_seq') || '0', 10) || 0;
-  const rows = repo.db.prepare(`SELECT seq, id, media_type, media_url, preview_url, thumbnail_url FROM media
+  const rows = repo.db.prepare(`SELECT seq, id, media_type, media_url, preview_url, thumbnail_url FROM media NOT INDEXED
     WHERE publish_state IN ('published','review') AND seq > ? ORDER BY seq LIMIT ?`).all(after, limit);
   if (!rows.length) { res.done = true; return res; }
   for (const row of rows) {
@@ -141,7 +141,7 @@ async function physiqueSweep({ limit = 12, settings } = {}) {
   }
   let after = parseInt(repo.settings.get('physique_sweep_seq') || '0', 10) || 0;
   const startedAt = after;
-  const rows = repo.db.prepare(`SELECT seq, id, creator_id, media_type, media_url, preview_url, thumbnail_url, publish_state, physique, review_reason, title, description, tags_text, community, author FROM media
+  const rows = repo.db.prepare(`SELECT seq, id, creator_id, media_type, media_url, preview_url, thumbnail_url, publish_state, physique, review_reason, title, description, tags_text, community, author FROM media NOT INDEXED
     WHERE publish_state IN ('published','review','hidden') AND seq > ? ORDER BY seq LIMIT ?`).all(after, limit);
   if (!rows.length) { res.done = true; return res; }
   const creators = new Set();
