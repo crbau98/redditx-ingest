@@ -26,6 +26,8 @@ before(async () => {
     },
     '/2/tweets/search/recent': () => ({ status: 402, json: { title: 'CreditsDepleted' } }),
     '/srv/timeline-profile/screen-name/jockfit': () => ({ body: '<html>Rate limit exceeded</html>' }),
+    '/srv/timeline-profile/screen-name/rate_limited_guy': () => ({ status: 429, headers: { 'retry-after': '1800' }, body: 'Rate limit exceeded' }),
+    '/srv/timeline-profile/screen-name/another_guy': () => ({ status: 429, headers: { 'retry-after': '1800' }, body: 'Rate limit exceeded' }),
     '/jockfit': () => ({ json: { code: 200, user: { screen_name: 'jockfit', name: 'Jock Fit', description: 'gym. more at linktr.ee/jockfit', avatar_url: 'https://pbs.twimg.com/p_normal.jpg' } } }),
   });
   prepareEnv({ SEARXNG_URL: mock.url, SEARCH_PROVIDERS: 'searxng', FXTWITTER_BASE_URL: mock.url, X_EMBED_URL: mock.url, X_SYNDICATION_URL: mock.url, X_BASE_URL: mock.url, X_BEARER_TOKEN: '' });
@@ -81,6 +83,28 @@ describe('keyless X', () => {
     assert.match(r.notes[0], /embed timeline failed/);
     assert.equal(r.profile.displayName, 'Jock Fit'); assert.match(r.profile.avatarUrl, /_400x400/);
     assert.ok(r.profile.links.some((l) => /linktr/.test(l.target || l.url || '')));
+  });
+
+  test('a syndication 429 parks every profile and does not spend the web-search budget', async () => {
+    const limiter = require('../src/lib/limiter');
+    x.syndState.parkedUntil = 0; x.syndState.reason = null;
+    const before = x.webUsage().count;
+    searx.results = [{ url: 'https://x.com/rate_limited_guy/status/1001' }];
+    try {
+      const r = await x.fetch({ kind: 'user', target: 'rate_limited_guy' }, ctx());
+      assert.equal(r.via, 'syndication:parked');
+      assert.equal(r.items.length, 0);
+      assert.equal(x.syndParked(), true);
+      assert.match(r.notes[0], /429/);
+      assert.equal(x.webUsage().count, before, 'park must not spend a web search');
+      const again = await x.fetch({ kind: 'user', target: 'another_guy' }, ctx());
+      assert.equal(again.via, 'syndication:parked');
+      assert.equal(x.webUsage().count, before);
+    } finally {
+      // The 429 also held the shared X HTTP limiter; clear it so later tests can still read posts.
+      x.syndState.parkedUntil = 0; x.syndState.reason = null;
+      limiter.reset();
+    }
   });
 
   test('blocked search engines are named instead of reading as "no results", and do not count as X failing', async () => {

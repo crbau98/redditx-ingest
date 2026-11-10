@@ -40,6 +40,21 @@ const API_PARK_MS = 6 * 3600 * 1000;
 const apiState = { parkedUntil: 0, reason: null };
 const apiParked = () => Date.now() < apiState.parkedUntil;
 const apiAvailable = () => !!config.creds.xBearer && usage().posts < budget() && !apiParked();
+/* Syndication (publish.twitter.com embed) 429s every logged-out profile when hot. Without a park,
+ * each failing user feed falls through to web search and burns the 150/day keyless budget. */
+const SYND_PARK_DEFAULT_MS = 45 * 60 * 1000;
+const SYND_PARK_MIN_MS = 30 * 60 * 1000;
+const SYND_PARK_MAX_MS = 60 * 60 * 1000;
+const syndState = { parkedUntil: 0, reason: null };
+const syndParked = () => Date.now() < syndState.parkedUntil;
+function parkSyndication(e) {
+  const raSec = Number(e && e.retryAfter) || 0;
+  const ms = raSec > 0
+    ? Math.min(SYND_PARK_MAX_MS, Math.max(SYND_PARK_MIN_MS, raSec * 1000))
+    : SYND_PARK_DEFAULT_MS;
+  syndState.parkedUntil = Date.now() + ms;
+  syndState.reason = `X syndication rate-limited (429); parked ${Math.round(ms / 60000)} min — keyless web search skipped until then`;
+}
 async function apiGet(url) {
   if (usage().posts >= budget()) throw Object.assign(new Error(`X API monthly read budget reached (${budget()} posts) — using the keyless route until next month`), { budget: true });
   let json;
@@ -212,9 +227,18 @@ async function viaApi(feed, ctx, cursor) {
 }
 
 async function viaSyndication(feed) {
-  const html = await http.text(`${config.baseUrls.xSyndication}/srv/timeline-profile/screen-name/${encodeURIComponent(feed.target)}?showReplies=false`, {
-    headers: { accept: 'text/html', referer: 'https://publish.twitter.com/' },
-  });
+  if (syndParked()) {
+    throw Object.assign(new Error(syndState.reason || 'X syndication parked after 429'), { status: 429, syndPark: true });
+  }
+  let html;
+  try {
+    html = await http.text(`${config.baseUrls.xSyndication}/srv/timeline-profile/screen-name/${encodeURIComponent(feed.target)}?showReplies=false`, {
+      headers: { accept: 'text/html', referer: 'https://publish.twitter.com/' },
+    });
+  } catch (e) {
+    if (e.status === 429 || e.rateLimited) parkSyndication(e);
+    throw e;
+  }
   return parseSyndication(html).flatMap((t) => parseLegacyTweet(t));
 }
 
@@ -379,12 +403,13 @@ module.exports = { _viaWebSearch: viaWebSearch,
   expandedLinks,
   lookupUsers,
   apiAvailable,
+  syndParked,
   platform: 'x',
   label: 'X',
   color: '#a1a1aa',
   kinds: ['user', 'search'],
   intervalMin: { user: 240, search: 180 },
-  apiState, parseApi, parseLegacyTweet, parseSyndication, parseEmbedTweet, postsInResults, embedToken, fetchTweet, usage, webUsage,
+  apiState, syndState, parseApi, parseLegacyTweet, parseSyndication, parseEmbedTweet, postsInResults, embedToken, fetchTweet, usage, webUsage,
   isConfigured(kind) {
     // With no token the keyless route is the only one, and it needs web searches. At 0 the adapter has no way to read a
     // feed at all, so say so and let the engine skip the feed instead of spending a syndication request on a 429 every run.
@@ -427,9 +452,18 @@ module.exports = { _viaWebSearch: viaWebSearch,
     }
     if (feed.kind === 'search') return viaWebSearch(feed, ctx, cursor);
     // Profiles: the embed timeline first. X often serves it empty, stale or not at all to logged-out readers, so an
-    // empty or failed answer falls back to finding the account's posts through web search.
+    // empty or failed answer falls back to finding the account's posts through web search — except after a
+    // syndication 429, when every profile would burn the same daily search budget for the same wall.
+    if (syndParked()) {
+      return { items: [], cursor, via: 'syndication:parked', notes: [syndState.reason] };
+    }
     let items = []; let embedErr = null;
-    try { items = await viaSyndication(feed); } catch (e) { embedErr = e; }
+    try { items = await viaSyndication(feed); } catch (e) {
+      embedErr = e;
+      if (e.status === 429 || e.syndPark || e.rateLimited) {
+        return { items: [], cursor, via: 'syndication:parked', notes: [e.message] };
+      }
+    }
     if (!items.length) {
       let r;
       try { r = await viaWebSearch(feed, ctx, cursor); } catch (e) {
