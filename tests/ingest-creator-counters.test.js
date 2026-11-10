@@ -66,6 +66,33 @@ test('tags.usage_count equals its media_tags rows (the v23 triggers), also when 
   assert.deepEqual(tagDrift(), [], 'the cascade from a deleted media row decrements');
 });
 
+test('a published insert adds that one row, an older post does not rewind the date, and a duplicate adds nothing', () => {
+  const x = creator();
+  media(x, { score: 4, postedAt: '2026-06-01T00:00:00.000Z' });
+  media(x, { type: 'video', score: 6, postedAt: '2026-05-01T00:00:00.000Z' });
+  const mid = repo.creators.get(x.id);
+  assert.equal(mid.media_count, 2);
+  assert.equal(mid.video_count, 1);
+  assert.equal(mid.total_score, 10);
+  assert.equal(mid.last_media_at, '2026-06-01T00:00:00.000Z', 'an older post stays behind the newer one');
+  const hash = crypto.createHash('md5').update('bump-dup').digest('hex');
+  const first = repo.media.insert({
+    creator_id: x.id, platform: 'rss', source_id: 'bump', source_key: 'rss:bump:0', post_key: 'rss:bump', media_type: 'image',
+    media_url: 'https://img.example/bump.jpg', hash, score: 8, posted_at: '2026-07-01T00:00:00.000Z', publish_state: 'published',
+  });
+  const dup = repo.media.insert({
+    creator_id: x.id, platform: 'rss', source_id: 'bump', source_key: 'rss:bump:0', post_key: 'rss:bump', media_type: 'image',
+    media_url: 'https://img.example/bump.jpg', hash, score: 80, posted_at: '2026-08-01T00:00:00.000Z', publish_state: 'published',
+  });
+  assert.ok(first);
+  assert.equal(dup, null);
+  const row = repo.creators.get(x.id);
+  assert.equal(row.media_count, 3);
+  assert.equal(row.total_score, 18);
+  assert.equal(row.last_media_at, '2026-07-01T00:00:00.000Z');
+  assert.deepEqual(drift().filter((r) => r.handle === x.handle), []);
+});
+
 test('the boot-time recount uses the same counters: published items only, and last_media_at', async () => {
   const x = creator();
   media(x, { score: 5, postedAt: '2026-01-02T00:00:00.000Z' });

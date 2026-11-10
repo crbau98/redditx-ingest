@@ -70,9 +70,11 @@ Success: the first screen is useful before the slow calls return, scrolling does
 
 - [x] Find’s cleanup marks the page as left. A lookup or a follow that finishes after you leave does not paint, and it does not open that creator. The page that is up stays up.
 
+- [x] A published insert moves that creator’s counters by the one new row. Hide, restore, and re-attribute still recount. The body read in the link-health probe already stops itself (`src/engine/probe.js`).
+
 ## Next
 
-52. Bound the link-health probe so a hung socket cannot hold a slot until the 45s race. The magic-byte sniff needs its own short timeout.
+53. Review queue: one action on a hold reason should clear the matching rows in the admin console, so 9,000 waiting items are not one click each.
 
 ## Later
 

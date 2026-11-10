@@ -191,6 +191,20 @@ const creatorQ = {
   stats: db.prepare(`UPDATE creators SET ${STATS_SET},
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
     WHERE id = @id`),
+  // One new published row. A full recount stays on hide, restore, and re-attribute, where the
+  // published set changes by more than "add this row". Counting every post on each insert was
+  // the stall on creators who already have thousands.
+  bump: db.prepare(`UPDATE creators SET
+      media_count = media_count + 1,
+      video_count = video_count + @video,
+      total_score = total_score + @score,
+      last_media_at = CASE
+        WHEN @posted IS NULL THEN last_media_at
+        WHEN last_media_at IS NULL OR @posted > last_media_at THEN @posted
+        ELSE last_media_at
+      END,
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    WHERE id = @id`),
   // the same counts without touching updated_at (boot-time reconciliation of many creators)
   recount: db.prepare(`UPDATE creators SET ${STATS_SET} WHERE id = @id`),
   feedsOf: db.prepare('SELECT * FROM feeds WHERE creator_id = ? ORDER BY platform, target'),
@@ -1264,23 +1278,32 @@ const media = {
   /** @returns {string|null} new media id, or null on duplicate */
   insert(row, tags = []) {
     const id = uuid();
+    const rec = {
+      id, creator_id: null, feed_id: null, source_id: null, source_key: null, post_key: null, position: 0, source_url: null,
+      community: null, author: null, title: null, description: null, preview_url: null, thumbnail_url: null, hls_url: null,
+      has_audio: 0, width: null, height: null, duration: null, mime_type: null, score: 0, nsfw_level: 'explicit', scope: 'in',
+      publish_state: 'published', review_reason: null, posted_at: nowIso(), phash: null, physique: null, attribution_evidence: null, lean_bias: null, ...row,
+    };
     const run = db.transaction(() => {
       try {
-        mediaQ.insert.run({
-          id, creator_id: null, feed_id: null, source_id: null, source_key: null, post_key: null, position: 0, source_url: null,
-          community: null, author: null, title: null, description: null, preview_url: null, thumbnail_url: null, hls_url: null,
-          has_audio: 0, width: null, height: null, duration: null, mime_type: null, score: 0, nsfw_level: 'explicit', scope: 'in',
-          publish_state: 'published', review_reason: null, posted_at: nowIso(), phash: null, physique: null, attribution_evidence: null, lean_bias: null, ...row,
-        });
+        mediaQ.insert.run(rec);
       } catch (e) {
         // Duplicate hash / source_key: expected and harmless. Anything else is a real bug.
         if (e && e.code === 'SQLITE_CONSTRAINT_UNIQUE') return null;
         throw e;
       }
       if (tags.length) addTags(id, tags, 'ingest');
-      // a new row changes its creator's counts (media_count, video_count, total_score, last_media_at)
-      if (row.creator_id) creatorQ.stats.run({ id: row.creator_id });
-      hosts.add(row.media_url, row.preview_url, row.thumbnail_url, row.hls_url);
+      // A published row moves the visible counters by itself. Hide, restore, and re-attribute
+      // still recount, because those can take a row out of the published set.
+      if (rec.creator_id && rec.publish_state === 'published') {
+        creatorQ.bump.run({
+          id: rec.creator_id,
+          video: rec.media_type === 'video' ? 1 : 0,
+          score: Number(rec.score) || 0,
+          posted: rec.posted_at || null,
+        });
+      }
+      hosts.add(rec.media_url, rec.preview_url, rec.thumbnail_url, rec.hls_url);
       return id;
     });
     return run();
