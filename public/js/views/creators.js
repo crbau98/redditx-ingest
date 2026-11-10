@@ -1,5 +1,5 @@
 import { h, icon, fmt, debounce, emptyState } from '../dom.js';
-import { get } from '../api.js';
+import { get, prefetch } from '../api.js';
 import { navigate, href } from '../router.js';
 import { platformLabel, follows } from '../store.js';
 import { find } from './find.js';
@@ -161,7 +161,7 @@ export async function creators(root, { query }) {
   const showActiveChip = () => filterScroll.querySelector('.chip.on')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
   window.addEventListener('resize', syncFilterRow);
 
-  const grid = h('div', { class: 'creator-grid' });
+  const grid = h('div', { class: 'creator-grid', 'aria-busy': 'true' }, Array.from({ length: 8 }, () => h('div', { class: 'skeleton', style: { height: '260px' } })));
   const more = h('div', { class: 'loadmore' });
 
   root.replaceChildren(
@@ -189,37 +189,49 @@ export async function creators(root, { query }) {
   }).catch(() => {});
 
   let page = 0; let total = 0; let loading = false; let destroyed = false; let done = false;
+  const creatorQuery = (n) => {
+    const params = { ...f, fresh: f.fresh || undefined, page: n, limit: 36 };
+    delete params.following; delete params.lookup;
+    if (f.following) params.ids = follows.list().map((c) => c.id).slice(0, 150).join(',');
+    if (params.paid) params.onlyfans = params.paid === 'onlyfans' ? '1' : undefined;
+    return params;
+  };
   async function load() {
     if (loading || done || destroyed) return;
     loading = true;
     more.replaceChildren(h('div', { class: 'spinner' }));
     try {
-      const params = { ...f, fresh: f.fresh || undefined, page, limit: 36 };
-      delete params.following; delete params.lookup;
-      if (f.following) {
-        const ids = follows.list().map((c) => c.id);
-        if (!ids.length) {
-          total = 0; count.textContent = '0 creators'; done = true;
-          more.replaceChildren(emptyState({ icon: 'heart', title: 'Not following anyone yet', text: 'Follow creators across PRISM and filter to them here.', actions: [h('button', { class: 'btn primary', onclick: () => set({ following: '' }) }, 'Show all creators')] }));
-          return;
-        }
-        params.ids = ids.slice(0, 150).join(',');
+      const params = creatorQuery(page);
+      if (f.following && !params.ids) {
+        total = 0; count.textContent = '0 creators'; done = true;
+        grid.replaceChildren();
+        grid.removeAttribute('aria-busy');
+        more.replaceChildren(emptyState({ icon: 'heart', title: 'Not following anyone yet', text: 'Follow creators across PRISM and filter to them here.', actions: [h('button', { class: 'btn primary', onclick: () => set({ following: '' }) }, 'Show all creators')] }));
+        return;
       }
-      if (params.paid) params.onlyfans = params.paid === 'onlyfans' ? '1' : undefined;
       const r = await get('/api/creators', params);
       if (destroyed) return;
       total = r.total; count.textContent = `${fmt.int(total)} ${total === 1 ? 'creator' : 'creators'}`;
-      grid.append(...r.items.map((c) => creatorCard(c)));
+      const firstPage = page === 0;
+      const cards = r.items.map((c, i) => creatorCard(c, { eager: firstPage && i < 4 }));
+      if (firstPage) { grid.replaceChildren(...cards); grid.removeAttribute('aria-busy'); }
+      else grid.append(...cards);
       page++;
       done = grid.children.length >= total;
+      if (!done) prefetch('/api/creators', creatorQuery(page));
       if (!grid.children.length) more.replaceChildren(emptyState({ icon: 'users', title: 'No creators found', text: f.q ? `No creators matched “${f.q}” with current filters. Try searching across the web or resetting filters.` : f.paid ? 'No creators found with that linkout yet. As new accounts are scanned, linkouts update automatically.' : 'Creators appear here once content has been indexed into the library.', actions: [h('button', { type: 'button', class: 'btn primary', onclick: () => runInlineLookup(f.q) }, icon('search', 'sm'), f.q ? `Find “${f.q}” across the web` : 'Find a creator'), filtersActive ? h('button', { class: 'btn', onclick: () => navigate('/creators', {}, { replace: true }) }, 'Clear filters') : null].filter(Boolean) }));
       else more.replaceChildren(done ? h('span', { class: 'muted' }, 'That’s everyone') : h('button', { class: 'btn', onclick: load }, 'Load more'));
-    } catch (e) { more.replaceChildren(h('span', { class: 'muted' }, e.message), h('button', { class: 'btn sm', onclick: load }, 'Retry')); }
+    } catch (e) {
+      if (destroyed) return;
+      if (page === 0) { grid.replaceChildren(); grid.removeAttribute('aria-busy'); }
+      more.replaceChildren(h('span', { class: 'muted' }, e.message), h('button', { class: 'btn sm', onclick: load }, 'Retry'));
+    }
     finally { loading = false; }
   }
   const io = new IntersectionObserver((en) => { if (en[0].isIntersecting && page > 0) load(); }, { rootMargin: '800px' });
   io.observe(more);
-  await load();
-  requestAnimationFrame(() => { syncFilterRow(); showActiveChip(); });
-  return () => { destroyed = true; io.disconnect(); window.removeEventListener('resize', syncFilterRow); };
+  // Hand the router a way to leave before the first page returns. The skeletons stay until that page paints.
+  const stop = () => { destroyed = true; io.disconnect(); window.removeEventListener('resize', syncFilterRow); };
+  load().then(() => { if (!destroyed) requestAnimationFrame(() => { if (!destroyed) { syncFilterRow(); showActiveChip(); } }); });
+  return stop;
 }

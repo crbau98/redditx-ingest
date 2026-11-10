@@ -6,6 +6,7 @@
  */
 const { test, describe, before } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { prepareEnv } = require('./helpers/mock');
@@ -137,6 +138,24 @@ describe('throughput', () => {
   });
   test('buckets outside the 48-hour window are ignored', () => {
     assert.equal(L.throughput([{ hour: key(60), added: 99, runs: 1, errors: 0 }], now).addedPrev24, 0);
+  });
+  test('a source with nothing today and something in the window is quiet, and it sorts first', () => {
+    const rows = L.sourceYield([
+      { day: '2026-11-05', platform: 'reddit', n: 4 },
+      { day: '2026-11-04', platform: 'reddit', n: 9 },
+      { day: '2026-11-05', platform: 'bluesky', n: 0 },
+      { day: '2026-11-03', platform: 'telegram', n: 2 },
+      { day: '2026-11-01', platform: 'x', n: 1 },
+    ], Date.UTC(2026, 10, 5, 18));
+    assert.equal(rows.find((r) => r.platform === 'reddit').today, 4);
+    assert.equal(rows.find((r) => r.platform === 'reddit').yesterday, 9);
+    assert.equal(rows.find((r) => r.platform === 'reddit').quiet, false);
+    assert.equal(rows.find((r) => r.platform === 'telegram').quiet, true);
+    assert.equal(rows.find((r) => r.platform === 'telegram').today, 0);
+    assert.equal(rows[0].quiet, true);
+    const ov = fs.readFileSync(path.join(__dirname, '../public/js/views/admin/overview.js'), 'utf8');
+    assert.match(ov, /sourceCard\(\)/);
+    assert.match(ov, /0 today/);
   });
 });
 

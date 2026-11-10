@@ -1,10 +1,12 @@
-import { h, icon, avatar, fmt, debounce, $ } from '../dom.js';
+import { h, icon, avatar, fmt, debounce, $, proxied } from '../dom.js';
 import { get } from '../api.js';
 import { navigate, setParam } from '../router.js';
-import { prefs, searches, collections, platformLabel } from '../store.js';
+import { prefs, searches, collections, history, playback, platformLabel } from '../store.js';
 import { smartSearch } from '../smart.js';
+import { orderByIds, recentJumps, jumpCacheFresh } from '../recent-jumps.js';
 
 let open = null;
+let jumpCache = { at: 0, key: '', jumps: { videos: [], creators: [] } };
 
 /** Open a random item in the viewer, wherever you are. */
 export async function surpriseMe() {
@@ -57,7 +59,28 @@ export function openPalette() {
       list,
       h('div', { class: 'palette-foot' }, h('span', null, h('kbd', { class: 'kbd' }, '↑'), ' ', h('kbd', { class: 'kbd' }, '↓'), ' move'), h('span', null, h('kbd', { class: 'kbd' }, '↵'), ' open'), h('span', null, h('kbd', { class: 'kbd' }, '/'), ' search'), h('span', null, h('kbd', { class: 'kbd' }, '?'), ' shortcuts'))));
 
-  const commands = staticCommands();
+  const fixed = staticCommands();
+  let jumps = { videos: [], creators: [] };
+  const jumpCommands = () => [
+    ...jumps.creators.map((c) => ({ group: 'Recent creators', avatar: c, label: c.display_name || c.handle || 'Creator', hint: c.handle ? `@${c.handle}` : 'Opened on this device', run: () => navigate(`/creator/${c.id}`) })),
+    ...jumps.videos.map((v) => ({
+      group: 'Recent videos',
+      thumb: v.still ? h('img', {
+        class: 'palette-still', src: proxied(v.still), alt: '', width: 28, height: 28, decoding: 'async',
+        onerror: (e) => {
+          const el = e.currentTarget;
+          if (!v.stillFall || el.dataset.fell) return;
+          el.dataset.fell = '1';
+          el.src = proxied(v.stillFall);
+        },
+      }) : null,
+      icon: 'play',
+      label: v.title,
+      hint: v.leftOff ? `left off ${fmt.duration(v.leftOff)}` : (v.creator || 'Opened on this device'),
+      run: () => setParam('m', v.id, { replace: false }),
+    })),
+  ];
+  const commands = () => [...jumpCommands(), ...fixed];
   let rows = []; let idx = 0; let remote = { creators: [], tags: [], communities: [] }; let token = 0;
 
   const close = () => {
@@ -71,7 +94,8 @@ export function openPalette() {
 
   function paint() {
     const q = norm(input.value.trim());
-    const local = q ? commands.filter((c) => matches(c, q)) : commands.filter((c) => c.group !== 'Collections' || commands.filter((x) => x.group === 'Collections').indexOf(c) < 4);
+    const allLocal = commands();
+    const local = q ? allLocal.filter((c) => matches(c, q)) : allLocal.filter((c) => c.group !== 'Collections' || allLocal.filter((x) => x.group === 'Collections').indexOf(c) < 4);
     const dyn = [
       ...remote.creators.map((c) => ({ group: 'Creators', avatar: c, label: c.display_name || c.handle, hint: `@${c.handle} · ${fmt.num(c.media_count)} posts`, run: () => navigate(`/creator/${c.id}`) })),
       ...remote.tags.map((t) => ({ group: 'Tags', icon: 'tag', label: `#${t.name}`, hint: `${fmt.num(t.count)} items`, run: () => navigate('/explore', { tag: t.name }) })),
@@ -84,7 +108,7 @@ export function openPalette() {
     let group = null;
     for (const c of all) {
       if (c.group !== group) { group = c.group; parts.push(h('div', { class: 'suggest-label' }, group)); }
-      const el = h('a', { class: 'suggest-row', role: 'option', href: '#', 'aria-selected': 'false' }, c.avatar ? avatar(c.avatar, 26) : icon(c.icon || 'chev-r', 'sm'), h('span', { class: 'truncate' }, c.label), c.hint ? h('span', { class: 'n' }, c.hint) : null);
+      const el = h('a', { class: 'suggest-row', role: 'option', href: '#', 'aria-selected': 'false' }, c.avatar ? avatar(c.avatar, 26) : (c.thumb || icon(c.icon || 'chev-r', 'sm')), h('span', { class: 'truncate' }, c.label), c.hint ? h('span', { class: 'n' }, c.hint) : null);
       const row = { el, run: c.run };
       el.addEventListener('click', (e) => { e.preventDefault(); run(row); });
       el.addEventListener('mousemove', () => { const k = rows.indexOf(row); if (k !== idx) mark(k); });
@@ -115,6 +139,21 @@ export function openPalette() {
   open = { input, close };
   paint();
   input.focus();
+  // Jump-back is local history, not a search. A repeat open inside a minute reuses the last fetch.
+  const opened = prefs.historyOff ? [] : history.list().slice(0, 24);
+  const key = `${opened.join(',')}|${playback.list().map((p) => `${p.id}:${p.t}`).join(',')}`;
+  if (opened.length && jumpCacheFresh(jumpCache, key)) {
+    jumps = jumpCache.jumps;
+    paint();
+  } else if (opened.length) {
+    get('/api/media', { ids: opened.join(','), limit: opened.length }).then((r) => {
+      const next = recentJumps(orderByIds(r.items || [], opened), playback.list());
+      jumpCache = { at: Date.now(), key, jumps: next };
+      if (!open) return;
+      jumps = next;
+      paint();
+    }).catch(() => {});
+  }
 }
 
 export const paletteOpen = () => !!open;

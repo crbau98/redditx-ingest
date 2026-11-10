@@ -53,5 +53,35 @@ describe('lazyBackground', () => {
       assert.match(src, /lazyBackground\(/, f);
       assert.doesNotMatch(src, /backgroundImage/, `${f} must not set an eager background-image`);
     }
+    const card = fs.readFileSync(path.join(JS, 'components', 'creator-card.js'), 'utf8');
+    assert.match(card, /previewFalls/);
+    const topics = fs.readFileSync(path.join(JS, 'components', 'topics.js'), 'utf8');
+    assert.match(topics, /previewFalls/);
+    assert.match(topics, /eager: i < 4/);
+    const stage = fs.readFileSync(path.join(JS, 'views', 'creator.js'), 'utf8');
+    assert.match(stage, /dataset\.fell/);
+  });
+
+  test('the fallback probe waits until the tile is painted, then steps once', async () => {
+    const probes = [];
+    globalThis.Image = class { set src(v) { this._src = v; probes.push(this); } get src() { return this._src; } };
+    const observers = [];
+    globalThis.IntersectionObserver = class {
+      constructor(cb) { this.cb = cb; observers.push(this); }
+      observe() {}
+      unobserve() {}
+    };
+    const { lazyBackground } = await load();
+    const waiting = el();
+    lazyBackground(waiting, '/t.webp', false, '/p.jpg');
+    assert.equal(probes.length, 0, 'offscreen tiles do not probe');
+    assert.equal(waiting.style.backgroundImage, undefined);
+    observers[0].cb([{ target: waiting, isIntersecting: true }]);
+    assert.equal(waiting.style.backgroundImage, 'url("/t.webp")');
+    assert.equal(probes.length, 1);
+    waiting.isConnected = true;
+    probes[0].onerror();
+    assert.equal(waiting.style.backgroundImage, 'url("/p.jpg")');
+    delete globalThis.Image;
   });
 });

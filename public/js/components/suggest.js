@@ -3,6 +3,7 @@ import { get } from '../api.js';
 import { navigate, href } from '../router.js';
 import { platformLabel, recentSearches } from '../store.js';
 import { understand, understoodChips, smartSearch } from '../smart.js';
+import { stillChain } from '../images.js';
 
 /**
  * Autocomplete for search boxes: a live "Understood as" preview of what Enter will search
@@ -43,8 +44,18 @@ export function attachSuggest(input, { id = 'suggest-box', extraRows = null } = 
     }
     preview.replaceChildren(
       h('div', { class: 'sp-strip' }, items.slice(0, 6).map((it) => {
-        const src = it.preview_url || it.thumbnail_url || (it.media_type === 'image' ? it.media_url : null);
-        const a = h('a', { class: 'sp-thumb', href: '#', title: it.title || '', 'aria-label': it.title || 'Open' }, src ? h('img', { src: proxied(src), alt: '', loading: 'eager', decoding: 'async' }) : null, it.media_type === 'video' ? h('span', { class: 'sp-play' }, icon('play', 'sm')) : null);
+        const chain = stillChain(it);
+        const img = chain.length ? h('img', {
+          src: proxied(chain[0]), alt: '', loading: 'eager', decoding: 'async',
+          onerror: (e) => {
+            const el = e.currentTarget;
+            const step = Number(el.dataset.step || 0) + 1;
+            if (step >= chain.length) return;
+            el.dataset.step = String(step);
+            el.src = proxied(chain[step]);
+          },
+        }) : null;
+        const a = h('a', { class: 'sp-thumb', href: '#', title: it.title || '', 'aria-label': it.title || 'Open' }, img, it.media_type === 'video' ? h('span', { class: 'sp-play' }, icon('play', 'sm')) : null);
         a.addEventListener('mousedown', (e) => { e.preventDefault(); hide(); input.blur(); navigate('/explore', { ...params, m: it.id }); });
         return a;
       })),

@@ -1,20 +1,22 @@
-import { h, icon, proxied, fmt, avatar, toast, copyText, openModal } from '../dom.js';
+import { h, icon, proxied, fmt, avatar, toast, copyText, openModal, paintCover, armPoster } from '../dom.js';
 import { get, post, reportBroken } from '../api.js';
 import { favorites, follows, prefs, history as viewHistory, tastes, collections, platformLabel, platformColor, bus } from '../store.js';
 import { parse, href, setParam } from '../router.js';
 import { openReport } from './report.js';
-import { attachVideo, releaseVideo, isM3u8 } from './video.js';
+import { attachVideo, releaseVideo, isM3u8, bindWatch, bumpRate, togglePip } from './video.js';
+import { clampRate } from '../playback-policy.js';
 import { openCollectionPicker } from './collections.js';
 import { playFlip, heartBurst, haptic } from './fx.js';
 import { makeZoomable } from './zoom.js';
 import { viewerExit } from './transitions.js';
 import { openElsewhere } from './elsewhere.js';
-import { tileImage } from '../images.js';
+import { tileImage, stillChain } from '../images.js';
 
 let S = null; // the single active lightbox session
 const viewed = new Set();
 const warmed = new Set(); // full-size image URLs this viewer has finished loading (instant when shown)
-const relCache = new Map(); // media id -> related items
+const relCache = new Map(); // media id -> related items already given to the strip
+const relWait = new Map(); // media id -> in-flight sequence list (limit 24), shared with the strip
 const byCreator = new Map(); // creator id -> { at, items } his latest posts
 
 /* ------------------------------------------------------------------ public */
@@ -39,17 +41,31 @@ export const isOpen = () => !!S;
 async function openById(id) {
   if (!S) start([], null);
   S.loading = true; render();
+  const seq = (S.openSeq = (S.openSeq || 0) + 1);
+  // The swipe sequence can arrive after the picture. A failed related list leaves the item up.
+  const relatedP = get(`/api/media/${id}/related`, { limit: 24 }).catch(() => []);
+  relWait.set(id, relatedP);
+  relatedP.then(() => { if (relWait.get(id) === relatedP) relWait.delete(id); });
   try {
     const item = await get(`/api/media/${id}`);
-    const related = await get(`/api/media/${id}/related`, { limit: 24 }).catch(() => []);
-    if (!S) return;
-    S.items = [item, ...related];
+    if (!S || S.openSeq !== seq) return;
+    S.items = [item];
     S.loading = false;
     show(0);
+    const related = await relatedP;
+    if (!S || S.openSeq !== seq || S.index !== 0 || !S.items[0] || S.items[0].id !== id) return;
+    const more = (Array.isArray(related) ? related : []).filter((it) => it && it.id && it.id !== id);
+    if (!more.length) return;
+    S.items = [S.items[0], ...more];
+    S.next.disabled = false;
+    paintTop();
+    paintStrip();
+    const n = S.items[1];
+    if (n && n.media_type === 'image') { const pre = new Image(); pre.onload = () => warmed.add(n.media_url); pre.src = proxied(n.media_url); }
   } catch (e) {
     toast(e.status === 404 ? 'That item is no longer available' : e.message, 'err');
-    if (S) destroy();
-    setParam('m', null);
+    if (S && S.openSeq === seq) destroy();
+    if (!S || S.openSeq === seq) setParam('m', null);
   }
 }
 
@@ -184,6 +200,23 @@ function toggleTheater() {
   toast(S.theater ? 'Cinema mode on' : 'Cinema mode off');
 }
 
+function creatorPosts(id) {
+  const hit = byCreator.get(id);
+  if (hit && hit.items && Date.now() - hit.at < 120000) return Promise.resolve(hit.items);
+  if (hit && hit.pending) return hit.pending;
+  const pending = get(`/api/creators/${id}/media`, { sort: 'recent', limit: 12 }).then((r) => {
+    const items = (r && r.items) || [];
+    byCreator.set(id, { at: Date.now(), items });
+    if (byCreator.size > 40) byCreator.delete(byCreator.keys().next().value);
+    return items;
+  }).catch((err) => {
+    if (byCreator.get(id) && byCreator.get(id).pending === pending) byCreator.delete(id);
+    throw err;
+  });
+  byCreator.set(id, { pending });
+  return pending;
+}
+
 function paintDock(it) {
   if (!S || !S.dock) return;
   if (!it || !it.creator_id) { S.dock.style.display = 'none'; return; }
@@ -233,24 +266,19 @@ function paintDock(it) {
     const list = (items || []).filter((x) => x && x.id !== it.id).slice(0, 7);
     if (!list.length) return;
     thumbsHolder.replaceChildren(...list.map((r) => {
-      const src = tileImage(r) || '';
-      return h('button', {
+      const btn = h('button', {
         class: `lb-dock-thumb${r.id === it.id ? ' on' : ''}`,
         title: r.title || `Post by ${cName}`,
-        style: src ? { backgroundImage: `url("${proxied(src)}")` } : {},
         onclick: (e) => { e.stopPropagation(); jumpTo(r); }
       }, r.media_type === 'video' ? icon('play', 'fill') : null);
+      paintCover(btn, stillChain(r));
+      return btn;
     }));
   };
 
   const hit = byCreator.get(it.creator_id);
-  if (hit && Date.now() - hit.at < 120000) fillThumbs(hit.items);
-  else {
-    get(`/api/creators/${it.creator_id}/media`, { sort: 'recent', limit: 12 }).then((r) => {
-      byCreator.set(it.creator_id, { at: Date.now(), items: r.items });
-      fillThumbs(r.items);
-    }).catch(() => {});
-  }
+  if (hit && hit.items && Date.now() - hit.at < 120000) fillThumbs(hit.items);
+  else creatorPosts(it.creator_id).then((items) => fillThumbs(items)).catch(() => {});
 }
 
 function toggleSlideshow() {
@@ -261,7 +289,7 @@ function toggleSlideshow() {
 }
 
 function showHelp() {
-  const rows = [['← / →  (J / K)', 'Previous / next'], ['F', 'Save to favourites'], ['C', 'Add to a collection'], ['Click · scroll · pinch', 'Zoom the image (+ / − / 0 too)'], ['Drag', 'Pan while zoomed'], ['I', 'Show or hide details'], ['M', 'Mute video'], ['Space', 'Play / pause video'], ['S', 'Start / stop slideshow'], ['Esc', 'Close'], ['/', 'Search (outside the viewer)'], ['Ctrl / ⌘ + K', 'Command palette (outside the viewer)'], ['Double-click', 'Save the image'], ['Swipe ← →', 'Navigate (touch)'], ['Swipe ↓', 'Close (touch)']];
+  const rows = [['← / →  (J / K)', 'Previous / next'], ['F', 'Save to favourites'], ['C', 'Add to a collection'], ['Click · scroll · pinch', 'Zoom the image (+ / − / 0 too)'], ['Drag', 'Pan while zoomed'], ['I', 'Show or hide details'], ['M', 'Mute video'], [', / .', 'Slower / faster'], ['P', 'Picture in picture'], ['Space', 'Play / pause video'], ['S', 'Start / stop slideshow'], ['Esc', 'Close'], ['/', 'Search (outside the viewer)'], ['Ctrl / ⌘ + K', 'Command palette (outside the viewer)'], ['Double-click', 'Save the image'], ['Swipe ← →', 'Navigate (touch)'], ['Swipe ↓', 'Close (touch)']];
   const m = openModal({ title: 'Keyboard shortcuts', body: h('dl', { class: 'kv', style: { gridTemplateColumns: 'auto 1fr' } }, rows.map(([k, d]) => [h('dt', null, h('kbd', { class: 'kbd' }, k)), h('dd', { style: { textAlign: 'left' } }, d)])), actions: [h('button', { class: 'btn primary', onclick: () => m.close() }, 'Got it')] });
 }
 
@@ -282,6 +310,8 @@ function paintTop() {
     h('button', { class: `btn icon fav${faved ? ' on' : ''}`, 'aria-label': faved ? 'Remove from saved' : 'Save', 'aria-pressed': String(faved), title: 'Save (F)', onclick: () => toggleFav(it) }, icon('heart'), h('span', { class: 'lb-lab', 'aria-hidden': 'true' }, 'Save')),
     h('button', { class: `btn icon${collections.containing(it.id).length ? ' on' : ''}`, 'aria-label': 'Add to collection', title: 'Add to collection (C)', onclick: () => openCollectionPicker(it) }, icon('bookmark'), h('span', { class: 'lb-lab', 'aria-hidden': 'true' }, 'Collect')),
     h('button', { class: 'btn icon', 'aria-label': 'Share link', title: 'Copy link', onclick: () => share(it) }, icon('share'), h('span', { class: 'lb-lab', 'aria-hidden': 'true' }, 'Share')),
+    it.media_type === 'video' ? h('button', { class: 'btn sm lb-rate', 'aria-label': `Playback speed ${clampRate(prefs.playbackRate)} times`, title: 'Speed (, slower, . faster)', onclick: () => { const n = bumpRate(S.stage.querySelector('video'), 1); toast(`${n}×`); paintTop(); } }, `${clampRate(prefs.playbackRate)}×`) : null,
+    it.media_type === 'video' && document.pictureInPictureEnabled ? h('button', { class: 'btn icon', 'aria-label': 'Picture in picture', title: 'Picture in picture (P)', onclick: () => togglePip(S.stage.querySelector('video')) }, icon('external', 'sm'), h('span', { class: 'lb-lab', 'aria-hidden': 'true' }, 'PiP')) : null,
     h('button', { class: `btn icon hide-mobile${S.theater ? ' on' : ''}`, 'aria-label': S.theater ? 'Exit cinema mode' : 'Cinema mode', 'aria-pressed': String(!!S.theater), title: 'Cinema mode (T)', onclick: toggleTheater }, icon('film', 'sm'), h('span', { class: 'lb-lab', 'aria-hidden': 'true' }, 'Cinema')),
     dl,
     h('button', { class: `btn icon hide-mobile${S.slide ? ' on' : ''}`, 'aria-label': S.slide ? 'Stop slideshow' : 'Start slideshow', 'aria-pressed': String(!!S.slide), title: 'Slideshow (S)', onclick: toggleSlideshow }, icon(S.slide ? 'pause' : 'play', S.slide ? '' : 'fill')),
@@ -324,6 +354,7 @@ async function share(it) {
 /* ------------------------------------------------------------------ stage */
 function teardownVideo() {
   if (!S) return;
+  if (S.watchOff) { S.watchOff(); S.watchOff = null; }
   if (S.video) { S.video.destroy(); S.video = null; }
   releaseVideo(S.stage.querySelector('video'));
 }
@@ -345,9 +376,10 @@ function paintStrip() {
   const thumbs = [];
   for (let i = from; i < to; i++) {
     const x = S.items[i];
-    const src = tileImage(x) || '';
-    thumbs.push(h('button', { class: `lb-thumb${i === S.index ? ' on' : ''}`, role: 'option', 'aria-selected': String(i === S.index), 'aria-label': x.title || `Item ${i + 1}`, style: src ? { backgroundImage: `url("${proxied(src)}")` } : null, onclick: () => show(i) },
-      x.media_type === 'video' ? icon('play', 'fill') : null));
+    const btn = h('button', { class: `lb-thumb${i === S.index ? ' on' : ''}`, role: 'option', 'aria-selected': String(i === S.index), 'aria-label': x.title || `Item ${i + 1}`, onclick: () => show(i) },
+      x.media_type === 'video' ? icon('play', 'fill') : null);
+    paintCover(btn, stillChain(x));
+    thumbs.push(btn);
   }
   S.strip.replaceChildren(...thumbs);
   const on = S.strip.querySelector('.on');
@@ -362,7 +394,9 @@ function paintStage(it) {
   S.stage.classList.remove('zoomed-wrap');
   const keep = [S.prev, S.next];
   if (it.media_type === 'video') {
-    const v = h('video', { controls: true, playsinline: true, loop: true, autoplay: true, preload: 'auto', poster: it.preview_url ? proxied(it.preview_url) : null, 'aria-label': it.title || 'Video' });
+    const poster = tileImage(it);
+    const v = h('video', { controls: true, playsinline: true, loop: true, autoplay: true, preload: 'auto', poster: poster ? proxied(poster) : null, 'aria-label': it.title || 'Video' });
+    armPoster(v, stillChain(it));
     v.muted = prefs.muted;
     v.addEventListener('volumechange', () => { prefs.muted = v.muted; });
     v.addEventListener('error', () => {
@@ -375,6 +409,7 @@ function paintStage(it) {
     });
     S.stage.replaceChildren(...keep, v);
     S.video = attachVideo(v, it);
+    S.watchOff = bindWatch(v, it);
     playFlip(v);
     v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
   } else {
@@ -439,7 +474,7 @@ function paintInfo() {
     it.creator_id ? moreFrom : null,
     it.creator_id ? collabs : null,
     it.title ? h('h3', null, it.title) : null,
-    it.description ? h('p', { class: 'muted', style: { whiteSpace: 'pre-line', fontSize: '14px' } }, it.description.slice(0, 400)) : null,
+    it.description ? h('p', { class: 'lb-desc muted', style: { whiteSpace: 'pre-line', fontSize: '14px' } }, it.description.slice(0, 400)) : null,
     h('dl', { class: 'kv' },
       h('dt', null, 'Source'), h('dd', null, h('span', { class: 'badge plat', style: { '--c': platformColor(it.platform) } }, platformLabel(it.platform))),
       it.community ? [h('dt', null, 'Community'), h('dd', null, it.community)] : null,
@@ -458,14 +493,35 @@ function paintInfo() {
   const paintRelated = (items) => {
     if (!S || cur() !== it) return;
     if (!items.length) { rel.replaceWith(h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Nothing related yet.')); return; }
-    rel.replaceChildren(...items.map((r) => h('a', {
-      href: href(parse().path, { ...Object.fromEntries(parse().query), m: r.id }),
-      style: { backgroundImage: `url("${proxied(tileImage(r) || '')}")` }, 'aria-label': r.title || 'Related',
-      onclick: (e) => { e.preventDefault(); jumpTo(r); },
-    }, r.media_type === 'video' ? h('span', { class: 'pill', style: { position: 'absolute', left: '6px', top: '6px' } }, icon('play', 'fill')) : null)));
+    rel.replaceChildren(...items.map((r) => {
+      const a = h('a', {
+        href: href(parse().path, { ...Object.fromEntries(parse().query), m: r.id }),
+        'aria-label': r.title || 'Related',
+        onclick: (e) => { e.preventDefault(); jumpTo(r); },
+      }, r.media_type === 'video' ? h('span', { class: 'pill', style: { position: 'absolute', left: '6px', top: '6px' } }, icon('play', 'fill')) : null);
+      paintCover(a, stillChain(r));
+      return a;
+    }));
   };
   if (relCache.has(it.id)) paintRelated(relCache.get(it.id));
+  else if (relWait.has(it.id)) relWait.get(it.id).then((items) => {
+    if (relCache.has(it.id)) return;
+    const slice = (Array.isArray(items) ? items : []).filter((r) => r && r.id && r.id !== it.id).slice(0, 9);
+    relCache.set(it.id, slice);
+    paintRelated(slice);
+  });
   else get(`/api/media/${it.id}/related`, { limit: 9 }).then((items) => { relCache.set(it.id, items); paintRelated(items); }).catch(() => {});
+  // List responses leave the caption off so a grid of 48 posts stays small. The detail panel asks for it once.
+  if (it.description == null) {
+    get(`/api/media/${it.id}`).then((full) => {
+      if (!S || cur() !== it || !full) return;
+      it.description = full.description || '';
+      if (!it.description || box.querySelector('.lb-desc')) return;
+      const p = h('p', { class: 'lb-desc muted', style: { whiteSpace: 'pre-line', fontSize: '14px' } }, it.description.slice(0, 400));
+      const title = box.querySelector('h3');
+      if (title) title.after(p); else box.prepend(p);
+    }).catch(() => {});
+  }
 }
 
 /** The picture's own public address (never our proxy): reverse image search engines fetch it themselves. */
@@ -508,21 +564,18 @@ function creatorStrip(it) {
     const list = items.filter((x) => x.id !== it.id).slice(0, 8);
     if (!list.length) { strip.remove(); return; }
     strip.replaceChildren(...list.map((r) => {
-      const src = tileImage(r) || '';
-      return h('a', { class: 'lb-more-thumb', role: 'listitem', href: href(parse().path, { ...Object.fromEntries(parse().query), m: r.id }), 'aria-label': r.title || `Post by ${name}`,
-        style: src ? { backgroundImage: `url("${proxied(src)}")` } : null, onclick: (e) => { e.preventDefault(); jumpTo(r); } },
+      const a = h('a', { class: 'lb-more-thumb', role: 'listitem', href: href(parse().path, { ...Object.fromEntries(parse().query), m: r.id }), 'aria-label': r.title || `Post by ${name}`,
+        onclick: (e) => { e.preventDefault(); jumpTo(r); } },
       r.media_type === 'video' ? h('span', { class: 'pill' }, icon('play', 'fill')) : null);
+      paintCover(a, stillChain(r));
+      return a;
     }));
   };
   const hit = byCreator.get(it.creator_id);
-  if (hit && Date.now() - hit.at < 120000) paint(hit.items);
+  if (hit && hit.items && Date.now() - hit.at < 120000) paint(hit.items);
   else {
     strip.append(...Array.from({ length: 4 }, () => h('span', { class: 'lb-more-thumb skeleton' })));
-    get(`/api/creators/${it.creator_id}/media`, { sort: 'recent', limit: 9 }).then((r) => {
-      byCreator.set(it.creator_id, { at: Date.now(), items: r.items });
-      if (byCreator.size > 40) byCreator.delete(byCreator.keys().next().value);
-      paint(r.items);
-    }).catch(() => strip.remove());
+    creatorPosts(it.creator_id).then((items) => paint(items)).catch(() => strip.remove());
   }
   return el;
 }
@@ -585,6 +638,9 @@ function onKey(e) {
     case 's': case 'S': toggleSlideshow(); break;
     case '?': showHelp(); break;
     case 'm': case 'M': { const v = S.stage.querySelector('video'); if (v) v.muted = !v.muted; break; }
+    case ',': case '<': { const v = S.stage.querySelector('video'); if (v) { e.preventDefault(); toast(`${bumpRate(v, -1)}×`); paintTop(); } break; }
+    case '.': case '>': { const v = S.stage.querySelector('video'); if (v) { e.preventDefault(); toast(`${bumpRate(v, 1)}×`); paintTop(); } break; }
+    case 'p': case 'P': { const v = S.stage.querySelector('video'); if (v) { e.preventDefault(); togglePip(v); } break; }
     case '+': case '=': if (S.zoom) { e.preventDefault(); S.zoom.zoomBy(1.6); } break;
     case '-': if (S.zoom) { e.preventDefault(); S.zoom.zoomBy(1 / 1.6); } break;
     case '0': if (S.zoom) { e.preventDefault(); S.zoom.reset(); } break;

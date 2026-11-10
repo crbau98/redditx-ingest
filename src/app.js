@@ -46,14 +46,24 @@ function createApp() {
   }));
   app.use(compression({ filter: (req, res) => (req.path.startsWith('/api/stream') || req.path.startsWith('/api/admin/stream') || req.path === '/api/proxy' ? false : compression.filter(req, res)) }));
   if (!config.isTest) app.use(morgan(config.isProd ? 'tiny' : 'dev', { skip: (req) => req.path === '/api/health' || req.path === '/api/proxy' }));
-  // A slow API request is logged once, with its duration: the health endpoint only shows the worst pause
-  // between checks; this says which request caused it.
-  if (!config.isTest) app.use((req, res, next) => {
+  // Server-Timing is set before the body is flushed so DevTools and tests can separate server time from the network.
+  // A slow API request is also logged once: the health endpoint only shows the worst pause between checks.
+  app.use((req, res, next) => {
+    if (!req.path.startsWith('/api')) return next();
     const t0 = process.hrtime.bigint();
-    res.on('finish', () => {
-      const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-      if (ms >= 500 && req.path.startsWith('/api') && req.path !== '/api/health') console.warn(`[slow] ${req.method} ${req.originalUrl.split('?')[0]} ${ms.toFixed(0)}ms ${res.statusCode}`);
-    });
+    let stamped = false;
+    const end = res.end;
+    res.end = function timedEnd(...args) {
+      if (!stamped) {
+        stamped = true;
+        if (!this.headersSent) {
+          const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+          this.setHeader('Server-Timing', `app;dur=${ms.toFixed(1)}`);
+          if (!config.isTest && ms >= 500 && req.path !== '/api/health') console.warn(`[slow] ${req.method} ${req.originalUrl.split('?')[0]} ${ms.toFixed(0)}ms ${res.statusCode}`);
+        }
+      }
+      return end.apply(this, args);
+    };
     next();
   });
   // Auth runs before the large body parser so unauthenticated uploads are rejected without being read.

@@ -49,24 +49,41 @@ function communityList(plat, list) {
   return wrap;
 }
 
-export async function browse(root) {
+export function browse(root) {
   document.title = 'Browse — PRISM';
   root.replaceChildren(h('div', { class: 'skeleton', style: { height: '320px' } }));
-  let tags; let communities; let platforms;
-  let topics;
-  let ofCreators = null; let ofPosts = null; let fanslyCreators = null;
   const total = (p) => p.then((r) => (r && Number.isFinite(r.total) ? r.total : null), () => null);
+  // Topics and the three paid counts are slow. Start them now, but paint sources, communities, and tags without them.
+  const tagsP = get('/api/tags', { limit: 200 });
+  const communitiesP = get('/api/communities');
+  const platformsP = get('/api/platforms');
+  const topicsP = topicCards({ limit: 12 }).catch(() => null);
+  const ofCreatorsP = total(get('/api/creators', { onlyfans: '1', limit: 1 }));
+  const ofPostsP = total(get('/api/media', { paid: 'onlyfans', limit: 1 }));
+  const fanslyP = total(get('/api/creators', { paid: 'fansly', limit: 1 }));
+  // The skeleton is already up. Hand back the way out before the catalog returns, so a late
+  // catalog cannot replace a page you have left.
+  let left = false;
+  const stop = () => { left = true; };
+  void fill();
+  return stop;
+
+  async function fill() {
+  let tags; let communities; let platforms;
   try {
-    [tags, communities, platforms, topics, ofCreators, ofPosts, fanslyCreators] = await Promise.all([
-      get('/api/tags', { limit: 200 }), get('/api/communities'), get('/api/platforms'), topicCards({ limit: 12 }),
-      total(get('/api/creators', { onlyfans: '1', limit: 1 })), total(get('/api/media', { paid: 'onlyfans', limit: 1 })), total(get('/api/creators', { paid: 'fansly', limit: 1 })),
-    ]);
+    [tags, communities, platforms] = await Promise.all([tagsP, communitiesP, platformsP]);
   }
-  catch (e) { root.replaceChildren(emptyState({ icon: 'alert', title: 'Couldn’t load', text: e.message })); return () => {}; }
+  catch (e) {
+    if (left) return;
+    root.replaceChildren(emptyState({ icon: 'alert', title: 'Couldn’t load', text: e.message }));
+    return;
+  }
+  if (left) return;
 
   if (!platforms.length) {
+    if (left) return;
     root.replaceChildren(emptyState({ icon: 'compass', title: 'Nothing ingested yet', text: 'Sources, topics and tags appear here after the first ingest.', actions: [h('a', { class: 'btn primary', href: href('/admin/sources') }, 'Add a source')] }));
-    return () => {};
+    return;
   }
 
   const byPlatform = new Map();
@@ -75,28 +92,44 @@ export async function browse(root) {
   // Only tiles with a real number: a count that is missing or zero is left out, never invented.
   const tile = (cls, to, name, count, caption, style) => h('a', { class: `browse-tile ${cls}`.trim(), href: to, style },
     h('div', { class: 'name' }, name), h('div', { class: 'count num' }, fmt.num(count)), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, caption));
-  const paidTiles = [
-    ofCreators ? tile('of-tile', href('/creators', { paid: 'onlyfans' }), [h('span', { class: 'of-mark', 'aria-hidden': 'true' }), 'OnlyFans creators'], ofCreators, 'With a linked page') : null,
-    ofPosts ? tile('of-tile', href('/explore', { paid: 'onlyfans' }), [icon('sparkle', 'sm'), 'OnlyFans posts'], ofPosts, 'Photos and videos') : null,
-    fanslyCreators ? tile('', href('/creators', { paid: 'fansly' }), 'Fansly creators', fanslyCreators, 'With a linked page', { '--c': '#0c85d0' }) : null,
-  ].filter(Boolean);
-
-  root.replaceChildren(
-    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Browse'), h('div', { class: 'sub' }, 'Every source, community and tag in the library.'))),
-    paidTiles.length ? h('section', { class: 'section', style: { marginTop: '8px' } },
+  const paidHold = h('div', { class: 'browse-hold' });
+  const topicHold = h('div', { class: 'browse-hold' });
+  const paintPaid = (ofCreators, ofPosts, fanslyCreators) => {
+    if (!paidHold.isConnected) return;
+    const paidTiles = [
+      ofCreators ? tile('of-tile', href('/creators', { paid: 'onlyfans' }), [h('span', { class: 'of-mark', 'aria-hidden': 'true' }), 'OnlyFans creators'], ofCreators, 'With a linked page') : null,
+      ofPosts ? tile('of-tile', href('/explore', { paid: 'onlyfans' }), [icon('sparkle', 'sm'), 'OnlyFans posts'], ofPosts, 'Photos and videos') : null,
+      fanslyCreators ? tile('', href('/creators', { paid: 'fansly' }), 'Fansly creators', fanslyCreators, 'With a linked page', { '--c': '#0c85d0' }) : null,
+    ].filter(Boolean);
+    if (!paidTiles.length) { paidHold.remove(); return; }
+    paidHold.replaceWith(h('section', { class: 'section', style: { marginTop: '8px' } },
       h('div', { class: 'section-head' },
         h('div', null,
           h('h2', null, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), 'OnlyFans & paid pages'),
           h('div', { class: 'sub' }, 'Creators with a linked OnlyFans or Fansly page')),
         h('a', { class: 'link-more', href: href('/creators'), 'aria-label': 'See top creators' }, 'See all', icon('chev-r', 'sm'))),
-      h('div', { class: 'browse-grid' }, paidTiles)) : null,
+      h('div', { class: 'browse-grid' }, paidTiles)));
+  };
+
+  if (left) return;
+  root.replaceChildren(
+    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Browse'), h('div', { class: 'sub' }, 'Every source, community and tag in the library.'))),
+    paidHold,
     h('section', { class: 'section', style: { marginTop: '8px' } }, h('div', { class: 'section-head' }, h('h2', null, icon('layers'), 'Sources'), h('div', { class: 'sub' }, 'Free platforms PRISM ingests — each tile opens Explore')),
       h('div', { class: 'browse-grid' }, platforms.map((p) => h('a', { class: 'browse-tile', href: href('/explore', { platform: p.platform }), style: { '--c': platformColor(p.platform) } },
         h('div', { class: 'name' }, platformLabel(p.platform)), h('div', { class: 'count num' }, fmt.int(p.count)), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'items'))))),
-    topics ? h('section', { class: 'section', style: { marginTop: '8px' } }, h('div', { class: 'section-head' }, h('div', null, h('h2', null, icon('sparkle'), 'Topics'), h('div', { class: 'sub' }, 'Tags that travel together, grouped automatically'))), topics) : null,
+    topicHold,
     h('section', { class: 'section' }, h('div', { class: 'section-head' }, h('h2', null, icon('compass'), 'Communities'), h('div', { class: 'sub' }, 'Where creators post — each chip opens Explore')),
       h('div', { class: 'stack', style: { gap: '22px' } }, [...byPlatform.entries()].map(([plat, list]) => communityList(plat, list)))),
     h('section', { class: 'section' }, h('div', { class: 'section-head' }, h('h2', null, icon('tag'), 'Tags'), h('div', { class: 'sub' }, `${tags.length} most used`)),
       tagRow([...tags].sort((a, b) => b.count - a.count))));
-  return () => {};
+
+  Promise.all([ofCreatorsP, ofPostsP, fanslyP]).then(([ofCreators, ofPosts, fanslyCreators]) => { if (left) return; paintPaid(ofCreators, ofPosts, fanslyCreators); });
+  topicsP.then((topics) => {
+    if (left) return;
+    if (!topicHold.isConnected) return;
+    if (!topics) { topicHold.remove(); return; }
+    topicHold.replaceWith(h('section', { class: 'section', style: { marginTop: '8px' } }, h('div', { class: 'section-head' }, h('div', null, h('h2', null, icon('sparkle'), 'Topics'), h('div', { class: 'sub' }, 'Tags that travel together, grouped automatically'))), topics));
+  });
+  }
 }

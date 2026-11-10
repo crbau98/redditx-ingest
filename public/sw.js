@@ -17,7 +17,7 @@
  *
  * Everything is same-origin and capped, and the caches hold only what this device already showed. Posting
  * {type:'prism-clear-caches'} to the worker (the app does on "Clear history") empties them all. */
-const VERSION = 'prism-shell-v11';
+const VERSION = 'prism-shell-v12';
 const API_CACHE = 'prism-api-v1';
 const IMG_CACHE = 'prism-img-v1';
 const FLAGS_CACHE = 'prism-flags-v1';

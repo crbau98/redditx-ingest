@@ -993,7 +993,26 @@ function v30(db) {
     ON CONFLICT(key) DO UPDATE SET value = 'true', updated_at = ${NOW}`).run();
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30];
+/**
+ * v31: the two public sorts that still built a temporary table.
+ * Popular creators ordered by COALESCE(popularity), which cannot use ix_creators_popularity.
+ * The partial index stops at the two predicates the query writes as literals. media_count and
+ * last_media_at are parameters, and SQLite refuses INDEXED BY when a partial predicate is a parameter.
+ * Ingested media ordered by ingested_at, seq while the index stopped at ingested_at.
+ */
+function v31(db) {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS ix_creators_popular_active
+      ON creators(popularity DESC, last_media_at DESC, media_count DESC, total_score DESC, id)
+      WHERE status = 'active' AND scope != 'excluded';
+    CREATE INDEX IF NOT EXISTS ix_media_pub_ingested
+      ON media(ingested_at DESC, seq DESC)
+      WHERE publish_state = 'published';
+  `);
+}
+v31.ddlOnly = true;
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

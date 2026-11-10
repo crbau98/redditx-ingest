@@ -35,7 +35,7 @@ async function emptyFollowing(root) {
     h('section', { class: 'section' }, h('div', { class: 'section-head' }, h('div', null, h('h2', null, icon('flame'), 'Popular creators'))), people));
   try {
     const r = await get('/api/creators', { sort: 'score', limit: 12 });
-    people.replaceChildren(...r.items.map((c) => creatorCard(c, { mini: true })));
+    people.replaceChildren(...r.items.map((c, i) => creatorCard(c, { mini: true, eager: i < 2 })));
   } catch { people.remove(); }
   return () => {};
 }

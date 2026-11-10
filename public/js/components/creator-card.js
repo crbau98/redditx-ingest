@@ -16,6 +16,7 @@ import { postedWords } from './creator-words.js';
  */
 export function creatorCard(c, { mini = false, badge = null, spotlight = false, reason = null, eager = false } = {}) {
   const thumbs = (c.previews || []).slice(0, 3);
+  const falls = c.previewFalls || [];
   while (thumbs.length < 3) thumbs.push(null);
   const isNew = follows.has(c.id) && c.last_media_at && follows.seen(c.id) && c.last_media_at > follows.seen(c.id);
   const when = postedWords(c.last_media_at);
@@ -96,7 +97,7 @@ export function creatorCard(c, { mini = false, badge = null, spotlight = false, 
   badge ? h('span', { class: 'rise' }, icon('trend', 'sm'), badge) : null,
   // Three sample pictures, decorative: the card's link already names him. Each loads only when near the screen (lazy-bg.js).
   h('div', { class: 'creator-thumbs', 'aria-hidden': 'true' },
-    thumbs.map((t, idx) => lazyBackground(h('div'), t ? proxied(t) : null, eager && idx === 0))),
+    thumbs.map((t, idx) => lazyBackground(h('div'), t ? proxied(t) : null, eager && idx === 0, falls[idx] && falls[idx] !== t ? proxied(falls[idx]) : null))),
   h('div', { class: 'creator-body' },
     h('div', { class: 'creator-head' },
       avatar(c, spotlight ? 64 : 56),

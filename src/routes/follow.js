@@ -74,7 +74,7 @@ router.post('/follow/feed', (req, res) => {
   const total = page === 0 || !b.nocount ? repo.db.prepare(`${withF} SELECT COUNT(*) AS n ${from}`).get(...params).n : null;
   const rows = repo.db.prepare(`${withF} SELECT m.*, c.handle AS creator_handle, c.display_name AS creator_name, c.avatar_url AS creator_avatar ${from}
     ORDER BY m.posted_at DESC, m.seq DESC LIMIT ? OFFSET ?`).all(...params, limit, page * limit);
-  res.json({ items: rows.map((r) => publicMedia(repo.serializeMedia(r))), total, page, limit });
+  res.json({ items: rows.map((r) => publicMedia(repo.serializeMedia(r), { brief: true })), total, page, limit });
 });
 
 module.exports = router;

@@ -77,7 +77,7 @@ const NAV = [['home', '/', 'Home', 'home'], ['explore', '/explore', 'Explore', '
 /* --------------------------------------------------------- global shortcuts */
 function showShortcuts() {
   const rows = [['Ctrl / ⌘ + K', 'Command palette — jump anywhere, run actions'], ['/', 'Search'], ['?', 'This help'], ['G then H / F / E / R / C / S', 'Go to Home, Following, Explore, Reels, Creators, Saved'], ['X', 'Surprise me (open something random)'],
-    ['In the viewer', ''], ['← / →  (J / K)', 'Previous / next'], ['F · C', 'Save · add to collection'], ['S · I · M', 'Slideshow · details · mute'],
+    ['In the viewer', ''], ['← / →  (J / K)', 'Previous / next'], ['F · C', 'Save · add to collection'], ['S · I · M', 'Slideshow · details · mute'], [', · .', 'Slower · faster'], ['P', 'Picture in picture'],
     ['In Reels', ''], ['↑ / ↓  (K / J)', 'Previous / next'], ['Space · M', 'Pause · sound'], ['F · C · Enter', 'Save · collect · open details'], ['Double-tap', 'Save'],
     ['In the review queue (Admin)', ''], ['← / →', 'Move between items'], ['Space', 'Select / deselect'], ['A · H · R', 'Approve · Hide · Remove the selection']];
   const m = openModal({ title: 'Keyboard shortcuts', wide: true, body: h('dl', { class: 'kv', style: { gridTemplateColumns: 'auto 1fr' } }, rows.map(([k, d]) => (d

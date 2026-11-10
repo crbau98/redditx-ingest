@@ -1,5 +1,6 @@
-import { h, icon, fmt, proxied, toast, openModal, emptyState } from '../../dom.js';
+import { h, icon, fmt, toast, openModal, emptyState, paintCover } from '../../dom.js';
 import { platformLabel, platformColor } from '../../store.js';
+import { stillChain } from '../../images.js';
 
 export const platBadge = (p) => h('span', { class: 'badge plat', style: { '--c': platformColor(p) } }, platformLabel(p));
 
@@ -9,8 +10,12 @@ export function statusDot(status, failures = 0) {
   return h('span', { class: `dot ${cls}`, title: status || 'never run', role: 'img', 'aria-label': status || 'never run' });
 }
 
-export const thumbOf = (m) => m.preview_url || m.thumbnail_url || (m.media_type === 'image' ? m.media_url : '');
-export const thumb = (m) => h('div', { class: 'thumb', style: thumbOf(m) ? { backgroundImage: `url("${proxied(thumbOf(m))}")` } : {} });
+export const thumbOf = (m) => stillChain(m)[0] || '';
+export const thumb = (m) => {
+  const el = h('div', { class: 'thumb' });
+  paintCover(el, stillChain(m));
+  return el;
+};
 
 /**
  * A list that is a table on a wide screen and a stack of cards on a phone (CSS only: the same cells, laid out by `.tbl.a-cards`).

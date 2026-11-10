@@ -41,11 +41,20 @@ export function cardImage(item, { proxy, width = 0, viewport = 390, dpr = 1, isV
   return { src: proxy(large), fallback: null };
 }
 
+export function stillChain(item) {
+  if (!item) return [];
+  const urls = [item.thumb_url, item.preview_url, item.thumbnail_url];
+  if (item.media_type === 'image') urls.push(item.media_url);
+  const out = [];
+  for (const u of urls) if (u && !out.includes(u)) out.push(u);
+  return out;
+}
+
 /**
  * The small picture of a post for tiles that are a few dozen CSS px wide (the viewer's filmstrip and dock, related rails,
- * its blurred backdrop): the thumbnail when there is one, else the platform preview. Posts that came from a grid have
- * already downloaded their thumbnail, so these tiles then cost no request at all.
+ * its blurred backdrop, the video poster, a Reels poster, the search strip): the thumbnail when there is one, else the
+ * platform preview. Posts that came from a grid have already downloaded their thumbnail, so these tiles then cost no request at all.
  */
 export function tileImage(item) {
-  return item.thumb_url || item.preview_url || item.thumbnail_url || (item.media_type === 'image' ? item.media_url : null);
+  return stillChain(item)[0] || null;
 }

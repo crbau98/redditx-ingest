@@ -64,6 +64,14 @@ test('the reels view drives its buffer from planWindow, and neighbours shrink th
   assert.match(reels, /const plan = planWindow\(i, slides\.length\)/);
   assert.match(reels, /plan\.warm\.includes\(k\)/);
   assert.match(reels, /s\.handle\.demote\(\)/, 'a slide that stops being active gives back its large buffer');
+  assert.match(reels, /if \(!canWarm\) return; \/\/ a slow link does not prefetch the next photo or the next video/);
+  assert.match(reels, /if \(!s\.isVideo\) \{ mount\(s\); return; \}/, 'the next photo mounts while the current slide is showing');
+  assert.match(reels, /prefetch\('\/api\/media', mediaQuery\(page\)\)/);
+  assert.match(reels, /prefetch\('\/api\/recommend', \{ \.\.\.tasteQ/);
+  assert.match(reels, /prefetchQuery\('\/api\/follow\/feed'/);
+  const api = read('api.js');
+  assert.match(api, /export function prefetchQuery/);
+  assert.match(api, /POST \$\{path\} \$\{JSON\.stringify\(body \?\? \{\}\)\}/);
 
   const video = read('components', 'video.js');
   assert.match(video, /demote\(\) \{[^}]*maxBufferLength = 6/, 'demote() restores the small buffer target');

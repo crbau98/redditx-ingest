@@ -101,6 +101,7 @@
 .a-spark i.err { background: var(--bad); opacity: 1; }
 .a-kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 13.5px; margin: 0; }
 .a-kv dt { color: var(--muted); } .a-kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.a-kv dt.quiet { color: var(--warn); font-weight: 650; }
 .a-engine-acts { display: flex; gap: 8px; flex-wrap: wrap; }
 .a-run { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); font-size: 13px; min-width: 0; }
 

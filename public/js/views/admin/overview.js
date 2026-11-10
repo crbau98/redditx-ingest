@@ -3,7 +3,7 @@ import { adminGet, adminPost, adminPatch, adminDelete, streamAdmin } from '../..
 import { href } from '../../router.js';
 import { platformColor, platformLabel } from '../../store.js';
 import { kpi, pageHead, act, platBadge, undoToast } from './ui.js';
-import { attentionItems, explainFeedError, worstFailing, throughput, trendText, physiqueLine } from './logic.js';
+import { attentionItems, explainFeedError, worstFailing, throughput, trendText, physiqueLine, sourceYield } from './logic.js';
 import { addFeedDialog } from './feeds.js';
 
 /** Items ingested per day for the last 14 days, stacked by source. */
@@ -135,6 +135,19 @@ export async function render(root, { overview: first }) {
         h('dt', null, 'Blocked by safety'), h('dd', null, fmt.int(o.last24h.blocked))));
   }
 
+  function sourceCard() {
+    const rows = sourceYield(o.ingestDaily || []);
+    if (!rows.length) return null;
+    return h('section', { class: 'a-card', 'aria-labelledby': 'ov-yield' },
+      h('div', { class: 'a-card-head' }, h('h2', { id: 'ov-yield' }, icon('layers', 'sm'), 'By source')),
+      h('dl', { class: 'a-kv' }, ...rows.flatMap((r) => [
+        h('dt', r.quiet ? { class: 'quiet' } : {}, platformLabel(r.platform)),
+        h('dd', null, r.quiet
+          ? `0 today · ${fmt.int(r.yesterday)} the day before`
+          : `${fmt.int(r.today)} today · ${fmt.int(r.yesterday)} the day before`),
+      ])));
+  }
+
   function engineCard() {
     const running = o.engine.running;
     const breakerOpen = Object.entries(o.engine.breakers || {}).filter(([, b]) => b.state !== 'closed');
@@ -199,7 +212,7 @@ export async function render(root, { overview: first }) {
       quickAdd(),
       h('div', { class: 'a-ov' },
         h('div', { class: 'a-ov-main' }, attentionBlock(), onboarding),
-        h('div', { class: 'a-ov-side' }, throughputCard(), engineCard(), numbers())));
+        h('div', { class: 'a-ov-side' }, throughputCard(), sourceCard(), engineCard(), numbers())));
     if (hadHeadingFocus) { const h1 = holder.querySelector('h1'); if (h1) h1.focus({ preventScroll: true }); }
   }
 

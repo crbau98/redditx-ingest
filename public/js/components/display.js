@@ -1,5 +1,6 @@
 import { h, icon, openModal, toast } from '../dom.js';
 import { prefs, tastes, follows } from '../store.js';
+import { RATES } from '../playback-policy.js';
 import { pushSupported, pushCreators, enableForAll, disablePush } from '../push.js';
 
 const ACCENTS = [
@@ -32,6 +33,7 @@ export function openDisplaySettings() {
       h('div', { class: 'display-row' }, h('label', null, 'Theme'), seg([['auto', 'Auto'], ['dark', 'Dark'], ['light', 'Light']], prefs.theme, (v) => { prefs.theme = v; })),
       h('div', { class: 'display-row' }, h('label', null, 'Accent'), swatches),
       h('div', { class: 'display-row' }, h('label', null, 'Grid'), seg([['s', 'Dense'], ['m', 'Cozy'], ['l', 'Large']], prefs.density, (v) => { prefs.density = v; })),
+      h('div', { class: 'display-row' }, h('label', null, 'Speed'), seg(RATES.map((n) => [n, `${n}×`]), prefs.playbackRate, (v) => { prefs.playbackRate = v; })),
       h('div', { class: 'display-row' }, h('label', null, 'Behaviour'),
         check('Play video previews in the grid', () => prefs.previews, (v) => { prefs.previews = v; }, 'On hover (desktop) or when mostly on screen (phone).'),
         check('Start videos with sound off', () => prefs.muted, (v) => { prefs.muted = v; }),

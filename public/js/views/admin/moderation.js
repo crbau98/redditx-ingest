@@ -1,8 +1,9 @@
-import { h, icon, fmt, proxied, emptyState, toast } from '../../dom.js';
+import { h, icon, fmt, emptyState, toast, paintCover } from '../../dom.js';
 import { adminGet, adminPost } from '../../api.js';
 import { href } from '../../router.js';
-import { pageHead, act, platBadge, thumbOf, openModal, undoToast, bulkBar, loadingState, errorState } from './ui.js';
+import { pageHead, act, platBadge, openModal, undoToast, bulkBar, loadingState, errorState } from './ui.js';
 import { holdOf, undoPlan, selectionSummary, sendBackBody } from './logic.js';
+import { stillChain } from '../../images.js';
 
 export { holdOf };
 
@@ -35,10 +36,12 @@ function queueCard(m, { onFlip }) {
   const creator = m.creator_name || m.creator_handle || m.author || 'Unknown creator';
   const tags = String(m.tags_text || '').split(/\s+/).filter(Boolean).slice(0, 4);
   const aria = `${m.title || 'Untitled'}. ${hold.label}. ${creator}.`;
+  const img = h('div', { class: 'img', 'aria-hidden': 'true' },
+    h('div', { class: 'check' }, icon('check')),
+    m.media_type === 'video' ? h('span', { class: 'pill', style: { position: 'absolute', right: '8px', top: '8px' } }, icon('play', 'fill'), 'Video') : null);
+  paintCover(img, stillChain(m));
   const card = h('div', { class: `mod-card kind-${hold.kind}`, tabindex: '0', role: 'checkbox', 'aria-checked': 'false', 'aria-label': aria },
-    h('div', { class: 'img', 'aria-hidden': 'true', style: thumbOf(m) ? { backgroundImage: `url("${proxied(thumbOf(m))}")` } : {} },
-      h('div', { class: 'check' }, icon('check')),
-      m.media_type === 'video' ? h('span', { class: 'pill', style: { position: 'absolute', right: '8px', top: '8px' } }, icon('play', 'fill'), 'Video') : null),
+    img,
     h('div', { class: 'body' },
       h('div', { class: 't' }, m.title || '(untitled)'),
       h('div', { class: 'row wrap', style: { gap: '6px' } }, platBadge(m.platform),
@@ -201,9 +204,11 @@ export async function render(root) {
 export function selectableGrid(items, { onChange }) {
   const selected = new Set();
   const cards = items.map((m) => {
+    const img = h('div', { class: 'img' }, h('div', { class: 'check' }, icon('check')),
+      m.media_type === 'video' ? h('span', { class: 'pill', style: { position: 'absolute', right: '8px', top: '8px' } }, icon('play', 'fill'), 'Video') : null);
+    paintCover(img, stillChain(m));
     const card = h('div', { class: 'mod-card', tabindex: '0', role: 'checkbox', 'aria-checked': 'false', 'aria-label': m.title || 'media' },
-      h('div', { class: 'img', style: thumbOf(m) ? { backgroundImage: `url("${proxied(thumbOf(m))}")` } : {} }, h('div', { class: 'check' }, icon('check')),
-        m.media_type === 'video' ? h('span', { class: 'pill', style: { position: 'absolute', right: '8px', top: '8px' } }, icon('play', 'fill'), 'Video') : null),
+      img,
       h('div', { class: 'body' }, h('div', { class: 't' }, m.title || '(untitled)'),
         h('div', { class: 'row wrap', style: { gap: '6px' } }, platBadge(m.platform), m.review_reason ? h('span', { class: `badge ${m.review_reason.startsWith('safety') ? 'bad' : 'warn'}` }, reasonLabel(m.review_reason)) : null),
         h('div', { class: 'muted', style: { fontSize: '12px' } }, `${m.creator_name || m.author || '—'} · ${fmt.ago(m.ingested_at)}`),

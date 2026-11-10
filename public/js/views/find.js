@@ -10,6 +10,7 @@ const EXAMPLES = ['Reno Gold', 'Christian Hogue', 'Alejandro Pino', '@jakipz', '
 function nicheHints() {
   const wrap = h('div', { class: 'row wrap niche-hints', style: { gap: '8px' }, 'aria-label': 'Popular niches' });
   get('/api/tags', { limit: 12 }).then((tags) => {
+    if (!wrap.isConnected) return;
     wrap.replaceChildren(...(tags || []).slice(0, 10).map((t) => h('a', { class: 'chip', href: href('/explore', { tag: t.name, sort: 'trending' }), title: `${t.count} posts tagged #${t.name}` }, `#${t.name}`, h('span', { class: 'n' }, String(t.count)))));
   }).catch(() => {});
   return wrap;
@@ -66,9 +67,11 @@ export async function find(root, { query }) {
       state.result = await post('/api/lookup', { query: q });
       lookupCache.set(q, state.result);
     } catch (e) {
+      if (left) return;
       state.error = e.message;
       state.rateLimited = e.status === 429 || /rate|too many|slow down/i.test(e.message || '');
     }
+    if (left) return;
     state.loading = false;
     paint();
   }
@@ -85,11 +88,17 @@ export async function find(root, { query }) {
     try {
       const selections = cands.map((c) => ({ platform: c.platform, kind: c.kind, target: c.target }));
       const r = await post('/api/lookup/follow', { name: String(name || input.value).trim(), selections, lookupId: state.result && state.result.lookupId });
+      if (left) return;
       state.following = false;
       state.followed = true;
       paint();
-      if (r.creator) setTimeout(() => navigate(`/creator/${r.creator.id}`), 650);
-    } catch (e) { state.following = false; paint(); out.prepend(h('div', { class: 'notice warn', role: 'alert' }, e.message)); }
+      if (r.creator) openTimer = setTimeout(() => { if (!left) navigate(`/creator/${r.creator.id}`); }, 650);
+    } catch (e) {
+      if (left) return;
+      state.following = false;
+      paint();
+      out.prepend(h('div', { class: 'notice warn', role: 'alert' }, e.message));
+    }
   }
 
   /** One evidence string → a chip (where the account turned up), ≤40 chars, links out when it carries a URL. */
@@ -178,6 +187,7 @@ export async function find(root, { query }) {
   }
 
   function paint() {
+    if (left) return;
     btn.disabled = state.loading || state.following;
     btn.setAttribute('aria-busy', String(state.loading || state.following));
     input.disabled = state.loading;
@@ -256,7 +266,16 @@ export async function find(root, { query }) {
     form,
     out,
   );
+  // Lookup and follow both outlive this page. Hand back a stop that drops their paint and the
+  // profile navigation, so a result that lands after you leave does not replace the page you are on.
+  let left = false;
+  let openTimer = null;
+  const stop = () => {
+    left = true;
+    if (openTimer) clearTimeout(openTimer);
+    openTimer = null;
+  };
   if (initial) run();
   else paint();
-  return () => {};
+  return stop;
 }

@@ -363,3 +363,38 @@ a, button, summary, label, select, input, [role='button'] { touch-action: manipu
     animation: none;
   }
 }
+
+/* First page of a feed: static blocks, not a shimmer. They leave as soon as cards arrive. */
+.feed-skeletons {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.feed-bone {
+  aspect-ratio: 3 / 4;
+  border-radius: 14px;
+  background: var(--surface-2);
+}
+.resume-card { position: relative; }
+.resume-bar {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  height: 3px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.28);
+  pointer-events: none;
+}
+.resume-bar::after {
+  content: '';
+  display: block;
+  height: 100%;
+  width: calc(var(--p, 0) * 100%);
+  border-radius: inherit;
+  background: var(--accent, #ff5c8a);
+}
+.card-media > .resume-bar { z-index: 2; }
+.lb-rate { min-width: 52px; font-variant-numeric: tabular-nums; }
+

@@ -1,7 +1,8 @@
-import { h, icon, fmt, proxied, emptyState, promptDialog, confirmDialog } from '../../dom.js';
+import { h, icon, fmt, emptyState, promptDialog, confirmDialog, paintCover } from '../../dom.js';
 import { adminGet, adminPost } from '../../api.js';
 import { parse, navigate } from '../../router.js';
 import { pageHead, act, chips, loadingState, errorState } from './ui.js';
+import { stillChain } from '../../images.js';
 
 const KIND = { takedown: 'Takedown', copyright: 'Copyright', underage: 'Possible minor', nonconsensual: 'No consent', other: 'Other' };
 // What each resolution does, for the confirmation. Remove and Block cannot be undone from here.
@@ -29,8 +30,10 @@ export async function render(root) {
         else if (action === 'dismiss' || action === 'restore') { note = await promptDialog({ title: label, label: 'Note (optional)', confirmLabel: label }); if (note === null) return; }
         await act(e.currentTarget, () => adminPost(`/reports/${x.id}/resolve`, { action, note }), 'Done'); load();
       } }, label);
+      const cover = h('div', { class: 'thumb', role: 'img', 'aria-label': x.media_title || 'Reported item' });
+      paintCover(cover, stillChain(x).length ? stillChain(x) : (x.media_thumb ? [x.media_thumb] : []));
       return h('article', { class: `report${urgent ? ' urgent' : ''}`, 'aria-label': `${KIND[x.kind] || x.kind} report` },
-        h('div', { class: 'thumb', role: 'img', 'aria-label': x.media_title || 'Reported item', style: x.media_thumb ? { backgroundImage: `url("${proxied(x.media_thumb)}")` } : {} }),
+        cover,
         h('div', { class: 'stack', style: { gap: '6px', minWidth: 0 } },
           h('div', { class: 'row wrap' }, h('span', { class: `badge ${urgent ? 'bad' : 'warn'}` }, KIND[x.kind] || x.kind), x.status !== 'open' ? h('span', { class: 'badge' }, x.status) : null, h('span', { class: 'a-sub' }, fmt.ago(x.created_at))),
           h('div', { style: { fontWeight: 600, overflowWrap: 'anywhere' } }, x.media_title || x.creator_handle || '(item removed)'),

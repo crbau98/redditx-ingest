@@ -1,5 +1,7 @@
 import { proxied, loadScript } from '../dom.js';
 import { reportBroken } from '../api.js';
+import { prefs, playback, bus } from '../store.js';
+import { clampRate, stepRate, resumeAt } from '../playback-policy.js';
 
 // A playlist link: a .m3u8, or GayForFans' /play/<id>/manifest (an HLS manifest with no extension).
 export const isM3u8 = (u) => /\.m3u8(\?|$)|\/play\/[^/]+\/manifest(\?|$)/i.test(u || '');
@@ -72,6 +74,62 @@ export function attachVideo(v, it) {
     inst.attachMedia(v);
   })();
   return handle;
+}
+
+/** Apply the saved speed, restore a resume point, and remember where this video left off. */
+export function bindWatch(v, it) {
+  if (!v || !it || !it.id) return () => {};
+  const apply = () => { v.playbackRate = clampRate(prefs.playbackRate); };
+  apply();
+  const offRate = bus.on('rate', apply);
+  const saved = playback.get(it.id);
+  let restored = false;
+  const restore = () => {
+    if (restored || !saved || !Number.isFinite(v.duration)) return;
+    const at = resumeAt(saved.t, v.duration);
+    if (!at) return;
+    restored = true;
+    try { v.currentTime = at; } catch { restored = false; }
+  };
+  v.addEventListener('loadedmetadata', restore);
+  if (v.readyState >= 1) restore();
+  let last = 0;
+  // A player that never reached the clip (a warmed neighbour, a failed open) must not wipe a saved point.
+  const save = () => {
+    if (!Number.isFinite(v.duration) || v.currentTime < 1) return;
+    last = performance.now();
+    playback.remember(it.id, v.currentTime, v.duration);
+  };
+  const onTime = () => { if (performance.now() - last < 5000) return; save(); };
+  const onEnded = () => playback.forget(it.id);
+  v.addEventListener('timeupdate', onTime);
+  v.addEventListener('pause', save);
+  v.addEventListener('ended', onEnded);
+  return () => {
+    save();
+    offRate();
+    v.removeEventListener('loadedmetadata', restore);
+    v.removeEventListener('timeupdate', onTime);
+    v.removeEventListener('pause', save);
+    v.removeEventListener('ended', onEnded);
+  };
+}
+
+/** One speed stop faster or slower. The button and the comma / period keys share this. */
+export function bumpRate(video, dir) {
+  const next = stepRate(prefs.playbackRate, dir);
+  prefs.playbackRate = next;
+  if (video) video.playbackRate = next;
+  return next;
+}
+
+export async function togglePip(video) {
+  if (!video || typeof document === 'undefined' || !document.pictureInPictureEnabled || typeof video.requestPictureInPicture !== 'function') return false;
+  try {
+    if (document.pictureInPictureElement === video) { await document.exitPictureInPicture(); return false; }
+    await video.requestPictureInPicture();
+    return true;
+  } catch { return false; }
 }
 
 /** Stop a video and drop its network connection. */

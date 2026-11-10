@@ -24,6 +24,7 @@ describe('requests started while the page loads (theme-init.js + api.js)', () =>
       location: { hash }, localStorage: storage,
       document: { documentElement: { dataset: {} }, head: { appendChild() {} }, createElement: () => ({}), currentScript: null },
       fetch: fetchImpl || ((url, opts) => { started.push({ url, opts }); return Promise.resolve({ ok: true, text: async () => (url === '/api/meta' ? META(gate) : '{}') }); }),
+      URLSearchParams,
     };
     sandbox.window = sandbox;
     vm.runInNewContext(themeInit, sandbox);
@@ -50,8 +51,26 @@ describe('requests started while the page loads (theme-init.js + api.js)', () =>
     assert.deepEqual((await early('#/reels', { storage: picked })).urls, ['/api/meta'], 'a "For you" opener asks /api/recommend itself');
   });
 
+  test('a reels link starts the first page that reel will ask for', async () => {
+    const { qs } = await esm('api.js', '?urls');
+    const reel = (over = {}) => '/api/media' + qs({ type: 'video', sort: 'trending', ...over, page: 0, limit: 12 });
+    const got = (hash, opts) => early(hash, opts).then((r) => r.urls);
+    assert.deepEqual(await got('#/reels?tag=gym'), ['/api/meta', reel({ tag: 'gym' })]);
+    assert.deepEqual(await got('#/reels?sort=recent&q=gym%20rat'), ['/api/meta', reel({ sort: 'recent', q: 'gym rat' })]);
+    assert.deepEqual(await got('#/reels?type=all'), ['/api/meta', reel({ type: undefined })]);
+    assert.deepEqual(await got('#/reels?type=image&paid=onlyfans'), ['/api/meta', reel({ type: 'image', paid: 'onlyfans' })]);
+    assert.deepEqual(await got('#/reels?platform=reddit&since=week&community=gaybros'), ['/api/meta', reel({ platform: 'reddit', since: 'week', community: 'gaybros' })]);
+    assert.deepEqual(await got('#/reels?following=1'), ['/api/meta']);
+    assert.deepEqual(await got('#/reels?sort=random'), ['/api/meta']);
+    assert.deepEqual(await got('#/reels?sort=foryou'), ['/api/meta']);
+    const taste = { getItem: () => JSON.stringify({ events: 4, t: { gym: 3 }, c: {}, seeds: {} }) };
+    assert.deepEqual(await got('#/reels?sort=recent&tag=gym', { storage: taste }), ['/api/meta', reel({ sort: 'recent', tag: 'gym' })]);
+  });
+
   test('a visitor who has not passed the age gate gets no list requests (they would be 403s and console errors)', async () => {
-    for (const hash of ['#/', '#/explore', '#/browse']) {
+    const shared = '#/explore?m=11111111-1111-4111-8111-111111111111';
+    const creator = '#/creator/22222222-2222-4222-8222-222222222222';
+    for (const hash of ['#/', '#/explore', '#/browse', '#/creators?q=gym', '#/reels?tag=gym', shared, creator]) {
       assert.deepEqual((await early(hash, { gate: { enforce: true, verified: false } })).urls, ['/api/meta'], hash);
     }
   });
@@ -85,6 +104,53 @@ describe('requests started while the page loads (theme-init.js + api.js)', () =>
     sandbox.window = sandbox;
     assert.doesNotThrow(() => vm.runInNewContext(themeInit, sandbox));
     assert.equal(sandbox.__early, undefined);
+  });
+
+  test('a shared link starts the one item openById asks for, and not its related list', async () => {
+    const id = '11111111-1111-4111-8111-111111111111';
+    const item = `/api/media/${id}`;
+    assert.deepEqual((await early(`#/explore?m=${id}`)).urls, ['/api/meta', item]);
+    assert.deepEqual((await early(`#/?m=${id}`)).urls, ['/api/meta', '/api/discover', '/api/media?sort=recent&page=0&limit=36', item]);
+    assert.deepEqual((await early('#/explore?m=not-a-uuid')).urls, ['/api/meta']);
+    assert.deepEqual((await early('#/explore?m=%ZZ')).urls, ['/api/meta']);
+    assert.ok(!(await early(`#/explore?tag=gym&m=${id}`)).urls.some((u) => u.includes('/related')));
+    const lb = fs.readFileSync(path.join(PUBLIC_JS, 'components', 'lightbox.js'), 'utf8');
+    assert.match(lb, /get\(`\/api\/media\/\$\{id\}`\)/);
+    assert.match(themeInit, /lists\.push\('\/api\/media\/' \+ mediaId\)/);
+    assert.match(themeInit, /components\/lightbox\.js/);
+  });
+
+  test('a creator link starts the profile and the default first page', async () => {
+    const id = '22222222-2222-4222-8222-222222222222';
+    const profile = `/api/creators/${id}`;
+    const page = (limit) => `/api/creators/${id}/media?sort=recent&limit=${limit}&page=0`;
+    assert.deepEqual((await early('#/creator/abc')).urls, ['/api/meta']);
+    assert.deepEqual((await early(`#/creator/${id}`)).urls, ['/api/meta', profile, page(36)]);
+    const compact = { getItem: (k) => (k === 'prism.density' ? '"s"' : null) };
+    assert.deepEqual((await early(`#/creator/${id}`, { storage: compact })).urls, ['/api/meta', profile, page(48)]);
+    assert.deepEqual((await early(`#/creator/${id}?sort=recent`)).urls, ['/api/meta', profile, page(36)]);
+    assert.deepEqual((await early(`#/creator/${id}?sort=top`)).urls, ['/api/meta', profile]);
+    assert.deepEqual((await early(`#/creator/${id}?type=video`)).urls, ['/api/meta', profile]);
+    assert.deepEqual((await early(`#/creator/${id}?platform=reddit`)).urls, ['/api/meta', profile]);
+    assert.deepEqual((await early(`#/creator/${id}?q=gym`)).urls, ['/api/meta', profile]);
+  });
+
+  test('the creators list starts as the grid will ask for it', async () => {
+    const { qs } = await esm('api.js', '?urls');
+    const grid = ({ q, sort = 'popular', platform, paid, fresh } = {}) => '/api/creators' + qs({
+      q, sort, platform, paid, fresh, page: 0, limit: 36, onlyfans: paid === 'onlyfans' ? '1' : undefined,
+    });
+    const got = (hash) => (early(hash)).then((r) => r.urls);
+    assert.deepEqual(await got('#/creators'), ['/api/meta', grid()]);
+    assert.deepEqual(await got('#/creators?q=gym%20rat'), ['/api/meta', grid({ q: 'gym rat' })]);
+    assert.deepEqual(await got('#/creators?sort=name'), ['/api/meta', grid({ sort: 'name' })]);
+    assert.deepEqual(await got('#/creators?platform=reddit&fresh=7'), ['/api/meta', grid({ platform: 'reddit', fresh: '7' })]);
+    assert.deepEqual(await got('#/creators?paid=fansly'), ['/api/meta', grid({ paid: 'fansly' })]);
+    assert.deepEqual(await got('#/creators?paid=onlyfans'), ['/api/meta', grid({ paid: 'onlyfans' })]);
+    assert.deepEqual(await got('#/creators?onlyfans=1'), ['/api/meta', grid({ paid: 'onlyfans' })]);
+    assert.deepEqual(await got('#/creators?lookup=1'), ['/api/meta', grid()]);
+    assert.deepEqual(await got('#/creators?following=1'), ['/api/meta']);
+    assert.deepEqual(await got('#/creators?following=1&q=gym'), ['/api/meta']);
   });
 
   describe('api.js takes them over', () => {
@@ -146,5 +212,13 @@ describe('the early URLs and the views that consume them stay in step', () => {
       ['/api/creators?paid=fansly&limit=1', "get('/api/creators', { paid: 'fansly', limit: 1 })"],
     ]) { assert.ok(themeInit.includes(early), `theme-init.js starts ${early}`); assert.ok(browse.includes(needle), `views/browse.js changed ${needle}: update theme-init.js`); }
     assert.ok(fs.readFileSync(path.join(PUBLIC_JS, 'components', 'topics.js'), 'utf8').includes("get('/api/topics')"), 'topics.js changed its request: update theme-init.js');
+  });
+  test('a creator page asks for the profile and the default first posts page theme-init starts', () => {
+    const creator = view('creator.js');
+    assert.match(creator, /get\(`\/api\/creators\/\$\{params\.id\}`\)/);
+    assert.match(creator, /endpoint: `\/api\/creators\/\$\{params\.id\}\/media`/);
+    assert.match(creator, /query: \{ type, sort, platform: platform \|\| undefined, q: qFilter \|\| undefined \}/);
+    assert.match(themeInit, /\/media\?sort=recent&limit='/);
+    assert.match(fs.readFileSync(path.join(PUBLIC_JS, 'components', 'feed.js'), 'utf8'), /endpoint === '\/api\/media'/);
   });
 });

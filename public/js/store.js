@@ -1,6 +1,7 @@
 // Client state: preferences, device-local favourites and follows. Nothing here
 // ever leaves the device (no accounts), and every access is guarded because
 // localStorage can throw (private mode, blocked storage).
+import { clampRate, keepProgress, mergeResume } from './playback-policy.js';
 
 const read = (key, fallback) => {
   try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v); } catch { return fallback; }
@@ -21,6 +22,8 @@ export const prefs = {
   set previews(v) { write('prism.previews', !!v); },
   get muted() { return read('prism.muted', true); },
   set muted(v) { write('prism.muted', !!v); },
+  get playbackRate() { return clampRate(read('prism.rate', 1)); },
+  set playbackRate(v) { const n = clampRate(v); write('prism.rate', n); bus.emit('rate', n); },
   get hideSeen() { return read('prism.hideSeen', false); },
   set hideSeen(v) { write('prism.hideSeen', !!v); bus.emit('hideSeen', !!v); },
   get reelsHint() { return read('prism.reelsHint', false); },
@@ -59,7 +62,7 @@ export const favorites = {
     return favSet.has(id);
   },
   clear() { favs = []; favSet.clear(); write('prism.favs', favs); bus.emit('fav', {}); },
-  export: () => JSON.stringify({ app: 'prism', version: 2, favorites: favs, follows: followsList, collections: colls, searches: searchList }, null, 2),
+  export: () => JSON.stringify({ app: 'prism', version: 3, favorites: favs, follows: followsList, collections: colls, searches: searchList, playback: playback.list() }, null, 2),
   import(text) {
     const data = JSON.parse(text);
     if (!data || data.app !== 'prism') throw new Error('Not a PRISM export');
@@ -77,6 +80,11 @@ export const favorites = {
     saveColls();
     for (const q of data.searches || []) if (q && q.query && !searchList.some((x) => searchKey(x.query) === searchKey(q.query))) searchList.push({ ...q, key: searchKey(q.query) });
     saveSearches();
+    if (Array.isArray(data.playback)) {
+      plays = mergeResume(plays, data.playback);
+      write('prism.playback', plays);
+      bus.emit('playback', null);
+    }
     bus.emit('fav', {}); bus.emit('follow', {});
     return added;
   },
@@ -175,7 +183,38 @@ export const history = {
     write('prism.history', hist);
     bus.emit('history', id);
   },
-  clear() { hist = []; histSet = new Set(); write('prism.history', hist); bus.emit('history', null); },
+  clear() { hist = []; histSet = new Set(); write('prism.history', hist); playback.clear(); bus.emit('history', null); },
+};
+
+/* ------------------------------------------------------------- playback */
+// Where a video left off on this device. Cleared with history. Finished and barely-started
+// clips are not kept (see playback-policy.js).
+const MAX_PLAY = 24;
+const PLAY_MS = 21 * 86400000;
+let plays = read('prism.playback', []).filter((p) => p && typeof p.id === 'string' && Number.isFinite(p.t));
+const savePlays = () => { write('prism.playback', plays); bus.emit('playback', null); };
+export const playback = {
+  list: () => plays.filter((p) => Date.now() - (p.at || 0) < PLAY_MS),
+  get: (id) => plays.find((p) => p.id === id) || null,
+  remember(id, seconds, duration) {
+    if (prefs.historyOff || !id) return;
+    const t = Number(seconds);
+    const d = Number(duration);
+    if (!keepProgress(t, d)) {
+      if (!plays.some((p) => p.id === id)) return;
+      plays = plays.filter((p) => p.id !== id);
+      savePlays();
+      return;
+    }
+    plays = [{ id, t: Math.round(t), d: Math.round(d), at: Date.now() }, ...plays.filter((p) => p.id !== id)].slice(0, MAX_PLAY);
+    savePlays();
+  },
+  forget(id) {
+    if (!plays.some((p) => p.id === id)) return;
+    plays = plays.filter((p) => p.id !== id);
+    savePlays();
+  },
+  clear() { plays = []; write('prism.playback', plays); bus.emit('playback', null); },
 };
 
 /* ---------------------------------------------------------- collections */
@@ -230,6 +269,18 @@ export const searches = {
   rename(id, name) { const s = searchList.find((x) => x.id === id); if (s && name) { s.name = String(name).slice(0, 60); saveSearches(); } },
   markSeen(id) { const s = searchList.find((x) => x.id === id); if (s) { s.seen = new Date().toISOString(); saveSearches(); } },
 };
+
+/** The “what’s new” request for a smart feed. Saved and Home both use this, so the counts match. */
+export function smartFeedQuery(s) {
+  const q = { ...(s && s.query) };
+  delete q.following;
+  if (s && s.query && s.query.following) {
+    const ids = follows.list().map((c) => c.id).slice(0, 100);
+    q.creators = ids.length ? ids.join(',') : '00000000-0000-0000-0000-000000000000';
+  }
+  if (q.sort === 'relevance') delete q.sort;
+  return { ...q, after: s && s.seen, limit: 1 };
+}
 
 /* ------------------------------------------------------ recent searches */
 // What was typed into search on this device, newest first, offered again when the box is empty.

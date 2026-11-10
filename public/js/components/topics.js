@@ -15,9 +15,10 @@ export async function topicCards({ limit = 10 } = {}) {
   if (!list || list.length < 2) return null;
   return h('div', { class: 'topic-grid' }, list.slice(0, limit).map((t, i) => {
     const q = { anytags: t.tags.join(','), label: t.title };
-    const tiles = t.previews.slice(0, 4);
+    const tiles = (t.previews || []).slice(0, 4);
+    const falls = t.previewFalls || [];
     return h('a', { class: 'topic-card', href: href('/explore', q), style: { '--i': i }, 'aria-label': `${t.title}: ${t.count} items` },
-      h('div', { class: `topic-mosaic n${tiles.length}` }, tiles.map((src) => lazyBackground(h('span', { class: 'tile' }), proxied(src)))),
+      h('div', { class: `topic-mosaic n${tiles.length}` }, tiles.map((src, idx) => lazyBackground(h('span', { class: 'tile' }), proxied(src), i < 2 && idx === 0, falls[idx] && falls[idx] !== src ? proxied(falls[idx]) : null))),
       h('div', { class: 'topic-body' },
         h('div', { class: 'topic-title' }, t.title),
         h('div', { class: 'topic-tags' }, t.tags.slice(0, 4).map((x) => h('span', null, `#${x}`))),
@@ -44,7 +45,7 @@ export async function becauseRails(open, { max = 2 } = {}) {
       h('div', { class: 'section-head' },
         h('div', null, h('h2', null, icon('sparkle'), 'Because you watch ', h('span', { class: 'grad-text' }, `#${tag}`)), h('div', { class: 'sub' }, 'The best of it you haven’t opened yet')),
         h('a', { class: 'link-more', href: href('/explore', { tag, sort: 'top' }) }, 'See all', icon('chev-r', 'sm'))),
-      h('div', { class: 'rail' }, items.map((it) => mediaCard(it, { open: open(items), compact: false })))));
+      h('div', { class: 'rail' }, items.map((it, i) => mediaCard(it, { open: open(items), compact: false, eager: i < 4 })))));
   }
   return out;
 }

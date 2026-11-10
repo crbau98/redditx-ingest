@@ -136,10 +136,18 @@ function logAction(targetType, targetId, action, reason, actor = 'system') {
 const POPULAR_ACTIVE_DAYS = 90;
 const SELECT_CREATOR_CARD = `
   SELECT c.*,
-    (SELECT json_group_array(t) FROM (
-        SELECT COALESCE(m.preview_url, m.thumbnail_url, CASE WHEN m.media_type = 'image' THEN m.media_url END) AS t
+    (SELECT json_group_array(json(t)) FROM (
+        SELECT json_object(
+          'u', COALESCE(m.thumb_url, m.preview_url, m.thumbnail_url, CASE WHEN m.media_type = 'image' THEN m.media_url END),
+          'f', CASE
+            WHEN m.thumb_url IS NOT NULL
+             AND COALESCE(m.preview_url, m.thumbnail_url, CASE WHEN m.media_type = 'image' THEN m.media_url END) IS NOT NULL
+             AND COALESCE(m.preview_url, m.thumbnail_url, CASE WHEN m.media_type = 'image' THEN m.media_url END) != m.thumb_url
+            THEN COALESCE(m.preview_url, m.thumbnail_url, CASE WHEN m.media_type = 'image' THEN m.media_url END)
+          END
+        ) AS t
         FROM media m WHERE m.creator_id = c.id AND m.publish_state = 'published' AND m.scope != 'excluded'
-        ORDER BY m.score DESC, m.seq DESC LIMIT 6) WHERE t IS NOT NULL LIMIT 3) AS previews,
+        ORDER BY m.score DESC, m.seq DESC LIMIT 6) WHERE json_extract(t, '$.u') IS NOT NULL LIMIT 3) AS previews,
     (SELECT group_concat(p) FROM (SELECT DISTINCT m.platform AS p FROM media m WHERE m.creator_id = c.id AND m.publish_state = 'published')) AS platforms
   FROM creators c`;
 
@@ -147,7 +155,22 @@ function serializeCreator(row) {
   if (!row) return null;
   const out = { ...row };
   try { out.links = JSON.parse(row.links || '[]'); } catch { out.links = []; }
-  if (row.previews !== undefined) { try { out.previews = JSON.parse(row.previews || '[]'); } catch { out.previews = []; } }
+  if (row.previews !== undefined) {
+    try {
+      const parsed = JSON.parse(row.previews || '[]');
+      const slots = parsed.map((p) => {
+        if (p && typeof p === 'object') return p;
+        if (typeof p === 'string' && p.startsWith('{')) {
+          try { const o = JSON.parse(p); if (o && typeof o === 'object' && 'u' in o) return o; } catch { /* a plain URL */ }
+        }
+        return p;
+      });
+      if (slots.some((p) => p && typeof p === 'object' && 'u' in p)) {
+        out.previews = slots.map((p) => (p && typeof p === 'object' ? p.u : p));
+        out.previewFalls = slots.map((p) => (p && typeof p === 'object' && p.f) || null);
+      } else out.previews = parsed;
+    } catch { out.previews = []; }
+  }
   if (row.platforms !== undefined) out.platforms = row.platforms ? row.platforms.split(',') : [];
   out.verified = !!row.verified;
   return out;
@@ -312,14 +335,22 @@ const creators = {
     const order = {
       media: mediaOrder,
       // Popular = the stored rank (engine/popularity.js), then the freshest and the biggest archive.
-      popular: 'COALESCE(c.popularity, 0) DESC, c.last_media_at DESC, c.media_count DESC, c.total_score DESC',
+      // popularity is NOT NULL. COALESCE here forced a sort of every active creator.
+      popular: 'c.popularity DESC, c.last_media_at DESC, c.media_count DESC, c.total_score DESC',
       recent: 'c.last_media_at DESC',
       new: 'c.created_at DESC',
       name: 'c.handle COLLATE NOCASE ASC',
     }[sort] || 'c.media_count DESC';
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    // The default Popular screen matches ix_creators_popular_active exactly. Without INDEXED BY, a status
+    // filter makes the planner walk every active creator and sort. Narrower filters (a search, one platform)
+    // stay with the planner.
+    const broadPopular = sort === 'popular' && !admin && !query && !platform && !ofOnly && !paidHost && !(Array.isArray(ids) && ids.length);
+    const cardSql = broadPopular
+      ? SELECT_CREATOR_CARD.replace('FROM creators c', 'FROM creators c INDEXED BY ix_creators_popular_active')
+      : SELECT_CREATOR_CARD;
     const total = db.prepare(`SELECT COUNT(*) AS n FROM creators c ${whereSql}`).get(...params).n;
-    const items = db.prepare(`${SELECT_CREATOR_CARD} ${whereSql} ORDER BY ${order}, c.id LIMIT ? OFFSET ?`)
+    const items = db.prepare(`${cardSql} ${whereSql} ORDER BY ${order}, c.id LIMIT ? OFFSET ?`)
       .all(...params, limit, page * limit).map(serializeCreator);
     return { items, total, page, limit };
   },
@@ -1101,7 +1132,7 @@ function buildMediaWhere(f) {
  * whenever the filters are broad, so it is forced for broad filters and left to the planner for
  * narrow ones (one creator, a community, explicit ids, rare tags) where an index lookup is cheaper.
  */
-const SORT_INDEX = { recent: 'ix_media_pub_posted', oldest: 'ix_media_pub_posted', top: 'ix_media_pub_score', trending: 'ix_media_pub_hot', ingested: 'ix_media_ingested' };
+const SORT_INDEX = { recent: 'ix_media_pub_posted', oldest: 'ix_media_pub_posted', top: 'ix_media_pub_score', trending: 'ix_media_pub_hot', ingested: 'ix_media_pub_ingested' };
 const BROAD_TAG_MIN = 1500; // rows carrying a tag before scanning in sort order beats a lookup
 const tagCountCache = new Map(); // tag -> { n, at }
 function tagRows(name) {
@@ -1489,6 +1520,14 @@ const media = {
 };
 
 /* ----------------------------------------------------------- tag intelligence */
+function topicStills(m) {
+  const chain = [];
+  for (const u of [m.thumb_url, m.preview_url, m.thumbnail_url, m.media_type === 'image' ? m.media_url : null]) {
+    if (u && !chain.includes(u)) chain.push(u);
+  }
+  return chain;
+}
+
 const tagIntel = {
   /**
    * Tags that travel with the given ones: co-occurrence on published media, ranked by
@@ -1570,7 +1609,8 @@ const tagIntel = {
       const title = `${seed.name[0].toUpperCase()}${seed.name.slice(1).replace(/-/g, ' ')} & ${members[0].name.replace(/-/g, ' ')}`;
       const list = media.list({ tagsAny: names, sort: 'top', limit: 4, noCount: true }).items;
       const total = media.list({ tagsAny: names, limit: 1 }).total;
-      topics.push({ id: names.slice(0, 3).join('+'), title, tags: names, count: total, previews: list.map((m) => m.preview_url || m.thumbnail_url || (m.media_type === 'image' ? m.media_url : null)).filter(Boolean) });
+      const stills = list.map(topicStills).filter((c) => c.length);
+      topics.push({ id: names.slice(0, 3).join('+'), title, tags: names, count: total, previews: stills.map((c) => c[0]), previewFalls: stills.map((c) => c[1] || null) });
     }
     return topics.sort((a, b) => b.count - a.count);
   },
@@ -1599,7 +1639,8 @@ const reports = {
     const where = status === 'all' ? '' : 'WHERE r.status = ?';
     const params = status === 'all' ? [] : [status];
     const total = db.prepare(`SELECT COUNT(*) AS n FROM reports r ${where}`).get(...params).n;
-    const items = db.prepare(`SELECT r.*, m.title AS media_title, COALESCE(m.preview_url, m.thumbnail_url, CASE WHEN m.media_type = 'image' THEN m.media_url END) AS media_thumb,
+    const items = db.prepare(`SELECT r.*, m.title AS media_title, m.thumb_url, m.preview_url, m.thumbnail_url, m.media_url, m.media_type,
+        COALESCE(m.thumb_url, m.preview_url, m.thumbnail_url, CASE WHEN m.media_type = 'image' THEN m.media_url END) AS media_thumb,
         m.publish_state AS media_state, m.source_url AS media_source, c.handle AS creator_handle
       FROM reports r LEFT JOIN media m ON m.id = r.media_id LEFT JOIN creators c ON c.id = COALESCE(r.creator_id, m.creator_id)
       ${where} ORDER BY (r.kind IN ('underage','nonconsensual')) DESC, r.created_at DESC LIMIT ? OFFSET ?`).all(...params, limit, page * limit);

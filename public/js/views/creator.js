@@ -123,22 +123,48 @@ function alsoOnWebSection(c) {
 }
 
 export async function creator(root, { params, query }) {
-  root.replaceChildren(h('div', { class: 'skeleton', style: { height: '260px' } }));
-  let c;
-  try { c = await get(`/api/creators/${params.id}`); } catch (e) {
-    root.replaceChildren(emptyState({ icon: 'users', title: e.status === 404 ? 'Creator not found' : 'Couldn’t load', text: e.status === 404 ? 'This profile may have been removed.' : e.message, actions: [h('a', { class: 'btn', href: href('/creators') }, 'Browse creators')] }));
-    return () => {};
-  }
-  document.title = `${c.display_name || c.handle} — PRISM`;
   const type = query.get('type') || '';
   const sort = query.get('sort') || 'recent';
   const platform = /^[a-z]{1,20}$/.test(query.get('platform') || '') ? query.get('platform') : '';
   const qFilter = query.get('q') || '';
+  const profileP = get(`/api/creators/${params.id}`);
+  let feed = createFeed({
+    endpoint: `/api/creators/${params.id}/media`,
+    query: { type, sort, platform: platform || undefined, q: qFilter || undefined },
+    empty: emptyState({ icon: 'image', title: 'Nothing here yet', text: qFilter ? `No posts matching “${qFilter}”.` : (type === 'video' ? 'No videos published yet.' : type === 'image' ? 'No photos published yet.' : 'No published posts yet.') }),
+  });
+  root.replaceChildren(h('div', { class: 'skeleton', style: { height: '220px' } }), feed.el);
+  // The header skeleton and the posts are already up. Hand back the way out before the profile returns,
+  // so leaving destroys that feed and a late profile cannot replace the next page.
+  let left = false;
+  let extra = () => {};
+  const stop = () => {
+    left = true;
+    extra();
+    extra = () => {};
+    if (feed) feed.destroy();
+    feed = null;
+  };
+  void openProfile();
+  return stop;
+
+  async function openProfile() {
+  let c;
+  try { c = await profileP; } catch (e) {
+    if (left) return;
+    if (feed) feed.destroy();
+    feed = null;
+    root.replaceChildren(emptyState({ icon: 'users', title: e.status === 404 ? 'Creator not found' : 'Couldn’t load', text: e.status === 404 ? 'This profile may have been removed.' : e.message, actions: [h('a', { class: 'btn', href: href('/creators') }, 'Browse creators')] }));
+    return;
+  }
+  if (left) return;
+  document.title = `${c.display_name || c.handle} — PRISM`;
   const setQ = (patch) => navigate(`/creator/${c.id}`, { type, sort, platform, q: qFilter, ...patch }, { replace: true });
 
   // The stage: his best picture (previews come highest-scored first), full-bleed behind the header,
   // washed into the page with a colour taken from it. A banner is the fallback, then a plain wash.
   const art = (c.previews && c.previews[0]) || c.banner_url;
+  const artFall = (c.previewFalls && c.previewFalls[0]) || null;
 
   const followBtn = h('button', { class: 'btn' });
   const paintFollow = () => {
@@ -252,10 +278,9 @@ export async function creator(root, { params, query }) {
 
   const searchPost = h('input', { class: 'input sm', type: 'search', placeholder: `Search @${c.handle}'s posts…`, value: qFilter, style: { width: 'auto', minWidth: '160px', maxWidth: '240px', marginBottom: '8px' }, 'aria-label': `Search in @${c.handle}'s posts` });
   searchPost.addEventListener('input', debounce(() => setQ({ q: searchPost.value.trim() }), 350));
-  const feed = createFeed({ endpoint: `/api/creators/${c.id}/media`, query: { type, sort, platform: platform || undefined, q: qFilter || undefined }, empty: emptyState({ icon: 'image', title: 'Nothing here yet', text: qFilter ? `No posts matching “${qFilter}”.` : (type === 'video' ? 'No videos published yet.' : type === 'image' ? 'No photos published yet.' : 'No published posts yet.') }) });
 
   const stage = h('section', { class: `stage${art ? '' : ' bare'}` },
-    art ? h('div', { class: 'stage-media', 'aria-hidden': 'true' }, h('img', { class: 'stage-img', src: proxied(art), alt: '', decoding: 'async', fetchpriority: 'high' })) : null,
+    art ? h('div', { class: 'stage-media', 'aria-hidden': 'true' }, h('img', { class: 'stage-img', src: proxied(art), alt: '', decoding: 'async', fetchpriority: 'high', onerror: (e) => { const img = e.currentTarget; if (!artFall || img.dataset.fell) return; img.dataset.fell = '1'; img.src = proxied(artFall); } })) : null,
     h('div', { class: 'stage-tint', 'aria-hidden': 'true' }), h('div', { class: 'stage-wash', 'aria-hidden': 'true' }), // the wash sits on top so the page edge is always plain background
     head);
   // Stats count up the first time you open a creator in a visit; coming back shows them settled.
@@ -263,6 +288,7 @@ export async function creator(root, { params, query }) {
   const stats = h('div', { class: 'profile-stats' }, h('span', null, stat(c.media_count), 'posts'), h('span', null, stat(c.video_count), 'videos'), c.total_score ? h('span', null, stat(c.total_score, fmt.num), 'total score') : null, c.last_media_at ? h('span', null, `Active ${fmt.ago(c.last_media_at)}`) : null);
   counted.add(c.id);
 
+  if (left) return;
   root.replaceChildren(stage,
     c.bio ? h('p', { class: 'profile-bio' }, c.bio) : null,
     stats,
@@ -278,13 +304,14 @@ export async function creator(root, { params, query }) {
   landAvatar(headAvatar, c.id); // the avatar tapped on the way here flies into place
   // Activity and "Similar creators" load after the page is usable; a failure just means they are missing.
   get(`/api/creators/${c.id}/activity`).then((a) => {
+    if (left) return;
     const panel = root.isConnected && activityPanel(a);
     const anchor = root.querySelector('.tabs');
     if (panel && anchor) anchor.closest('.row').before(panel, h('div', { style: { height: '22px' } }));
   }).catch(() => {});
   // Co-stars and collabs: men who co-star or mention each other in posts
   get(`/api/creators/${c.id}/collabs`, { limit: 12 }).then((list) => {
-    if (!list.length || !root.isConnected) return;
+    if (left || !list.length || !root.isConnected) return;
     const anchor = root.querySelector('.tabs');
     if (!anchor) return;
     anchor.closest('.row').before(h('section', { class: 'section', id: 'conn-collabs', style: { marginTop: '28px' } },
@@ -293,7 +320,7 @@ export async function creator(root, { params, query }) {
     revealJump(root, 'conn-collabs');
   }).catch(() => {});
   get(`/api/creators/${c.id}/similar`, { limit: 12 }).then((list) => {
-    if (!list.length || !root.isConnected) return;
+    if (left || !list.length || !root.isConnected) return;
     const anchor = root.querySelector('.tabs');
     if (!anchor) return;
     anchor.closest('.row').before(h('section', { class: 'section', id: 'conn-similar', style: { marginTop: '28px' } },
@@ -303,7 +330,7 @@ export async function creator(root, { params, query }) {
   }).catch(() => {});
   // OnlyFans creators: more men with a page who post in the same style.
   if (c.onlyfans) get(`/api/creators/${c.id}/similar`, { limit: 12, onlyfans: 1 }).then((list) => {
-    if (!list.length || !root.isConnected) return;
+    if (left || !list.length || !root.isConnected) return;
     const anchor = root.querySelector('.tabs');
     if (!anchor) return;
     anchor.closest('.row').before(h('section', { class: 'section', style: { marginTop: '28px' } },
@@ -314,7 +341,7 @@ export async function creator(root, { params, query }) {
   const TINT_VARS = ['--accent', '--accent-2', '--accent-3', '--grad', '--grad-soft'];
   const tintFrom = art || c.avatar_url; // the same picture the stage shows, so the wash matches it
   dominantColor(tintFrom ? proxied(tintFrom) : null).then((col) => {
-    if (!col || !root.isConnected || !root.contains(head)) return;
+    if (left || !col || !root.isConnected || !root.contains(head)) return;
     const hsl = (dh, ds = 0, dl = 0) => `hsl(${(col.h + dh + 360) % 360} ${Math.min(95, col.s + ds)}% ${Math.min(72, col.l + dl)}%)`;
     root.style.setProperty('--accent', hsl(0));
     root.style.setProperty('--accent-2', hsl(-38, 0, -6));
@@ -323,5 +350,6 @@ export async function creator(root, { params, query }) {
     root.style.setProperty('--grad-soft', `linear-gradient(120deg, hsl(${(col.h + 322) % 360} ${col.s}% ${col.l}% / .22), hsl(${col.h} ${col.s}% ${col.l}% / .2) 55%, hsl(${(col.h + 32) % 360} ${col.s}% ${col.l}% / .16))`);
     root.classList.add('tinted');
   });
-  return () => { stopPullPoll(); feed.destroy(); off(); TINT_VARS.forEach((v) => root.style.removeProperty(v)); root.classList.remove('tinted'); };
+  extra = () => { stopPullPoll(); off(); TINT_VARS.forEach((v) => root.style.removeProperty(v)); root.classList.remove('tinted'); };
+  }
 }

@@ -14,13 +14,20 @@ let observer;
 
 function paint(el) {
   const url = el._lazyBg;
+  const fallback = el._lazyFb;
   el._lazyBg = null;
-  if (url) el.style.backgroundImage = `url("${url}")`;
+  if (!url) return;
+  el.style.backgroundImage = `url("${url}")`;
+  if (!fallback || fallback === url) return;
+  const probe = new Image();
+  probe.onerror = () => { if (el.isConnected) el.style.backgroundImage = `url("${fallback}")`; };
+  probe.src = url;
 }
 
-/** @returns the element, so it can be used inline: `lazyBackground(h('div'), url, eager)` */
-export function lazyBackground(el, url, eager = false) {
+/** @returns the element, so it can be used inline: `lazyBackground(h('div'), url, eager, fallback)` */
+export function lazyBackground(el, url, eager = false, fallback = null) {
   if (!url) return el;
+  el._lazyFb = fallback || null;
   if (eager || typeof IntersectionObserver === 'undefined') { el._lazyBg = url; paint(el); return el; }
   if (!observer) {
     observer = new IntersectionObserver((entries) => {

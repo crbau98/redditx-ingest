@@ -104,6 +104,14 @@ export function prefetch(path, query) {
   if (noCache.test(path)) return;
   cachedRead(url, () => viaEarly(url, () => api(url))).catch(() => {});
 }
+/** Warm a POST read that `query()` will ask for next. Same cache key, and it does not clear the cache. */
+export function prefetchQuery(path, body) {
+  const conn = typeof navigator !== 'undefined' && navigator.connection;
+  if (conn && (conn.saveData || /(^|-)2g$|^3g$/.test(conn.effectiveType || ''))) return;
+  if (noCache.test(path)) return;
+  const key = `POST ${path} ${JSON.stringify(body ?? {})}`;
+  cachedRead(key, () => api(path, { method: 'POST', body: body ?? {} })).catch(() => {});
+}
 export function clearApiCache() { cache.clear(); }
 // View pings and broken-media reports change nothing anyone sees; every other write may.
 export const post = (path, body, opts) => { if (!/\/(view|broken)$/.test(path)) cache.clear(); return api(path, { method: 'POST', body: body ?? {}, ...opts }); };

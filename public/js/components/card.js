@@ -122,7 +122,7 @@ export function releaseCard(card) {
 // `width`: the CSS width the card is laid out at, when the caller knows it (masonry columns); without it the card is a rail card.
 // `eager: true` is only the first viewport row (one card per column). Everything else stays lazy
 // at the default fetch priority so a long page does not compete with that first row.
-export function mediaCard(item, { open, compact = false, why = null, eager = false, width = 0 } = {}) {
+export function mediaCard(item, { open, compact = false, why = null, eager = false, width = 0, progress = 0 } = {}) {
   const ratio = item.width && item.height ? Math.min(Math.max(item.width / item.height, 0.55), 1.9) : 0.8;
   const isVideo = item.media_type === 'video';
   // Grids load the small thumbnail build when it exists (engine/thumbs.js, ~360px WebP) and take the platform
@@ -153,6 +153,7 @@ export function mediaCard(item, { open, compact = false, why = null, eager = fal
     media.appendChild(img);
     if (reliefIo) reliefIo.observe(media);
   } else ph.classList.add('done');
+  if (progress > 0) media.appendChild(h('span', { class: 'resume-bar', style: { '--p': String(Math.min(0.96, progress)) }, 'aria-hidden': 'true' }));
   // On full cards the "why" chip rides in the caption over the image; compact cards keep it on the media.
   const whyChip = why ? h('span', { class: 'card-why', title: `Why you are seeing this: ${why}. This comes from what you open and save on this device.` }, icon('sparkle', 'sm'), why) : null;
   if (whyChip && compact) media.appendChild(whyChip);

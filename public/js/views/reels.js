@@ -1,11 +1,13 @@
-import { h, icon, proxied, fmt, avatar, toast, copyText, emptyState, openModal } from '../dom.js';
-import { get, post, query as postQuery, reportBroken } from '../api.js';
+import { h, icon, proxied, fmt, avatar, toast, copyText, emptyState, openModal, armPoster } from '../dom.js';
+import { get, post, query as postQuery, reportBroken, prefetch, prefetchQuery } from '../api.js';
 import { navigate, href } from '../router.js';
 import { prefs, favorites, follows, history as viewHistory, tastes, collections, platformLabel, bus } from '../store.js';
-import { attachVideo, releaseVideo } from '../components/video.js';
+import { attachVideo, releaseVideo, bindWatch, bumpRate, togglePip } from '../components/video.js';
+import { clampRate } from '../playback-policy.js';
 import { openCollectionPicker } from '../components/collections.js';
 import { openLightbox, lightboxOpen } from '../components/ondemand.js';
 import { heartBurst, ambientBackdrop } from '../components/fx.js';
+import { tileImage, stillChain } from '../images.js';
 import { planWindow } from '../components/reel-window.js';
 
 const SORTS = [['foryou', 'For you'], ['trending', 'Trending'], ['random', 'Shuffle'], ['recent', 'Newest'], ['top', 'Top']];
@@ -34,6 +36,10 @@ export async function reels(root, { query }) {
 
   document.body.classList.add('reels-mode');
   const track = h('div', { class: 'reels-track', tabindex: '-1' });
+  // One full-height placeholder until the first slide exists. It is only a painted block: no video, no still.
+  const reelBone = () => h('section', { class: 'reel skeleton reel-bone', 'aria-hidden': 'true' });
+  let bone = reelBone();
+  track.append(bone);
   const muteBtn = h('button', { class: 'btn icon ghost', 'aria-label': 'Toggle sound', title: 'Sound (M)', onclick: () => setMuted(!prefs.muted) });
   const paintMute = () => muteBtn.replaceChildren(icon(prefs.muted ? 'mute' : 'volume'));
   paintMute();
@@ -55,7 +61,16 @@ export async function reels(root, { query }) {
     const pick = (patch) => () => { m.close(); set(patch); };
     const group = (label, opts, key) => h('div', { class: 'field' }, h('label', null, label), h('div', { class: 'row wrap', style: { gap: '8px' } },
       opts.map(([v, l]) => h('button', { class: `chip${f[key] === v ? ' on' : ''}`, 'aria-pressed': String(f[key] === v), onclick: pick({ [key]: v }) }, l))));
-    m = openModal({ title: 'What plays', body: h('div', { class: 'stack' }, group('Show', [['video', 'Videos'], ['all', 'Everything'], ['image', 'Photos']], 'type'), group('Source', [['', 'All sources'], ['onlyfans', 'OnlyFans only']], 'paid'), group('Order', SORTS, 'sort')) });
+    m = openModal({ title: 'What plays', body: h('div', { class: 'stack' },
+      group('Show', [['video', 'Videos'], ['all', 'Everything'], ['image', 'Photos']], 'type'),
+      group('Source', [['', 'All sources'], ['onlyfans', 'OnlyFans only']], 'paid'),
+      group('Order', SORTS, 'sort'),
+      h('div', { class: 'field' }, h('label', null, 'Speed'), h('div', { class: 'row wrap', style: { gap: '8px' } },
+        [0.75, 1, 1.25, 1.5, 2].map((n) => h('button', {
+          class: `chip${clampRate(prefs.playbackRate) === n ? ' on' : ''}`,
+          'aria-pressed': String(clampRate(prefs.playbackRate) === n),
+          onclick: () => { prefs.playbackRate = n; const v = slides[active] && slides[active].stage.querySelector('video'); if (v) v.playbackRate = n; m.close(); showHud('bolt', `${n}×`); },
+        }, `${n}×`))))) });
   }
   const shell = h('div', { class: 'reels', role: 'region', 'aria-label': 'Reels' }, top, track);
   root.replaceChildren(shell);
@@ -80,11 +95,17 @@ export async function reels(root, { query }) {
     if (v) { v.muted = m; if (!m) v.play().catch(() => {}); }
     showHud(m ? 'mute' : 'volume', m ? 'Muted' : 'Sound On');
   }
+  function cycleRate(dir) {
+    const s = slides[active];
+    const v = s && s.stage.querySelector('video');
+    const next = bumpRate(v, dir);
+    showHud('bolt', `${next}×`);
+  }
 
   /* --------------------------------------------------------------- slides */
   function slide(it, index) {
     const isVideo = it.media_type === 'video';
-    const poster = it.preview_url || it.thumbnail_url || (!isVideo ? it.media_url : null);
+    const poster = tileImage(it);
     const stage = h('div', { class: 'reel-stage' });
     const bg = h('div', { class: 'reel-bg' });
     const bar = h('div', { class: 'reel-progress' }, h('i'));
@@ -175,15 +196,36 @@ export async function reels(root, { query }) {
     }
     if (s.isVideo) {
       const v = h('video', { playsinline: true, loop: true, preload: 'none', poster: s.poster ? proxied(s.poster) : null, 'aria-label': s.it.title || 'Video' });
+      armPoster(v, stillChain(s.it));
       v.muted = prefs.muted;
       for (const ev of ['playing', 'seeked', 'ratechange']) v.addEventListener(ev, () => syncProgress(s));
       for (const ev of ['pause', 'waiting']) v.addEventListener(ev, () => { if (s.prog) s.prog.pause(); });
       s.stage.replaceChildren(v);
     } else {
       const preview = s.it.preview_url || s.it.thumbnail_url;
-      const img = h('img', { alt: s.it.title || '', src: proxied(preview || s.it.media_url), decoding: 'async', draggable: 'false' });
-      if (preview) { const full = new Image(); full.onload = () => { if (img.isConnected) img.src = full.src; }; full.src = proxied(s.it.media_url); }
-      img.addEventListener('error', () => { reportBroken(s.it.id); s.stage.replaceChildren(h('div', { class: 'reel-gone' }, 'This item is no longer available at its source.')); });
+      const sharp = preview || s.it.media_url;
+      // Same order as the viewer: the cached 360px thumb, then the platform preview, then the full file.
+      const first = s.it.thumb_url && s.it.thumb_url !== sharp ? s.it.thumb_url : sharp;
+      const img = h('img', { alt: s.it.title || '', src: proxied(first), decoding: 'async', draggable: 'false' });
+      const startFull = () => {
+        if (!preview || preview === s.it.media_url) return;
+        const full = new Image();
+        full.onload = () => { if (img.isConnected) img.src = full.src; };
+        full.src = proxied(s.it.media_url);
+      };
+      if (first !== sharp) {
+        const mid = new Image();
+        mid.onload = () => { if (img.isConnected) img.src = mid.src; startFull(); };
+        mid.onerror = startFull;
+        mid.src = proxied(sharp);
+      } else startFull();
+      img.addEventListener('error', () => {
+        const current = img.src;
+        if (sharp && current !== proxied(sharp)) { img.src = proxied(sharp); return; }
+        if (s.it.media_url && current !== proxied(s.it.media_url)) { img.src = proxied(s.it.media_url); return; }
+        reportBroken(s.it.id);
+        s.stage.replaceChildren(h('div', { class: 'reel-gone' }, 'This item is no longer available at its source.'));
+      });
       s.stage.replaceChildren(img);
     }
   }
@@ -215,7 +257,9 @@ export async function reels(root, { query }) {
     const v = s.stage.querySelector('video');
     if (!v) return;
     v.muted = prefs.muted;
+    if (s.watchOff) { s.watchOff(); s.watchOff = null; }
     if (!s.handle) s.handle = attachVideo(v, s.it);
+    s.watchOff = bindWatch(v, s.it);
     s.handle.promote();
     v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
   }
@@ -232,6 +276,7 @@ export async function reels(root, { query }) {
   function deactivate(s) {
     settle(s, { teardown: true });
     if (!s.isVideo) return;
+    if (s.watchOff) { s.watchOff(); s.watchOff = null; }
     if (s.handle) { s.handle.destroy(); s.handle = null; }
     releaseVideo(s.stage.querySelector('video'));
   }
@@ -240,7 +285,8 @@ export async function reels(root, { query }) {
   const conn = navigator.connection || {};
   const canWarm = !conn.saveData && !/(^|-)2g$|^3g$/.test(conn.effectiveType || '');
   function warm(s) {
-    if (!canWarm || !s.isVideo) return;
+    if (!canWarm) return; // a slow link does not prefetch the next photo or the next video
+    if (!s.isVideo) { mount(s); return; }
     mount(s);
     const v = s.stage.querySelector('video');
     if (!v || s.handle) return;
@@ -277,26 +323,40 @@ export async function reels(root, { query }) {
       const forYou = f.sort === 'foryou' && !f.creator && !f.tag && !f.tags && !f.anytags && !f.community && !f.q && !f.following && !f.platform && !f.after;
       // newest from everyone followed: the POST feed carries up to 500 creators (a URL holds 100)
       const followFeed = followIds && f.sort === 'recent' && !f.creator && !f.tag && !f.tags && !f.anytags && !f.community && !f.q && !f.platform && !f.since && !f.after;
-      const res = followFeed ? await postQuery('/api/follow/feed', { follows: follows.list().map((c) => ({ id: c.id })), part: 'all', type: f.type === 'all' ? undefined : f.type, page, limit: PAGE, nocount: page > 0 })
-        : forYou ? await get('/api/recommend', { ...(tasteQ = (page && tasteQ) || tastes.query({ exclude: viewHistory.list().slice(0, 100) })), type: f.type === 'all' ? undefined : f.type, seed, page, limit: PAGE }) : await get('/api/media', {
+      const mediaQuery = (n) => ({
         type: f.type === 'all' ? undefined : f.type, sort: f.sort === 'foryou' ? 'trending' : f.sort, platform: f.platform, tag: f.tag, tags: f.tags || undefined, anytags: f.anytags || undefined, since: f.since || undefined, after: f.after || undefined, community: f.community, creator: f.creator, q: f.q,
         creators: followIds ? (followIds.length ? followIds.join(',') : '00000000-0000-0000-0000-000000000000') : undefined,
-        paid: f.paid || undefined, seed: f.sort === 'random' ? seed : undefined, page, limit: PAGE,
+        paid: f.paid || undefined, seed: f.sort === 'random' ? seed : undefined, page: n, limit: PAGE,
       });
+      const res = followFeed ? await postQuery('/api/follow/feed', { follows: follows.list().map((c) => ({ id: c.id })), part: 'all', type: f.type === 'all' ? undefined : f.type, page, limit: PAGE, nocount: page > 0 })
+        : forYou ? await get('/api/recommend', { ...(tasteQ = (page && tasteQ) || tastes.query({ exclude: viewHistory.list().slice(0, 100) })), type: f.type === 'all' ? undefined : f.type, seed, page, limit: PAGE }) : await get('/api/media', mediaQuery(page));
       if (destroyed) return;
       page++;
       if (res.items.length < PAGE) done = true;
+      if (!done && followFeed) prefetchQuery('/api/follow/feed', { follows: follows.list().map((c) => ({ id: c.id })), part: 'all', type: f.type === 'all' ? undefined : f.type, page, limit: PAGE, nocount: page > 0 });
+      if (!done && !followFeed) {
+        if (forYou) prefetch('/api/recommend', { ...tasteQ, type: f.type === 'all' ? undefined : f.type, seed, page, limit: PAGE });
+        else prefetch('/api/media', mediaQuery(page));
+      }
       const fresh = prefs.hideSeen ? res.items.filter((it) => !viewHistory.has(it.id)) : res.items;
       for (const it of fresh) {
         if (slides.some((s) => s.it.id === it.id)) continue;
         const s = slide(it, slides.length);
+        if (bone) { bone.remove(); bone = null; }
         slides.push(s); track.appendChild(s.el); io.observe(s.el);
       }
-      if (done) track.appendChild(endSlide());
+      if (done) {
+        if (bone) { bone.remove(); bone = null; }
+        track.appendChild(endSlide());
+      }
       if (!slides.length && !done) { loading = false; return load(); }
       if (active < 0 && slides.length) setActive(0);
     } catch (e) {
-      if (!slides.length) track.replaceChildren(h('div', { class: 'reel reel-end' }, emptyState({ icon: 'alert', title: 'Couldn’t load reels', text: e.message || 'An error occurred while loading reels.', actions: [h('button', { class: 'btn primary', onclick: () => { loading = false; load(); } }, 'Try again'), h('a', { class: 'btn', href: href('/explore') }, 'Back to Explore')] })));
+      if (destroyed) return;
+      if (!slides.length) {
+        if (bone) { bone.remove(); bone = null; }
+        track.replaceChildren(h('div', { class: 'reel reel-end' }, emptyState({ icon: 'alert', title: 'Couldn’t load reels', text: e.message || 'An error occurred while loading reels.', actions: [h('button', { class: 'btn primary', onclick: () => { loading = false; bone = reelBone(); track.replaceChildren(bone); load(); } }, 'Try again'), h('a', { class: 'btn', href: href('/explore') }, 'Back to Explore')] })));
+      }
       else toast(e.message || 'Could not load more', 'err');
     } finally { loading = false; }
   }
@@ -330,7 +390,8 @@ export async function reels(root, { query }) {
   function restart() {
     slides.forEach((s) => { unmount(s); io.unobserve(s.el); });
     slides.length = 0; page = 0; done = false; active = -1; seed = Math.floor(Math.random() * 1e6); tasteQ = null;
-    track.replaceChildren(); track.scrollTop = 0;
+    bone = reelBone();
+    track.replaceChildren(bone); track.scrollTop = 0;
     load();
   }
 
@@ -351,6 +412,9 @@ export async function reels(root, { query }) {
       case 'End': e.preventDefault(); jump(slides.length - 1); break;
       case ' ': { e.preventDefault(); const v = s && s.stage.querySelector('video'); if (v) { if (v.paused) v.play().catch(() => {}); else v.pause(); } break; }
       case 'm': case 'M': setMuted(!prefs.muted); break;
+      case ',': case '<': e.preventDefault(); cycleRate(-1); break;
+      case '.': case '>': e.preventDefault(); cycleRate(1); break;
+      case 'p': case 'P': { const v = s && s.stage.querySelector('video'); if (v) { e.preventDefault(); togglePip(v); } break; }
       case 'f': case 'F': if (s) favorites.toggle(s.it.id, s.it); break;
       case 'c': case 'C': if (s) openCollectionPicker(s.it); break;
       case 'i': case 'I': case 'Enter': if (s) openLightbox(slides.map((x) => x.it), active); break;
@@ -374,19 +438,11 @@ export async function reels(root, { query }) {
   const onHash = () => { const v = slides[active] && slides[active].stage.querySelector('video'); if (v && lightboxOpen()) v.pause(); };
   window.addEventListener('hashchange', onHash);
 
-  await load();
-  track.focus({ preventScroll: true });
-  // First visit: show how to move on, then get out of the way.
-  if (!prefs.reelsHint && slides.length > 1) {
-    const touch = window.matchMedia('(pointer: coarse)').matches;
-    const hint = h('div', { class: 'reel-hint', role: 'status' }, icon(touch ? 'up' : 'chev-d', 'sm'), touch ? 'Swipe up for the next one · double-tap to save' : 'Scroll, ↓ or J for the next one · M for sound · F to save');
-    shell.appendChild(hint);
-    const done = () => { hint.remove(); prefs.reelsHint = true; track.removeEventListener('scroll', done); };
-    track.addEventListener('scroll', done, { passive: true, once: true });
-    setTimeout(done, 6000);
-  }
-
-  return () => {
+  // The key handler and the skeleton are already up. Return the way out before the first page, so leaving
+  // drops them while that request is still in flight. The skeleton stays until the response paints.
+  let hintTimer = 0;
+  let hintDone = null;
+  const stop = () => {
     destroyed = true;
     io.disconnect();
     slides.forEach(unmount);
@@ -395,5 +451,21 @@ export async function reels(root, { query }) {
     window.removeEventListener('hashchange', onHash);
     offs.forEach((off) => off());
     document.body.classList.remove('reels-mode');
+    if (hintTimer) { clearTimeout(hintTimer); hintTimer = 0; }
+    if (hintDone) { track.removeEventListener('scroll', hintDone); hintDone = null; }
   };
+  load().then(() => {
+    if (destroyed) return;
+    track.focus({ preventScroll: true });
+    // First visit: show how to move on, then get out of the way.
+    if (!prefs.reelsHint && slides.length > 1) {
+      const touch = window.matchMedia('(pointer: coarse)').matches;
+      const hint = h('div', { class: 'reel-hint', role: 'status' }, icon(touch ? 'up' : 'chev-d', 'sm'), touch ? 'Swipe up for the next one · double-tap to save' : 'Scroll, ↓ or J for the next one · M for sound · F to save');
+      shell.appendChild(hint);
+      hintDone = () => { hint.remove(); prefs.reelsHint = true; track.removeEventListener('scroll', hintDone); hintDone = null; if (hintTimer) { clearTimeout(hintTimer); hintTimer = 0; } };
+      track.addEventListener('scroll', hintDone, { passive: true, once: true });
+      hintTimer = setTimeout(hintDone, 6000);
+    }
+  });
+  return stop;
 }

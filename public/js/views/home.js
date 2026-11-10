@@ -1,7 +1,7 @@
 import { h, icon, fmt, emptyState } from '../dom.js';
 import { get, prefetch } from '../api.js';
 import { href } from '../router.js';
-import { follows, tastes, history as viewHistory, prefs, GENERIC } from '../store.js';
+import { follows, tastes, history as viewHistory, prefs, playback, GENERIC, searches, smartFeedQuery } from '../store.js';
 import { mediaCard } from '../components/card.js';
 import { creatorCard } from '../components/creator-card.js';
 import { createFeed } from '../components/feed.js';
@@ -36,7 +36,7 @@ async function forYouSection(open) {
     h('a', { class: 'btn sm', href: href('/reels', { sort: 'foryou', type: 'all' }), style: { marginTop: '6px' } }, icon('film', 'sm'), 'Play For you as Reels'),
     people.length >= 3 ? h('div', { class: 'stack', style: { marginTop: '18px' } },
       h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase' } }, 'Creators you might like'),
-      h('div', { class: 'rail' }, people.map((c) => creatorCard(c, { mini: true, badge: c.reason })))) : null);
+      h('div', { class: 'rail' }, people.map((c, i) => creatorCard(c, { mini: true, badge: c.reason, eager: i < 2 })))) : null);
 }
 
 /**
@@ -102,23 +102,67 @@ function nicheRow(tags) {
       list.map((t) => h('a', { class: 'chip sm', href: href('/explore', { tags: t.name }) }, `#${t.name}`))));
 }
 
-export async function home(root) {
+export function home(root) {
   eagerRail = 4;
-  const holder = h('div', { class: 'stack' }, h('div', { class: 'skeleton', style: { height: '320px' } }), h('div', { class: 'skeleton', style: { height: '260px' } }));
-  root.replaceChildren(holder);
-  let feed;
+  const holder = h('div', { class: 'stack home-pending' }, h('div', { class: 'skeleton', style: { height: '168px', borderRadius: '16px' } }));
+  const latestHead = h('div', { class: 'section-head' },
+    h('div', null, h('h2', null, icon('layers'), 'Latest uploads'), h('div', { class: 'sub' }, 'Filter by creator, or open Explore for everything')),
+    h('a', { class: 'link-more', href: href('/explore') }, 'Explore', icon('chev-r', 'sm')));
+  const creatorFilterBar = h('div', { class: 'row', hidden: true, style: { gap: '8px', overflowX: 'auto', padding: '0 0 14px', scrollbarWidth: 'none' }, role: 'group', 'aria-label': 'Filter feed by creator' });
+  let feed = createFeed({
+    query: { sort: 'recent' },
+    pageSize: 36,
+    failText: 'Latest uploads didn’t load. The rest of Home is still here.',
+    empty: emptyState({ icon: 'layers', title: 'No uploads yet', text: 'Discover still loaded. New posts show up here as soon as they are ingested.' }),
+  });
+  const feedSection = h('section', { class: 'section' }, latestHead, creatorFilterBar, feed.el);
+  root.replaceChildren(holder, feedSection);
   let data;
   // Everything that does not need /api/discover starts now, with it, instead of one round trip
   // (150 ms+ on a phone) after another. Each one is only awaited where the page uses it.
   const open = (list) => (item) => openLightbox(list, Math.max(0, list.findIndex((x) => x.id === item.id)));
   const followIds = follows.list().map((c) => c.id).slice(0, 100);
   const followedP = followIds.length ? get('/api/media', { creators: followIds.join(','), sort: 'recent', limit: 14 }).then((r) => r.items, () => []) : Promise.resolve([]);
+  const resumeSaved = playback.list().slice(0, 12);
+  const resumeP = resumeSaved.length
+    ? get('/api/media', { ids: resumeSaved.map((p) => p.id).join(','), limit: resumeSaved.length }).then((r) => r.items || [], () => [])
+    : Promise.resolve([]);
   const forYouP = forYouSection(open).catch(() => null);
-  prefetch('/api/media', { sort: 'recent', page: 0, limit: 36 }); // the first feed page, reused by createFeed below
+  prefetch('/api/media', { sort: 'recent', page: 0, limit: 36 }); // the first feed page, reused by the feed already on screen
+  // The grid is already on screen. Hand back the way out before Discover returns, so leaving destroys
+  // that grid while the snapshot is still in flight and a late snapshot cannot replace the next page.
+  let left = false;
+  let extra = () => {};
+  const stop = () => {
+    left = true;
+    extra();
+    extra = () => {};
+    if (feed) feed.destroy();
+    feed = null;
+  };
+  void fill();
+  return stop;
+
+  async function fill() {
   try { data = await get('/api/discover'); } catch (e) {
-    root.replaceChildren(emptyState({ icon: 'alert', title: 'Couldn’t load', text: e.message, actions: [h('button', { class: 'btn primary', onclick: () => home(root) }, 'Try again')] }));
-    return () => {};
+    if (left) return;
+    // The early grid is independent. A failed snapshot must not throw away uploads that already painted.
+    const failedFeeds = homeFeeds();
+    holder.replaceWith(...[emptyState({
+      icon: 'alert',
+      title: 'Discover didn’t load',
+      text: `${e.message || 'The snapshot failed.'} Latest uploads are still on this page.`,
+      actions: [h('button', { class: 'btn primary', onclick: () => {
+        const dying = feed; feed = null;
+        const next = home(root);
+        extra = () => { next(); };
+        if (dying) dying.destroy();
+      } }, 'Try again')],
+    }), failedFeeds.section].filter(Boolean));
+    failedFeeds.paint();
+    return;
   }
+  if (left) return;
 
   const s = data.stats;
   const input = h('input', { class: 'input', type: 'search', placeholder: window.matchMedia('(max-width: 560px)').matches ? 'Search creators or tags' : 'Try “muscle guys at the gym, videos this week”', 'aria-label': 'Search', enterkeyhint: 'search', autocomplete: 'off' });
@@ -138,13 +182,46 @@ export async function home(root) {
       h('button', { class: 'btn glass', onclick: surpriseMe }, icon('shuffle', 'sm'), 'Surprise me')),
     h('p', { class: 'hero-note' }, 'Adults 18+ only. Male creators only. Report anything that doesn’t belong.')));
 
+  function homeFeeds() {
+    const savedFeeds = searches.list().slice(0, 2);
+    const rows = [];
+    if (!savedFeeds.length) return { section: null, paint() {} };
+    const section = h('section', { class: 'section home-feeds' },
+      sectionHead('bookmark', 'Smart feeds', 'New since you last opened them', { href: href('/saved', { tab: 'feeds' }), label: 'See all' }),
+      h('div', { class: 'search-list' }, savedFeeds.map((s) => {
+        const hold = h('span', { class: 'home-feed-count' });
+        rows.push({ s, hold });
+        return h('div', { class: 'search-item' },
+          icon('bookmark'),
+          h('div', { class: 'grow', style: { minWidth: 0 } }, h('a', { href: href('/explore', s.query), onclick: () => searches.markSeen(s.id), style: { fontWeight: 650 } }, s.name)),
+          hold);
+      })));
+    const paint = () => {
+      for (const { s, hold } of rows) {
+        const fresh = searches.list().find((x) => x.id === s.id) || s;
+        get('/api/media', smartFeedQuery(fresh)).then((r) => {
+          if (!hold.isConnected) return;
+          hold.replaceChildren(r.total ? h('span', { class: 'badge good' }, `${fmt.num(r.total)} new`) : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'up to date'));
+        }).catch(() => { if (hold.isConnected) hold.replaceChildren(); });
+      }
+    };
+    return { section, paint };
+  }
+
   if (!s.total) {
-    root.replaceChildren(hero, emptyState({
+    if (left) return;
+    feed.destroy();
+    feed = null;
+    const emptyFeeds = homeFeeds();
+    root.replaceChildren(...[hero, emptyState({
       icon: 'sparkle', title: 'Your library is empty',
       text: 'Open the admin console to add creators and communities, then run a first sync. Content appears here as soon as it’s ingested.',
       actions: [h('a', { class: 'btn primary', href: href('/admin/sources') }, 'Open admin'), h('a', { class: 'btn', href: href('/creators') }, 'Browse creators')],
-    }));
-    return () => {};
+    }), emptyFeeds.section].filter(Boolean));
+    emptyFeeds.paint();
+    const stopEmpty = initPullToRefresh(root, async () => { emptyFeeds.paint(); });
+    extra = () => { stopEmpty(); };
+    return;
   }
 
   // The page, in the order a visitor wants it: the most popular creators first, then what is new from people they follow,
@@ -167,10 +244,12 @@ export async function home(root) {
   if (popular.length >= 3) {
     parts.push(h('section', { class: 'section popular-now' },
       sectionHead('trend', 'Popular now', 'Most posts this week against each creator’s usual pace. A sign of momentum, not a quality rank.', { href: href('/creators', { sort: 'popular', fresh: '7' }), label: 'See all' }),
-      h('div', { class: 'rail' }, popular.map((c) => creatorCard(c, { mini: true, reason: `${fmt.num(c.week_count)} ${c.week_count === 1 ? 'post' : 'posts'} this week` })))));
+      h('div', { class: 'rail' }, popular.map((c, i) => creatorCard(c, { mini: true, eager: i < 2, reason: `${fmt.num(c.week_count)} ${c.week_count === 1 ? 'post' : 'posts'} this week` })))));
   }
   const ring = creatorRing([...top, ...(data.rising || []), ...(data.newCreators || [])], { label: 'More creators' });
   if (ring) parts.push(ring);
+  const feeds = homeFeeds();
+  if (feeds.section) parts.push(feeds.section);
   // The For you rail has a fixed slot; a pick refreshes what is in it, in place.
   const refreshForYou = async () => { const sec = await forYouSection(open).catch(() => null); forYouSlot.replaceChildren(...(sec ? [sec] : [])); };
   const picker = interestPicker(data.tags, { onChange: refreshForYou, onSkip: () => {} });
@@ -178,19 +257,32 @@ export async function home(root) {
 
   const forYouSlot = h('div', { class: 'for-you-slot' });
   const fromFollowed = await followedP; // optional: a failed request leaves it empty
+  if (left) return;
   if (fromFollowed.length) {
     parts.push(h('section', { class: 'section' }, sectionHead('heart', 'From creators you follow', 'Latest from the people you follow on this device', { href: href('/following'), label: 'See all' }), rail(fromFollowed, { open: open(fromFollowed) })));
+  }
+  const resumeItems = await resumeP;
+  if (left) return;
+  const resumeById = new Map(resumeItems.map((it) => [it.id, it]));
+  const continueItems = resumeSaved.map((p) => resumeById.get(p.id)).filter(Boolean);
+  if (continueItems.length) {
+    const frac = new Map(resumeSaved.map((p) => [p.id, p.d ? Math.min(0.96, p.t / p.d) : 0]));
+    const resumeHead = sectionHead('history', 'Continue watching', 'Picked up where you left off on this device');
+    const resumeSec = h('section', { class: 'section continue-watching' }, resumeHead,
+      h('div', { class: 'rail' }, continueItems.map((it) => h('div', { class: 'resume-card' },
+        mediaCard(it, { open: open(continueItems), eager: false }),
+        h('span', { class: 'resume-bar', style: { '--p': String(frac.get(it.id) || 0) }, 'aria-hidden': 'true' })))),
+      h('button', { class: 'btn sm ghost', style: { marginTop: '8px' }, onclick: () => { playback.clear(); resumeSec.remove(); } }, 'Clear'));
+    parts.push(resumeSec);
   }
   if (data.trending.length) {
     parts.push(h('section', { class: 'section' }, sectionHead('flame', 'Trending now', 'Top posts, OnlyFans creators first', { href: href('/explore', { sort: 'trending', paid: 'onlyfans' }), label: 'See all' }), rail(data.trending, { open: open(data.trending) })));
   }
   const forYou = await forYouP;
+  if (left) return;
   if (forYou) forYouSlot.replaceChildren(forYou);
   parts.push(forYouSlot);
 
-  const latestHead = h('div', { class: 'section-head' },
-    h('div', null, h('h2', null, icon('layers'), 'Latest uploads'), h('div', { class: 'sub' }, 'Filter by creator, or open Explore for everything')),
-    h('a', { class: 'link-more', href: href('/explore') }, 'Explore', icon('chev-r', 'sm')));
   let activeCreatorId = '';
   const setFeedCreator = (cid) => {
     if (activeCreatorId === cid) return;
@@ -206,22 +298,23 @@ export async function home(root) {
     feed = next;
   };
   const pillCreators = top.slice(0, 12);
-  const creatorFilterBar = pillCreators.length ? h('div', { class: 'row', style: { gap: '8px', overflowX: 'auto', padding: '0 0 14px', scrollbarWidth: 'none' }, role: 'group', 'aria-label': 'Filter feed by creator' },
-    h('button', { type: 'button', class: 'chip on', dataset: { cid: '' }, 'aria-pressed': 'true', onclick: () => setFeedCreator('') }, 'All creators'),
-    ...pillCreators.map((c) => h('button', { type: 'button', class: 'chip', dataset: { cid: c.id }, 'aria-pressed': 'false', onclick: () => setFeedCreator(c.id), title: `${c.display_name || c.handle} (${c.media_count} posts)` },
-      c.display_name || c.handle, h('span', { class: 'n' }, fmt.num(c.media_count)))),
-    h('a', { class: 'chip', href: href('/find') }, icon('plus', 'sm'), 'Find a creator')) : null;
+  if (pillCreators.length) {
+    creatorFilterBar.hidden = false;
+    creatorFilterBar.replaceChildren(
+      h('button', { type: 'button', class: 'chip on', dataset: { cid: '' }, 'aria-pressed': 'true', onclick: () => setFeedCreator('') }, 'All creators'),
+      ...pillCreators.map((c) => h('button', { type: 'button', class: 'chip', dataset: { cid: c.id }, 'aria-pressed': 'false', onclick: () => setFeedCreator(c.id), title: `${c.display_name || c.handle} (${c.media_count} posts)` },
+        c.display_name || c.handle, h('span', { class: 'n' }, fmt.num(c.media_count)))),
+      h('a', { class: 'chip', href: href('/find') }, icon('plus', 'sm'), 'Find a creator'));
+  }
 
-  feed = createFeed({ query: { sort: 'recent' }, pageSize: 36 });
-  parts.push(h('section', { class: 'section' }, latestHead, creatorFilterBar, feed.el));
-
-  root.replaceChildren(...parts);
+  if (left) return;
+  root.replaceChildren(...parts, feedSection);
+  feeds.paint();
   const stopPtr = initPullToRefresh(root, async () => {
     if (feed) await feed.refresh();
     await refreshForYou();
+    feeds.paint();
   });
-  return () => {
-    stopPtr();
-    if (feed) feed.destroy();
-  };
+  extra = () => { stopPtr(); };
+  }
 }

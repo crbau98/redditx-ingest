@@ -155,6 +155,33 @@ export function trendText(t) {
 }
 
 /**
+ * Per-source yield from the overview's daily rows: today against the day before.
+ * `quiet` is a source that added nothing today but did add something across the previous 14 days.
+ * @param {Array<{day: string, platform: string, n: number}>} rows day is YYYY-MM-DD UTC.
+ */
+export function sourceYield(rows = [], now = Date.now()) {
+  const day = (offset) => {
+    const d = new Date(now);
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - offset)).toISOString().slice(0, 10);
+  };
+  const today = day(0);
+  const yesterday = day(1);
+  const map = new Map();
+  for (const r of rows || []) {
+    if (!r || !r.platform || !r.day) continue;
+    const row = map.get(r.platform) || { platform: r.platform, today: 0, yesterday: 0, earlier: 0 };
+    const n = Number(r.n) || 0;
+    if (r.day === today) row.today += n;
+    else if (r.day === yesterday) row.yesterday += n;
+    else row.earlier += n;
+    map.set(r.platform, row);
+  }
+  return [...map.values()]
+    .map((r) => ({ platform: r.platform, today: r.today, yesterday: r.yesterday, quiet: r.today === 0 && (r.yesterday > 0 || r.earlier > 0) }))
+    .sort((a, b) => Number(b.quiet) - Number(a.quiet) || b.today - a.today || a.platform.localeCompare(b.platform));
+}
+
+/**
  * The rows of "Needs attention": only queues with something in them, worst first.
  * Reports about minors come before everything, then ingestion that is broken, then work waiting for a decision.
  * @returns {Array<{key: string, n: number, tone: 'bad'|'warn'|'info', title: string, sub: string, to: string, query?: object}>}

@@ -22,10 +22,13 @@ const webpush = require('../lib/webpush');
 const router = express.Router();
 
 /* ------------------------------------------------------------ serialisation */
-function publicMedia(m) {
+function publicMedia(m, opts = {}) {
   if (!m) return null;
+  const brief = opts.brief === true;
   return {
-    id: m.id, title: m.title, description: m.description, media_type: m.media_type,
+    id: m.id, title: m.title,
+    ...(brief ? {} : { description: m.description }),
+    media_type: m.media_type,
     media_url: m.media_url, preview_url: m.preview_url, thumbnail_url: m.thumbnail_url,
     thumb_url: m.thumb_url || null, tint: m.tint || null,
     hls_url: m.hls_url, has_audio: m.has_audio, width: m.width, height: m.height, duration: m.duration,
@@ -40,6 +43,8 @@ function publicMedia(m) {
   };
 }
 
+const briefMedia = (m) => publicMedia(m, { brief: true });
+
 function publicCreator(c) {
   if (!c) return null;
   const of = creatorOnlyFans(c);
@@ -53,7 +58,7 @@ function publicCreator(c) {
     id: c.id, handle: c.handle, display_name: c.display_name, bio: c.bio, avatar_url: c.avatar_url, banner_url: c.banner_url,
     links: c.links, verified: c.verified, media_count: c.media_count, video_count: c.video_count, total_score: c.total_score,
     popularity: Math.round((Number(c.popularity) || 0) * 10) / 10,
-    last_media_at: c.last_media_at, previews: c.previews, platforms: c.platforms, added_at: c.created_at,
+    last_media_at: c.last_media_at, previews: c.previews, previewFalls: Array.isArray(c.previewFalls) ? c.previewFalls : [], platforms: c.platforms, added_at: c.created_at,
     onlyfans: of, paid: creatorPaid(c),
   };
 }
@@ -156,7 +161,7 @@ const discoverView = async () => {
   const d = await snapshot('discover');
   return {
     ...d,
-    trending: d.trending.map(publicMedia), freshVideos: d.freshVideos.map(publicMedia),
+    trending: d.trending.map(briefMedia), freshVideos: d.freshVideos.map(briefMedia),
     topCreators: d.topCreators.map(publicCreator), newCreators: d.newCreators.map(publicCreator),
     rising: d.rising.map((c) => ({ ...publicCreator(c), week_count: c.week_count })),
   };
@@ -332,7 +337,7 @@ router.get('/media', (req, res) => {
   const r = repo.media.list(mediaFilters(req.query));
   // Short cache: lists are cheap but the browser can reuse them while the user moves between views.
   res.set('Cache-Control', 'public, max-age=15, stale-while-revalidate=60');
-  res.json({ ...r, items: r.items.map(publicMedia) });
+  res.json({ ...r, items: r.items.map(briefMedia) });
 });
 
 router.get('/media/:id', (req, res) => {
@@ -347,7 +352,7 @@ router.get('/media/:id', (req, res) => {
 router.get('/media/:id/related', (req, res) => {
   const m = repo.media.get(req.params.id);
   if (!m || m.publish_state !== 'published') return res.status(404).json({ error: 'Not found' });
-  res.json(repo.media.related(req.params.id, repo.clampInt(req.query.limit, 1, 40, 12)).map(publicMedia));
+  res.json(repo.media.related(req.params.id, repo.clampInt(req.query.limit, 1, 40, 12)).map(briefMedia));
 });
 
 /**
@@ -359,8 +364,8 @@ router.get('/media/:id/similar', (req, res) => {
   if (!m || m.publish_state !== 'published') return res.status(404).json({ error: 'Not found' });
   const limit = repo.clampInt(req.query.limit, 1, 40, 12);
   const look = require('../engine/visual').similar(m.id, limit);
-  if (look && look.length) return res.json({ basis: 'look', items: look.map(publicMedia) });
-  res.json({ basis: 'tags', items: repo.media.related(m.id, limit).map(publicMedia) });
+  if (look && look.length) return res.json({ basis: 'look', items: look.map(briefMedia) });
+  res.json({ basis: 'tags', items: repo.media.related(m.id, limit).map(briefMedia) });
 });
 
 const engagementLimiter = rateLimit({ windowMs: 60 * 1000, max: 90, standardHeaders: true, legacyHeaders: false, message: { error: 'Slow down' } });
@@ -438,7 +443,7 @@ router.get('/creators/:id/media', (req, res) => {
   const c = repo.creators.get(req.params.id);
   if (!c || c.status !== 'active') return res.status(404).json({ error: 'Not found' });
   const r = repo.media.list({ ...mediaFilters(req.query), creator: c.id });
-  res.json({ ...r, items: r.items.map(publicMedia) });
+  res.json({ ...r, items: r.items.map(briefMedia) });
 });
 
 router.get('/suggest', (req, res) => res.json(suggestCached(typeof req.query.q === 'string' ? req.query.q : '', 6)));
@@ -477,15 +482,15 @@ router.get('/recommend', (req, res) => {
     if (e.code !== 'warming') throw e;
     // the taste profile needs the library, which is still being built: answer with what is trending, say so
     const tr = repo.media.list({ sort: 'trending', page: t.page, limit: t.limit, type: t.type, notCreators: [...t.avoidCreators], notTags: [...t.avoidTags] });
-    return res.json({ ...tr, items: tr.items.map(publicMedia), personalized: false, warming: true });
+    return res.json({ ...tr, items: tr.items.map(briefMedia), personalized: false, warming: true });
   }
   // Nothing to go on yet (new visitor): fall back to what is trending, so the rail is never empty.
   // Whatever was marked "Not interested" stays out of the fallback too.
   if (!r.personalized) {
     const tr = repo.media.list({ sort: 'trending', page: t.page, limit: t.limit, type: t.type, notCreators: [...t.avoidCreators], notTags: [...t.avoidTags] });
-    return res.json({ ...tr, items: tr.items.map(publicMedia), personalized: false });
+    return res.json({ ...tr, items: tr.items.map(briefMedia), personalized: false });
   }
-  res.json({ ...r, items: r.items.map(publicMedia) });
+  res.json({ ...r, items: r.items.map(briefMedia) });
 });
 
 /** Creators you might like, from the same taste profile (exclude = creators already followed). */
@@ -560,7 +565,7 @@ router.get('/search', aiSearchLimiter, async (req, res, next) => { try {
     ...r,
     ai: aiInfo,
     creators: r.creators.map((c) => ({ ...publicCreator(c), match: c.match })),
-    posts: { ...r.posts, items: r.posts.items.map(publicMedia) },
+    posts: { ...r.posts, items: r.posts.items.map(briefMedia) },
   });
 } catch (e) { next(e); } });
 

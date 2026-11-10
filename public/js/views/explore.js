@@ -1,5 +1,5 @@
 import { h, icon, fmt, emptyState, toast, promptDialog } from '../dom.js';
-import { get } from '../api.js';
+import { get, prefetch } from '../api.js';
 import { navigate, href, parse } from '../router.js';
 import { prefs, platformLabel, follows, searches, tastes, history as viewHistory, bus } from '../store.js';
 import { createFeed } from '../components/feed.js';
@@ -53,6 +53,7 @@ export async function explore(root, { query }) {
     creators: followIds ? (followIds.length ? followIds.join(',') : '00000000-0000-0000-0000-000000000000') : undefined,
   });
   const anyFilter = f.q || f.tag || f.tags || f.anytags || f.creator || f.community || f.following;
+  if (f.sort !== 'foryou' && f.sort !== 'random') prefetch('/api/media', { ...toApi(f), limit: prefs.density === 's' ? 48 : 36, page: 0 });
   const titleText = f.sort === 'foryou' && !anyFilter ? 'For you' : f.smart && f.raw ? `“${f.raw}”` : f.following ? 'Following' : f.anytags && f.label ? f.label
     : f.q && !f.tags ? `Results for “${f.q}”` : tagList.length ? tagList.map((t) => `#${t}`).join(' + ') : f.tag ? `#${f.tag}` : f.community ? f.community : 'Explore';
   const titleEl = h('h1', null, titleText);

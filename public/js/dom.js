@@ -101,6 +101,42 @@ export function proxied(url) {
   return `/api/proxy?url=${encodeURIComponent(url)}`;
 }
 
+/** Paint a cover image, stepping to the next URL when one 404s. A CSS background never fires an error on its own. */
+export function paintCover(el, urls) {
+  const chain = [];
+  for (const u of urls || []) if (u && !chain.includes(u)) chain.push(u);
+  const paint = (i) => {
+    const url = chain[i];
+    if (!url) { el.style.removeProperty('background-image'); return; }
+    const src = proxied(url);
+    el.style.backgroundImage = `url("${src}")`;
+    if (i >= chain.length - 1) return;
+    const probe = new Image();
+    probe.onerror = () => paint(i + 1);
+    probe.src = src;
+  };
+  if (chain.length) paint(0);
+}
+
+/** A `<video poster>` never reports a 404. Probe the stills and step the poster; this does not touch the video file. */
+export function armPoster(video, urls) {
+  const chain = [];
+  for (const u of urls || []) if (u && !chain.includes(u)) chain.push(u);
+  if (!video || !chain.length) return;
+  video.poster = proxied(chain[0]);
+  const step = (i) => {
+    if (i >= chain.length - 1) return;
+    const probe = new Image();
+    probe.onerror = () => {
+      if (!video.isConnected) return;
+      video.poster = proxied(chain[i + 1]);
+      step(i + 1);
+    };
+    probe.src = proxied(chain[i]);
+  };
+  step(0);
+}
+
 export const debounce = (fn, ms = 250) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 
 export async function copyText(text) {

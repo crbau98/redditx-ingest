@@ -1,6 +1,6 @@
 import { h, icon, emptyState } from '../dom.js';
-import { get, clearApiCache } from '../api.js';
-import { prefs, history, bus } from '../store.js';
+import { get, clearApiCache, prefetch } from '../api.js';
+import { prefs, history, playback, bus } from '../store.js';
 import { createMasonry } from './masonry.js';
 import { mediaCard } from './card.js';
 import { openLightbox } from './ondemand.js';
@@ -17,6 +17,12 @@ const stash = new Map();
 // the whole id list must count (a removed 41st save is a different list), but keys stay short
 const hashIds = (ids) => { let x = 0; for (const c of ids.join(',')) x = (Math.imul(x, 31) + c.charCodeAt(0)) | 0; return `${ids.length}:${x >>> 0}`; };
 
+function resumeFrac(id) {
+  const p = playback.get(id);
+  if (!p || !p.d || p.t <= 0) return 0;
+  return Math.min(0.96, p.t / p.d);
+}
+
 /** Forget remembered feeds: all of them, or those of one page (a routeKey). */
 export function dropFeedStash(key) {
   if (!key) { stash.clear(); return; }
@@ -28,10 +34,12 @@ export function dropFeedStash(key) {
  * lightbox "sequence" so next/prev walk the same list the user is looking at
  * (and keep loading more as they go).
  */
-export function createFeed({ query = {}, endpoint = '/api/media', fetchPage = null, pageSize, empty, onTotal, onDone, ids, hideSeen = false, why = null, quietEnd = false }) {
+export function createFeed({ query = {}, endpoint = '/api/media', fetchPage = null, pageSize, empty, failText = '', onTotal, onDone, onPage = null, ids, alsoIds = null, hideSeen = false, showProgress = false, why = null, quietEnd = false }) {
   const root = h('div', { class: 'feed' });
-  const masonry = createMasonry({ density: prefs.density, render: (item, d, opts) => mediaCard(item, { open: openAt, compact: d === 's', why: why ? why(item) : null, eager: !!(opts && opts.eager), width: (opts && opts.width) || 0 }) });
+  const masonry = createMasonry({ density: prefs.density, render: (item, d, opts) => mediaCard(item, { open: openAt, compact: d === 's', why: why ? why(item) : null, eager: !!(opts && opts.eager), width: (opts && opts.width) || 0, progress: showProgress ? resumeFrac(item.id) : 0 }) });
   const sentinel = h('div', { class: 'loadmore' });
+  const bones = h('div', { class: 'feed-skeletons', 'aria-hidden': 'true' });
+  for (let i = 0; i < 8; i++) bones.append(h('div', { class: 'feed-bone' }));
   root.append(masonry.el, sentinel);
 
   let page = 0;
@@ -72,9 +80,17 @@ export function createFeed({ query = {}, endpoint = '/api/media', fetchPage = nu
     loading = true; errored = false;
     sentinel.replaceChildren(h('div', { class: 'spinner' }));
     try {
-      const idSlice = ids ? ids.slice(page * limit, (page + 1) * limit) : undefined;
+      const pageIndex = page;
+      const idSlice = ids ? ids.slice(pageIndex * limit, (pageIndex + 1) * limit) : undefined;
+      // Resume points past the first page ride on that first request. They are not drawn in the grid.
+      let asked = idSlice;
+      if (idSlice && pageIndex === 0 && Array.isArray(alsoIds) && alsoIds.length) {
+        const inSlice = new Set(idSlice);
+        const extra = alsoIds.filter((id) => id && !inSlice.has(id));
+        if (extra.length) asked = [...idSlice, ...extra];
+      }
       const usingCursor = cursorMode && !!cursor;
-      const params = { ...query, limit, seed: query.sort === 'random' ? seed : query.seed, ids: idSlice ? idSlice.join(',') : undefined,
+      const params = { ...query, limit: asked ? asked.length : limit, seed: query.sort === 'random' ? seed : query.seed, ids: asked ? asked.join(',') : undefined,
         ...(ids
           ? { page: 0 }
           : usingCursor
@@ -83,23 +99,38 @@ export function createFeed({ query = {}, endpoint = '/api/media', fetchPage = nu
       // fetchPage: a feed whose request is not a plain GET (e.g. a follow list in a POST body)
       const res = await (fetchPage ? fetchPage(params) : get(endpoint, params));
       if (destroyed) return;
-      if (ids) res.items.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id)); // keep "most recently saved first"
+      let pageItems = res.items || [];
+      let extraItems = [];
+      if (idSlice && asked && asked.length !== idSlice.length) {
+        const inSlice = new Set(idSlice);
+        extraItems = pageItems.filter((it) => it && !inSlice.has(it.id));
+        pageItems = pageItems.filter((it) => it && inSlice.has(it.id));
+      }
+      if (ids) pageItems.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id)); // keep "most recently saved first"
       if (ids) total = ids.length; else if (res.total !== null && res.total !== undefined) total = res.total;
-      if (onTotal && (page === 0 || ids)) onTotal(total);
+      if (onTotal && (pageIndex === 0 || ids)) onTotal(total);
       // The first cursor-capable response decides the mode. A server without nextCursor keeps offset paging.
       if (!ids && cursorMode && !usingCursor && !('nextCursor' in res)) cursorMode = false;
       if (!ids && cursorMode) cursor = res.nextCursor || null;
       // "Hide seen": drop anything this device already opened. Paging still follows the server's pages.
-      const fresh = hideSeen ? res.items.filter((it) => !history.has(it.id)) : res.items;
-      hidden += res.items.length - fresh.length;
-      fetched += res.items.length;
+      const fresh = hideSeen ? pageItems.filter((it) => !history.has(it.id)) : pageItems;
+      hidden += pageItems.length - fresh.length;
+      fetched += pageItems.length;
       if (fresh.length) masonry.add(fresh);
+      if (onPage) onPage({ page: pageIndex, items: pageItems, extra: extraItems });
       page++;
       done = ids
         ? page * limit >= ids.length
         : cursorMode
-          ? (res.items.length < limit || !res.nextCursor)
-          : (res.items.length < limit || fetched >= total);
+          ? ((res.items || []).length < limit || !res.nextCursor)
+          : ((res.items || []).length < limit || fetched >= total);
+      if (bones.isConnected && (masonry.items.length || done)) bones.remove();
+      if (!done && !ids && !fetchPage) {
+        const next = cursorMode && cursor
+          ? { ...query, limit, cursor, nocount: '1' }
+          : { ...query, limit, page, nocount: '1', seed: query.sort === 'random' ? seed : query.seed };
+        prefetch(endpoint, next);
+      }
       if (!masonry.items.length && done && hidden) {
         sentinel.replaceChildren(emptyState({ icon: 'eye', title: 'You’ve seen everything here', text: `${hidden} item${hidden === 1 ? ' is' : 's are'} hidden because you already opened ${hidden === 1 ? 'it' : 'them'}. Turn off “Hide seen” to show them again.` }));
       } else if (!masonry.items.length && done) {
@@ -113,7 +144,8 @@ export function createFeed({ query = {}, endpoint = '/api/media', fetchPage = nu
       } else sentinel.replaceChildren();
     } catch (e) {
       errored = true;
-      sentinel.replaceChildren(h('div', { class: 'stack', style: { justifyItems: 'center' } }, h('span', { class: 'muted' }, e.message || 'Could not load'), h('button', { class: 'btn sm', onclick: () => { load(); } }, icon('refresh', 'sm'), 'Retry')));
+      if (bones.isConnected) bones.remove();
+      sentinel.replaceChildren(h('div', { class: 'stack', style: { justifyItems: 'center' } }, h('span', { class: 'muted' }, failText || e.message || 'Could not load'), h('button', { class: 'btn sm', onclick: () => { load(); } }, icon('refresh', 'sm'), 'Retry')));
     } finally { loading = false; }
     keepFilled();
   }
@@ -140,10 +172,11 @@ export function createFeed({ query = {}, endpoint = '/api/media', fetchPage = nu
     if (done && !quietEnd) sentinel.replaceChildren(h('span', { class: 'muted' }, 'You’ve reached the end'));
     queueMicrotask(() => {
       if (destroyed) return;
+      if (onPage) onPage({ page: 0, items: keep, extra: [], restored: true });
       if (onTotal) onTotal(total);
       if (done && onDone) onDone(masonry.items.length); // fixed-id feeds reconcile missing items here
     });
-  }
+  } else root.insertBefore(bones, masonry.el);
 
   const io = new IntersectionObserver((entries) => { if (entries[0].isIntersecting && !errored) load(); }, { rootMargin: '1100px 0px' });
   io.observe(sentinel);
@@ -169,6 +202,7 @@ export function createFeed({ query = {}, endpoint = '/api/media', fetchPage = nu
     // "refresh" would re-render the response the page already had.
     clearApiCache();
     masonry.clear();
+    if (!bones.isConnected) root.insertBefore(bones, masonry.el);
     dropFeedStash(routeKey());
     return loadPage();
   }
