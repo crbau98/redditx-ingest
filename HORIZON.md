@@ -72,10 +72,11 @@ Success: the first screen is useful before the slow calls return, scrolling does
 
 - [x] A published insert moves that creator’s counters by the one new row. Hide, restore, and re-attribute still recount. The body read in the link-health probe already stops itself (`src/engine/probe.js`).
 - [x] Review queue: Publish all, Hide all, or Remove all on a hold applies to every waiting row with that exact reason, in chunks of 500. A hold that already fits on the page stays on the group buttons. Block stays one item at a time.
+- [x] Review queue: page through holds that do not share a reason, so a mixed backlog is not stuck on the newest 60.
 
 ## Next
 
-54. Review queue: page through holds that do not share a reason, so a mixed backlog is not stuck on the newest 60.
+55. Review queue: filter the page by hold kind or one named reason, so you do not page past unrelated holds.
 
 ## Later
 

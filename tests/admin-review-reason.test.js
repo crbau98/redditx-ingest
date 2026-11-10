@@ -105,3 +105,22 @@ test('a hold bigger than one chunk leaves the rest waiting, and the queue lists 
   assert.equal(second.json.updated, 1);
   assert.equal(second.json.remaining, 0);
 });
+
+test('the review queue pages past the newest slice of a mixed backlog', async () => {
+  const insert = repo.db.transaction(() => {
+    for (let i = 0; i < 65; i++) item(i % 2 ? 'scope:unclear-page' : 'safety: age-claim');
+  });
+  insert();
+  const first = await adm('/moderation/queue?limit=60&page=0');
+  const second = await adm('/moderation/queue?limit=60&page=1');
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  assert.equal(first.json.page, 0);
+  assert.equal(first.json.limit, 60);
+  assert.equal(first.json.items.length, 60);
+  assert.ok(first.json.total >= 65);
+  assert.equal(second.json.page, 1);
+  assert.ok(second.json.items.length >= 5);
+  const firstIds = new Set(first.json.items.map((m) => m.id));
+  assert.ok(second.json.items.every((m) => !firstIds.has(m.id)), 'page 1 is not a repeat of page 0');
+});

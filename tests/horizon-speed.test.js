@@ -182,6 +182,13 @@ test('import keeps the newer resume point and drops one older than 21 days', () 
   assert.match(store, /mergeResume\(plays, data\.playback\)/);
 });
 
+test('the review queue pages a mixed backlog instead of stopping at the newest 60', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../public/js/views/admin/moderation.js'), 'utf8');
+  assert.match(src, /adminGet\('\/moderation\/queue', \{ limit: PAGE, page \}\)/);
+  assert.match(src, /pager\(\{ page: r\.page, limit: r\.limit \|\| PAGE, total: r\.total/);
+  assert.ok(src.includes('if (!r.items.length && page > 0 && (r.total || 0) > 0)'), 'an empty later page steps back after a clear');
+});
+
 test('find drops a late lookup and does not open a profile after you leave', () => {
   const src = fs.readFileSync(path.join(__dirname, '../public/js/views/find.js'), 'utf8');
   const paint = src.indexOf('function paint()');

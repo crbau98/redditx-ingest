@@ -1,7 +1,7 @@
 import { h, icon, fmt, emptyState, toast, paintCover } from '../../dom.js';
 import { adminGet, adminPost } from '../../api.js';
 import { href } from '../../router.js';
-import { pageHead, act, platBadge, openModal, undoToast, bulkBar, loadingState, errorState } from './ui.js';
+import { pageHead, act, platBadge, openModal, undoToast, bulkBar, loadingState, errorState, pager } from './ui.js';
 import { holdOf, undoPlan, selectionSummary, sendBackBody, reasonClearBody, reasonActions, reasonClearCopy, reasonUndoChunks, REASON_ROUNDS } from './logic.js';
 import { stillChain } from '../../images.js';
 
@@ -174,15 +174,23 @@ export async function render(root) {
   const showState = (node) => { if (alive) host.replaceChildren(node); };
   let bulk = null;
   let clearing = false;
+  // Mixed holds used to stop at the newest 60. Page through the rest with the same pager as Media.
+  let page = 0;
+  const PAGE = 60;
 
   async function load() {
     if (!alive) return;
     showState(loadingState('Loading the queue'));
     if (bulk) bulk.clear();
     let r;
-    try { r = await adminGet('/moderation/queue', { limit: 60 }); }
+    try { r = await adminGet('/moderation/queue', { limit: PAGE, page }); }
     catch (e) { if (alive) showState(errorState(e.message, () => load())); return; }
     if (!alive) return;
+    // After a clear, this page can be empty while older holds remain — step back once.
+    if (!r.items.length && page > 0 && (r.total || 0) > 0) {
+      page = Math.max(0, Math.min(page - 1, Math.ceil(r.total / (r.limit || PAGE)) - 1));
+      return load();
+    }
     if (!r.items.length) {
       grid = null; shortcuts = null;
       showState(emptyState({ icon: 'check', title: 'Nothing is waiting',
@@ -257,11 +265,15 @@ export async function render(root) {
           h('button', { class: 'btn sm good', type: 'button', onclick: clearReason('approve', row) }, 'Publish all'),
           h('button', { class: 'btn sm', type: 'button', onclick: clearReason('hide', row) }, 'Hide all'),
           h('button', { class: 'btn sm', type: 'button', onclick: clearReason('reject', row) }, 'Remove all'))))) : null;
+    const from = page * (r.limit || PAGE) + 1;
+    const to = from + r.items.length - 1;
     showState(h('div', { class: 'stack' },
       holdSection,
-      h('div', { class: 'row' }, h('span', { class: 'a-meta', role: 'status' }, `${fmt.int(r.total)} waiting · showing ${r.items.length}`), h('span', { class: 'grow' }),
+      h('div', { class: 'row' }, h('span', { class: 'a-meta', role: 'status' }, `${fmt.int(r.total)} waiting · showing ${from}–${to}`), h('span', { class: 'grow' }),
         h('button', { class: 'btn sm', type: 'button', onclick: () => grid.selectAll() }, 'Select all on this page')),
-      grid.el, bulk.el));
+      grid.el,
+      pager({ page: r.page, limit: r.limit || PAGE, total: r.total, onPage: (p) => { page = p; load(); } }),
+      bulk.el));
     shortcuts = { a: run('approve'), h: run('hide'), r: run('reject') };
   }
   await load();
