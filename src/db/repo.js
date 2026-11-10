@@ -1266,7 +1266,7 @@ const media = {
   // body-filter hides are reversible (a threshold change shows them again), so they stay indexed: a copy is never stored twice
   hashedRows() { return db.prepare("SELECT id, phash, media_type, width, height FROM media WHERE phash IS NOT NULL AND (publish_state IN ('published','review') OR (publish_state = 'hidden' AND review_reason LIKE 'physique:%'))").all(); },
   /** One seq-ordered slice of hashedRows(), for the chunked first build (services/dedupe.loadChunked). */
-  hashedChunk(after = 0, n = 5000) { return db.prepare("SELECT seq, id, phash, media_type, width, height FROM media WHERE phash IS NOT NULL AND seq > ? AND (publish_state IN ('published','review') OR (publish_state = 'hidden' AND review_reason LIKE 'physique:%')) ORDER BY seq LIMIT ?").all(after, n); },
+  hashedChunk(after = 0, n = 5000) { return db.prepare("SELECT seq, id, phash, media_type, width, height FROM media NOT INDEXED WHERE phash IS NOT NULL AND seq > ? AND (publish_state IN ('published','review') OR (publish_state = 'hidden' AND review_reason LIKE 'physique:%')) ORDER BY seq LIMIT ?").all(after, n); },
   hashInfo(id) { return db.prepare('SELECT phash, media_type, width, height, publish_state, review_reason FROM media WHERE id = ?').get(id); },
   /** Another place the SAME picture was posted. */
   addAltSource(mediaId, { platform, source_url, author = null, community = null, posted_at = null }) {
