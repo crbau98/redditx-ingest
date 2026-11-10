@@ -56,6 +56,47 @@ describe('review queue', () => {
     assert.equal(L.selectionSummary(items), '4 selected · 1 safety · 2 male focus unclear');
     assert.equal(L.selectionSummary([]), '0 selected');
   });
+  test('a whole hold is one request body, and block or a blank reason is refused', () => {
+    assert.deepEqual(L.reasonClearBody(' scope:unclear ', 'hide'), { reason: 'scope:unclear', action: 'hide' });
+    assert.equal(L.reasonClearBody('scope:unclear', 'block'), null);
+    assert.equal(L.reasonClearBody('scope:unclear', 'flag'), null);
+    assert.equal(L.reasonClearBody('  ', 'approve'), null);
+    assert.equal(L.reasonClearBody('x'.repeat(201), 'approve'), null);
+    assert.equal(L.REASON_CHUNK, 500);
+    assert.equal(L.REASON_ROUNDS, 40);
+  });
+  test('only a hold with more rows than this page offers a one-action clear', () => {
+    const counts = [{ reason: 'scope:unclear', n: 9000 }, { reason: 'safety: age-claim', n: 2 }, { reason: '', n: 4 }, { reason: 'physique:heavy', n: 3 }];
+    const onPage = [{ review_reason: 'safety: age-claim' }, { review_reason: 'safety: age-claim' }, { review_reason: 'physique:heavy' }];
+    const rows = L.reasonActions(counts, onPage);
+    assert.deepEqual(rows.map((r) => r.reason), ['scope:unclear', 'physique:heavy']);
+    assert.equal(rows[0].n, 9000);
+    assert.equal(rows[0].label, 'Male focus unclear');
+    assert.equal(rows[1].kind, 'other');
+    assert.deepEqual(L.reasonActions(null, []), []);
+  });
+  test('the confirm names a safety rule and says the action covers rows that are not on this page', () => {
+    const safety = L.reasonClearCopy('safety: age-claim', 'approve', 12);
+    assert.match(safety.title, /Publish all 12/);
+    assert.match(safety.sub, /not on this page/);
+    assert.match(safety.sub, /age-claim/);
+    assert.equal(safety.cls, 'good');
+    const hide = L.reasonClearCopy('scope:unclear', 'hide', 9000);
+    assert.match(hide.title, /Hide all 9000/);
+    assert.match(hide.sub, /not on this page/);
+    assert.equal(L.reasonClearCopy('scope:unclear', 'block', 3), null);
+  });
+  test('undo of a whole hold is split into bulk-sized requests, each item under that reason', () => {
+    const ids = Array.from({ length: 501 }, (_, i) => `id-${i}`);
+    const chunks = L.reasonUndoChunks(ids, 'scope:unclear');
+    assert.equal(chunks.length, 2);
+    assert.equal(chunks[0].ids.length, 500);
+    assert.equal(chunks[1].ids.length, 1);
+    assert.equal(chunks[0].action, 'flag');
+    assert.equal(chunks[0].reasons['id-0'], 'scope:unclear');
+    assert.equal(chunks[1].reasons['id-500'], 'scope:unclear');
+    assert.deepEqual(L.reasonUndoChunks([null, 4, 'ok'], 'scope:unclear'), [L.sendBackBody([{ id: 'ok', review_reason: 'scope:unclear' }])]);
+  });
 });
 
 describe('feed errors in plain words', () => {

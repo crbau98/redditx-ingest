@@ -1080,6 +1080,9 @@ const mediaQ = {
   leanSet: db.prepare('UPDATE media SET lean_bias = ? WHERE id = ?'),
   state: db.prepare("UPDATE media SET publish_state = ?, review_reason = COALESCE(?, review_reason), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?"),
   stateExact: db.prepare("UPDATE media SET publish_state = ?, review_reason = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?"),
+  reviewIdsByReason: db.prepare("SELECT id, creator_id FROM media WHERE publish_state = 'review' AND review_reason = ? ORDER BY seq LIMIT ?"),
+  countReviewReason: db.prepare("SELECT COUNT(*) AS n FROM media WHERE publish_state = 'review' AND review_reason = ?"),
+  reviewReasonCounts: db.prepare("SELECT review_reason AS reason, COUNT(*) AS n FROM media WHERE publish_state = 'review' AND review_reason IS NOT NULL AND review_reason != '' GROUP BY review_reason ORDER BY n DESC LIMIT ?"),
   like: db.prepare('UPDATE media SET likes = likes + 1 WHERE id = ?'),
   unlike: db.prepare('UPDATE media SET likes = MAX(0, likes - 1) WHERE id = ?'),
   view: db.prepare('UPDATE media SET views = views + 1 WHERE id = ?'),
@@ -1320,7 +1323,17 @@ const media = {
     notifyState(id, state);
   },
 
-  update(id, patch) {
+  /** Waiting rows with this exact hold reason, oldest first. Never more than 500. */
+  reviewIdsByReason(reason, limit = 500) {
+    return mediaQ.reviewIdsByReason.all(reason, Math.min(500, Math.max(1, limit | 0)));
+  },
+  countReviewReason(reason) { return mediaQ.countReviewReason.get(reason).n; },
+  /** How many items are waiting under each hold reason, biggest first. */
+  reviewReasonCounts(limit = 24) {
+    return mediaQ.reviewReasonCounts.all(Math.min(40, Math.max(1, limit | 0)));
+  },
+
+  update(id, patch, { deferStats = false } = {}) {
     const allowed = ['title', 'description', 'nsfw_level', 'scope'];
     const sets = []; const params = { id };
     let movedFrom = null;
@@ -1343,8 +1356,11 @@ const media = {
     sets.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')");
     db.prepare(`UPDATE media SET ${sets.join(', ')} WHERE id = @id`).run(params);
     const m = db.prepare('SELECT creator_id FROM media WHERE id = ?').get(id);
-    if (m && m.creator_id) creators.refreshStats(m.creator_id);
-    if (movedFrom && movedFrom !== (m && m.creator_id)) creators.refreshStats(movedFrom);
+    // A bulk caller refreshes each affected creator once. A per-row recount scans that creator's whole library.
+    if (!deferStats) {
+      if (m && m.creator_id) creators.refreshStats(m.creator_id);
+      if (movedFrom && movedFrom !== (m && m.creator_id)) creators.refreshStats(movedFrom);
+    }
     if (params.publish_state || params.scope) countCache.clear(); // visibility changed: the next total must see it
     if (params.publish_state) notifyState(id, params.publish_state);
     return media.get(id);

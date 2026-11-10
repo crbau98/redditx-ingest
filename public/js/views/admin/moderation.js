@@ -2,7 +2,7 @@ import { h, icon, fmt, emptyState, toast, paintCover } from '../../dom.js';
 import { adminGet, adminPost } from '../../api.js';
 import { href } from '../../router.js';
 import { pageHead, act, platBadge, openModal, undoToast, bulkBar, loadingState, errorState } from './ui.js';
-import { holdOf, undoPlan, selectionSummary, sendBackBody } from './logic.js';
+import { holdOf, undoPlan, selectionSummary, sendBackBody, reasonClearBody, reasonActions, reasonClearCopy, reasonUndoChunks, REASON_ROUNDS } from './logic.js';
 import { stillChain } from '../../images.js';
 
 export { holdOf };
@@ -21,6 +21,9 @@ export { holdOf };
  *   Hide      keep it out of the library (undo puts it back in the queue)
  *   Remove    take it down (asks first; undo puts it back in the queue)
  *   Block     block the item forever so the source cannot return it (asks first; cannot be undone here)
+ *
+ * A hold with more rows than this page shows also has Publish all, Hide all and Remove all.
+ * One confirm applies to every item still waiting under that exact reason. Block stays per item.
  */
 
 // Used by the media browser's grid (selectableGrid below), which still shows the raw reason.
@@ -117,6 +120,19 @@ export function confirmBatch(action, items) {
  */
 export async function sendBackToReview(items) { return adminPost('/media/bulk', sendBackBody(items)); }
 
+/** One confirm for a whole hold. Cancel has the focus, so Enter does nothing by accident. */
+function confirmReason(action, row) {
+  const copy = reasonClearCopy(row.reason, action, row.n);
+  if (!copy) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let m;
+    const cancel = h('button', { class: 'btn', type: 'button', onclick: () => m.close(false) }, 'Cancel');
+    const go = h('button', { class: copy.cls ? `btn ${copy.cls}` : 'btn', type: 'button', onclick: () => m.close(true) }, copy.go);
+    m = openModal({ title: copy.title, sub: copy.sub, body: null, onClose: (ok) => resolve(!!ok), actions: [cancel, go] });
+    setTimeout(() => cancel.focus(), 60);
+  });
+}
+
 export async function render(root) {
   const host = h('div', { class: 'stack' });
   const sub = h('div', null,
@@ -154,15 +170,19 @@ export async function render(root) {
   };
   document.addEventListener('keydown', onKey);
 
-  const showState = (node) => host.replaceChildren(node);
+  let alive = true;
+  const showState = (node) => { if (alive) host.replaceChildren(node); };
   let bulk = null;
+  let clearing = false;
 
   async function load() {
+    if (!alive) return;
     showState(loadingState('Loading the queue'));
     if (bulk) bulk.clear();
     let r;
     try { r = await adminGet('/moderation/queue', { limit: 60 }); }
-    catch (e) { showState(errorState(e.message, () => load())); return; }
+    catch (e) { if (alive) showState(errorState(e.message, () => load())); return; }
+    if (!alive) return;
     if (!r.items.length) {
       grid = null; shortcuts = null;
       showState(emptyState({ icon: 'check', title: 'Nothing is waiting',
@@ -190,14 +210,62 @@ export async function render(root) {
       h('button', { class: 'btn danger', type: 'button', 'aria-label': 'Block forever', title: 'Block forever', onclick: run('block') }, 'Block'),
     ], { label: 'Selected items' });
     grid = reviewGroups(r.items, { onChange: (sel) => { const items = [...sel.values()]; if (items.length) bulk.set(selectionSummary(items)); else bulk.clear(); } });
+    const holds = reasonActions(r.reasons, r.items);
+    const status = h('div', { class: 'a-meta', role: 'status' });
+    const clearReason = (action, row) => async (e) => {
+      if (clearing) return;
+      clearing = true;
+      try {
+        if (!(await confirmReason(action, row))) return;
+        const label = holdOf(row.reason).label;
+        await act(e && e.currentTarget, async () => {
+          const ids = [];
+          let remaining = row.n;
+          let guard = 0;
+          let stopped = null;
+          try {
+            while (alive && remaining > 0 && guard++ < REASON_ROUNDS) {
+              const body = reasonClearBody(row.reason, action);
+              if (!body) break;
+              const out = await adminPost('/moderation/by-reason', body);
+              if (!out || !out.updated) { remaining = out ? Number(out.remaining) || 0 : remaining; break; }
+              if (Array.isArray(out.ids)) ids.push(...out.ids);
+              remaining = Number(out.remaining) || 0;
+              if (status.isConnected) status.textContent = `${label}: ${fmt.int(ids.length)} done${remaining ? ` · ${fmt.int(remaining)} still waiting` : ''}`;
+            }
+          } catch (err) { stopped = err; }
+          const plan = undoPlan(action);
+          if (plan && ids.length) {
+            undoToast(`${plan.verb} ${fmt.int(ids.length)} “${label}”`, async () => {
+              for (const body of reasonUndoChunks(ids, row.reason)) await adminPost('/media/bulk', body);
+              if (alive) load();
+            });
+          }
+          if (alive) await load();
+          if (stopped) throw stopped;
+          if (remaining > 0) toast(`${fmt.int(remaining)} still waiting under this hold`);
+        });
+      } finally { clearing = false; }
+    };
+    const holdSection = holds.length ? h('section', { class: 'review-reasons', 'aria-label': 'Clear a whole hold' },
+      h('h2', { class: 'group-label' }, 'Clear a whole hold'),
+      h('p', { class: 'review-group-note muted' }, 'One action applies to every item still waiting under that hold, not only this page.'),
+      status,
+      ...holds.map((row) => h('div', { class: 'review-reason' },
+        h('div', { class: 'grow' }, h('strong', null, row.label), h('div', { class: 'muted' }, `${fmt.int(row.n)} waiting`)),
+        h('div', { class: 'row wrap' },
+          h('button', { class: 'btn sm good', type: 'button', onclick: clearReason('approve', row) }, 'Publish all'),
+          h('button', { class: 'btn sm', type: 'button', onclick: clearReason('hide', row) }, 'Hide all'),
+          h('button', { class: 'btn sm', type: 'button', onclick: clearReason('reject', row) }, 'Remove all'))))) : null;
     showState(h('div', { class: 'stack' },
+      holdSection,
       h('div', { class: 'row' }, h('span', { class: 'a-meta', role: 'status' }, `${fmt.int(r.total)} waiting · showing ${r.items.length}`), h('span', { class: 'grow' }),
         h('button', { class: 'btn sm', type: 'button', onclick: () => grid.selectAll() }, 'Select all on this page')),
       grid.el, bulk.el));
     shortcuts = { a: run('approve'), h: run('hide'), r: run('reject') };
   }
   await load();
-  return () => document.removeEventListener('keydown', onKey);
+  return () => { alive = false; document.removeEventListener('keydown', onKey); };
 }
 
 /** A selectable grid of media with bulk actions — shared by the review queue and the media browser. */

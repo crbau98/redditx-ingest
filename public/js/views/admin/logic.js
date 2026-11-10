@@ -63,6 +63,83 @@ export function selectionSummary(items) {
   return bits.join(' · ');
 }
 
+/* One action for every row waiting under one exact hold reason. The queue page only shows a slice. */
+const REASON_ACTIONS = ['approve', 'hide', 'reject'];
+export const REASON_CHUNK = 500;
+export const REASON_ROUNDS = 40;
+
+/** Body for one chunk. Empty, oversized, or a permanent action (block) is refused. */
+export function reasonClearBody(reason, action) {
+  const r = String(reason ?? '').trim();
+  if (!r || r.length > 200 || !REASON_ACTIONS.includes(action)) return null;
+  return { reason: r, action };
+}
+
+/**
+ * Holds with more rows waiting than this page shows. A reason that already fits on the page stays
+ * on the group buttons. Counts for a blank reason are skipped.
+ * @param {Array<{reason: string, n: number}>} counts
+ * @param {Array<{review_reason?: string}>} onPage
+ */
+export function reasonActions(counts, onPage) {
+  const seen = new Map();
+  for (const m of onPage || []) {
+    const r = String((m && m.review_reason) || '').trim();
+    if (r) seen.set(r, (seen.get(r) || 0) + 1);
+  }
+  const out = [];
+  for (const c of counts || []) {
+    if (!c || typeof c.reason !== 'string') continue;
+    const reason = c.reason.trim();
+    const n = Number(c.n);
+    if (!reason || reason.length > 200 || !Number.isFinite(n) || n <= (seen.get(reason) || 0)) continue;
+    const hold = holdOf(reason);
+    out.push({ reason, n, label: hold.label, kind: hold.kind });
+  }
+  return out;
+}
+
+/** Confirm copy. Every reason-wide action asks once, because most of the rows are not on screen. */
+export function reasonClearCopy(reason, action, n) {
+  const hold = holdOf(reason);
+  const count = Number(n) || 0;
+  const noun = count === 1 ? 'item' : 'items';
+  if (action === 'approve') {
+    return {
+      title: `Publish all ${count} “${hold.label}”?`,
+      go: `Publish ${count}`,
+      cls: 'good',
+      sub: `Every item still waiting under this hold goes live, including ones not on this page.${hold.kind === 'safety' ? ` Publishing overrides the safety rule “${hold.rule}” for these ${noun}.` : ''}`,
+    };
+  }
+  if (action === 'hide') {
+    return {
+      title: `Hide all ${count} “${hold.label}”?`,
+      go: `Hide ${count}`,
+      cls: '',
+      sub: 'They stay out of the library, including ones not on this page. Undo puts this batch back in the queue.',
+    };
+  }
+  if (action === 'reject') {
+    return {
+      title: `Remove all ${count} “${hold.label}”?`,
+      go: `Remove ${count}`,
+      cls: 'danger',
+      sub: 'They are taken down and are not shown on the site, including ones not on this page. Undo puts this batch back in the queue.',
+    };
+  }
+  return null;
+}
+
+/** Undo bodies of at most one bulk request each, every item under the hold it was waiting under. */
+export function reasonUndoChunks(ids, reason, size = REASON_CHUNK) {
+  const list = (ids || []).filter((id) => typeof id === 'string' && id);
+  const n = Math.max(1, size | 0);
+  const out = [];
+  for (let i = 0; i < list.length; i += n) out.push(sendBackBody(list.slice(i, i + n).map((id) => ({ id, review_reason: reason }))));
+  return out;
+}
+
 /* ------------------------------------------------------------------ feeds */
 
 /**

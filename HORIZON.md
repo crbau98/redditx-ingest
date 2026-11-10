@@ -71,10 +71,11 @@ Success: the first screen is useful before the slow calls return, scrolling does
 - [x] Find’s cleanup marks the page as left. A lookup or a follow that finishes after you leave does not paint, and it does not open that creator. The page that is up stays up.
 
 - [x] A published insert moves that creator’s counters by the one new row. Hide, restore, and re-attribute still recount. The body read in the link-health probe already stops itself (`src/engine/probe.js`).
+- [x] Review queue: Publish all, Hide all, or Remove all on a hold applies to every waiting row with that exact reason, in chunks of 500. A hold that already fits on the page stays on the group buttons. Block stays one item at a time.
 
 ## Next
 
-53. Review queue: one action on a hold reason should clear the matching rows in the admin console, so 9,000 waiting items are not one click each.
+54. Review queue: page through holds that do not share a reason, so a mixed backlog is not stuck on the newest 60.
 
 ## Later
 

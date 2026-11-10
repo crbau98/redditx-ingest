@@ -292,7 +292,34 @@ router.post('/media/bulk', (req, res) => {
 
 router.get('/moderation/queue', (req, res) => {
   const r = repo.media.list({ admin: true, state: 'review', sort: 'ingested', ...page(req) });
-  res.json(r);
+  res.json({ ...r, reasons: repo.media.reviewReasonCounts() });
+});
+
+// One chunk of a hold: every waiting row with this exact reason, not a prefix and not another state.
+// Block stays on the per-item action. The caller repeats until `remaining` is 0. Same 500 cap as /media/bulk.
+const REVIEW_REASON_CHUNK = 500;
+router.post('/moderation/by-reason', (req, res) => {
+  const body = req.body || {};
+  const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
+  const action = body.action;
+  if (!reason || reason.length > 200 || !['approve', 'hide', 'reject'].includes(action)) {
+    return bad(res, 'reason (1–200 characters) and action (approve, hide or reject) required');
+  }
+  const creators = new Set();
+  const ids = [];
+  repo.db.transaction(() => {
+    for (const row of repo.media.reviewIdsByReason(reason, REVIEW_REASON_CHUNK)) {
+      const cur = repo.media.get(row.id);
+      // The list and the write share this transaction. Skip a row that left this hold since the read.
+      if (!cur || cur.publish_state !== 'review' || cur.review_reason !== reason) continue;
+      const out = targets.moderate(row.id, action, reason, 'admin', { deferStats: true });
+      if (!out) continue;
+      ids.push(row.id);
+      if (row.creator_id) creators.add(row.creator_id);
+    }
+  })();
+  for (const id of creators) repo.creators.refreshStats(id);
+  res.json({ ok: true, updated: ids.length, remaining: repo.media.countReviewReason(reason), ids });
 });
 
 /* ----------------------------------------------------------------- reports */

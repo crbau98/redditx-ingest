@@ -236,25 +236,26 @@ function publicAccounts(creatorId) {
     .filter((a) => a.url);
 }
 
-function moderate(id, action, reason, actor = 'admin') {
+function moderate(id, action, reason, actor = 'admin', opts = {}) {
+  const deferStats = !!(opts && opts.deferStats);
   const m = repo.media.get(id);
   if (!m) return null;
   switch (action) {
     case 'approve': case 'publish':
-      repo.media.update(id, { publish_state: 'published', scope: 'in' });
+      repo.media.update(id, { publish_state: 'published', scope: 'in' }, { deferStats });
       if (m.physique != null) {
         if (String(m.review_reason || '').startsWith('physique:')) repo.media.setPhysique(id, require('../engine/physique').APPROVED); // overriding the body filter itself: no sweep or setting hides it again
         else {
           // approved for another reason (safety / scope review): the body verdict still applies
           const physique = require('../engine/physique');
           const v = physique.stateFor(m.physique, require('../settings').get());
-          if (v) repo.media.setState(id, v.state, v.reason, { exact: true });
+          if (v) repo.media.setState(id, v.state, v.reason, { exact: true, deferStats });
         }
       }
       break;
-    case 'hide': repo.media.setState(id, 'hidden', reason); break;
-    case 'flag': repo.media.setState(id, 'review', reason); break;
-    case 'reject': case 'remove': repo.media.setState(id, 'removed', reason); break;
+    case 'hide': repo.media.setState(id, 'hidden', reason, { deferStats }); break;
+    case 'flag': repo.media.setState(id, 'review', reason, { deferStats }); break;
+    case 'reject': case 'remove': repo.media.setState(id, 'removed', reason, { deferStats }); break;
     case 'block': repo.media.block(id, reason, actor); return repo.media.get(id);
     default: return undefined;
   }

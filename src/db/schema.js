@@ -1012,7 +1012,20 @@ function v31(db) {
 }
 v31.ddlOnly = true;
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31];
+/**
+ * v32: the review queue clears a hold by exact reason. The partial index covers "how many
+ * are waiting under this reason" and "the next chunk of those rows" without a table scan.
+ */
+function v32(db) {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS ix_media_review_reason
+      ON media(review_reason, seq)
+      WHERE publish_state = 'review';
+  `);
+}
+v32.ddlOnly = true;
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31, v32];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });
