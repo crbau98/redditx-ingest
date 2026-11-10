@@ -64,7 +64,7 @@ export async function saved(root, { query }) {
     if (!ids.length) {
       body.replaceChildren(emptyState({ icon: 'heart', title: 'Nothing saved yet', text: 'Tap the heart on anything you like (or press F in the viewer) and it lands here.', actions: [h('a', { class: 'btn primary', href: href('/explore') }, 'Explore')] }));
     } else {
-      const f = idFeed(ids);
+      const f = idFeed(ids, { showProgress: true });
       body.replaceChildren(h('div', { class: 'row wrap', style: { marginBottom: '14px' } },
         h('button', { class: 'btn sm primary', onclick: () => f.feed.items.length && openLightbox(f.feed.items, 0) }, icon('play', 'sm fill'), 'Play all'),
         h('span', { class: 'grow' }),
@@ -88,7 +88,7 @@ export async function saved(root, { query }) {
         h('button', { class: 'btn sm danger', onclick: async () => { if (await confirmDialog('The items themselves stay in PRISM (and in Saved, if saved).', { title: `Delete “${coll.name}”?`, confirmLabel: 'Delete', danger: true })) { collections.remove(coll.id); go('collections'); } } }, icon('trash', 'sm'), 'Delete'));
       let f = null;
       if (!coll.items.length) body.replaceChildren(head, emptyState({ icon: 'folder', title: 'This collection is empty', text: 'Open anything and press C (or the bookmark button) to add it here.', actions: [h('a', { class: 'btn primary', href: href('/explore') }, 'Explore')] }));
-      else { f = idFeed(coll.items, { onLoaded: (keep) => collections.prune(coll.id, keep) }); body.replaceChildren(head, f.el); cleanup = f.destroy; }
+      else { f = idFeed(coll.items, { showProgress: true, onLoaded: (keep) => collections.prune(coll.id, keep) }); body.replaceChildren(head, f.el); cleanup = f.destroy; }
     } else {
       const list = collections.list();
       const newCard = h('button', { class: 'coll-card new', onclick: async () => { const n = await promptDialog({ title: 'New collection', label: 'Name', placeholder: 'e.g. Gym, Beach, Favourites…', confirmLabel: 'Create' }); if (n) { const c = collections.create(n); go('collections', { c: c.id }); } } }, icon('plus', 'lg'), 'New collection');

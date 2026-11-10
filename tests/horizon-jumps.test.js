@@ -90,6 +90,10 @@ test('history asks once for the first page and any resume point past it', async 
   assert.doesNotMatch(hist, /ids: resumeSaved\.map/);
   assert.match(feed, /alsoIds\.filter/);
   assert.match(feed, /resumeFrac/);
+  const fav = saved.slice(saved.indexOf("tab === 'saved'"), saved.indexOf("tab === 'collections'"));
+  const coll = saved.slice(saved.indexOf("tab === 'collections'"), saved.indexOf("tab === 'following'"));
+  assert.match(fav, /showProgress: true/);
+  assert.match(coll, /showProgress: true/);
 });
 
 test('a smart feed count asks for one item newer than the last visit', async () => {
