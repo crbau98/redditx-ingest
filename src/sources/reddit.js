@@ -504,7 +504,7 @@ module.exports = {
         let reachedKnown = false;
         for (const it of parsed) {
           if (it.postedAt && (!newest || it.postedAt > newest)) newest = it.postedAt;
-          if (!first && pass.sort === 'new' && cursor.newestAt && it.postedAt && it.postedAt <= cursor.newestAt && !ctx.force) { reachedKnown = true; continue; }
+          if (!first && pass.sort === 'new' && cursor.newestAt && it.postedAt && it.postedAt < cursor.newestAt && !ctx.force) { reachedKnown = true; continue; }
           const key = `${it.sourceId}:${it.position || 0}`;
           if (seen.has(key)) continue; // the archive can serve the same row to two passes
           seen.add(key);

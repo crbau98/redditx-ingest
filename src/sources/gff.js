@@ -170,6 +170,14 @@ function actorName(vo) {
   return (first && first.name) ? String(first.name).trim() : null;
 }
 
+/** A performer name, or null when it is empty or only the site's own name ("GayForFans", "JustTheGays.com | Just The Gays"). */
+function realName(name) {
+  const n = String(name || '').trim();
+  if (!n) return null;
+  const rest = n.replace(/gay\s*for\s*fans|just\s*the\s*gays/gi, '').replace(/\.(com|tv)\b/gi, '').replace(/[\s|·:\-–—]+/g, '');
+  return rest ? n : null;
+}
+
 /** How many people watched a video (the JSON-LD watch counter), used as the item's score. */
 function watchCount(vo) {
   const stats = vo && vo.interactionStatistic;
@@ -393,21 +401,24 @@ module.exports = {
         vh = await http.text(v.url, { maxBytes: 3_000_000, retries: 1, headers: pageHeaders() });
       } catch (e) {
         if (isBlockedStatus(e.status) || isChallengeText(e.body)) throw challengeError();
+        // Not marked seen: a failed page read is usually transient, so the next run tries it again.
         notes.push(`gayforfans: ${v.slug} — ${e.message}`);
-        seen.add(v.slug);
         continue;
       }
       if (isChallengeText(vh)) throw challengeError();
-      seen.add(v.slug);
       const vo = videoObject(String(vh));
       if (!vo || !vo.contentUrl) continue;
+      // The video page names him; the performer page's <h1> can be the site's own name. With neither,
+      // the slug would become a junk creator, so the video is skipped (and retried next run).
+      const author = realName(actorName(vo)) || realName(page.name);
+      if (!author) { notes.push(`gayforfans: ${v.slug} — no performer name on the page, skipped`); continue; }
+      seen.add(v.slug);
       items.push({
         sourceId: `gff-${v.slug}`,
         position: 0,
         title: clip(vo.name || v.title || page.name || v.slug, 200),
         body: clip(vo.description || '', 2000),
-        // The video page names him; the performer page's <h1> can be generic ("GayForFans").
-        author: actorName(vo) || (page.name && !/^gayforfans$/i.test(page.name) ? page.name : v.slug),
+        author,
         score: watchCount(vo),
         postedAt: toIso(vo.uploadDate),
         permalink: v.url,

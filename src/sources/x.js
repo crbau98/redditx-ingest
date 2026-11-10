@@ -18,6 +18,11 @@ const { toIso, clip, repostsOn } = require('./util');
 const { extractLinks } = require('../lib/links');
 
 const base = config.baseUrls.x;
+
+/** An X image URL at a given size: sets `name` on the URL's own query instead of appending a second `?`. */
+function sized(url, name) {
+  try { const u = new URL(url); u.searchParams.set('name', name); return u.toString(); } catch { return url; }
+}
 const NO_HIT_TTL_MS = 7 * 24 * 3600 * 1000;
 
 /* X API plans cap how many posts you may read per month. Count what we read and stop
@@ -111,7 +116,7 @@ function parseApi(json, query) {
       if (!m) return;
       const isVideo = m.type === 'video' || m.type === 'animated_gif';
       const mp4 = isVideo ? bestMp4(m.variants) : null;
-      const mediaUrl = isVideo ? (mp4 && mp4.url) : (m.url ? `${m.url}?name=orig` : null);
+      const mediaUrl = isVideo ? (mp4 && mp4.url) : (m.url ? sized(m.url, 'orig') : null);
       if (!mediaUrl) return;
       items.push({
         sourceId: t.id, position: i,
@@ -122,7 +127,7 @@ function parseApi(json, query) {
         permalink: `https://x.com/${user.username || 'i'}/status/${t.id}`,
         mediaType: isVideo ? 'video' : 'image',
         mediaUrl,
-        previewUrl: isVideo ? m.preview_image_url : `${m.url}?name=medium`,
+        previewUrl: isVideo ? m.preview_image_url : sized(m.url, 'medium'),
         width: m.width || null, height: m.height || null, duration: m.duration_ms ? m.duration_ms / 1000 : null,
         altText: m.alt_text || null, hasAudio: m.type === 'video',
         tags: ((t.entities && t.entities.hashtags) || []).map((h) => h.tag),
@@ -161,7 +166,7 @@ function parseLegacyTweet(t, via = null) {
   return mediaList.map((m, i) => {
     const isVideo = m.type === 'video' || m.type === 'animated_gif';
     const mp4 = isVideo ? bestMp4(m.video_info && m.video_info.variants) : null;
-    const mediaUrl = isVideo ? (mp4 && mp4.url) : (m.media_url_https ? `${m.media_url_https}?name=orig` : null);
+    const mediaUrl = isVideo ? (mp4 && mp4.url) : (m.media_url_https ? sized(m.media_url_https, 'orig') : null);
     if (!mediaUrl) return null;
     const o = m.original_info || {};
     return {
@@ -172,7 +177,7 @@ function parseLegacyTweet(t, via = null) {
       postedAt: toIso(t.created_at),
       permalink: `https://x.com/${user.screen_name || 'i'}/status/${t.id_str || t.id}`,
       mediaType: isVideo ? 'video' : 'image', mediaUrl,
-      previewUrl: m.media_url_https ? `${m.media_url_https}?name=medium` : null,
+      previewUrl: m.media_url_https ? sized(m.media_url_https, 'medium') : null,
       width: o.width || null, height: o.height || null,
       hasAudio: m.type === 'video',
       tags: ((t.entities && t.entities.hashtags) || []).map((h) => h.text),
@@ -269,7 +274,7 @@ function parseEmbedTweet(t) {
   return (t.mediaDetails || []).map((m, i) => {
     const isVideo = m.type === 'video' || m.type === 'animated_gif';
     const mp4 = isVideo ? bestMp4(m.video_info && m.video_info.variants) : null;
-    const mediaUrl = isVideo ? (mp4 && mp4.url) : (m.media_url_https ? `${m.media_url_https}?name=orig` : null);
+    const mediaUrl = isVideo ? (mp4 && mp4.url) : (m.media_url_https ? sized(m.media_url_https, 'orig') : null);
     if (!mediaUrl) return null;
     const o = m.original_info || {};
     return {
@@ -278,7 +283,7 @@ function parseEmbedTweet(t) {
       score: (t.favorite_count || 0) + (t.retweet_count || 0) * 2, postedAt: toIso(t.created_at),
       permalink: `https://x.com/${user.screen_name || 'i'}/status/${t.id_str}`,
       mediaType: isVideo ? 'video' : 'image', mediaUrl,
-      previewUrl: m.media_url_https ? `${m.media_url_https}?name=medium` : null,
+      previewUrl: m.media_url_https ? sized(m.media_url_https, 'medium') : null,
       width: o.width || null, height: o.height || null, hasAudio: m.type === 'video',
       tags: ((t.entities && t.entities.hashtags) || []).map((h) => h.text),
       nsfw: t.possibly_sensitive ? 'explicit' : 'suggestive', trusted: true,
@@ -399,7 +404,7 @@ async function lookupUsers(usernames) {
   return (json.data || []).map((u) => ({ username: u.username, name: u.name, description: u.description || '', followers: (u.public_metrics && u.public_metrics.followers_count) || 0, avatar: (u.profile_image_url || '').replace('_normal', '_400x400') || null }));
 }
 
-module.exports = { _viaWebSearch: viaWebSearch,
+module.exports = { _viaWebSearch: viaWebSearch, _sized: sized,
   expandedLinks,
   lookupUsers,
   apiAvailable,
@@ -481,7 +486,7 @@ module.exports = { _viaWebSearch: viaWebSearch,
     for (const it of items) {
       const at = it.cursorAt || it.postedAt;
       if (at && (!newest || at > newest)) newest = at;
-      if (cursor.newestAt && at && at <= cursor.newestAt && !ctx.force) continue;
+      if (cursor.newestAt && at && at < cursor.newestAt && !ctx.force) continue;
       fresh.push(it);
     }
     let profile;
