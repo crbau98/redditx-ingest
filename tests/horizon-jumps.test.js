@@ -93,6 +93,10 @@ test('history asks once for the first page and any resume point past it', async 
   const fav = saved.slice(saved.indexOf("tab === 'saved'"), saved.indexOf("tab === 'collections'"));
   const coll = saved.slice(saved.indexOf("tab === 'collections'"), saved.indexOf("tab === 'following'"));
   assert.match(fav, /showProgress: true/);
+  assert.match(fav, /playback\.list\(\)\.slice\(0, 12\)/);
+  assert.match(fav, /ids: resumeSaved\.map/);
+  assert.match(fav, /eager: i < 4/);
+  assert.match(fav, /if \(left \|\| !continueSlot\.isConnected/);
   assert.match(coll, /showProgress: true/);
 });
 

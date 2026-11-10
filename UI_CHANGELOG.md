@@ -12,6 +12,7 @@
 - **Grid cards keep the 360px thumb** when it already covers the column (up to 2×). The platform preview is only requested where that thumb would be stretched. This was already the rule in `images.js`.
 - **Command palette jump-back.** With the box empty, the last creators and videos this device opened appear at the top. A saved position shows as “left off”. Nothing is searched until you type.
 - **History has Continue.** Saved → History shows the same resume rail as Home above the opened-items grid.
+- **Saved has Continue too.** The Saved tab shows that same resume rail above the favorites grid (or the empty state), with the first four cards eager-loaded.
 - **Home fails in two pieces.** If Discover fails, Latest uploads stay and a banner says so. If Latest uploads fail, that grid says the rest of Home is still there.
 - **Library export includes where videos left off.** Import keeps the newer of the file and this device, and drops points older than 21 days. Older files that have no resume points still import.
 - **Admin → Overview shows each source.** Today’s items sit next to the day before, on the overview itself. A source that added nothing today after adding something in the last two weeks is marked and listed first.

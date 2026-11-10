@@ -61,11 +61,33 @@ export async function saved(root, { query }) {
   /* ------------------------------------------------------------- saved */
   if (tab === 'saved') {
     const ids = favorites.list();
+    // Same device resume list as Home / History. One request up front so Continue does not wait on the favorites grid.
+    const resumeSaved = playback.list().slice(0, 12);
+    const continueSlot = h('div', { class: 'continue-slot' });
+    const paintContinue = (found) => {
+      if (left || !continueSlot.isConnected || continueSlot.dataset.ready === '1') return;
+      const byId = new Map((found || []).map((it) => [it.id, it]));
+      const continueItems = resumeSaved.map((p) => byId.get(p.id)).filter(Boolean);
+      if (!continueItems.length) return;
+      continueSlot.dataset.ready = '1';
+      const frac = new Map(resumeSaved.map((p) => [p.id, p.d ? Math.min(0.96, p.t / p.d) : 0]));
+      const open = (item) => openLightbox(continueItems, Math.max(0, continueItems.findIndex((x) => x.id === item.id)));
+      continueSlot.replaceChildren(h('section', { class: 'section continue-watching' },
+        h('div', { class: 'section-head' }, h('div', null, h('h2', null, icon('play'), 'Continue'), h('div', { class: 'sub' }, 'Where videos left off on this device'))),
+        h('div', { class: 'rail' }, continueItems.map((it, i) => h('div', { class: 'resume-card' },
+          mediaCard(it, { open, eager: i < 4 }),
+          h('span', { class: 'resume-bar', style: { '--p': String(frac.get(it.id) || 0) }, 'aria-hidden': 'true' }))))));
+    };
+    if (resumeSaved.length) {
+      get('/api/media', { ids: resumeSaved.map((p) => p.id).join(','), limit: resumeSaved.length }).then((r) => {
+        paintContinue(r.items || []);
+      }).catch(() => {});
+    }
     if (!ids.length) {
-      body.replaceChildren(emptyState({ icon: 'heart', title: 'Nothing saved yet', text: 'Tap the heart on anything you like (or press F in the viewer) and it lands here.', actions: [h('a', { class: 'btn primary', href: href('/explore') }, 'Explore')] }));
+      body.replaceChildren(continueSlot, emptyState({ icon: 'heart', title: 'Nothing saved yet', text: 'Tap the heart on anything you like (or press F in the viewer) and it lands here.', actions: [h('a', { class: 'btn primary', href: href('/explore') }, 'Explore')] }));
     } else {
       const f = idFeed(ids, { showProgress: true });
-      body.replaceChildren(h('div', { class: 'row wrap', style: { marginBottom: '14px' } },
+      body.replaceChildren(continueSlot, h('div', { class: 'row wrap', style: { marginBottom: '14px' } },
         h('button', { class: 'btn sm primary', onclick: () => f.feed.items.length && openLightbox(f.feed.items, 0) }, icon('play', 'sm fill'), 'Play all'),
         h('span', { class: 'grow' }),
         h('button', { class: 'btn sm danger', onclick: async () => { if (await confirmDialog('This only affects this device.', { title: 'Clear all saved items?', confirmLabel: 'Clear', danger: true })) { favorites.clear(); go('saved'); } } }, icon('trash', 'sm'), 'Clear')), f.el);
