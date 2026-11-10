@@ -605,6 +605,7 @@ async function imageKeywordDiscovery({ keywords = 1, hits = IMAGE_HITS, leads = 
         hex = await phash.hashBuffer(res.body);
       } catch { /* an unreadable picture still proves the page exists, but cannot be de-duplicated */ }
       if (hex) {
+        await dedupe.loadChunked().catch(() => {}); // the index is complete before a check: a partial one can miss a duplicate or a blocked picture
         const d = dedupe.check({ phash: hex, mediaType: 'image' }, { distance: 6 });
         if (d.dup || d.blocked) { out.duplicates++; continue; }
       }

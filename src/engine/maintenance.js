@@ -275,6 +275,7 @@ function borrowedPoster(row) {
 }
 
 async function hashSweep({ limit = 12, settings } = {}) {
+  await dedupe.loadChunked().catch(() => {}); // a sweep that starts during the boot build would read a partial index
   const s = settings || settingsStore.get();
   const res = { checked: 0, hashed: 0, collapsed: 0, errors: 0, done: false };
   let after = parseInt(repo.settings.get('hash_sweep_seq') || '0', 10) || 0;

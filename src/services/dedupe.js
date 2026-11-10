@@ -44,6 +44,7 @@ function loadChunked(opts) {
 async function loadChunkedOnce({ chunk = LOAD_CHUNK } = {}) {
   if (loaded) return { chunks: 0, rows: 0, already: true };
   loaded = true; // remember()/check() during the build land in the live part; the tail chunk catches them up
+  for (const h of repo.media.phashBlocked()) blocked.add(h, h); // the blocklist first: a re-upload of a removed picture is refused from the first second
   let chunks = 0; let rows = 0; let after = 0;
   for (;;) {
     const batch = repo.media.hashedChunk(after, chunk);
@@ -53,7 +54,6 @@ async function loadChunkedOnce({ chunk = LOAD_CHUNK } = {}) {
     after = batch[batch.length - 1].seq;
     await new Promise((res) => setImmediate(res)); // the loop answers between chunks
   }
-  for (const h of repo.media.phashBlocked()) blocked.add(h, h);
   return { chunks, rows, already: false };
 }
 
