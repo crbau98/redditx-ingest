@@ -18,11 +18,34 @@ let loaded = false;
 
 const aspectOf = (w, h) => (w > 0 && h > 0 ? w / h : null);
 
+function loadSync() {
+  for (const r of repo.media.hashedRows()) live.add(r.id, r.phash, { type: r.media_type, aspect: aspectOf(r.width, r.height) });
+  for (const h of repo.media.phashBlocked()) blocked.add(h, h);
+}
+
 function load() {
   if (loaded) return;
   loaded = true;
-  for (const r of repo.media.hashedRows()) live.add(r.id, r.phash, { type: r.media_type, aspect: aspectOf(r.width, r.height) });
+  loadSync();
+}
+
+// One straight build of 900k rows holds the loop for ~119 s (its sync index adds). The boot warmer
+// takes this road instead: seq-ordered chunks with a yield between them, so health checks keep answering.
+const LOAD_CHUNK = 5000;
+async function loadChunked({ chunk = LOAD_CHUNK } = {}) {
+  if (loaded) return { chunks: 0, rows: 0, already: true };
+  loaded = true; // remember()/check() during the build land in the live part; the tail chunk catches them up
+  let chunks = 0; let rows = 0; let after = 0;
+  for (;;) {
+    const batch = repo.media.hashedChunk(after, chunk);
+    for (const r of batch) live.add(r.id, r.phash, { type: r.media_type, aspect: aspectOf(r.width, r.height) });
+    rows += batch.length; chunks++;
+    if (!batch.length || batch.length < chunk) break;
+    after = batch[batch.length - 1].seq;
+    await new Promise((res) => setImmediate(res)); // the loop answers between chunks
+  }
   for (const h of repo.media.phashBlocked()) blocked.add(h, h);
+  return { chunks, rows, already: false };
 }
 
 const indexed = (r) => r.publish_state === 'published' || r.publish_state === 'review' || (r.publish_state === 'hidden' && String(r.review_reason || '').startsWith('physique:'));
@@ -67,4 +90,4 @@ function blockHash(phash, reason) {
 function stats() { load(); return { indexed: live.size, blocked: blocked.size }; }
 function _reset() { loaded = false; live.entries.clear(); live.buckets.clear(); blocked.entries.clear(); blocked.buckets.clear(); }
 
-module.exports = { check, remember, forget, blockHash, stats, load, _reset };
+module.exports = { check, remember, forget, blockHash, stats, load, loadChunked, _reset };

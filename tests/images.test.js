@@ -20,6 +20,7 @@ describe('thumbnail or preview for a grid card (images.js)', () => {
   const THUMB = '/p?https://cdn/t.webp';
   const PREVIEW = '/p?https://cdn/p.jpg';
   const src = (opts, it = item) => img.cardImage(it, { proxy, ...opts }).src;
+  const full = (opts, it = item) => img.cardImage(it, { proxy, ...opts });
 
   test('the thumbnail covers a 2-column phone grid and a phone rail, on 2x and 3x screens alike', () => {
     assert.equal(src({ width: 175, dpr: 2 }), THUMB, '2-column grid at 2x: 350 device px');
@@ -62,6 +63,14 @@ describe('thumbnail or preview for a grid card (images.js)', () => {
     assert.equal(src({ width: 600, dpr: 2 }, { ...item, preview_url: null, thumbnail_url: null, media_url: null }), THUMB);
   });
 
+  test('a dead thumbnail falls back to the preview instead of a blank tile', () => {
+    assert.equal(full({ width: 175, dpr: 2 }).fallback, PREVIEW, 'small slot: the thumbnail is first, the preview is the retry');
+    assert.equal(full({ width: 330, dpr: 2 }).fallback, null, 'large slot: the preview is already first, no retry needed');
+    assert.equal(full({ width: 175, dpr: 2 }, { ...item, preview_url: null, thumbnail_url: null, media_url: null }).fallback, null, 'nothing larger exists: no retry');
+    const card = fs.readFileSync(path.join(JS, 'components', 'card.js'), 'utf8');
+    assert.match(card, /const \{ src, fallback \} = cardImage\(item/, 'the card reads the retry URL');
+    assert.match(card, /img\._fellBack/, 'one retry only — the fallback failing still leaves: placeholder + report');
+  });
   test('every grid card is built through it, with the layout width passed down from the masonry', () => {
     const card = fs.readFileSync(path.join(JS, 'components', 'card.js'), 'utf8');
     const masonry = fs.readFileSync(path.join(JS, 'components', 'masonry.js'), 'utf8');

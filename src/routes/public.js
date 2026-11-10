@@ -123,7 +123,7 @@ function warm() {
   // the visual index is built once here, after the first health answer, so the first 'More like this' visitor does not pay it
   // The dedupe index loads every stored hash lazily on first use — a multi-second synchronous build that used to
   // land inside the first feed run of the morning. Load it here, after the first health answer, with the rest.
-  const queue = [...prep, ...warmers, () => { try { require('../services/dedupe').load(); } catch { /* index optional */ } }, () => require('../engine/visual').warmIndex()];
+  const queue = [...prep, ...warmers, () => { try { require('../services/dedupe').loadChunked().catch(() => {}); } catch { /* index optional */ } }, () => require('../engine/visual').warmIndex()];
   const next = () => { const g = queue.shift(); if (!g) return; try { g(); } catch (e) { console.error('[warm]', e.message); } setImmediate(next); };
   setImmediate(next);
 }

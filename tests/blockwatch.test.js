@@ -54,4 +54,13 @@ describe('loop watchdog', () => {
     blockwatch.stop();
     blockwatch.reset();
   });
+
+  test('the link-health sweep and the deep-pull rotation carry their own labels', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const health = fs.readFileSync(path.join(__dirname, '..', 'src', 'engine', 'health.js'), 'utf8');
+    assert.match(health, /around\('linkHealth'/, 'the 10-minute sweep must not wear whoever ran before it');
+    const ds = fs.readFileSync(path.join(__dirname, '..', 'src', 'engine', 'deepsearch.js'), 'utf8');
+    assert.match(ds, /work\('deepPull'\)/, 'the rotation kick is tagged while it fans out');
+  });
 });

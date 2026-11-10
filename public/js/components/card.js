@@ -127,7 +127,7 @@ export function mediaCard(item, { open, compact = false, why = null, eager = fal
   const isVideo = item.media_type === 'video';
   // Grids load the small thumbnail build when it exists (engine/thumbs.js, ~360px WebP) and take the platform
   // preview only where the thumbnail would have to be stretched (see images.js). The full file only loads in the viewer.
-  const { src } = cardImage(item, { proxy: proxied, width, viewport: window.innerWidth, dpr: window.devicePixelRatio || 1, isVideo });
+  const { src, fallback } = cardImage(item, { proxy: proxied, width, viewport: window.innerWidth, dpr: window.devicePixelRatio || 1, isVideo });
 
   const here = parse();
   const media = h('a', { class: 'card-media', href: href(here.path, { ...Object.fromEntries(here.query), m: item.id }), style: { aspectRatio: String(ratio) }, 'aria-label': item.title || 'Open media' });
@@ -143,7 +143,13 @@ export function mediaCard(item, { open, compact = false, why = null, eager = fal
     // The placeholder's shimmer stops as soon as the image is in: a grid of finished cards must not
     // keep animating underneath (it repainted every visible card, every frame, forever).
     img.addEventListener('load', () => { media._loaded = true; img.classList.remove('loading'); ph.classList.add('done'); });
-    img.addEventListener('error', () => { media._img = null; img.remove(); ph.classList.add('done'); reportBroken(item.id); });
+    // A thumbnail whose build vanished from the store (store row without a stored object, expired key) must not
+    // leave a blank tile: one retry takes the platform preview, which is how the row loaded before thumbnails.
+    img.addEventListener('error', () => {
+      const retry = !img._fellBack && fallback && fallback !== img.src ? fallback : null;
+      if (retry) { img._fellBack = true; media._src = retry; img.src = retry; return; }
+      media._img = null; img.remove(); ph.classList.add('done'); reportBroken(item.id);
+    });
     media.appendChild(img);
     if (reliefIo) reliefIo.observe(media);
   } else ph.classList.add('done');

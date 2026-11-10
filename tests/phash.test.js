@@ -132,4 +132,12 @@ describe('pipeline dedupe (analyzer replaced by a fake)', () => {
     assert.equal(repo.media.altSources(first).length, 1);
     assert.equal((await maintenance.hashSweep({ limit: 500, settings })).checked, 0, 'cursor moved on');
   });
+  test('the boot build yields between chunks and finds the same duplicates as the straight build', async () => {
+    dedupe._reset();
+    const r = await dedupe.loadChunked({ chunk: 2 });
+    assert.equal(r.already, false); assert.ok(r.chunks >= 1); assert.ok(r.rows >= 4, JSON.stringify(r));
+    const probe = dedupe.check({ phash: H(1), mediaType: 'image' });
+    assert.ok(probe.dup, 'the chunked build finds the same duplicate as load()');
+    assert.equal((await dedupe.loadChunked({ chunk: 2 })).already, true, 'second call is a no-op');
+  });
 });

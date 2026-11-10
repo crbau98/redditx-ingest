@@ -33,9 +33,12 @@ export const railWidth = (viewportWidth) => Math.min(240, Math.max(168, Math.rou
  */
 export function cardImage(item, { proxy, width = 0, viewport = 390, dpr = 1, isVideo = false }) {
   const large = item.preview_url || item.thumbnail_url || (!isVideo ? item.media_url : null);
-  if (!item.thumb_url) return { src: large ? proxy(large) : null };
+  if (!item.thumb_url) return { src: large ? proxy(large) : null, fallback: null };
   const slot = (width > 0 ? width : railWidth(viewport)) * Math.min(Math.max(dpr, 1), DENSITY_CAP);
-  return { src: proxy(slot <= THUMB_FIT_PX || !large ? item.thumb_url : large) };
+  // The thumbnail is the first try; when it 404s (store row without a stored build, expired object-store
+  // key) the card falls back to the platform preview instead of leaving a blank tile (see components/card.js).
+  if (slot <= THUMB_FIT_PX || !large) return { src: proxy(item.thumb_url), fallback: large ? proxy(large) : null };
+  return { src: proxy(large), fallback: null };
 }
 
 /**

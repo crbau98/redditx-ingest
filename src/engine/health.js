@@ -212,7 +212,8 @@ function start() {
     const s = settingsStore.get();
     if (!s.schedulerEnabled || !s.linkHealth || running) return;
     running = true; stopFlag = false;
-    sweep({ aborted: () => stopFlag }).catch((e) => events.log('WARN', `Link health sweep: ${e.message}`)).finally(() => { running = false; });
+    const blockwatch = require('../lib/blockwatch');
+    blockwatch.around('linkHealth', () => sweep({ aborted: () => stopFlag })).catch((e) => events.log('WARN', `Link health sweep: ${e.message}`)).finally(() => { running = false; });
   }, 10 * 60 * 1000);
   timer.unref();
 }

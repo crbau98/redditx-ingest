@@ -341,6 +341,12 @@ const PHYSIQUE_KEYS = ['physiqueFilter', 'physiqueThreshold', 'physiqueCreatorSh
 router.put('/settings', (req, res) => {
   const before = settingsStore.get();
   const values = settingsStore.update(req.body || {});
+  // Audit the physique flips: a false→true or true→false here hid/shown 30k+ rows before, so it leaves a trail.
+  for (const k of PHYSIQUE_KEYS) {
+    if (values[k] !== before[k]) {
+      try { repo.logAction('setting', k, values[k] === false || values[k] === 0 ? 'disable' : (before[k] === false || before[k] === 0 ? 'enable' : 'change'), `${JSON.stringify(before[k])} → ${JSON.stringify(values[k])}`, 'admin'); } catch { /* audit never blocks a settings save */ }
+    }
+  }
   // Lean preference switched off: forget the stored biases right away (chunked, off this request),
   // so Trending returns to the plain score; switched on: rewind the bias sweep to re-judge everyone.
   if (values.leanPreference === false && before.leanPreference !== false) maintenance.clearLeanBias().catch((e) => events.log('WARN', `Lean preference: ${e.message}`));
@@ -568,7 +574,7 @@ router.delete('/takedowns/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-router.get('/audit', (req, res) => res.json(repo.audit.list({ ...page(req), targetType: ['media', 'creator', 'report', 'takedown'].includes(req.query.type) ? req.query.type : undefined })));
+router.get('/audit', (req, res) => res.json(repo.audit.list({ ...page(req), targetType: ['media', 'creator', 'report', 'takedown', 'setting', 'feed', 'candidate'].includes(req.query.type) ? req.query.type : undefined })));
 
 router.get('/creators-duplicates', (req, res) => res.json(repo.creators.duplicates().slice(0, 100)));
 

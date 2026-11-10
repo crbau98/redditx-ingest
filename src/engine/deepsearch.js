@@ -388,9 +388,12 @@ function rotate({ limit = 2 } = {}) {
     return { ...r, score: (seed ? 3 : 0) + (r.paid ? 2 : 0) + (r.feeds > 0 ? 1 : 0) };
   }).sort((a, b) => b.score - a.score || b.feeds - a.feeds);
   const kicked = [];
+  const blockwatch = require('../lib/blockwatch');
   for (const r of scored) {
     if (kicked.length >= limit) break;
+    blockwatch.work('deepPull'); // the kick's own search fan-out must not wear whoever ran before it
     const out = kick(r.id, { trigger: 'rotation' });
+    blockwatch.work('idle');
     if (out.started) kicked.push(r.display_name || r.handle);
   }
   if (kicked.length) events.log('OK', `Deep-pull rotation: ${kicked.join(', ')}`);

@@ -213,6 +213,16 @@ describe('admin API', () => {
     assert.ok(!('notASetting' in st.json.values));
     assert.ok(!JSON.stringify((await adm('/settings')).json).includes('test-key'), 'secrets never echoed');
   });
+  test('physique flips write an audit entry, so a false→true that hides 30k rows leaves a trail', async () => {
+    const cur = (await adm('/settings')).json.values.physiqueFilter;
+    await adm('/settings', { method: 'PUT', body: { physiqueFilter: !cur } });
+    const flips = repo.audit.list({ targetType: 'setting' }).items.filter((a) => a.target_id === 'physiqueFilter');
+    assert.ok(flips.length >= 1, 'the flip was logged');
+    assert.ok(['enable', 'disable'].includes(flips[0].action), `logged as enable/disable, got ${flips[0].action}`);
+    assert.match(flips[0].reason || '', /true|false/);
+    assert.equal((await adm('/audit?type=setting')).json.items.filter((a) => a.target_id === 'physiqueFilter').length >= 1, true, 'visible at GET /audit?type=setting');
+    await adm('/settings', { method: 'PUT', body: { physiqueFilter: cur } });
+  });
   test('feeds: add from a pasted link, reject nonsense, bulk import, edit, delete', async () => {
     const add = await adm('/feeds', { method: 'POST', body: { input: 'https://www.reddit.com/r/AdminTestSub', run: false } });
     assert.equal(add.status, 201); assert.equal(add.json.feed.target, 'adminsubtest'.length ? 'admintestsub' : '');
