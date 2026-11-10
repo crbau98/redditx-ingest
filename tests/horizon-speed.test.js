@@ -106,6 +106,21 @@ test('Explore drops late creator-name and spelling fills after you leave', () =>
   assert.equal(src.includes('await understand(f.raw)'), false);
 });
 
+test('Explore drops a late Narrow-with relatedRail fill after you leave', () => {
+  const explore = fs.readFileSync(path.join(__dirname, '../public/js/views/explore.js'), 'utf8');
+  const smart = fs.readFileSync(path.join(__dirname, '../public/js/smart.js'), 'utf8');
+  const leftAt = explore.indexOf('let left = false;');
+  const rail = explore.indexOf("relatedRail(focusTags, { onPick: addTag, title: 'Narrow with'");
+  const alive = explore.indexOf('alive: () => !left', rail);
+  const back = explore.indexOf('return () => {\n    left = true;');
+  assert.ok(leftAt > 0 && leftAt < rail && rail < alive && alive < back, 'Narrow with passes alive from Explore’s left flag');
+  const ask = smart.indexOf("get('/api/tags/related'");
+  const guard = smart.indexOf('if (!alive()) return;', ask);
+  const fill = smart.indexOf('el.replaceChildren(h(\'span\', { class: \'rr-label\' }', ask);
+  assert.ok(ask > 0 && guard > ask && guard < fill, 'a late related list does not paint Narrow with after you leave');
+  assert.equal(smart.includes('await get(\'/api/tags/related\''), false);
+});
+
 test('a creator profile hands back cleanup before the profile returns', () => {
   const src = fs.readFileSync(path.join(__dirname, '../public/js/views/creator.js'), 'utf8');
   const bone = src.indexOf("style: { height: '220px' }");

@@ -206,7 +206,7 @@ export async function explore(root, { query }) {
   const required = [...tagList, ...(f.tag ? [f.tag] : [])];
   const focusTags = (required.length ? required : anyList).slice(0, 4);
   const addTag = (name) => set({ tag: '', tags: [...new Set([...required, name])].slice(0, 6).join(',') });
-  const tagRail = focusTags.length ? relatedRail(focusTags, { onPick: addTag, title: 'Narrow with', mode: required.length ? 'all' : 'any' }) : h('div', { class: 'row', style: { gap: '8px', overflowX: 'auto', padding: '14px 0 2px', scrollbarWidth: 'none' } });
+  const tagRail = focusTags.length ? relatedRail(focusTags, { onPick: addTag, title: 'Narrow with', mode: required.length ? 'all' : 'any', alive: () => !left }) : h('div', { class: 'row', style: { gap: '8px', overflowX: 'auto', padding: '14px 0 2px', scrollbarWidth: 'none' } });
 
   const creatorRail = h('div', { class: 'row', style: { gap: '8px', overflowX: 'auto', padding: '10px 0 2px', scrollbarWidth: 'none' }, role: 'group', 'aria-label': 'Filter by creator' });
   const creatorGroup = labelledGroup('Creator', creatorRail);

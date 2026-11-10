@@ -82,6 +82,7 @@ Success: the first screen is useful before the slow calls return, scrolling does
 58. [x] An empty Following page returns its cleanup before popular creators resolve. A late list, or a late failure, does not paint a page you have left.
 59. [x] Explore returns its cleanup before platform, creator, and tag chip lists resolve. A late list, or a late creator failure, does not paint a page you have left.
 60. [x] Explore drops a late creator-name fill and a late “Understood as” spelling note after you leave, so the tab title and banner stay with the page you opened next.
+61. [x] Explore’s “Narrow with” related-tag rail drops a late `/api/tags/related` fill after you leave, so the Tags row stays with the page you opened next.
 
 ## Later
 

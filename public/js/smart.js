@@ -90,9 +90,10 @@ export async function findRelaxation(f, toApi, opts) {
  * `mode: 'all'` measures against media with every given tag (what an AND refinement narrows);
  * 'any' against media with any of them (a topic).
  */
-export function relatedRail(tagNames, { onPick, title = 'Related', mode = 'all' } = {}) {
+export function relatedRail(tagNames, { onPick, title = 'Related', mode = 'all', alive = () => true } = {}) {
   const el = h('div', { class: 'related-rail', hidden: true });
   get('/api/tags/related', { tags: tagNames.join(','), mode, limit: 14 }).then((list) => {
+    if (!alive()) return;
     if (!list.length) return;
     el.replaceChildren(h('span', { class: 'rr-label' }, icon('sparkle', 'sm'), title),
       ...list.map((t) => h('a', { class: 'chip sm', href: onPick ? '#' : href('/explore', { tag: t.name }), onclick: onPick ? (e) => { e.preventDefault(); onPick(t.name); } : null, title: `${fmt.num(t.count)} items together · ${t.lift.toFixed(1)}× more likely` }, icon('plus', 'sm'), `#${t.name}`)));
