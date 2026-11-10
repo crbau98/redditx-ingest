@@ -70,15 +70,19 @@ export function relaxations(f, { creatorName } = {}) {
   return steps;
 }
 
-/** First relaxation that returns results: {patch, label, total} or null. Probes in order, cheaply. */
-export async function findRelaxation(f, toApi, opts) {
+/** First relaxation that returns results: {patch, label, total} or null. Probes in order, cheaply.
+ * Pass `alive` so Explore can stop mid-probe after you leave (no more /api/media probes). */
+export async function findRelaxation(f, toApi, opts = {}) {
+  const alive = typeof opts.alive === 'function' ? opts.alive : () => true;
   let acc = {};
   const dropped = [];
   for (const step of relaxations(f, opts)) {
+    if (!alive()) return null;
     acc = { ...acc, ...step.patch };
     dropped.push(step.label);
     try {
       const r = await get('/api/media', { ...toApi({ ...f, ...acc }), limit: 1 });
+      if (!alive()) return null;
       if (r.total) return { patch: acc, label: dropped.join(', '), total: r.total };
     } catch { return null; }
   }

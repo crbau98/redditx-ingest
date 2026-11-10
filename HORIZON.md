@@ -84,6 +84,7 @@ Success: the first screen is useful before the slow calls return, scrolling does
 60. [x] Explore drops a late creator-name fill and a late “Understood as” spelling note after you leave, so the tab title and banner stay with the page you opened next.
 61. [x] Explore’s “Narrow with” related-tag rail drops a late `/api/tags/related` fill after you leave, so the Tags row stays with the page you opened next.
 62. [x] Explore’s empty-result relaxation (`findRelaxation`) drops a late navigate or “Try without …” prompt after you leave, so the next screen’s route and empty state stay put.
+63. [x] Explore’s empty-result relaxation stops mid-probe when you leave (`alive`), so further `/api/media` probes do not keep running for a page you already left.
 
 ## Later
 

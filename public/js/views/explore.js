@@ -220,7 +220,7 @@ export async function explore(root, { query }) {
 
   async function onEmpty() {
     if (f.norelax || forYou) return;
-    const r = await findRelaxation(f, toApi, { creatorName });
+    const r = await findRelaxation(f, toApi, { creatorName, alive: () => !left });
     // A late probe must not rewrite the route or empty state after you leave Explore.
     if (left || !r) return;
     if (f.smart) {

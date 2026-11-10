@@ -125,7 +125,7 @@ test('Explore drops a late findRelaxation navigate or empty prompt after you lea
   const src = fs.readFileSync(path.join(__dirname, '../public/js/views/explore.js'), 'utf8');
   const leftAt = src.indexOf('let left = false;');
   const onEmpty = src.indexOf('async function onEmpty()');
-  const ask = src.indexOf('await findRelaxation(f, toApi, { creatorName })', onEmpty);
+  const ask = src.indexOf("await findRelaxation(f, toApi, { creatorName, alive: () => !left })", onEmpty);
   const guard = src.indexOf('if (left || !r) return;', ask);
   const nav = src.indexOf("navigate('/explore', { ...f, ...r.patch, relaxed: r.label, from }", ask);
   const btn = src.indexOf('emptyHost.append(h(\'button\'', ask);
@@ -133,6 +133,18 @@ test('Explore drops a late findRelaxation navigate or empty prompt after you lea
   assert.ok(leftAt > 0 && leftAt < onEmpty && onEmpty < ask, 'left is marked before relaxation probes');
   assert.ok(ask > 0 && guard > ask && guard < nav && nav < btn && btn < back, 'a late relaxation does not navigate or append after you leave');
   assert.equal(src.includes('if (!r || !root.isConnected) return;'), false);
+});
+
+test('findRelaxation stops mid-probe once alive is false', () => {
+  const smart = fs.readFileSync(path.join(__dirname, '../public/js/smart.js'), 'utf8');
+  const fn = smart.indexOf('export async function findRelaxation');
+  const loop = smart.indexOf('for (const step of relaxations(f, opts))', fn);
+  const before = smart.indexOf('if (!alive()) return null;', loop);
+  const ask = smart.indexOf("await get('/api/media'", loop);
+  const after = smart.indexOf('if (!alive()) return null;', ask);
+  assert.ok(fn > 0 && loop > fn && before > loop && before < ask, 'alive is checked before each /api/media probe');
+  assert.ok(ask > 0 && after > ask, 'alive is checked again after a probe returns');
+  assert.match(smart, /typeof opts\.alive === 'function' \? opts\.alive : \(\) => true/);
 });
 
 test('a creator profile hands back cleanup before the profile returns', () => {
