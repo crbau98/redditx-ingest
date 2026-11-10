@@ -140,4 +140,16 @@ describe('pipeline dedupe (analyzer replaced by a fake)', () => {
     assert.ok(probe.dup, 'the chunked build finds the same duplicate as load()');
     assert.equal((await dedupe.loadChunked({ chunk: 2 })).already, true, 'second call is a no-op');
   });
+
+  test('two loadChunked callers share one build, and load() does not sync-scan while it runs', async () => {
+    dedupe._reset();
+    const a = dedupe.loadChunked({ chunk: 2 });
+    const b = dedupe.loadChunked({ chunk: 2 });
+    // Mid-build: check() must not fall into load()'s full sync scan (building is set).
+    assert.doesNotThrow(() => dedupe.check({ phash: H(1), mediaType: 'image' }));
+    const [ra, rb] = await Promise.all([a, b]);
+    assert.equal(ra.already, false);
+    assert.equal(rb.already, true, 'the second waiter reuses the first build');
+    assert.ok(dedupe.check({ phash: H(1), mediaType: 'image' }).dup);
+  });
 });

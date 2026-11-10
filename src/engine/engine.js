@@ -707,7 +707,9 @@ function start() {
   setTimeout(() => {
     // Seeding is a transaction on the main thread: it runs after the first health answer, never before the listener is up.
     try { seedDefaults(); } catch (e) { events.log('ERR', `seed: ${e.message}`); }
-    tick();
+    // The first feed run waits for the chunked dedupe index. A check()/remember() before that would
+    // fall into load()'s synchronous full scan (~1.7 s+ at prod scale) and stall health.
+    require('../services/dedupe').loadChunked().catch(() => {}).finally(() => tick());
   }, 2000).unref();
   }); // end setTimeout delay for engine start
   // The first hot-score pass after a restart reads every published row, cold on a fresh container. It used to run at

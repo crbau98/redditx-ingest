@@ -25,6 +25,9 @@ function loadSync() {
 
 function load() {
   if (loaded) return;
+  // A chunked build is already spoken for: do not fall into a multi-second sync scan. Mid-build
+  // callers see the partial index (the same as remember() during loadChunked).
+  if (building) return;
   loaded = true;
   loadSync();
 }
@@ -32,7 +35,13 @@ function load() {
 // One straight build of 900k rows holds the loop for ~119 s (its sync index adds). The boot warmer
 // takes this road instead: seq-ordered chunks with a yield between them, so health checks keep answering.
 const LOAD_CHUNK = 5000;
-async function loadChunked({ chunk = LOAD_CHUNK } = {}) {
+let building = null; // one in-flight chunked build: later callers await it instead of racing a sync load()
+function loadChunked(opts) {
+  if (building) return building.then(() => ({ chunks: 0, rows: 0, already: true }));
+  building = loadChunkedOnce(opts);
+  return building;
+}
+async function loadChunkedOnce({ chunk = LOAD_CHUNK } = {}) {
   if (loaded) return { chunks: 0, rows: 0, already: true };
   loaded = true; // remember()/check() during the build land in the live part; the tail chunk catches them up
   let chunks = 0; let rows = 0; let after = 0;
@@ -88,6 +97,11 @@ function blockHash(phash, reason) {
 }
 
 function stats() { load(); return { indexed: live.size, blocked: blocked.size }; }
-function _reset() { loaded = false; live.entries.clear(); live.buckets.clear(); blocked.entries.clear(); blocked.buckets.clear(); }
+function _reset() {
+  loaded = false;
+  building = null;
+  live.entries.clear(); live.buckets.clear();
+  blocked.entries.clear(); blocked.buckets.clear();
+}
 
 module.exports = { check, remember, forget, blockHash, stats, load, loadChunked, _reset };
