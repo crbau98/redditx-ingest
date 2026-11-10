@@ -1686,39 +1686,8 @@ async function gffDiscovery({ pages = 2, perPage = 6, coomerLimit = 12, maxFollo
   let indexReady = false; // the creator index is one big request: only fetch it when a page actually lists performers
   const http = require('../sources/http').forPlatform('gff', 1000);
   const gff = registry.get('gff');
-  let page = parseInt(repo.discoveryState.get('gff.page', '0'), 10) || 0;
-  for (let p = 0; p < Math.max(1, pages); p++) {
-    if (aborted()) break;
-    let html;
-    try {
-      html = await http.text(`https://gayforfans.com/performer${page ? `?page=${page + 1}` : ''}`, { maxBytes: 3_000_000, retries: 1, headers: { accept: 'text/html' } });
-    } catch (e) { events.log('WARN', `Discovery: gayforfans directory — ${e.message}`); break; }
-    const cheerio = require('cheerio');
-    const $ = cheerio.load(String(html));
-    const seen = new Set();
-    const links = [];
-    $('a[href*="/performer/"]').each((_, el) => {
-      const href = $(el).attr('href') || '';
-      const m = href.match(/\/performer\/([a-z0-9-]{3,})/i);
-      if (!m || seen.has(m[1])) return;
-      seen.add(m[1]);
-      const label = ($(el).text() || '').replace(/#\d+\s*/, '').replace(/\s+/g, ' ').trim();
-      links.push({ url: /^https?:/i.test(href) ? href : `https://gayforfans.com${href}`, slug: m[1], label });
-    });
-    // JustTheGays (justthegays.tv) is the 2026-era sister directory on the same infrastructure: the
-    // mirror (coomer.st) stopped indexing new OnlyFans posts in late 2025, and this is where the
-    // current material and the newly rising performers live. Its trending top-performer list is
-    // read once per run, so a creator nobody follows yet still gets found.
-    if (gff && typeof gff.trendingPerformers === 'function' && p === 0) {
-      try {
-        const fresh = await gff.trendingPerformers({ limit: 30 });
-        for (const f of fresh) {
-          if (seen.has(f.slug)) continue;
-          seen.add(f.slug);
-          links.push({ url: f.url, slug: f.slug, label: f.name });
-        }
-      } catch (e) { events.log('WARN', `Discovery: JustTheGays trending — ${e.message}`); }
-    }
+  // Follow the performers on one list (and their coomer mirror pages), through the usual gates.
+  const consider = async (links) => {
     out.scanned += links.length;
     let added = 0;
     // GayForFans is a gay-male OnlyFans directory: each performer here is a gay male creator by the
@@ -1751,6 +1720,41 @@ async function gffDiscovery({ pages = 2, perPage = 6, coomerLimit = 12, maxFollo
       if (r.status === 'created') { out.coomer++; events.log('OK', `Discovery: gayforfans performer ${name} → coomer ${hit.service}/${hit.id}`); }
     }
     out.seen += links.length;
+  };
+
+  // JustTheGays first: its public lists (latest, trending, popular, most viewed, top rated) answer with
+  // plain HTML, while gayforfans.com bot-checks this server. It is the 2026-era sister directory on the
+  // same infrastructure, where the newly rising performers appear first.
+  if (gff && typeof gff.trendingPerformers === 'function') {
+    let fresh = [];
+    try { fresh = await gff.trendingPerformers({ limit: 150 }); } catch (e) { events.log('WARN', `Discovery: JustTheGays lists — ${e.message}`); }
+    if (fresh.length) {
+      await consider(fresh.map((f) => ({ url: f.url, slug: f.slug, label: f.name })));
+      if (out.followed || out.coomer) return out;
+    }
+  }
+
+  // Fallback, only when JustTheGays found nobody new: walk the gayforfans.com performer directory.
+  let page = parseInt(repo.discoveryState.get('gff.page', '0'), 10) || 0;
+  for (let p = 0; p < Math.max(1, pages); p++) {
+    if (aborted()) break;
+    let html;
+    try {
+      html = await http.text(`https://gayforfans.com/performer${page ? `?page=${page + 1}` : ''}`, { maxBytes: 3_000_000, retries: 1, headers: { accept: 'text/html' } });
+    } catch (e) { events.log('WARN', `Discovery: gayforfans directory — ${e.message}`); break; }
+    const cheerio = require('cheerio');
+    const $ = cheerio.load(String(html));
+    const seen = new Set();
+    const links = [];
+    $('a[href*="/performer/"]').each((_, el) => {
+      const href = $(el).attr('href') || '';
+      const m = href.match(/\/performer\/([a-z0-9-]{3,})/i);
+      if (!m || seen.has(m[1])) return;
+      seen.add(m[1]);
+      const label = ($(el).text() || '').replace(/#\d+\s*/, '').replace(/\s+/g, ' ').trim();
+      links.push({ url: /^https?:/i.test(href) ? href : `https://gayforfans.com${href}`, slug: m[1], label });
+    });
+    await consider(links);
     page = gffNextPage(page);
     repo.discoveryState.set('gff.page', String(page));
     if (links.length < 10) break;

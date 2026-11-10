@@ -37,9 +37,22 @@ test('lookup probe remains bounded', async () => {
   assert.equal(result.items.length, 2);
 });
 
-test('a bot check on gayforfans reads the same performer on JustTheGays instead of failing the feed', async () => {
+test('a gayforfans feed reads JustTheGays first and moves there, without touching gayforfans', async () => {
   handler = (url) => {
     if (url.includes('gayforfans.com/performer/')) return Promise.reject(Object.assign(new Error('Forbidden'), { status: 403 }));
+    return null;
+  };
+  const result = await gff.fetch({ target: 'https://gayforfans.com/performer/test-person-123' }, { cursor: {}, limit: 50 });
+  assert.equal(result.resolvedTarget, 'https://justthegays.tv/performer/test-person-123');
+  assert.equal(result.items.length, 30);
+  assert.ok(!calls.some((url) => url.includes('gayforfans.com')), 'gayforfans is not read when JustTheGays has the performer');
+});
+
+test('when JustTheGays has nothing under the slug and gayforfans bot-checks, the name search still finds him', async () => {
+  handler = (url) => {
+    if (url.includes('gayforfans.com/performer/')) return Promise.reject(Object.assign(new Error('Forbidden'), { status: 403 }));
+    if (/justthegays\.tv\/performer\/test-person-123/.test(url)) return Promise.reject(Object.assign(new Error('not found'), { status: 404 }));
+    if (url.includes('/search?q=')) return '<a href="/performer/test-person-x9">#1 Test Person</a>';
     return null;
   };
   const result = await gff.fetch({ target: 'https://gayforfans.com/performer/test-person-123' }, { cursor: {}, limit: 50 });
@@ -79,6 +92,7 @@ test('when the slugs differ, the sister directory is searched by name', async ()
 test('a real (non-challenge) error on gayforfans is still thrown', async () => {
   handler = (url) => {
     if (url.includes('gayforfans.com/performer/')) return Promise.reject(Object.assign(new Error('server error'), { status: 500 }));
+    if (url.includes('justthegays.tv/performer/')) return Promise.reject(Object.assign(new Error('not found'), { status: 404 }));
     return null;
   };
   await assert.rejects(

@@ -11,9 +11,13 @@ const originalHttp = http.forPlatform;
 const originalRobots = web.robotsAllows;
 let videoAnswer = null;
 let performerH1 = 'Test Person';
+let performerExtra = '';
+let performerVideos = ['video-alpha'];
+const videoCalls = [];
 const ld = (o) => `<script type="application/ld+json">${JSON.stringify({ '@type': 'VideoObject', contentUrl: 'https://example.test/stream', ...o })}</script>`;
 http.forPlatform = () => ({ text: async (url) => {
-  if (url.includes('/performer/')) return `<h1>${performerH1}</h1><link rel="canonical" href="https://justthegays.tv/performer/test-person-123"><a href="/video/video-alpha">a</a>`;
+  if (url.includes('/performer/')) return `<h1>${performerH1}</h1><link rel="canonical" href="https://justthegays.tv/performer/test-person-123">${performerVideos.map((v) => `<a href="/video/${v}">a</a>`).join('')}${performerExtra}`;
+  videoCalls.push(url);
   return videoAnswer(url);
 } });
 web.robotsAllows = async () => true;
@@ -25,6 +29,7 @@ let repo; let pipeline;
 before(() => { repo = require('../src/db/repo'); pipeline = require('../src/engine/pipeline'); });
 
 const feed = { platform: 'gff', kind: 'user', target: 'https://justthegays.tv/performer/test-person-123' };
+test.afterEach(() => { performerExtra = ''; performerVideos = ['video-alpha']; videoCalls.length = 0; });
 const run = (cursor) => gff.fetch(feed, { cursor, limit: 50, aborted: () => false });
 
 test('a 500 on a video page leaves the slug out of cursor.seen and the next run retries it', async () => {
@@ -61,4 +66,28 @@ test('a video page with no actor still uses a real performer page name', async (
   const r = await run({});
   assert.equal(r.items.length, 1);
   assert.equal(r.items[0].author, 'Test Person');
+});
+
+test('a performer page with embedded VideoObjects yields items without fetching video pages', async () => {
+  performerH1 = 'Test Person';
+  performerVideos = ['video-alpha', 'video-beta'];
+  const list = { '@context': 'https://schema.org', '@type': 'CollectionPage', mainEntity: { '@type': 'ItemList', itemListElement: performerVideos.map((v, i) => ({ '@type': 'ListItem', position: i + 1, item: { '@type': 'VideoObject', name: v, url: `https://justthegays.tv/video/${v}`, contentUrl: `https://cdn.example.test/${v}.m3u8`, uploadDate: '2026-11-01T00:00:00Z' } })) } };
+  performerExtra = `<script type="application/ld+json">${JSON.stringify(list)}</script>`;
+  videoAnswer = () => { throw new Error('video page must not be fetched'); };
+  const r = await run({});
+  assert.deepEqual(r.items.map((it) => it.sourceId), ['gff-video-alpha', 'gff-video-beta']);
+  assert.equal(r.items[0].mediaUrl, 'https://cdn.example.test/video-alpha.m3u8');
+  assert.equal(r.items[0].author, 'Test Person');
+  assert.equal(videoCalls.length, 0);
+});
+
+test('a 403 video page is noted and skipped, not marked seen, while the other videos still load', async () => {
+  performerH1 = 'Test Person';
+  performerVideos = ['video-alpha', 'video-beta'];
+  videoAnswer = (url) => (url.includes('video-alpha') ? Promise.reject(Object.assign(new Error('HTTP 403'), { status: 403 })) : ld({}));
+  const r = await run({});
+  assert.deepEqual(r.items.map((it) => it.sourceId), ['gff-video-beta']);
+  assert.ok(r.notes.some((n) => /video-alpha/.test(n)));
+  assert.ok(!r.cursor.seen.includes('video-alpha'));
+  assert.ok(r.cursor.seen.includes('video-beta'));
 });

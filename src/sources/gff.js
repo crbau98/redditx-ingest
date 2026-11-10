@@ -19,9 +19,9 @@
  * Items are creator-owned (the page *is* his), so they carry `trusted: true`; the engine's safety,
  * takedown, male-scope and picture gates still run on every one of them.
  *
- * Discovery (engine/discovery.js `gffDiscovery`) walks the public /performer directory — ranked by
- * popularity, 75 pages — and registers the top performers as feeds; it also walks JustTheGays'
- * trending top-performers list, which is where the new 2026 performers appear first.
+ * Discovery (engine/discovery.js `gffDiscovery`) reads JustTheGays' open lists (latest, trending,
+ * popular, most viewed, top rated) and registers their performers as feeds; the gayforfans.com
+ * /performer directory (75 pages) is walked only when those lists find nobody new.
  */
 const cheerio = require('cheerio');
 const http = require('./http').forPlatform('gff', 900);
@@ -56,6 +56,8 @@ function identity() {
   return { userAgent: on ? BROWSER_UA : null };
 }
 const pageHeaders = () => { const { userAgent } = identity(); return { accept: 'text/html', ...(userAgent ? { 'user-agent': userAgent } : {}) }; };
+/** JustTheGays list pages that answer with plain HTML (the a-z, all-time and search pages bot-check). */
+const JTG_LISTS = ['/p7103/latest', '/p6914/top-performers/trending', '/p7138/popular', '/p7113/most-viewed', '/p6976/top-rated'];
 /** Performer-page URL for a slug on either directory. */
 const performerUrl = (host, slug) => `https://${host}/performer/${slug}`;
 
@@ -214,7 +216,25 @@ function performerPage(html) {
     seen.add(m[1]);
     videos.push({ slug: m[1], url: /^https?:/i.test(href) ? href : `${base}${href.startsWith('/') ? '' : '/'}${href}`, title: ($(el).text() || '').replace(/\s+/g, ' ').trim() });
   });
-  return { name, avatar, banner, videos };
+  // JustTheGays performer pages carry their newest videos as JSON-LD VideoObjects with the stream URL,
+  // so those need no video-page request (individual video pages are the ones that answer 403 most).
+  const embedded = new Map();
+  $('script[type="application/ld+json"]').each((_, el) => {
+    let j;
+    try { j = JSON.parse($(el).text()); } catch { return; }
+    const walk = (node, depth) => {
+      if (!node || typeof node !== 'object' || depth > 6) return;
+      if (Array.isArray(node)) { node.forEach((n) => walk(n, depth + 1)); return; }
+      if (node['@type'] === 'VideoObject' && node.contentUrl) {
+        const m = String(node.url || node['@id'] || '').match(/\/video\/([a-z0-9-]{6,})/i);
+        if (m && !embedded.has(m[1])) embedded.set(m[1], node);
+        return;
+      }
+      Object.values(node).forEach((v) => walk(v, depth + 1));
+    };
+    walk(j, 0);
+  });
+  return { name, avatar, banner, videos, embedded };
 }
 
 module.exports = {
@@ -286,15 +306,16 @@ module.exports = {
   },
 
   /**
-   * The trending top-performer list of a directory (JustTheGays: /p6914/top-performers/trending).
-   * This is where the newest 2026 performers show up — the mirror stopped indexing them.
+   * Performers from JustTheGays' public lists (latest, trending, popular, most viewed, top rated).
+   * This is where the newest 2026 performers show up — the mirror stopped indexing them. Only the
+   * lists JustTheGays serves as plain HTML are read; gayforfans.com bot-checks this server.
    * @returns {Promise<Array<{url: string, name: string, slug: string, host: string}>>}
    */
   async trendingPerformers({ limit = 24, timeout = 12000 } = {}) {
     const out = [];
     const seen = new Set();
-    for (const site of SITES) {
-      for (const path of ['/p6914/top-performers/trending', '/p6913/top-performers/a-z']) {
+    for (const site of SITES.filter((x) => x.host === 'justthegays.tv')) {
+      for (const path of JTG_LISTS) {
         if (out.length >= limit) break;
         let html;
         try {
@@ -348,7 +369,7 @@ module.exports = {
     const alternateFor = async () => {
       if (!original) return null;
       const same = performerUrl('justthegays.tv', original.label);
-      let candidate = await read(same).catch(() => null);
+      let candidate = sisterTried ? null : await read(same).catch(() => null);
       if (candidate && candidate.videos.length) return { page: candidate, url: same };
       const query = String(feed.label || '').trim()
         || original.label.replace(/-[a-z0-9]{4,6}$/i, '').replace(/_/g, ' ').trim();
@@ -363,8 +384,19 @@ module.exports = {
 
     let page;
     let resolvedTarget;
+    let sisterTried = false;
     let triedAlternate = false;
     if (original && /gayforfans\.com\/performer\//i.test(target)) {
+      // JustTheGays serves the same performer as plain HTML; gayforfans.com bot-checks this server.
+      // Try the sister page under the same slug first and move the feed there when it has videos.
+      const sister = performerUrl('justthegays.tv', original.label);
+      sisterTried = true;
+      const first = await read(sister).catch(() => null);
+      if (first && first.videos.length) { page = first; resolvedTarget = sister; }
+    }
+    if (page) {
+      // read from JustTheGays above
+    } else if (original && /gayforfans\.com\/performer\//i.test(target)) {
       try {
         page = await read(target);
       } catch (e) {
@@ -394,19 +426,23 @@ module.exports = {
     const fresh = page.videos.filter((v) => !seen.has(v.slug)).slice(0, cap);
     if (!fresh.length && page.videos.length) notes.push('gayforfans: no new videos since the last run');
 
+    let blocked = 0;
     for (const v of fresh) {
       if (ctx.aborted && ctx.aborted()) break;
-      let vh;
-      try {
-        vh = await http.text(v.url, { maxBytes: 3_000_000, retries: 1, headers: pageHeaders() });
-      } catch (e) {
-        if (isBlockedStatus(e.status) || isChallengeText(e.body)) throw challengeError();
-        // Not marked seen: a failed page read is usually transient, so the next run tries it again.
-        notes.push(`gayforfans: ${v.slug} — ${e.message}`);
-        continue;
+      let vo = page.embedded && page.embedded.get(v.slug);
+      if (!vo) {
+        let vh;
+        try {
+          vh = await http.text(v.url, { maxBytes: 3_000_000, retries: 1, headers: pageHeaders() });
+          if (isChallengeText(vh)) throw Object.assign(new Error('bot check'), { status: 403 });
+        } catch (e) {
+          // Not marked seen: a failed or blocked page read is usually transient, so the next run tries it again.
+          if (isBlockedStatus(e.status) || isChallengeText(e.body)) blocked++;
+          notes.push(`gayforfans: ${v.slug} — ${e.message}`);
+          continue;
+        }
+        vo = videoObject(String(vh));
       }
-      if (isChallengeText(vh)) throw challengeError();
-      const vo = videoObject(String(vh));
       if (!vo || !vo.contentUrl) continue;
       // The video page names him; the performer page's <h1> can be the site's own name. With neither,
       // the slug would become a junk creator, so the video is skipped (and retried next run).
@@ -435,6 +471,8 @@ module.exports = {
       if (ctx.limit && items.length >= ctx.limit) break;
     }
 
+    // Every video page was blocked and nothing was read: the site is bot-checking, report it as such.
+    if (blocked && !items.length) throw challengeError();
     const kept = [...seen].slice(-SEEN_KEEP);
     return {
       items,
