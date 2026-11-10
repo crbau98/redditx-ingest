@@ -278,12 +278,16 @@ async function hashSweep({ limit = 12, settings } = {}) {
   const s = settings || settingsStore.get();
   const res = { checked: 0, hashed: 0, collapsed: 0, errors: 0, done: false };
   let after = parseInt(repo.settings.get('hash_sweep_seq') || '0', 10) || 0;
-  const rows = repo.db.prepare(`SELECT seq, id, platform, post_key, source_url, author, community, posted_at, media_type, media_url, preview_url, thumbnail_url, width, height, phash FROM media
+  const rows = repo.db.prepare(`SELECT seq, id, creator_id, platform, post_key, source_url, author, community, posted_at, media_type, media_url, preview_url, thumbnail_url, width, height, phash FROM media
     WHERE publish_state IN ('published','review') AND seq > ? ORDER BY seq LIMIT ?`).all(after, limit);
   if (!rows.length) { res.done = true; return res; }
+  const byId = repo.db.prepare("SELECT seq FROM media WHERE id = ? AND publish_state IN ('published','review')");
+  const touched = new Set(); // creators whose published set changed; recounted once at the end
   for (const row of rows) {
     after = row.seq; res.checked++;
-    await new Promise((res2) => setImmediate(res2)); // hashing and the dedupe lookup are synchronous: yield between rows
+    // setTimeout(0), not setImmediate: under a busy ingest the next Immediate can run before the
+    // event loop answers HTTP, and a 48-row hash pass was showing up as a multi-second hashSweep block.
+    await new Promise((res2) => setTimeout(res2, 0));
     if (borrowedPoster(row)) {
       // a hash the OLD sweep took from the borrowed poster is wrong: drop it, from the database and from the dedupe index, so it cannot
       // make an unrelated video with a similar poster look like a duplicate
@@ -298,12 +302,19 @@ async function hashSweep({ limit = 12, settings } = {}) {
     }
     if (!s.dedupe) { dedupe.remember(row.id, hash, { mediaType: row.media_type, width: row.width, height: row.height }); continue; }
     const hit = dedupe.check({ phash: hash, mediaType: row.media_type, width: row.width, height: row.height }, { distance: s.dedupeDistance, ignoreId: row.id }).dup;
-    const orig = hit && repo.db.prepare("SELECT seq FROM media WHERE id = ? AND publish_state IN ('published','review')").get(hit.id);
+    const orig = hit && byId.get(hit.id);
     if (orig && orig.seq < row.seq) {
       repo.media.addAltSource(hit.id, { platform: row.platform, source_url: row.source_url, author: row.author, community: row.community, posted_at: row.posted_at });
-      repo.media.setState(row.id, 'hidden', `duplicate of ${hit.id}`);
+      // deferStats: collapsing dozens of dupes used to recount each creator on every hide and
+      // stall the loop for seconds. One recount per touched creator runs after the pass.
+      repo.media.setState(row.id, 'hidden', `duplicate of ${hit.id}`, { deferStats: true });
+      if (row.creator_id) touched.add(row.creator_id);
       res.collapsed++;
     } else dedupe.remember(row.id, hash, { mediaType: row.media_type, width: row.width, height: row.height });
+  }
+  for (const id of touched) {
+    await new Promise((res2) => setTimeout(res2, 0));
+    repo.creators.refreshStats(id);
   }
   repo.settings.set('hash_sweep_seq', String(after));
   if (res.collapsed || res.hashed) events.log('OK', `Hash sweep: ${res.hashed} hashed, ${res.collapsed} duplicate(s) collapsed (of ${res.checked} checked)`);
@@ -488,7 +499,9 @@ function startImageSweep() {
     if (!s.imageSweep || !s.imageSweepPerTick) return;
     sweepBusy = true;
     try {
-      if (s.dedupe) await blockwatch.around('hashSweep', () => hashSweep({ limit: s.imageSweepPerTick * 2, settings: s }));
+      // Same bite as the image sweep (was 2×): a bigger hash pass hid many rows and recounted each
+      // creator mid-tick. With deferred recounts the bite can grow again once p99 stays quiet.
+      if (s.dedupe) await blockwatch.around('hashSweep', () => hashSweep({ limit: s.imageSweepPerTick, settings: s }));
       if ((!s.imageFilter && !s.physiqueFilter) || sweepGaveUp) return;
       if (!(await imagefilter.available())) { sweepGaveUp = true; return; } // logged once by the filter itself
       // The body sweep reads faces in the same pass, so while it has work the face-only sweep would download and analyse the

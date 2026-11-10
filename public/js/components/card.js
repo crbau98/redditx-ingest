@@ -3,7 +3,7 @@ import { h, icon, proxied, fmt, avatar } from '../dom.js';
 import { favorites, history as viewHistory, prefs, platformLabel, platformColor, bus } from '../store.js';
 import { parse, href } from '../router.js';
 import { rememberFlip, heartBurst } from './fx.js';
-import { cardImage } from '../images.js';
+import { cardImage, stillChain } from '../images.js';
 
 /* ---- hover / in-view video previews ------------------------------------
  * Only a couple of <video> elements are ever alive at once, so a grid of
@@ -127,7 +127,16 @@ export function mediaCard(item, { open, compact = false, why = null, eager = fal
   const isVideo = item.media_type === 'video';
   // Grids load the small thumbnail build when it exists (engine/thumbs.js, ~360px WebP) and take the platform
   // preview only where the thumbnail would have to be stretched (see images.js). The full file only loads in the viewer.
-  const { src, fallback } = cardImage(item, { proxy: proxied, width, viewport: window.innerWidth, dpr: window.devicePixelRatio || 1, isVideo });
+  const picked = cardImage(item, { proxy: proxied, width, viewport: window.innerWidth, dpr: window.devicePixelRatio || 1, isVideo });
+  // Prefer the size-aware pick, then walk every remaining still (thumb → preview → file) so one
+  // dead URL cannot leave a blank tile on a creator page.
+  const retries = [];
+  const seen = new Set();
+  const push = (u) => { if (u && !seen.has(u)) { seen.add(u); retries.push(u); } };
+  push(picked.src);
+  push(picked.fallback);
+  for (const u of stillChain(item)) push(proxied(u));
+  const src = retries.shift() || null;
 
   const here = parse();
   const media = h('a', { class: 'card-media', href: href(here.path, { ...Object.fromEntries(here.query), m: item.id }), style: { aspectRatio: String(ratio) }, 'aria-label': item.title || 'Open media' });
@@ -143,11 +152,11 @@ export function mediaCard(item, { open, compact = false, why = null, eager = fal
     // The placeholder's shimmer stops as soon as the image is in: a grid of finished cards must not
     // keep animating underneath (it repainted every visible card, every frame, forever).
     img.addEventListener('load', () => { media._loaded = true; img.classList.remove('loading'); ph.classList.add('done'); });
-    // A thumbnail whose build vanished from the store (store row without a stored object, expired key) must not
-    // leave a blank tile: one retry takes the platform preview, which is how the row loaded before thumbnails.
+    // A vanished store thumb, a hotlink-blocked preview, then the file itself: keep stepping until
+    // one loads. Only when every still fails do we leave the tinted placeholder and report broken.
     img.addEventListener('error', () => {
-      const retry = !img._fellBack && fallback && fallback !== img.src ? fallback : null;
-      if (retry) { img._fellBack = true; media._src = retry; img.src = retry; return; }
+      const retry = retries.shift();
+      if (retry && retry !== img.src) { media._src = retry; img.src = retry; return; }
       media._img = null; img.remove(); ph.classList.add('done'); reportBroken(item.id);
     });
     media.appendChild(img);

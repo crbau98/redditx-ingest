@@ -68,8 +68,9 @@ describe('thumbnail or preview for a grid card (images.js)', () => {
     assert.equal(full({ width: 330, dpr: 2 }).fallback, null, 'large slot: the preview is already first, no retry needed');
     assert.equal(full({ width: 175, dpr: 2 }, { ...item, preview_url: null, thumbnail_url: null, media_url: null }).fallback, null, 'nothing larger exists: no retry');
     const card = fs.readFileSync(path.join(JS, 'components', 'card.js'), 'utf8');
-    assert.match(card, /const \{ src, fallback \} = cardImage\(item/, 'the card reads the retry URL');
-    assert.match(card, /img\._fellBack/, 'one retry only — the fallback failing still leaves: placeholder + report');
+    assert.match(card, /cardImage\(item/, 'the card picks a size-aware first still');
+    assert.match(card, /stillChain\(item\)/, 'then walks every remaining still when that URL dies');
+    assert.match(card, /retries\.shift\(\)/, 'each error takes the next still; the last failure leaves the placeholder + report');
   });
   test('every grid card is built through it, with the layout width passed down from the masonry', () => {
     const card = fs.readFileSync(path.join(JS, 'components', 'card.js'), 'utf8');
