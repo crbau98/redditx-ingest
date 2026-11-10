@@ -76,7 +76,7 @@ Success: the first screen is useful before the slow calls return, scrolling does
 
 ## Next
 
-55. Review queue: filter the page by hold kind or one named reason, so you do not page past unrelated holds.
+55. [x] Review queue: filter the page by hold kind or one named reason, so you do not page past unrelated holds.
 
 ## Later
 

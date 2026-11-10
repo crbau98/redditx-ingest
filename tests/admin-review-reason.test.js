@@ -124,3 +124,24 @@ test('the review queue pages past the newest slice of a mixed backlog', async ()
   const firstIds = new Set(first.json.items.map((m) => m.id));
   assert.ok(second.json.items.every((m) => !firstIds.has(m.id)), 'page 1 is not a repeat of page 0');
 });
+
+test('the review queue filters by hold kind or one named reason', async () => {
+  item('safety: age-claim');
+  item('safety: age-claim');
+  item('scope:unclear');
+  item('physique:heavy');
+  const safety = await adm('/moderation/queue?kind=safety');
+  assert.equal(safety.status, 200);
+  assert.equal(safety.json.kind, 'safety');
+  assert.ok(safety.json.items.length >= 2);
+  assert.ok(safety.json.items.every((m) => String(m.review_reason).startsWith('safety:')));
+  const named = await adm('/moderation/queue?reason=' + encodeURIComponent('scope:unclear'));
+  assert.equal(named.status, 200);
+  assert.equal(named.json.reason, 'scope:unclear');
+  assert.ok(named.json.items.length >= 1);
+  assert.ok(named.json.items.every((m) => m.review_reason === 'scope:unclear'));
+  const other = await adm('/moderation/queue?kind=other');
+  assert.equal(other.status, 200);
+  assert.ok(other.json.items.some((m) => m.review_reason === 'physique:heavy'));
+  assert.ok(other.json.items.every((m) => !String(m.review_reason || '').startsWith('safety:') && m.review_reason !== 'scope:unclear' && m.review_reason !== 'scope'));
+});

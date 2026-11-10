@@ -291,8 +291,14 @@ router.post('/media/bulk', (req, res) => {
 });
 
 router.get('/moderation/queue', (req, res) => {
-  const r = repo.media.list({ admin: true, state: 'review', sort: 'ingested', ...page(req) });
-  res.json({ ...r, reasons: repo.media.reviewReasonCounts() });
+  // kind = safety|scope|other; reason = exact review_reason. Reason wins when both are set.
+  const kind = ['safety', 'scope', 'other'].includes(req.query.kind) ? req.query.kind : undefined;
+  const reason = typeof req.query.reason === 'string' ? req.query.reason.trim().slice(0, 200) : '';
+  const r = repo.media.list({
+    admin: true, state: 'review', sort: 'ingested', ...page(req),
+    ...(reason ? { reviewReason: reason } : kind ? { reviewKind: kind } : {}),
+  });
+  res.json({ ...r, kind: kind || null, reason: reason || null, reasons: repo.media.reviewReasonCounts() });
 });
 
 // One chunk of a hold: every waiting row with this exact reason, not a prefix and not another state.

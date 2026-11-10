@@ -175,15 +175,63 @@ export async function render(root) {
   let bulk = null;
   let clearing = false;
   // Mixed holds used to stop at the newest 60. Page through the rest with the same pager as Media.
+  // Filter by hold kind or one named reason so you do not page past unrelated holds.
   let page = 0;
+  let kind = '';
+  let reason = '';
   const PAGE = 60;
+  const KIND_FILTERS = [
+    ['', 'All kinds'],
+    ['safety', 'Safety'],
+    ['scope', 'Male focus'],
+    ['other', 'Other'],
+  ];
+
+  function filterQuery() {
+    const q = { limit: PAGE, page };
+    if (reason) q.reason = reason;
+    else if (kind) q.kind = kind;
+    return q;
+  }
+
+  function setFilter({ nextKind = kind, nextReason = reason } = {}) {
+    kind = nextKind;
+    reason = nextReason;
+    if (reason) kind = ''; // exact reason wins; clear the kind chip so the UI matches the API
+    page = 0;
+    load();
+  }
+
+  function filterBar(reasons) {
+    const kinds = KIND_FILTERS.map(([v, label]) => h('button', {
+      class: `btn sm${!reason && kind === v ? ' primary' : ''}`,
+      type: 'button',
+      'aria-pressed': String(!reason && kind === v),
+      onclick: () => setFilter({ nextKind: v, nextReason: '' }),
+    }, label));
+    const opts = [h('option', { value: '', selected: !reason }, 'Any named reason')];
+    for (const row of reasons || []) {
+      if (!row || !row.reason) continue;
+      opts.push(h('option', { value: row.reason, selected: reason === row.reason },
+        `${holdOf(row.reason).label} · ${fmt.int(row.n)}`));
+    }
+    const sel = h('select', {
+      class: 'select',
+      'aria-label': 'Filter by named hold reason',
+      onchange: () => setFilter({ nextKind: '', nextReason: sel.value }),
+    }, ...opts);
+    return h('div', { class: 'row wrap review-filters', style: { gap: '8px', alignItems: 'center' } },
+      h('span', { class: 'a-meta' }, 'Show'),
+      ...kinds,
+      sel);
+  }
 
   async function load() {
     if (!alive) return;
     showState(loadingState('Loading the queue'));
     if (bulk) bulk.clear();
     let r;
-    try { r = await adminGet('/moderation/queue', { limit: PAGE, page }); }
+    try { r = await adminGet('/moderation/queue', filterQuery()); }
     catch (e) { if (alive) showState(errorState(e.message, () => load())); return; }
     if (!alive) return;
     // After a clear, this page can be empty while older holds remain — step back once.
@@ -193,9 +241,16 @@ export async function render(root) {
     }
     if (!r.items.length) {
       grid = null; shortcuts = null;
-      showState(emptyState({ icon: 'check', title: 'Nothing is waiting',
-        text: 'The queue holds media the gate kept back: a safety rule matched, or the male focus could not be confirmed. Nothing held here is public. New holds appear after the next ingest.',
-        actions: [h('a', { class: 'btn', href: href('/admin/overview') }, 'Back to overview')] }));
+      const filtered = !!(kind || reason);
+      showState(h('div', { class: 'stack' },
+        filterBar(r.reasons),
+        emptyState({ icon: 'check', title: filtered ? 'Nothing matches this filter' : 'Nothing is waiting',
+          text: filtered
+            ? 'Clear the kind or reason filter to see the rest of the queue.'
+            : 'The queue holds media the gate kept back: a safety rule matched, or the male focus could not be confirmed. Nothing held here is public. New holds appear after the next ingest.',
+          actions: filtered
+            ? [h('button', { class: 'btn', type: 'button', onclick: () => setFilter({ nextKind: '', nextReason: '' }) }, 'Clear filter')]
+            : [h('a', { class: 'btn', href: href('/admin/overview') }, 'Back to overview')] })));
       return;
     }
     const run = (action) => async (e) => {
@@ -267,9 +322,11 @@ export async function render(root) {
           h('button', { class: 'btn sm', type: 'button', onclick: clearReason('reject', row) }, 'Remove all'))))) : null;
     const from = page * (r.limit || PAGE) + 1;
     const to = from + r.items.length - 1;
+    const filterNote = reason ? ` · ${holdOf(reason).label}` : kind ? ` · ${KIND_FILTERS.find(([v]) => v === kind)?.[1] || kind}` : '';
     showState(h('div', { class: 'stack' },
+      filterBar(r.reasons),
       holdSection,
-      h('div', { class: 'row' }, h('span', { class: 'a-meta', role: 'status' }, `${fmt.int(r.total)} waiting · showing ${from}–${to}`), h('span', { class: 'grow' }),
+      h('div', { class: 'row' }, h('span', { class: 'a-meta', role: 'status' }, `${fmt.int(r.total)} waiting${filterNote} · showing ${from}–${to}`), h('span', { class: 'grow' }),
         h('button', { class: 'btn sm', type: 'button', onclick: () => grid.selectAll() }, 'Select all on this page')),
       grid.el,
       pager({ page: r.page, limit: r.limit || PAGE, total: r.total, onPage: (p) => { page = p; load(); } }),

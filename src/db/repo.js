@@ -1121,6 +1121,17 @@ function buildMediaWhere(f) {
     else { where.push(`m.id IN (${f.ids.map(() => '?').join(',')})`); params.push(...f.ids); }
   }
   if (f.scope) { where.push('m.scope = ?'); params.push(f.scope); }
+  // Review queue: one exact hold reason, or one hold kind (safety / scope / other). Exact reason wins.
+  if (typeof f.reviewReason === 'string' && f.reviewReason) {
+    where.push('m.review_reason = ?');
+    params.push(f.reviewReason);
+  } else if (f.reviewKind === 'safety') {
+    where.push("m.review_reason LIKE 'safety:%'");
+  } else if (f.reviewKind === 'scope') {
+    where.push("m.review_reason IN ('scope:unclear', 'scope')");
+  } else if (f.reviewKind === 'other') {
+    where.push("(m.review_reason IS NULL OR (m.review_reason NOT LIKE 'safety:%' AND m.review_reason NOT IN ('scope:unclear', 'scope')))");
+  }
   if (f.level === 'explicit' || f.level === 'suggestive') { where.push('m.nsfw_level = ?'); params.push(f.level); }
   if (f.minScore) { where.push('m.score >= ?'); params.push(f.minScore); }
   if (f.after) { where.push('m.ingested_at > ?'); params.push(f.after); }

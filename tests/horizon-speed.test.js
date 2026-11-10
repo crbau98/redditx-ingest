@@ -184,9 +184,19 @@ test('import keeps the newer resume point and drops one older than 21 days', () 
 
 test('the review queue pages a mixed backlog instead of stopping at the newest 60', () => {
   const src = fs.readFileSync(path.join(__dirname, '../public/js/views/admin/moderation.js'), 'utf8');
-  assert.match(src, /adminGet\('\/moderation\/queue', \{ limit: PAGE, page \}\)/);
+  assert.match(src, /adminGet\('\/moderation\/queue', filterQuery\(\)\)/);
   assert.match(src, /pager\(\{ page: r\.page, limit: r\.limit \|\| PAGE, total: r\.total/);
   assert.ok(src.includes('if (!r.items.length && page > 0 && (r.total || 0) > 0)'), 'an empty later page steps back after a clear');
+});
+
+test('the review queue can filter by hold kind or one named reason', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../public/js/views/admin/moderation.js'), 'utf8');
+  assert.ok(src.includes("q.reason = reason"), 'named reason is sent to the queue');
+  assert.ok(src.includes('q.kind = kind'), 'hold kind is sent to the queue');
+  assert.match(src, /Filter by named hold reason/);
+  const route = fs.readFileSync(path.join(__dirname, '../src/routes/admin.js'), 'utf8');
+  assert.match(route, /reviewReason: reason/);
+  assert.match(route, /reviewKind: kind/);
 });
 
 test('find drops a late lookup and does not open a profile after you leave', () => {
