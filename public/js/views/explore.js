@@ -249,7 +249,10 @@ export async function explore(root, { query }) {
   });
 
   // Fill the dynamic option lists without blocking the feed.
+  // Cleanup returns before these resolve, so a late list does not paint a page you have left.
+  let left = false;
   get('/api/platforms').then((list) => {
+    if (left) return;
     platSel.replaceChildren(
       h('option', { value: '' }, 'All sources'),
       ...list.map((p) => h('option', { value: p.platform, selected: f.platform === p.platform }, `${platformLabel(p.platform)} (${fmt.num(p.count)})`))
@@ -257,6 +260,7 @@ export async function explore(root, { query }) {
     if (f.platform) platSel.value = f.platform;
   }).catch(() => {});
   get('/api/creators', { sort: 'media', platform: f.platform || undefined, limit: 16 }).then((res) => {
+    if (left) return;
     const list = (res && res.items) || [];
     if (!list.length) { creatorRail.replaceChildren(); return; }
     creatorRail.replaceChildren(
@@ -264,9 +268,10 @@ export async function explore(root, { query }) {
       ...list.map((c) => h('button', { type: 'button', class: `chip${f.creator === c.id ? ' on' : ''}`, 'aria-pressed': String(f.creator === c.id), onclick: () => set({ creator: f.creator === c.id ? '' : c.id }), title: `${c.display_name || c.handle} (${c.media_count} posts)` },
         c.display_name || c.handle, h('span', { class: 'n' }, fmt.num(c.media_count)))),
     );
-  }).catch(() => { creatorRail.replaceChildren(); });
+  }).catch(() => { if (left) return; creatorRail.replaceChildren(); });
   if (!focusTags.length) {
     get('/api/tags', { limit: 30 }).then((tags) => {
+      if (left) return;
       tagRail.replaceChildren(...tags.map((t) => h('button', { class: 'chip', onclick: () => set({ tag: t.name }) }, `#${t.name}`, h('span', { class: 'n' }, fmt.num(t.count)))));
     }).catch(() => {});
   }
@@ -276,6 +281,7 @@ export async function explore(root, { query }) {
   });
 
   return () => {
+    left = true;
     stopPtr();
     feed.destroy();
     offSearches();

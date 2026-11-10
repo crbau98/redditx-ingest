@@ -70,6 +70,26 @@ test('an empty Following page hands back cleanup before popular creators return'
   assert.ok(empty.includes('if (left) return; people.remove()'), 'a late failure does not drop the rail after you leave');
 });
 
+test('Explore drops late platform, creator, and tag chip fills after you leave', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../public/js/views/explore.js'), 'utf8');
+  const painted = src.indexOf("aria-label': 'Explore filters'");
+  const plats = src.indexOf("get('/api/platforms')");
+  const creators = src.indexOf("get('/api/creators', { sort: 'media'");
+  const tags = src.indexOf("get('/api/tags', { limit: 30 })");
+  const back = src.indexOf('return () => {\n    left = true;');
+  assert.ok(painted > 0 && painted < plats && plats < creators && creators < tags && tags < back, 'the filter bar is up, and cleanup marks left, before chip fills resolve');
+  assert.equal(src.includes('await get(\'/api/platforms\')'), false);
+  assert.equal(src.includes('await get(\'/api/creators\''), false);
+  assert.equal(src.includes('await get(\'/api/tags\''), false);
+  const platFill = src.indexOf('platSel.replaceChildren(');
+  const creatorFill = src.indexOf('creatorRail.replaceChildren(\n      h(\'button\'');
+  const tagFill = src.indexOf('tagRail.replaceChildren(...tags.map');
+  assert.ok(src.lastIndexOf('if (left) return', platFill) > plats && src.lastIndexOf('if (left) return', platFill) < platFill, 'a late platform list does not rewrite the source select');
+  assert.ok(src.lastIndexOf('if (left) return', creatorFill) > creators && src.lastIndexOf('if (left) return', creatorFill) < creatorFill, 'a late creator list does not rewrite the Creator rail');
+  assert.ok(src.lastIndexOf('if (left) return', tagFill) > tags && src.lastIndexOf('if (left) return', tagFill) < tagFill, 'a late tag list does not rewrite the Tags rail');
+  assert.ok(src.includes('if (left) return; creatorRail.replaceChildren()'), 'a late creator failure does not clear the rail after you leave');
+});
+
 test('a creator profile hands back cleanup before the profile returns', () => {
   const src = fs.readFileSync(path.join(__dirname, '../public/js/views/creator.js'), 'utf8');
   const bone = src.indexOf("style: { height: '220px' }");
