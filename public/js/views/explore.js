@@ -135,9 +135,12 @@ export async function explore(root, { query }) {
   if (f.after) chip(`New since ${fmt.ago(f.after)}`, { after: '' }, 'u-since');
   if (f.paid) chip(f.paid === 'onlyfans' ? 'OnlyFans' : f.paid, { paid: '' }, 'u-paid');
   if (f.smart && f.type) chip(f.type === 'video' ? 'Videos' : 'Photos', { type: '' }, 'u-type');
+  // Cleanup returns before late fills resolve, so a name or spelling note does not rewrite a page you have left.
+  let left = false;
   let creatorName = null;
   if (f.creator) {
     get(`/api/creators/${f.creator}`).then((c) => {
+      if (left) return;
       creatorName = c.display_name || c.handle;
       creatorChip.textContent = `by ${creatorName}`;
       if (titleText === 'Explore') { titleEl.textContent = creatorName; document.title = `${creatorName} — PRISM`; }
@@ -155,6 +158,7 @@ export async function explore(root, { query }) {
         h('a', { class: 'u-raw', href: href('/explore', { q: f.raw }), title: 'Run a plain full-text search instead' }, 'Search the exact words')),
       fixes, f.ai ? h('div', { class: 'u-fixes u-ai' }, icon('sparkle', 'sm'), `Read by AI: ${f.ai}`) : null);
     understand(f.raw).then((u) => {
+      if (left) return;
       if (u && u.corrections && u.corrections.length) fixes.replaceChildren(icon('check', 'sm'), 'Spelling fixed: ', ...u.corrections.map((c, i) => h('span', null, i ? ', ' : '', h('s', null, c.from), ' → ', h('b', null, `#${c.to}`))));
     });
   }
@@ -249,8 +253,6 @@ export async function explore(root, { query }) {
   });
 
   // Fill the dynamic option lists without blocking the feed.
-  // Cleanup returns before these resolve, so a late list does not paint a page you have left.
-  let left = false;
   get('/api/platforms').then((list) => {
     if (left) return;
     platSel.replaceChildren(

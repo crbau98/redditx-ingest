@@ -90,6 +90,22 @@ test('Explore drops late platform, creator, and tag chip fills after you leave',
   assert.ok(src.includes('if (left) return; creatorRail.replaceChildren()'), 'a late creator failure does not clear the rail after you leave');
 });
 
+test('Explore drops late creator-name and spelling fills after you leave', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../public/js/views/explore.js'), 'utf8');
+  const leftAt = src.indexOf('let left = false;');
+  const nameAsk = src.indexOf('get(`/api/creators/${f.creator}`)');
+  const nameFill = src.indexOf('creatorChip.textContent = `by ${creatorName}`');
+  const spellingAsk = src.indexOf('understand(f.raw)');
+  const spellingFill = src.indexOf("fixes.replaceChildren(icon('check', 'sm'), 'Spelling fixed:");
+  const back = src.indexOf('return () => {\n    left = true;');
+  assert.ok(leftAt > 0 && leftAt < nameAsk && nameAsk < nameFill, 'left is marked before the creator-name request');
+  assert.ok(src.lastIndexOf('if (left) return', nameFill) > nameAsk && src.lastIndexOf('if (left) return', nameFill) < nameFill, 'a late creator name does not rewrite the chip or document title');
+  assert.ok(spellingAsk > leftAt && spellingAsk < spellingFill && spellingFill < back, 'Understood as is up before spelling resolves');
+  assert.ok(src.lastIndexOf('if (left) return', spellingFill) > spellingAsk && src.lastIndexOf('if (left) return', spellingFill) < spellingFill, 'a late spelling note does not rewrite Understood as');
+  assert.equal(src.includes('await get(`/api/creators/${f.creator}`)'), false);
+  assert.equal(src.includes('await understand(f.raw)'), false);
+});
+
 test('a creator profile hands back cleanup before the profile returns', () => {
   const src = fs.readFileSync(path.join(__dirname, '../public/js/views/creator.js'), 'utf8');
   const bone = src.indexOf("style: { height: '220px' }");

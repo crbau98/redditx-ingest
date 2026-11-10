@@ -81,6 +81,7 @@ Success: the first screen is useful before the slow calls return, scrolling does
 57. [x] Saved → Saved shows the same Continue rail Home and History already use, so half-watched videos are one tap away without opening History.
 58. [x] An empty Following page returns its cleanup before popular creators resolve. A late list, or a late failure, does not paint a page you have left.
 59. [x] Explore returns its cleanup before platform, creator, and tag chip lists resolve. A late list, or a late creator failure, does not paint a page you have left.
+60. [x] Explore drops a late creator-name fill and a late “Understood as” spelling note after you leave, so the tab title and banner stay with the page you opened next.
 
 ## Later
 

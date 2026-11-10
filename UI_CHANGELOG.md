@@ -15,6 +15,7 @@
 - **Saved has Continue too.** The Saved tab shows that same resume rail above the favorites grid (or the empty state), with the first four cards eager-loaded.
 - **Empty Following does not stick.** Leaving before the popular-creators list returns keeps the page you opened next; a late answer does not rewrite Following.
 - **Explore chip fills do not stick.** Leaving before the source, creator, or tag chip lists return keeps the page you opened next; a late answer does not rewrite Explore.
+- **Explore name and spelling fills do not stick.** Leaving before a creator filter’s display name, or before “Understood as” spelling fixes return, keeps the next page’s title and banner; a late answer does not rewrite them.
 - **Home fails in two pieces.** If Discover fails, Latest uploads stay and a banner says so. If Latest uploads fail, that grid says the rest of Home is still there.
 - **Library export includes where videos left off.** Import keeps the newer of the file and this device, and drops points older than 21 days. Older files that have no resume points still import.
 - **Admin → Overview shows each source.** Today’s items sit next to the day before, on the overview itself. A source that added nothing today after adding something in the last two weeks is marked and listed first.
