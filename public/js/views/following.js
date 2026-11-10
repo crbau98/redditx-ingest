@@ -27,17 +27,19 @@ function creatorRail(list) {
 }
 
 /** Not following anyone yet: say what this page does and offer creators to start with. */
-async function emptyFollowing(root) {
+function emptyFollowing(root) {
+  let left = false;
   const people = h('div', { class: 'rail' });
   root.replaceChildren(
     h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Following'), h('div', { class: 'sub' }, 'Follow creators and everything they post collects here'))),
     emptyState({ icon: 'users', title: 'You’re not following anyone yet', text: 'Tap Follow on a creator’s profile, in the viewer or in Reels. Their new posts land here, newest first, with a badge when there’s something you haven’t seen.', actions: [h('a', { class: 'btn primary', href: href('/creators') }, 'Browse creators')] }),
     h('section', { class: 'section' }, h('div', { class: 'section-head' }, h('div', null, h('h2', null, icon('flame'), 'Popular creators'))), people));
-  try {
-    const r = await get('/api/creators', { sort: 'score', limit: 12 });
+  // Cleanup returns before this resolves, so a late list does not paint a page you have left.
+  get('/api/creators', { sort: 'score', limit: 12 }).then((r) => {
+    if (left) return;
     people.replaceChildren(...r.items.map((c, i) => creatorCard(c, { mini: true, eager: i < 2 })));
-  } catch { people.remove(); }
-  return () => {};
+  }).catch(() => { if (left) return; people.remove(); });
+  return () => { left = true; };
 }
 
 export async function following(root, { query }) {

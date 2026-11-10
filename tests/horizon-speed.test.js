@@ -57,6 +57,19 @@ test('Saved → Following hands back cleanup before the follow summary returns',
   assert.ok(src.includes('if (left) return; grid.replaceChildren(h(\'p\', { class: \'muted\' }, e.message))'), 'a late failure does not paint an error you will not see');
 });
 
+test('an empty Following page hands back cleanup before popular creators return', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../public/js/views/following.js'), 'utf8');
+  const empty = src.slice(src.indexOf('function emptyFollowing'), src.indexOf('export async function following'));
+  const painted = empty.indexOf("title: 'You’re not following anyone yet'");
+  const asked = empty.indexOf("get('/api/creators', { sort: 'score', limit: 12 })");
+  const back = empty.indexOf('return () => { left = true; }');
+  assert.ok(painted > 0 && painted < asked && asked < back, 'the empty state is up, and cleanup is returned, before popular creators are awaited');
+  assert.equal(empty.includes('await get('), false);
+  const fill = empty.indexOf('people.replaceChildren(...r.items.map((c, i) => creatorCard(c, { mini: true, eager: i < 2 })))');
+  assert.ok(empty.indexOf('if (left) return') > asked && empty.indexOf('if (left) return') < fill, 'a late list does not replace a page you have left');
+  assert.ok(empty.includes('if (left) return; people.remove()'), 'a late failure does not drop the rail after you leave');
+});
+
 test('a creator profile hands back cleanup before the profile returns', () => {
   const src = fs.readFileSync(path.join(__dirname, '../public/js/views/creator.js'), 'utf8');
   const bone = src.indexOf("style: { height: '220px' }");
