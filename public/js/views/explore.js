@@ -221,7 +221,8 @@ export async function explore(root, { query }) {
   async function onEmpty() {
     if (f.norelax || forYou) return;
     const r = await findRelaxation(f, toApi, { creatorName });
-    if (!r || !root.isConnected) return;
+    // A late probe must not rewrite the route or empty state after you leave Explore.
+    if (left || !r) return;
     if (f.smart) {
       const from = new URLSearchParams(Object.entries(f).filter(([k, v]) => v && !['relaxed', 'from', 'norelax'].includes(k))).toString();
       navigate('/explore', { ...f, ...r.patch, relaxed: r.label, from }, { replace: true });

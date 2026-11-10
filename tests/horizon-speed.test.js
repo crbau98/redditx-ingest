@@ -121,6 +121,20 @@ test('Explore drops a late Narrow-with relatedRail fill after you leave', () => 
   assert.equal(smart.includes('await get(\'/api/tags/related\''), false);
 });
 
+test('Explore drops a late findRelaxation navigate or empty prompt after you leave', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../public/js/views/explore.js'), 'utf8');
+  const leftAt = src.indexOf('let left = false;');
+  const onEmpty = src.indexOf('async function onEmpty()');
+  const ask = src.indexOf('await findRelaxation(f, toApi, { creatorName })', onEmpty);
+  const guard = src.indexOf('if (left || !r) return;', ask);
+  const nav = src.indexOf("navigate('/explore', { ...f, ...r.patch, relaxed: r.label, from }", ask);
+  const btn = src.indexOf('emptyHost.append(h(\'button\'', ask);
+  const back = src.indexOf('return () => {\n    left = true;');
+  assert.ok(leftAt > 0 && leftAt < onEmpty && onEmpty < ask, 'left is marked before relaxation probes');
+  assert.ok(ask > 0 && guard > ask && guard < nav && nav < btn && btn < back, 'a late relaxation does not navigate or append after you leave');
+  assert.equal(src.includes('if (!r || !root.isConnected) return;'), false);
+});
+
 test('a creator profile hands back cleanup before the profile returns', () => {
   const src = fs.readFileSync(path.join(__dirname, '../public/js/views/creator.js'), 'utf8');
   const bone = src.indexOf("style: { height: '220px' }");
