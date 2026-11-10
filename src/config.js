@@ -93,6 +93,9 @@ module.exports = {
     braveKey: env.BRAVE_API_KEY || env.BRAVE_SEARCH_API_KEY || readKeyFile(env.BRAVE_API_KEY_FILE),
     // Scrapfly (paid unblock/render tier, lib/scrapfly.js). The key file lives outside the repo, like BRAVE_API_KEY_FILE.
     scrapflyKey: env.SCRAPFLY_API_KEY || readKeyFile(env.SCRAPFLY_API_KEY_FILE),
+    // Oxylabs Web API (lib/oxylabs.js): page reads through its unblocking network and web search. Bearer key from
+    // OXYLABS_WEB_API_KEY (or a key file outside the repo); never logged.
+    oxylabsKey: env.OXYLABS_WEB_API_KEY || readKeyFile(env.OXYLABS_WEB_API_KEY_FILE),
     // Keenable web search (an AI-agent search engine, MCP over HTTP). Used by creator lookup and discovery.
     keenableKey: env.KEENABLE_API_KEY || '',
     // Bright Data (https://brightdata.com) Discover API: intent-ranked web search. BRIGHTDATA_API_KEY is accepted too (same token).
@@ -240,6 +243,8 @@ module.exports = {
 
   // Base-URL overrides so adapters can be pointed at a mock in tests.
   baseUrls: {
+    // Oxylabs Web API (POST /v1/search, POST /v1/scrape). Overridable so tests reach a local mock.
+    oxylabs: String(env.OXYLABS_BASE_URL || 'https://webapi.oxylabs.io').replace(/\/+$/, ''),
     reddit: env.REDDIT_BASE_URL || 'https://www.reddit.com',
     redditOauth: env.REDDIT_OAUTH_URL || 'https://oauth.reddit.com',
     redditArchive: env.REDDIT_ARCHIVE_URL || 'https://arctic-shift.photon-reddit.com',

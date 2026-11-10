@@ -355,8 +355,10 @@ async function viaWebSearch(feed, ctx, cursor) {
   let results;
   try {
     results = handle
-      ? await websearch.search(`"${handle}"`, { site: `x.com/${handle}`, count: 30, budget })
-      : await websearch.search(feed.target, { site: 'x.com', count: 30, budget });
+      // Oxylabs is asked for as the last engine: the keyless public engines are often CAPTCHA'd, and each search here costs
+      // one of today's keyless X searches whether or not it finds anything.
+      ? await websearch.search(`"${handle}"`, { site: `x.com/${handle}`, count: 30, budget, also: ['oxylabs'] })
+      : await websearch.search(feed.target, { site: 'x.com', count: 30, budget, also: ['oxylabs'] });
   } catch (e) {
     // A search outage is not X failing: skip this run instead of tripping the X circuit breaker.
     throw Object.assign(new Error(`Keyless X: web search failed: ${e.message}`), { skip: true });

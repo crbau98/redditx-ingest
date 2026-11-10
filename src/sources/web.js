@@ -25,6 +25,7 @@ const agegate = require('../lib/agegate');
 const paid = require('../lib/paid');
 const brightdata = require('../lib/brightdata');
 const scrapfly = require('../lib/scrapfly');
+const oxylabs = require('../lib/oxylabs');
 const settingsStore = require('../settings');
 const hoststrategy = require('../engine/hoststrategy');
 const rss = require('./rss');
@@ -517,7 +518,8 @@ async function unlockedRead(feed, need) {
   const jinaOn = cfg.jinaReader === 'fallback' && jina.configured();
   const bdOn = cfg.brightdataUnlocker === 'fallback' && !!cfg.brightdataUnlockBudget && (brightdata.unlockerConfigured() || (brightdata.browserConfigured() && render.enabled()));
   const scrapOn = cfg.scrapflyUnlocker === 'fallback' && scrapfly.configured() && scrapfly.allowedFor(feed);
-  if (!localOn && !jinaOn && !bdOn && !scrapOn) return null;
+  const oxyOn = oxylabs.configured() && cfg.oxylabsDailyBudget > 0;
+  if (!localOn && !jinaOn && !bdOn && !scrapOn && !oxyOn) return null;
   // robots.txt first, inside this function, because the link-in-bio adapter does not consult it on its own
   if (!(await robotsAllows(feed.target))) return { skipped: 'robots.txt disallows this page', tier: 'unlock' };
   const host = hostOf(feed.target);
@@ -535,8 +537,9 @@ async function unlockedRead(feed, need) {
   if (localOn && keep(await chromeRead(feed, need, cfg, host))) return ran(answers[0]);
   if (jinaOn && keep(await jinaRead(feed, need, cfg))) return ran(answers[answers.length - 1]);
 
-  // Then the paid tiers, Bright Data before Scrapfly.
+  // Then the paid tiers: Bright Data, Oxylabs, Scrapfly (allowlisted creators only).
   if (bdOn && keep(await brightdataRead(feed, need, cfg, host))) return ran(answers[answers.length - 1]);
+  if (oxyOn && keep(await oxylabsRead(feed))) return ran(answers[answers.length - 1]);
   if (scrapOn && keep(await scrapflyRead(feed, need, cfg, host))) return ran(answers[answers.length - 1]);
   // Nothing found media: keep the LAST real answer (an empty page is still an answer, and the last tier to get a page is the
   // most capable one that ran), else the LAST tier's story (a skip or an error), because that is the tier that ran once the
@@ -589,14 +592,31 @@ async function jinaRead(feed, need, cfg) {
   }
 }
 
+/** The Oxylabs Web API reads the page as HTML from its own network. Paid, capped by oxylabsDailyBudget. */
+async function oxylabsRead(feed) {
+  try {
+    if (thirdPartyUnreachable(new URL(feed.target).hostname)) return { skipped: 'a private address cannot be read by a third party', tier: 'oxylabs' };
+    const r = await oxylabs.scrape(feed.target);
+    if (r.blocked) return { skipped: 'Oxylabs was refused as well', tier: 'oxylabs' };
+    const page = extractPage(r.html, feed.target, { headers: {}, status: 200, maxMedia: RENDERED_MAX_MEDIA });
+    return { page, via: 'oxylabs', tier: 'oxylabs', notes: [] };
+  } catch (e) {
+    if (e && (e.budget || e.skip)) return { skipped: e.message, tier: 'oxylabs' };
+    e.tier = 'oxylabs';
+    return { error: e, tier: 'oxylabs' };
+  }
+}
+
 /** Which tier answered, for the run note. */
 const unlockLabel = (u) => (u.via === 'scrapfly-unlocker' ? 'Scrapfly Unblocker'
+  : u.via === 'oxylabs' ? 'Oxylabs Web API'
   : u.via === 'chrome-cdp' ? 'Chrome (CDP)'
     : u.via === 'jina-reader' ? 'Jina Reader'
       : u.via === 'brightdata-browser' ? 'Bright Data Browser API' : 'Bright Data Web Unlocker');
 
 /** The tier a result came from, for a note about a skip or an error. */
 const tierLabel = (t) => (t === 'scrapfly' ? 'Scrapfly'
+  : t === 'oxylabs' ? 'Oxylabs Web API'
   : t === 'chrome' ? 'Chrome (CDP)'
     : t === 'jina' ? 'Jina Reader'
       : t === 'unlock' ? 'Unlock tiers' : 'Bright Data');

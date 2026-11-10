@@ -29,6 +29,7 @@ const { clip, toIso, isChallengeText } = require('./util');
 const { robotsAllows } = require('./web');
 const settingsStore = require('../settings');
 const scrapfly = require('../lib/scrapfly');
+const oxylabs = require('../lib/oxylabs');
 const { checkHtmlOptOut } = require('../lib/takedowns');
 const { cleanDisplayName } = require('../lib/links');
 
@@ -137,6 +138,23 @@ async function unlockPerformer(url, feed, notes) {
     // Our own limits (not allowed, caps, account) leave the challenge path as it was; a real failure is noted and does the same.
     if (e.escalationRefused || (e.cost && !e.skip)) notes.push(`Scrapfly Unblocker: ${e.message}${e.cost ? ` (${e.cost} credits spent)` : ''}`);
     else if (!e.skip && !e.budget && !e.ours) notes.push(`Scrapfly Unblocker: ${e.message}`);
+    return null;
+  }
+}
+
+/**
+ * A page that answered with a bot check or a refusal, read through the Oxylabs Web API instead (lib/oxylabs.js: takedown and
+ * private-host gate, daily cap, key never logged). The caller has already checked robots.txt, as for a direct read. Returns the
+ * HTML, or null when the tier is not configured, out of budget, or failed (noted); the caller then treats it as the refusal.
+ */
+async function oxylabsHtml(url, notes) {
+  if (!oxylabs.configured()) return null;
+  try {
+    const r = await oxylabs.scrape(url);
+    if (r.blocked) { notes.push(`Oxylabs: ${new URL(url).pathname} came back as a bot check too`); return null; }
+    return r.html;
+  } catch (e) {
+    if (!e.skip) notes.push(`Oxylabs: ${e.message}`);
     return null;
   }
 }
@@ -357,6 +375,14 @@ module.exports = {
         if (isBlockedStatus(e.status) || isChallengeText(e.body)) {
           const unlocked = await unlockPerformer(url, feed, notes);
           if (unlocked) return unlocked.optedOut ? null : unlocked;
+          // The site refuses this server: read the public page through Oxylabs instead of parking the platform.
+          const html = await oxylabsHtml(url, notes);
+          if (html) {
+            const opt = checkHtmlOptOut(html, {}, 200);
+            if (opt && opt.optedOut) { notes.push(`Skipped page (${opt.reason || 'opted out'})`); return null; }
+            notes.push('read the performer page through Oxylabs (the site refused this server)');
+            return performerPage(html);
+          }
           throw challengeError();
         }
         if (e.status === 404) return null;
@@ -436,10 +462,15 @@ module.exports = {
           vh = await http.text(v.url, { maxBytes: 3_000_000, retries: 1, headers: pageHeaders() });
           if (isChallengeText(vh)) throw Object.assign(new Error('bot check'), { status: 403 });
         } catch (e) {
-          // Not marked seen: a failed or blocked page read is usually transient, so the next run tries it again.
-          if (isBlockedStatus(e.status) || isChallengeText(e.body)) blocked++;
-          notes.push(`gayforfans: ${v.slug} — ${e.message}`);
-          continue;
+          const refused = isBlockedStatus(e.status) || isChallengeText(e.body);
+          vh = refused && (await robotsAllows(v.url, identity())) ? await oxylabsHtml(v.url, notes) : null;
+          if (!vh) {
+            // Not marked seen: a failed or blocked page read is usually transient, so the next run tries it again.
+            if (refused) blocked++;
+            notes.push(`gayforfans: ${v.slug} — ${e.message}`);
+            continue;
+          }
+          if (checkHtmlOptOut(String(vh), {}, 200)?.optedOut) { notes.push(`gayforfans: ${v.slug} — opted out, skipped`); seen.add(v.slug); continue; }
         }
         vo = videoObject(String(vh));
       }

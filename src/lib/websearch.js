@@ -20,6 +20,7 @@ const brave = require('./brave');
 const keenable = require('./keenable');
 const brightdata = require('./brightdata');
 const claude = require('./claude');
+const oxylabs = require('./oxylabs');
 const http = require('../sources/http').forPlatform('searxng', 800);
 
 const CACHE_MS = 10 * 60 * 1000;
@@ -197,6 +198,12 @@ const PROVIDERS = {
     configured: () => brightdata.configured(),
     search: (q, o) => brightdata.search(q, o),
   },
+  // Oxylabs Web API search (OXYLABS_WEB_API_KEY), capped by setting oxylabsDailyBudget. Not in the default order: a caller
+  // asks for it with `also: ['oxylabs']` (the keyless X search does), and it then runs as the last tier.
+  oxylabs: {
+    configured: () => oxylabs.configured() && oxylabs.dailyBudget() > 0,
+    search: (q, { count = 20 } = {}) => oxylabs.search(q, { count: Math.min(count, 20) }),
+  },
   // Claude with its server-side web search tool (ANTHROPIC_API_KEY): last in the default order, so it only answers when
   // every other provider failed or found nothing. Each search is one request against the setting aiDailyBudget.
   claude: {
@@ -294,7 +301,7 @@ const PROVIDERS = {
 };
 
 /** Last outcome per provider, for the admin console: a search backend that quietly returns nothing looks like it works. */
-const health = Object.fromEntries(['keenable', 'brave', 'brightdata', 'bing', 'ddg', 'ddg-lite', 'searxng', 'claude'].map((p) => [p, { ok: 0, empty: 0, failed: 0, lastAt: null, lastError: null, lastResults: null, engines: [] }]));
+const health = Object.fromEntries(['keenable', 'brave', 'brightdata', 'bing', 'ddg', 'ddg-lite', 'searxng', 'claude', 'oxylabs'].map((p) => [p, { ok: 0, empty: 0, failed: 0, lastAt: null, lastError: null, lastResults: null, engines: [] }]));
 function note(name, results, err) {
   const h = health[name]; if (!h) return;
   h.lastAt = new Date().toISOString();
@@ -320,6 +327,7 @@ function status() {
     keenable: { configured: keenable.configured(), usage: keenable.usage() },
     brightdata: { configured: brightdata.configured(), usage: brightdata.usage() },
     claude: { configured: claude.configured(), usage: claude.usage() },
+    oxylabs: { configured: oxylabs.configured(), usage: oxylabs.usage(), budgetPerDay: oxylabs.dailyBudget(), lastError: health.oxylabs.lastError },
   };
 }
 
@@ -347,12 +355,14 @@ const dedupe = (list) => {
   });
 };
 
-async function search(q, { count = 20, budget = 40, fresh = false, site, preferKeyless = false } = {}) {
-  const key = `${count}|${site || ''}|${preferKeyless}|${q}`;
+async function search(q, { count = 20, budget = 40, fresh = false, site, preferKeyless = false, also = [] } = {}) {
+  const key = `${count}|${site || ''}|${preferKeyless}|${also.join(',')}|${q}`;
   const hit = cache.get(key);
   if (!fresh && hit && hit.results.length && Date.now() - hit.at < CACHE_MS) return hit.results;
   const configured = order().filter((p) => PROVIDERS[p].configured());
-  if (!configured.length) throw Object.assign(new Error('No web search configured: set KEENABLE_API_KEY, BRAVE_API_KEY, BRIGHTDATA_API_TOKEN, SEARXNG_URL or ANTHROPIC_API_KEY (or keep the keyless Bing/DuckDuckGo providers enabled)'), { skip: true });
+  // Engines this caller asked for on top of the configured order (e.g. Oxylabs for keyless X): tried last.
+  const extra = also.filter((p) => PROVIDERS[p] && !configured.includes(p) && PROVIDERS[p].configured());
+  if (!configured.length && !extra.length) throw Object.assign(new Error('No web search configured: set KEENABLE_API_KEY, BRAVE_API_KEY, BRIGHTDATA_API_TOKEN, SEARXNG_URL or ANTHROPIC_API_KEY (or keep the keyless Bing/DuckDuckGo providers enabled)'), { skip: true });
 
   const query = (name) => PROVIDERS[name].search(site && name !== 'keenable' ? `${q} site:${site}` : q, { count, budget, site });
   const remember = (name, results) => {
@@ -416,11 +426,12 @@ async function search(q, { count = 20, budget = 40, fresh = false, site, preferK
 
   /** Tier 3: any remaining providers. */
   const tailTier = () => sequential(rest);
+  const extraTier = () => sequential(extra);
 
   // The daily Brave counter is shared by lookup, discovery and image match. Secondary passes
   // (directory harvest, image match) pass preferKeyless so they ride the free tier and leave the
   // paid budget for identity matching and topic search — one budget, spent where it matters.
-  const tiers = preferKeyless ? [keylessTier, paidTier, tailTier] : [paidTier, keylessTier, tailTier];
+  const tiers = preferKeyless ? [keylessTier, paidTier, tailTier, extraTier] : [paidTier, keylessTier, tailTier, extraTier];
   for (const tier of tiers) {
     const results = await tier();
     if (results) return results;

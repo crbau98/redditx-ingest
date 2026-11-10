@@ -97,6 +97,7 @@ router.get('/browser4', async (req, res) => {
     },
     // The free tiers after the browser, and the optional token service. Booleans and counts only.
     jina: { mode: cfg.jinaReader, budgetPerDay: cfg.jinaDailyBudget, configured: require('../lib/jina').configured(), usage: require('../lib/jina').usage() },
+    oxylabs: { budgetPerDay: cfg.oxylabsDailyBudget, configured: require('../lib/oxylabs').configured(), usage: require('../lib/oxylabs').usage() }, // never the key
     captcha: { mode: cfg.captchaSolver, budgetPerDay: cfg.captchaSolverBudget, configured: require('../lib/captchasolver').configured(), usage: require('../lib/captchasolver').usage() },
   });
 });
