@@ -1,3 +1,4 @@
+import { makeGuard } from '../guard.js';
 import { h, icon, fmt, proxied, avatar, toast, copyText, emptyState, debounce } from '../dom.js';
 import { get, post, adminGet, adminPost } from '../api.js';
 import { navigate, href } from '../router.js';
@@ -137,28 +138,27 @@ export async function creator(root, { params, query }) {
   root.replaceChildren(h('div', { class: 'skeleton', style: { height: '220px' } }), feed.el);
   // The header skeleton and the posts are already up. Hand back the way out before the profile returns,
   // so leaving destroys that feed and a late profile cannot replace the next page.
-  let left = false;
   let extra = () => {};
-  const stop = () => {
-    left = true;
+  const life = makeGuard(() => {
     extra();
     extra = () => {};
     if (feed) feed.destroy();
     feed = null;
-  };
+  });
+  const stop = life.cleanup;
   void openProfile();
   return stop;
 
   async function openProfile() {
   let c;
   try { c = await profileP; } catch (e) {
-    if (left) return;
+    if (life.isLeft()) return;
     if (feed) feed.destroy();
     feed = null;
     root.replaceChildren(emptyState({ icon: 'users', title: e.status === 404 ? 'Creator not found' : 'Couldn’t load', text: e.status === 404 ? 'This profile may have been removed.' : e.message, actions: [h('a', { class: 'btn', href: href('/creators') }, 'Browse creators')] }));
     return;
   }
-  if (left) return;
+  if (life.isLeft()) return;
   document.title = `${c.display_name || c.handle} — PRISM`;
   const setQ = (patch) => navigate(`/creator/${c.id}`, { type, sort, platform, q: qFilter, ...patch }, { replace: true });
 
@@ -252,7 +252,7 @@ export async function creator(root, { params, query }) {
   const stats = h('div', { class: 'profile-stats' }, h('span', null, stat(c.media_count), 'posts'), h('span', null, stat(c.video_count), 'videos'), c.total_score ? h('span', null, stat(c.total_score, fmt.num), 'total score') : null, c.last_media_at ? h('span', null, `Active ${fmt.ago(c.last_media_at)}`) : null);
   counted.add(c.id);
 
-  if (left) return;
+  if (life.isLeft()) return;
   root.replaceChildren(stage,
     c.bio ? h('p', { class: 'profile-bio' }, c.bio) : null,
     stats,
@@ -268,14 +268,14 @@ export async function creator(root, { params, query }) {
   landAvatar(headAvatar, c.id); // the avatar tapped on the way here flies into place
   // Activity and "Similar creators" load after the page is usable; a failure just means they are missing.
   get(`/api/creators/${c.id}/activity`).then((a) => {
-    if (left) return;
+    if (life.isLeft()) return;
     const panel = root.isConnected && activityPanel(a);
     const anchor = root.querySelector('.tabs');
     if (panel && anchor) anchor.closest('.row').before(panel, h('div', { style: { height: '22px' } }));
   }).catch(() => {});
   // Co-stars and collabs: men who co-star or mention each other in posts
   get(`/api/creators/${c.id}/collabs`, { limit: 12 }).then((list) => {
-    if (left || !list.length || !root.isConnected) return;
+    if (life.isLeft() || !list.length || !root.isConnected) return;
     const anchor = root.querySelector('.tabs');
     if (!anchor) return;
     anchor.closest('.row').before(h('section', { class: 'section', id: 'conn-collabs', style: { marginTop: '28px' } },
@@ -284,7 +284,7 @@ export async function creator(root, { params, query }) {
     revealJump(root, 'conn-collabs');
   }).catch(() => {});
   get(`/api/creators/${c.id}/similar`, { limit: 12 }).then((list) => {
-    if (left || !list.length || !root.isConnected) return;
+    if (life.isLeft() || !list.length || !root.isConnected) return;
     const anchor = root.querySelector('.tabs');
     if (!anchor) return;
     anchor.closest('.row').before(h('section', { class: 'section', id: 'conn-similar', style: { marginTop: '28px' } },
@@ -294,7 +294,7 @@ export async function creator(root, { params, query }) {
   }).catch(() => {});
   // OnlyFans creators: more men with a page who post in the same style.
   if (c.onlyfans) get(`/api/creators/${c.id}/similar`, { limit: 12, onlyfans: 1 }).then((list) => {
-    if (left || !list.length || !root.isConnected) return;
+    if (life.isLeft() || !list.length || !root.isConnected) return;
     const anchor = root.querySelector('.tabs');
     if (!anchor) return;
     anchor.closest('.row').before(h('section', { class: 'section', style: { marginTop: '28px' } },
@@ -305,7 +305,7 @@ export async function creator(root, { params, query }) {
   const TINT_VARS = ['--accent', '--accent-2', '--accent-3', '--grad', '--grad-soft'];
   const tintFrom = art || c.avatar_url; // the same picture the stage shows, so the wash matches it
   dominantColor(tintFrom ? proxied(tintFrom) : null).then((col) => {
-    if (left || !col || !root.isConnected || !root.contains(head)) return;
+    if (life.isLeft() || !col || !root.isConnected || !root.contains(head)) return;
     const hsl = (dh, ds = 0, dl = 0) => `hsl(${(col.h + dh + 360) % 360} ${Math.min(95, col.s + ds)}% ${Math.min(72, col.l + dl)}%)`;
     root.style.setProperty('--accent', hsl(0));
     root.style.setProperty('--accent-2', hsl(-38, 0, -6));

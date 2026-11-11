@@ -40,8 +40,8 @@ test('home paints the latest grid before it waits on the discover snapshot', () 
   const back = src.indexOf('return stop;');
   assert.ok(feedAt > 0 && waitAt > feedAt, 'the grid is created before discover is awaited');
   assert.ok(back > feedAt && back < waitAt, 'cleanup is returned before Discover is awaited');
-  assert.ok(src.indexOf('if (left) return') < src.indexOf('holder.replaceWith'), 'a late failure does not replace the skeleton after you leave');
-  assert.ok(src.indexOf('if (left) return') < src.indexOf('root.replaceChildren(...parts, feedSection)'), 'a late snapshot does not replace a page you have left');
+  assert.ok(src.indexOf('if (life.isLeft()) return') < src.indexOf('holder.replaceWith'), 'a late failure does not replace the skeleton after you leave');
+  assert.ok(src.indexOf('if (life.isLeft()) return') < src.indexOf('root.replaceChildren(...parts, feedSection)'), 'a late snapshot does not replace a page you have left');
   assert.match(src, /Continue watching/);
 });
 
@@ -49,12 +49,13 @@ test('Saved → Following hands back cleanup before the follow summary returns',
   const src = fs.readFileSync(path.join(__dirname, '../public/js/views/saved.js'), 'utf8');
   const bones = src.indexOf("class: 'creator-grid'");
   const asked = src.indexOf("postQuery('/api/follow/summary'");
-  const back = src.indexOf('return () => { left = true; cleanup(); }');
+  const back = src.indexOf('return life.cleanup;');
   assert.ok(bones > 0 && bones < asked && asked < back, 'the skeletons are up, and cleanup is returned, before the summary is awaited');
+  assert.ok(src.includes('const life = makeGuard(() => cleanup());'), 'leaving still runs the tab cleanup');
   assert.equal(src.includes("await postQuery('/api/follow/summary'"), false);
   const paint = src.indexOf('grid.replaceChildren(...d.creators.map((c, i) => creatorCard(c, { eager: i < 4 })))');
-  assert.ok(src.indexOf('if (left) return') > asked && src.indexOf('if (left) return') < paint, 'a late summary does not replace the skeletons after you leave');
-  assert.ok(src.includes('if (left) return; grid.replaceChildren(h(\'p\', { class: \'muted\' }, e.message))'), 'a late failure does not paint an error you will not see');
+  assert.ok(src.indexOf('if (life.isLeft()) return') > asked && src.indexOf('if (life.isLeft()) return') < paint, 'a late summary does not replace the skeletons after you leave');
+  assert.ok(src.includes('if (life.isLeft()) return; grid.replaceChildren(h(\'p\', { class: \'muted\' }, e.message))'), 'a late failure does not paint an error you will not see');
 });
 
 test('an empty Following page hands back cleanup before popular creators return', () => {
@@ -62,12 +63,12 @@ test('an empty Following page hands back cleanup before popular creators return'
   const empty = src.slice(src.indexOf('function emptyFollowing'), src.indexOf('export async function following'));
   const painted = empty.indexOf("title: 'You’re not following anyone yet'");
   const asked = empty.indexOf("get('/api/creators', { sort: 'score', limit: 12 })");
-  const back = empty.indexOf('return () => { left = true; }');
+  const back = empty.indexOf('return life.cleanup;');
   assert.ok(painted > 0 && painted < asked && asked < back, 'the empty state is up, and cleanup is returned, before popular creators are awaited');
   assert.equal(empty.includes('await get('), false);
   const fill = empty.indexOf('people.replaceChildren(...r.items.map((c, i) => creatorCard(c, { mini: true, eager: i < 2 })))');
-  assert.ok(empty.indexOf('if (left) return') > asked && empty.indexOf('if (left) return') < fill, 'a late list does not replace a page you have left');
-  assert.ok(empty.includes('if (left) return; people.remove()'), 'a late failure does not drop the rail after you leave');
+  assert.ok(empty.indexOf('if (life.isLeft()) return') > asked && empty.indexOf('if (life.isLeft()) return') < fill, 'a late list does not replace a page you have left');
+  assert.ok(empty.includes('if (life.isLeft()) return; people.remove()'), 'a late failure does not drop the rail after you leave');
 });
 
 test('Explore drops late platform, creator, and tag chip fills after you leave', () => {
@@ -76,32 +77,33 @@ test('Explore drops late platform, creator, and tag chip fills after you leave',
   const plats = src.indexOf("get('/api/platforms')");
   const creators = src.indexOf("get('/api/creators', { sort: 'media'");
   const tags = src.indexOf("get('/api/tags', { limit: 30 })");
-  const back = src.indexOf('return () => {\n    left = true;');
+  const back = src.indexOf('return life.cleanup;');
   assert.ok(painted > 0 && painted < plats && plats < creators && creators < tags && tags < back, 'the filter bar is up, and cleanup marks left, before chip fills resolve');
+  assert.ok(/const life = makeGuard\(\(\) => \{\n\s+stopPtr\(\);\n\s+feed\.destroy\(\);\n\s+offSearches\(\);\n\s+offSeen\(\);/.test(src), 'leaving still stops pull-to-refresh, the feed and both listeners');
   assert.equal(src.includes('await get(\'/api/platforms\')'), false);
   assert.equal(src.includes('await get(\'/api/creators\''), false);
   assert.equal(src.includes('await get(\'/api/tags\''), false);
   const platFill = src.indexOf('platSel.replaceChildren(');
   const creatorFill = src.indexOf('creatorRail.replaceChildren(\n      h(\'button\'');
   const tagFill = src.indexOf('tagRail.replaceChildren(...tags.map');
-  assert.ok(src.lastIndexOf('if (left) return', platFill) > plats && src.lastIndexOf('if (left) return', platFill) < platFill, 'a late platform list does not rewrite the source select');
-  assert.ok(src.lastIndexOf('if (left) return', creatorFill) > creators && src.lastIndexOf('if (left) return', creatorFill) < creatorFill, 'a late creator list does not rewrite the Creator rail');
-  assert.ok(src.lastIndexOf('if (left) return', tagFill) > tags && src.lastIndexOf('if (left) return', tagFill) < tagFill, 'a late tag list does not rewrite the Tags rail');
-  assert.ok(src.includes('if (left) return; creatorRail.replaceChildren()'), 'a late creator failure does not clear the rail after you leave');
+  assert.ok(src.lastIndexOf('if (life.isLeft()) return', platFill) > plats && src.lastIndexOf('if (life.isLeft()) return', platFill) < platFill, 'a late platform list does not rewrite the source select');
+  assert.ok(src.lastIndexOf('if (life.isLeft()) return', creatorFill) > creators && src.lastIndexOf('if (life.isLeft()) return', creatorFill) < creatorFill, 'a late creator list does not rewrite the Creator rail');
+  assert.ok(src.lastIndexOf('if (life.isLeft()) return', tagFill) > tags && src.lastIndexOf('if (life.isLeft()) return', tagFill) < tagFill, 'a late tag list does not rewrite the Tags rail');
+  assert.ok(src.includes('if (life.isLeft()) return; creatorRail.replaceChildren()'), 'a late creator failure does not clear the rail after you leave');
 });
 
 test('Explore drops late creator-name and spelling fills after you leave', () => {
   const src = fs.readFileSync(path.join(__dirname, '../public/js/views/explore.js'), 'utf8');
-  const leftAt = src.indexOf('let left = false;');
+  const leftAt = src.indexOf('const life = makeGuard(');
   const nameAsk = src.indexOf('get(`/api/creators/${f.creator}`)');
   const nameFill = src.indexOf('creatorChip.textContent = `by ${creatorName}`');
   const spellingAsk = src.indexOf('understand(f.raw)');
   const spellingFill = src.indexOf("fixes.replaceChildren(icon('check', 'sm'), 'Spelling fixed:");
-  const back = src.indexOf('return () => {\n    left = true;');
+  const back = src.indexOf('return life.cleanup;');
   assert.ok(leftAt > 0 && leftAt < nameAsk && nameAsk < nameFill, 'left is marked before the creator-name request');
-  assert.ok(src.lastIndexOf('if (left) return', nameFill) > nameAsk && src.lastIndexOf('if (left) return', nameFill) < nameFill, 'a late creator name does not rewrite the chip or document title');
+  assert.ok(src.lastIndexOf('if (life.isLeft()) return', nameFill) > nameAsk && src.lastIndexOf('if (life.isLeft()) return', nameFill) < nameFill, 'a late creator name does not rewrite the chip or document title');
   assert.ok(spellingAsk > leftAt && spellingAsk < spellingFill && spellingFill < back, 'Understood as is up before spelling resolves');
-  assert.ok(src.lastIndexOf('if (left) return', spellingFill) > spellingAsk && src.lastIndexOf('if (left) return', spellingFill) < spellingFill, 'a late spelling note does not rewrite Understood as');
+  assert.ok(src.lastIndexOf('if (life.isLeft()) return', spellingFill) > spellingAsk && src.lastIndexOf('if (life.isLeft()) return', spellingFill) < spellingFill, 'a late spelling note does not rewrite Understood as');
   assert.equal(src.includes('await get(`/api/creators/${f.creator}`)'), false);
   assert.equal(src.includes('await understand(f.raw)'), false);
 });
@@ -109,10 +111,10 @@ test('Explore drops late creator-name and spelling fills after you leave', () =>
 test('Explore drops a late Narrow-with relatedRail fill after you leave', () => {
   const explore = fs.readFileSync(path.join(__dirname, '../public/js/views/explore.js'), 'utf8');
   const smart = fs.readFileSync(path.join(__dirname, '../public/js/smart.js'), 'utf8');
-  const leftAt = explore.indexOf('let left = false;');
+  const leftAt = explore.indexOf('const life = makeGuard(');
   const rail = explore.indexOf("relatedRail(focusTags, { onPick: addTag, title: 'Narrow with'");
-  const alive = explore.indexOf('alive: () => !left', rail);
-  const back = explore.indexOf('return () => {\n    left = true;');
+  const alive = explore.indexOf('alive: life.alive', rail);
+  const back = explore.indexOf('return life.cleanup;');
   assert.ok(leftAt > 0 && leftAt < rail && rail < alive && alive < back, 'Narrow with passes alive from Explore’s left flag');
   const ask = smart.indexOf("get('/api/tags/related'");
   const guard = smart.indexOf('if (!alive()) return;', ask);
@@ -123,13 +125,13 @@ test('Explore drops a late Narrow-with relatedRail fill after you leave', () => 
 
 test('Explore drops a late findRelaxation navigate or empty prompt after you leave', () => {
   const src = fs.readFileSync(path.join(__dirname, '../public/js/views/explore.js'), 'utf8');
-  const leftAt = src.indexOf('let left = false;');
+  const leftAt = src.indexOf('const life = makeGuard(');
   const onEmpty = src.indexOf('async function onEmpty()');
-  const ask = src.indexOf("await findRelaxation(f, toApi, { creatorName, alive: () => !left })", onEmpty);
-  const guard = src.indexOf('if (left || !r) return;', ask);
+  const ask = src.indexOf("await findRelaxation(f, toApi, { creatorName, alive: life.alive })", onEmpty);
+  const guard = src.indexOf('if (life.isLeft() || !r) return;', ask);
   const nav = src.indexOf("navigate('/explore', { ...f, ...r.patch, relaxed: r.label, from }", ask);
   const btn = src.indexOf('emptyHost.append(h(\'button\'', ask);
-  const back = src.indexOf('return () => {\n    left = true;');
+  const back = src.indexOf('return life.cleanup;');
   assert.ok(leftAt > 0 && leftAt < onEmpty && onEmpty < ask, 'left is marked before relaxation probes');
   assert.ok(ask > 0 && guard > ask && guard < nav && nav < btn && btn < back, 'a late relaxation does not navigate or append after you leave');
   assert.equal(src.includes('if (!r || !root.isConnected) return;'), false);
@@ -154,7 +156,7 @@ test('a creator profile hands back cleanup before the profile returns', () => {
   const waitAt = src.indexOf('await profileP');
   const painted = src.indexOf('root.replaceChildren(stage,');
   assert.ok(bone > 0 && bone < back && back < waitAt, 'the header skeleton is up, and cleanup is returned, before the profile is awaited');
-  assert.ok(src.indexOf('if (left) return') < painted, 'a late profile does not replace a page you have left');
+  assert.ok(src.indexOf('if (life.isLeft()) return') < painted, 'a late profile does not replace a page you have left');
   assert.match(src, /const art = \(c\.previews && c\.previews\[0\]\) \|\| c\.banner_url/);
 });
 
@@ -175,10 +177,10 @@ test('browse paints sources, communities, and tags before topics and paid counts
   assert.ok(fail > waited && fail < painted, 'a catalog failure replaces the page; a later topic or count failure does not');
   const back = src.indexOf('return stop;');
   assert.ok(src.indexOf("style: { height: '320px' }") < back && back < waited, 'cleanup is returned before the catalog is awaited');
-  assert.ok(src.indexOf('if (left) return') < fail, 'a late failure does not replace the skeleton after you leave');
+  assert.ok(src.indexOf('if (life.isLeft()) return') < fail, 'a late failure does not replace the skeleton after you leave');
   const empty = src.indexOf("title: 'Nothing ingested yet'");
-  assert.ok(src.lastIndexOf('if (left) return', empty) > waited && src.lastIndexOf('if (left) return', empty) < empty, 'an empty library does not replace a page you have left');
-  assert.ok(src.lastIndexOf('if (left) return', painted) < painted, 'a late catalog does not replace a page you have left');
+  assert.ok(src.lastIndexOf('if (life.isLeft()) return', empty) > waited && src.lastIndexOf('if (life.isLeft()) return', empty) < empty, 'an empty library does not replace a page you have left');
+  assert.ok(src.lastIndexOf('if (life.isLeft()) return', painted) < painted, 'a late catalog does not replace a page you have left');
 });
 
 test('the creators grid shows skeletons until the first page replaces them', () => {
@@ -294,10 +296,10 @@ test('find drops a late lookup and does not open a profile after you leave', () 
   const paint = src.indexOf('function paint()');
   const lookup = src.indexOf("await post('/api/lookup'");
   const follow = src.indexOf("await post('/api/lookup/follow'");
-  const nav = src.indexOf('if (!left) navigate(`/creator/${r.creator.id}`)');
+  const nav = src.indexOf('if (life.alive()) navigate(`/creator/${r.creator.id}`)');
   const back = src.indexOf('return stop;');
-  assert.ok(paint > 0 && src.slice(paint, paint + 40).includes('if (left) return'), 'paint does nothing once you have left');
-  assert.ok(lookup > 0 && src.indexOf('if (left) return', lookup) > lookup && src.indexOf('if (left) return', lookup) < follow, 'a late lookup does not paint');
+  assert.ok(paint > 0 && src.slice(paint, paint + 60).includes('if (life.isLeft()) return'), 'paint does nothing once you have left');
+  assert.ok(lookup > 0 && src.indexOf('if (life.isLeft()) return', lookup) > lookup && src.indexOf('if (life.isLeft()) return', lookup) < follow, 'a late lookup does not paint');
   assert.ok(follow > 0 && nav > follow, 'a follow that finishes after you leave does not navigate');
   assert.ok(src.includes('if (openTimer) clearTimeout(openTimer)'), 'leaving cancels the profile open');
   assert.ok(back > nav && !src.includes('return () => {}'), 'the router receives a stop, not an empty cleanup');

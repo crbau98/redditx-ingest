@@ -96,7 +96,7 @@ test('history asks once for the first page and any resume point past it', async 
   assert.match(fav, /playback\.list\(\)\.slice\(0, 12\)/);
   assert.match(fav, /ids: resumeSaved\.map/);
   assert.match(fav, /eager: i < 4/);
-  assert.match(fav, /if \(left \|\| !continueSlot\.isConnected/);
+  assert.match(fav, /if \(life\.isLeft\(\) \|\| !continueSlot\.isConnected/);
   assert.match(coll, /showProgress: true/);
 });
 
@@ -124,9 +124,9 @@ test('Home keeps the early grid when Discover fails, and says so when the grid f
   const retry = catchBody.slice(catchBody.indexOf('onclick'), catchBody.indexOf('Try again'));
   assert.ok(retry.indexOf('home(root)') < retry.indexOf('dying.destroy()'), 'the new grid is created before the old one is destroyed');
   assert.ok(retry.indexOf('const next = home(root)') < retry.indexOf('extra = () => { next(); }') && retry.indexOf('extra = () => { next(); }') < retry.indexOf('dying.destroy()'), 'the cleanup the router holds calls the replacement before the old grid is destroyed');
-  const stopBody = home.slice(home.indexOf('const stop = () => {'), home.indexOf('void fill()'));
+  const stopBody = home.slice(home.indexOf('const life = makeGuard(() => {'), home.indexOf('void fill()'));
   assert.ok(stopBody.indexOf('extra()') < stopBody.indexOf('if (feed) feed.destroy()'), 'leaving runs the replacement cleanup, which drops that grid');
-  assert.match(catchBody, /if \(left\) return/);
+  assert.match(catchBody, /if \(life\.isLeft\(\)\) return/);
   assert.doesNotMatch(catchBody, /feed\.destroy/);
   assert.doesNotMatch(catchBody, /root\.replaceChildren\(emptyState/);
   assert.match(home, /Latest uploads are still on this page/);

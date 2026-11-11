@@ -1,3 +1,4 @@
+import { makeGuard } from '../guard.js';
 import { h, icon, fmt, toast, confirmDialog, promptDialog, emptyState, paintCover } from '../dom.js';
 import { get, query as postQuery } from '../api.js';
 import { navigate, href } from '../router.js';
@@ -39,7 +40,7 @@ export async function saved(root, { query }) {
   const tab = TABS.some((t) => t[0] === query.get('tab')) ? query.get('tab') : 'saved';
   const go = (t, extra = {}) => navigate('/saved', { tab: t, ...extra }, { replace: true });
   let cleanup = () => {};
-  let left = false;
+  const life = makeGuard(() => cleanup());
 
   const tabs = h('div', { class: 'tabs', role: 'tablist' }, TABS.map(([key, label, ic]) => h('button', { class: tab === key ? 'on' : '', role: 'tab', 'aria-selected': String(tab === key), onclick: () => go(key) }, icon(ic, 'sm'), ` ${label} `, h('span', { class: 'muted num' }, counts[key]()))));
 
@@ -65,7 +66,7 @@ export async function saved(root, { query }) {
     const resumeSaved = playback.list().slice(0, 12);
     const continueSlot = h('div', { class: 'continue-slot' });
     const paintContinue = (found) => {
-      if (left || !continueSlot.isConnected || continueSlot.dataset.ready === '1') return;
+      if (life.isLeft() || !continueSlot.isConnected || continueSlot.dataset.ready === '1') return;
       const byId = new Map((found || []).map((it) => [it.id, it]));
       const continueItems = resumeSaved.map((p) => byId.get(p.id)).filter(Boolean);
       if (!continueItems.length) return;
@@ -151,11 +152,11 @@ export async function saved(root, { query }) {
       // one request for every followed creator; ones the server no longer shows are dropped.
       // Cleanup returns before this resolves, so a late summary does not paint a tab you have left.
       postQuery('/api/follow/summary', { follows: list.map((c) => ({ id: c.id, seen: c.seen })), cards: true }).then((d) => {
-        if (left) return;
+        if (life.isLeft()) return;
         if (d.gone.length) follows.prune(d.gone);
         d.creators.sort((a, b) => String(b.last_media_at || '').localeCompare(String(a.last_media_at || '')));
         grid.replaceChildren(...d.creators.map((c, i) => creatorCard(c, { eager: i < 4 })));
-      }).catch((e) => { if (left) return; grid.replaceChildren(h('p', { class: 'muted' }, e.message)); });
+      }).catch((e) => { if (life.isLeft()) return; grid.replaceChildren(h('p', { class: 'muted' }, e.message)); });
     }
   }
 
@@ -232,5 +233,5 @@ export async function saved(root, { query }) {
       cleanup = f.destroy;
     }
   }
-  return () => { left = true; cleanup(); };
+  return life.cleanup;
 }

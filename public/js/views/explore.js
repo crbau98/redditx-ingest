@@ -1,3 +1,4 @@
+import { makeGuard } from '../guard.js';
 import { h, icon, fmt, emptyState, toast, promptDialog } from '../dom.js';
 import { get, prefetch } from '../api.js';
 import { navigate, href, parse } from '../router.js';
@@ -136,11 +137,17 @@ export async function explore(root, { query }) {
   if (f.paid) chip(f.paid === 'onlyfans' ? 'OnlyFans' : f.paid, { paid: '' }, 'u-paid');
   if (f.smart && f.type) chip(f.type === 'video' ? 'Videos' : 'Photos', { type: '' }, 'u-type');
   // Cleanup returns before late fills resolve, so a name or spelling note does not rewrite a page you have left.
-  let left = false;
+  // Leaving stops the pointer handlers, the feed and the search / seen listeners (all set up below).
+  const life = makeGuard(() => {
+    stopPtr();
+    feed.destroy();
+    offSearches();
+    offSeen();
+  });
   let creatorName = null;
   if (f.creator) {
     get(`/api/creators/${f.creator}`).then((c) => {
-      if (left) return;
+      if (life.isLeft()) return;
       creatorName = c.display_name || c.handle;
       creatorChip.textContent = `by ${creatorName}`;
       if (titleText === 'Explore') { titleEl.textContent = creatorName; document.title = `${creatorName} — PRISM`; }
@@ -158,7 +165,7 @@ export async function explore(root, { query }) {
         h('a', { class: 'u-raw', href: href('/explore', { q: f.raw }), title: 'Run a plain full-text search instead' }, 'Search the exact words')),
       fixes, f.ai ? h('div', { class: 'u-fixes u-ai' }, icon('sparkle', 'sm'), `Read by AI: ${f.ai}`) : null);
     understand(f.raw).then((u) => {
-      if (left) return;
+      if (life.isLeft()) return;
       if (u && u.corrections && u.corrections.length) fixes.replaceChildren(icon('check', 'sm'), 'Spelling fixed: ', ...u.corrections.map((c, i) => h('span', null, i ? ', ' : '', h('s', null, c.from), ' → ', h('b', null, `#${c.to}`))));
     });
   }
@@ -206,7 +213,7 @@ export async function explore(root, { query }) {
   const required = [...tagList, ...(f.tag ? [f.tag] : [])];
   const focusTags = (required.length ? required : anyList).slice(0, 4);
   const addTag = (name) => set({ tag: '', tags: [...new Set([...required, name])].slice(0, 6).join(',') });
-  const tagRail = focusTags.length ? relatedRail(focusTags, { onPick: addTag, title: 'Narrow with', mode: required.length ? 'all' : 'any', alive: () => !left }) : h('div', { class: 'row', style: { gap: '8px', overflowX: 'auto', padding: '14px 0 2px', scrollbarWidth: 'none' } });
+  const tagRail = focusTags.length ? relatedRail(focusTags, { onPick: addTag, title: 'Narrow with', mode: required.length ? 'all' : 'any', alive: life.alive }) : h('div', { class: 'row', style: { gap: '8px', overflowX: 'auto', padding: '14px 0 2px', scrollbarWidth: 'none' } });
 
   const creatorRail = h('div', { class: 'row', style: { gap: '8px', overflowX: 'auto', padding: '10px 0 2px', scrollbarWidth: 'none' }, role: 'group', 'aria-label': 'Filter by creator' });
   const creatorGroup = labelledGroup('Creator', creatorRail);
@@ -220,9 +227,9 @@ export async function explore(root, { query }) {
 
   async function onEmpty() {
     if (f.norelax || forYou) return;
-    const r = await findRelaxation(f, toApi, { creatorName, alive: () => !left });
+    const r = await findRelaxation(f, toApi, { creatorName, alive: life.alive });
     // A late probe must not rewrite the route or empty state after you leave Explore.
-    if (left || !r) return;
+    if (life.isLeft() || !r) return;
     if (f.smart) {
       const from = new URLSearchParams(Object.entries(f).filter(([k, v]) => v && !['relaxed', 'from', 'norelax'].includes(k))).toString();
       navigate('/explore', { ...f, ...r.patch, relaxed: r.label, from }, { replace: true });
@@ -255,7 +262,7 @@ export async function explore(root, { query }) {
 
   // Fill the dynamic option lists without blocking the feed.
   get('/api/platforms').then((list) => {
-    if (left) return;
+    if (life.isLeft()) return;
     platSel.replaceChildren(
       h('option', { value: '' }, 'All sources'),
       ...list.map((p) => h('option', { value: p.platform, selected: f.platform === p.platform }, `${platformLabel(p.platform)} (${fmt.num(p.count)})`))
@@ -263,7 +270,7 @@ export async function explore(root, { query }) {
     if (f.platform) platSel.value = f.platform;
   }).catch(() => {});
   get('/api/creators', { sort: 'media', platform: f.platform || undefined, limit: 16 }).then((res) => {
-    if (left) return;
+    if (life.isLeft()) return;
     const list = (res && res.items) || [];
     if (!list.length) { creatorRail.replaceChildren(); return; }
     creatorRail.replaceChildren(
@@ -271,10 +278,10 @@ export async function explore(root, { query }) {
       ...list.map((c) => h('button', { type: 'button', class: `chip${f.creator === c.id ? ' on' : ''}`, 'aria-pressed': String(f.creator === c.id), onclick: () => set({ creator: f.creator === c.id ? '' : c.id }), title: `${c.display_name || c.handle} (${c.media_count} posts)` },
         c.display_name || c.handle, h('span', { class: 'n' }, fmt.num(c.media_count)))),
     );
-  }).catch(() => { if (left) return; creatorRail.replaceChildren(); });
+  }).catch(() => { if (life.isLeft()) return; creatorRail.replaceChildren(); });
   if (!focusTags.length) {
     get('/api/tags', { limit: 30 }).then((tags) => {
-      if (left) return;
+      if (life.isLeft()) return;
       tagRail.replaceChildren(...tags.map((t) => h('button', { class: 'chip', onclick: () => set({ tag: t.name }) }, `#${t.name}`, h('span', { class: 'n' }, fmt.num(t.count)))));
     }).catch(() => {});
   }
@@ -283,12 +290,6 @@ export async function explore(root, { query }) {
     if (feed) await feed.refresh();
   });
 
-  return () => {
-    left = true;
-    stopPtr();
-    feed.destroy();
-    offSearches();
-    offSeen();
-  };
+  return life.cleanup;
 }
 

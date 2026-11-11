@@ -1,3 +1,4 @@
+import { makeGuard } from '../guard.js';
 import { h, icon, fmt, emptyState } from '../dom.js';
 import { get } from '../api.js';
 import { href } from '../router.js';
@@ -63,8 +64,8 @@ export function browse(root) {
   const fanslyP = total(get('/api/creators', { paid: 'fansly', limit: 1 }));
   // The skeleton is already up. Hand back the way out before the catalog returns, so a late
   // catalog cannot replace a page you have left.
-  let left = false;
-  const stop = () => { left = true; };
+  const life = makeGuard();
+  const stop = life.cleanup;
   void fill();
   return stop;
 
@@ -74,14 +75,14 @@ export function browse(root) {
     [tags, communities, platforms] = await Promise.all([tagsP, communitiesP, platformsP]);
   }
   catch (e) {
-    if (left) return;
+    if (life.isLeft()) return;
     root.replaceChildren(emptyState({ icon: 'alert', title: 'Couldn’t load', text: e.message }));
     return;
   }
-  if (left) return;
+  if (life.isLeft()) return;
 
   if (!platforms.length) {
-    if (left) return;
+    if (life.isLeft()) return;
     root.replaceChildren(emptyState({ icon: 'compass', title: 'Nothing ingested yet', text: 'Sources, topics and tags appear here after the first ingest.', actions: [h('a', { class: 'btn primary', href: href('/admin/sources') }, 'Add a source')] }));
     return;
   }
@@ -111,7 +112,7 @@ export function browse(root) {
       h('div', { class: 'browse-grid' }, paidTiles)));
   };
 
-  if (left) return;
+  if (life.isLeft()) return;
   root.replaceChildren(
     h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Browse'), h('div', { class: 'sub' }, 'Every source, community and tag in the library.'))),
     paidHold,
@@ -124,9 +125,9 @@ export function browse(root) {
     h('section', { class: 'section' }, h('div', { class: 'section-head' }, h('h2', null, icon('tag'), 'Tags'), h('div', { class: 'sub' }, `${tags.length} most used`)),
       tagRow([...tags].sort((a, b) => b.count - a.count))));
 
-  Promise.all([ofCreatorsP, ofPostsP, fanslyP]).then(([ofCreators, ofPosts, fanslyCreators]) => { if (left) return; paintPaid(ofCreators, ofPosts, fanslyCreators); });
+  Promise.all([ofCreatorsP, ofPostsP, fanslyP]).then(([ofCreators, ofPosts, fanslyCreators]) => { if (life.isLeft()) return; paintPaid(ofCreators, ofPosts, fanslyCreators); });
   topicsP.then((topics) => {
-    if (left) return;
+    if (life.isLeft()) return;
     if (!topicHold.isConnected) return;
     if (!topics) { topicHold.remove(); return; }
     topicHold.replaceWith(h('section', { class: 'section', style: { marginTop: '8px' } }, h('div', { class: 'section-head' }, h('div', null, h('h2', null, icon('sparkle'), 'Topics'), h('div', { class: 'sub' }, 'Tags that travel together, grouped automatically'))), topics));

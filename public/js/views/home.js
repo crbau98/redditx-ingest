@@ -1,3 +1,4 @@
+import { makeGuard } from '../guard.js';
 import { h, icon, fmt, emptyState } from '../dom.js';
 import { get, prefetch } from '../api.js';
 import { href } from '../router.js';
@@ -131,21 +132,20 @@ export function home(root) {
   prefetch('/api/media', { sort: 'recent', page: 0, limit: 36 }); // the first feed page, reused by the feed already on screen
   // The grid is already on screen. Hand back the way out before Discover returns, so leaving destroys
   // that grid while the snapshot is still in flight and a late snapshot cannot replace the next page.
-  let left = false;
   let extra = () => {};
-  const stop = () => {
-    left = true;
+  const life = makeGuard(() => {
     extra();
     extra = () => {};
     if (feed) feed.destroy();
     feed = null;
-  };
+  });
+  const stop = life.cleanup;
   void fill();
   return stop;
 
   async function fill() {
   try { data = await get('/api/discover'); } catch (e) {
-    if (left) return;
+    if (life.isLeft()) return;
     // The early grid is independent. A failed snapshot must not throw away uploads that already painted.
     const failedFeeds = homeFeeds();
     holder.replaceWith(...[emptyState({
@@ -162,7 +162,7 @@ export function home(root) {
     failedFeeds.paint();
     return;
   }
-  if (left) return;
+  if (life.isLeft()) return;
 
   const s = data.stats;
   const input = h('input', { class: 'input', type: 'search', placeholder: window.matchMedia('(max-width: 560px)').matches ? 'Search creators or tags' : 'Try “muscle guys at the gym, videos this week”', 'aria-label': 'Search', enterkeyhint: 'search', autocomplete: 'off' });
@@ -209,7 +209,7 @@ export function home(root) {
   }
 
   if (!s.total) {
-    if (left) return;
+    if (life.isLeft()) return;
     feed.destroy();
     feed = null;
     const emptyFeeds = homeFeeds();
@@ -257,12 +257,12 @@ export function home(root) {
 
   const forYouSlot = h('div', { class: 'for-you-slot' });
   const fromFollowed = await followedP; // optional: a failed request leaves it empty
-  if (left) return;
+  if (life.isLeft()) return;
   if (fromFollowed.length) {
     parts.push(h('section', { class: 'section' }, sectionHead('heart', 'From creators you follow', 'Latest from the people you follow on this device', { href: href('/following'), label: 'See all' }), rail(fromFollowed, { open: open(fromFollowed) })));
   }
   const resumeItems = await resumeP;
-  if (left) return;
+  if (life.isLeft()) return;
   const resumeById = new Map(resumeItems.map((it) => [it.id, it]));
   const continueItems = resumeSaved.map((p) => resumeById.get(p.id)).filter(Boolean);
   if (continueItems.length) {
@@ -279,7 +279,7 @@ export function home(root) {
     parts.push(h('section', { class: 'section' }, sectionHead('flame', 'Trending now', 'Top posts, OnlyFans creators first', { href: href('/explore', { sort: 'trending', paid: 'onlyfans' }), label: 'See all' }), rail(data.trending, { open: open(data.trending) })));
   }
   const forYou = await forYouP;
-  if (left) return;
+  if (life.isLeft()) return;
   if (forYou) forYouSlot.replaceChildren(forYou);
   parts.push(forYouSlot);
 
@@ -307,7 +307,7 @@ export function home(root) {
       h('a', { class: 'chip', href: href('/find') }, icon('plus', 'sm'), 'Find a creator'));
   }
 
-  if (left) return;
+  if (life.isLeft()) return;
   root.replaceChildren(...parts, feedSection);
   feeds.paint();
   const stopPtr = initPullToRefresh(root, async () => {

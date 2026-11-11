@@ -1,3 +1,4 @@
+import { makeGuard } from '../../guard.js';
 import { h, icon, fmt, emptyState, toast, paintCover } from '../../dom.js';
 import { adminGet, adminPost } from '../../api.js';
 import { href } from '../../router.js';
@@ -170,8 +171,8 @@ export async function render(root) {
   };
   document.addEventListener('keydown', onKey);
 
-  let alive = true;
-  const showState = (node) => { if (alive) host.replaceChildren(node); };
+  const life = makeGuard(() => document.removeEventListener('keydown', onKey));
+  const showState = (node) => { if (life.alive()) host.replaceChildren(node); };
   let bulk = null;
   let clearing = false;
   // Mixed holds used to stop at the newest 60. Page through the rest with the same pager as Media.
@@ -227,13 +228,13 @@ export async function render(root) {
   }
 
   async function load() {
-    if (!alive) return;
+    if (!life.alive()) return;
     showState(loadingState('Loading the queue'));
     if (bulk) bulk.clear();
     let r;
     try { r = await adminGet('/moderation/queue', filterQuery()); }
-    catch (e) { if (alive) showState(errorState(e.message, () => load())); return; }
-    if (!alive) return;
+    catch (e) { if (life.alive()) showState(errorState(e.message, () => load())); return; }
+    if (!life.alive()) return;
     // After a clear, this page can be empty while older holds remain — step back once.
     if (!r.items.length && page > 0 && (r.total || 0) > 0) {
       page = Math.max(0, Math.min(page - 1, Math.ceil(r.total / (r.limit || PAGE)) - 1));
@@ -287,7 +288,7 @@ export async function render(root) {
           let guard = 0;
           let stopped = null;
           try {
-            while (alive && remaining > 0 && guard++ < REASON_ROUNDS) {
+            while (life.alive() && remaining > 0 && guard++ < REASON_ROUNDS) {
               const body = reasonClearBody(row.reason, action);
               if (!body) break;
               const out = await adminPost('/moderation/by-reason', body);
@@ -301,10 +302,10 @@ export async function render(root) {
           if (plan && ids.length) {
             undoToast(`${plan.verb} ${fmt.int(ids.length)} “${label}”`, async () => {
               for (const body of reasonUndoChunks(ids, row.reason)) await adminPost('/media/bulk', body);
-              if (alive) load();
+              if (life.alive()) load();
             });
           }
-          if (alive) await load();
+          if (life.alive()) await load();
           if (stopped) throw stopped;
           if (remaining > 0) toast(`${fmt.int(remaining)} still waiting under this hold`);
         });
@@ -334,7 +335,7 @@ export async function render(root) {
     shortcuts = { a: run('approve'), h: run('hide'), r: run('reject') };
   }
   await load();
-  return () => { alive = false; document.removeEventListener('keydown', onKey); };
+  return life.cleanup;
 }
 
 /** A selectable grid of media with bulk actions — shared by the review queue and the media browser. */

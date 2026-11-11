@@ -1,3 +1,4 @@
+import { makeGuard } from '../guard.js';
 import { h, icon, avatar, emptyState, proxied } from '../dom.js';
 import { get, post } from '../api.js';
 import { navigate, href } from '../router.js';
@@ -67,11 +68,11 @@ export async function find(root, { query }) {
       state.result = await post('/api/lookup', { query: q });
       lookupCache.set(q, state.result);
     } catch (e) {
-      if (left) return;
+      if (life.isLeft()) return;
       state.error = e.message;
       state.rateLimited = e.status === 429 || /rate|too many|slow down/i.test(e.message || '');
     }
-    if (left) return;
+    if (life.isLeft()) return;
     state.loading = false;
     paint();
   }
@@ -88,13 +89,13 @@ export async function find(root, { query }) {
     try {
       const selections = cands.map((c) => ({ platform: c.platform, kind: c.kind, target: c.target }));
       const r = await post('/api/lookup/follow', { name: String(name || input.value).trim(), selections, lookupId: state.result && state.result.lookupId });
-      if (left) return;
+      if (life.isLeft()) return;
       state.following = false;
       state.followed = true;
       paint();
-      if (r.creator) openTimer = setTimeout(() => { if (!left) navigate(`/creator/${r.creator.id}`); }, 650);
+      if (r.creator) openTimer = setTimeout(() => { if (life.alive()) navigate(`/creator/${r.creator.id}`); }, 650);
     } catch (e) {
-      if (left) return;
+      if (life.isLeft()) return;
       state.following = false;
       paint();
       out.prepend(h('div', { class: 'notice warn', role: 'alert' }, e.message));
@@ -187,7 +188,7 @@ export async function find(root, { query }) {
   }
 
   function paint() {
-    if (left) return;
+    if (life.isLeft()) return;
     btn.disabled = state.loading || state.following;
     btn.setAttribute('aria-busy', String(state.loading || state.following));
     input.disabled = state.loading;
@@ -268,13 +269,12 @@ export async function find(root, { query }) {
   );
   // Lookup and follow both outlive this page. Hand back a stop that drops their paint and the
   // profile navigation, so a result that lands after you leave does not replace the page you are on.
-  let left = false;
   let openTimer = null;
-  const stop = () => {
-    left = true;
+  const life = makeGuard(() => {
     if (openTimer) clearTimeout(openTimer);
     openTimer = null;
-  };
+  });
+  const stop = life.cleanup;
   if (initial) run();
   else paint();
   return stop;
