@@ -75,10 +75,19 @@ const REASON_ACTIONS = ['approve', 'hide', 'reject'];
 export const REASON_CHUNK = 500;
 export const REASON_ROUNDS = 40;
 
-/** Body for one chunk. Empty, oversized, or a permanent action (block) is refused. */
+/**
+ * May these posts be published without naming a creator? Telegram posts held as "Creator not named" may not: publishing
+ * them must go through Name the creator (targets.assignAmbiguous), which attaches the creator as it publishes.
+ */
+export function canPublishWithoutCreator(reason) {
+  return String(reason ?? '').trim() !== AMBIGUOUS_REASON;
+}
+
+/** Body for one chunk. Empty, oversized, a permanent action (block), or a publish the hold does not allow is refused. */
 export function reasonClearBody(reason, action) {
   const r = String(reason ?? '').trim();
   if (!r || r.length > 200 || !REASON_ACTIONS.includes(action)) return null;
+  if (action === 'approve' && !canPublishWithoutCreator(r)) return null;
   return { reason: r, action };
 }
 

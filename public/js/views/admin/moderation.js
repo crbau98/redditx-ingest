@@ -3,7 +3,7 @@ import { h, icon, fmt, emptyState, toast, paintCover } from '../../dom.js';
 import { adminGet, adminPost } from '../../api.js';
 import { href } from '../../router.js';
 import { pageHead, act, platBadge, openModal, undoToast, bulkBar, loadingState, errorState, pager } from './ui.js';
-import { holdOf, undoPlan, selectionSummary, sendBackBody, reasonClearBody, reasonActions, reasonClearCopy, reasonUndoChunks, REASON_ROUNDS, AMBIGUOUS_REASON } from './logic.js';
+import { holdOf, undoPlan, selectionSummary, sendBackBody, reasonClearBody, reasonActions, reasonClearCopy, reasonUndoChunks, REASON_ROUNDS, AMBIGUOUS_REASON, canPublishWithoutCreator } from './logic.js';
 import { stillChain } from '../../images.js';
 
 export { holdOf };
@@ -323,6 +323,11 @@ export async function render(root) {
     const run = (action) => async (e) => {
       const items = [...grid.selected.values()];
       if (!items.length) return;
+      // A Telegram post with no creator named is never published by a bulk approve: name the creator first.
+      if (action === 'approve') {
+        const unnamed = items.filter((m) => !canPublishWithoutCreator(m.review_reason)).length;
+        if (unnamed) { toast(`${unnamed} ${unnamed === 1 ? 'post has' : 'posts have'} no creator yet. Name the creator first.`, 'err'); return; }
+      }
       // Everything that changes what the public sees asks first (Approve names any safety rule it overrides); Hide does not.
       if (action !== 'hide' && !(await confirmBatch(action, items))) return;
       const ids = items.map((m) => m.id);
@@ -333,8 +338,10 @@ export async function render(root) {
       else toast(`${ids.length} ${ACTION_WORD[action]}`);
       load();
     };
+    // Under the "Creator not named" filter every row is unnamed, so bulk Approve is not offered at all.
+    const canApprove = canPublishWithoutCreator(reason);
     bulk = bulkBar([
-      h('button', { class: 'btn good', type: 'button', onclick: run('approve') }, icon('check', 'sm'), 'Approve'),
+      canApprove ? h('button', { class: 'btn good', type: 'button', onclick: run('approve') }, icon('check', 'sm'), 'Approve') : null,
       h('button', { class: 'btn', type: 'button', onclick: run('hide') }, 'Hide'),
       h('button', { class: 'btn', type: 'button', onclick: run('reject') }, 'Remove'),
       h('button', { class: 'btn danger', type: 'button', 'aria-label': 'Block forever', title: 'Block forever', onclick: run('block') }, 'Block'),
@@ -382,9 +389,12 @@ export async function render(root) {
       h('p', { class: 'review-group-note muted' }, 'One action applies to every item still waiting under that hold, not only this page.'),
       status,
       ...holds.map((row) => h('div', { class: 'review-reason' },
-        h('div', { class: 'grow' }, h('strong', null, row.label), h('div', { class: 'muted' }, `${fmt.int(row.n)} waiting`)),
+        h('div', { class: 'grow' }, h('strong', null, row.label), h('div', { class: 'muted' }, `${fmt.int(row.n)} waiting`),
+          canPublishWithoutCreator(row.reason) ? null : h('div', { class: 'muted' }, 'Filter to this hold, then name each creator to publish these.')),
         h('div', { class: 'row wrap' },
-          h('button', { class: 'btn sm good', type: 'button', onclick: clearReason('approve', row) }, 'Publish all'),
+          canPublishWithoutCreator(row.reason)
+            ? h('button', { class: 'btn sm good', type: 'button', onclick: clearReason('approve', row) }, 'Publish all')
+            : null,
           h('button', { class: 'btn sm', type: 'button', onclick: clearReason('hide', row) }, 'Hide all'),
           h('button', { class: 'btn sm', type: 'button', onclick: clearReason('reject', row) }, 'Remove all'))))) : null;
     const from = page * (r.limit || PAGE) + 1;
@@ -403,7 +413,7 @@ export async function render(root) {
       grid.el,
       pager({ page: r.page, limit: r.limit || PAGE, total: r.total, onPage: (p) => { page = p; load(); } }),
       bulk.el));
-    shortcuts = { a: run('approve'), h: run('hide'), r: run('reject') };
+    shortcuts = { ...(canApprove ? { a: run('approve') } : {}), h: run('hide'), r: run('reject') };
   }
   await load();
   return life.cleanup;

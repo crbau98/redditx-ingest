@@ -35,6 +35,16 @@ describe('review queue', () => {
     assert.equal(h.kind, 'other');
     assert.equal(L.AMBIGUOUS_REASON, 'attribution:telegram-ambiguous');
   });
+  test('a telegram post with no creator is never published by a bulk or whole-hold approve; hide and remove still work', () => {
+    const ambig = 'attribution:telegram-ambiguous';
+    assert.equal(L.canPublishWithoutCreator(ambig), false);
+    assert.equal(L.canPublishWithoutCreator('safety: age-claim'), true);
+    assert.equal(L.canPublishWithoutCreator(''), true);
+    assert.equal(L.reasonClearBody(ambig, 'approve'), null);
+    assert.deepEqual(L.reasonClearBody(ambig, 'hide'), { reason: ambig, action: 'hide' });
+    assert.deepEqual(L.reasonClearBody(ambig, 'reject'), { reason: ambig, action: 'reject' });
+    assert.deepEqual(L.reasonClearBody('safety: age-claim', 'approve'), { reason: 'safety: age-claim', action: 'approve' });
+  });
   test('approve, hide and remove can be undone by sending the item back to review; a block cannot', () => {
     for (const a of ['approve', 'hide', 'reject']) assert.equal(L.undoPlan(a).undoAction, 'flag', a);
     assert.equal(L.undoPlan('block'), null);
