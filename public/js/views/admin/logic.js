@@ -5,9 +5,16 @@ export const PHONE_NAV = ['overview', 'moderation', 'feeds', 'settings'];
 
 /* ------------------------------------------------------------------ review queue */
 
+/** A Telegram post forwarded from another channel with no creator named yet (see targets.assignAmbiguous). */
+export const AMBIGUOUS_REASON = 'attribution:telegram-ambiguous';
+
 /** What the gate wrote in `review_reason`, in words a reviewer can act on. */
 export function holdOf(reason) {
   const r = String(reason || '').trim();
+  if (r === AMBIGUOUS_REASON) {
+    // Kind stays 'other' so the kind filters and grouping are unchanged; the label says what is missing.
+    return { kind: 'other', rule: null, label: 'Creator not named', group: 'Creator not named', why: 'A Telegram post forwarded from another channel. Name its creator; publishing it attaches it to that creator.' };
+  }
   const safety = r.match(/^safety:\s*(.+?)(?:\s*\(community\))?$/);
   if (safety) {
     const rule = safety[1].trim();

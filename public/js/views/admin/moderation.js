@@ -3,7 +3,7 @@ import { h, icon, fmt, emptyState, toast, paintCover } from '../../dom.js';
 import { adminGet, adminPost } from '../../api.js';
 import { href } from '../../router.js';
 import { pageHead, act, platBadge, openModal, undoToast, bulkBar, loadingState, errorState, pager } from './ui.js';
-import { holdOf, undoPlan, selectionSummary, sendBackBody, reasonClearBody, reasonActions, reasonClearCopy, reasonUndoChunks, REASON_ROUNDS } from './logic.js';
+import { holdOf, undoPlan, selectionSummary, sendBackBody, reasonClearBody, reasonActions, reasonClearCopy, reasonUndoChunks, REASON_ROUNDS, AMBIGUOUS_REASON } from './logic.js';
 import { stillChain } from '../../images.js';
 
 export { holdOf };
@@ -120,6 +120,72 @@ export function confirmBatch(action, items) {
  * (or their ids, which come back as an unclassified hold).
  */
 export async function sendBackToReview(items) { return adminPost('/media/bulk', sendBackBody(items)); }
+
+/** Confirm before posts go live under a creator. Cancel has the focus, so Enter does nothing by accident. */
+function confirmAssign(creator, n) {
+  return new Promise((resolve) => {
+    let m;
+    const cancel = h('button', { class: 'btn', type: 'button', onclick: () => m.close(false) }, 'Cancel');
+    const go = h('button', { class: 'btn good', type: 'button', onclick: () => m.close(true) }, `Publish ${n} to @${creator.handle}`);
+    m = openModal({
+      title: `Publish ${n} ${n === 1 ? 'post' : 'posts'} to @${creator.handle}?`,
+      sub: 'They go live under that creator and in Explore. Each post keeps its Telegram source.',
+      body: null, onClose: (ok) => resolve(!!ok), actions: [cancel, go],
+    });
+    setTimeout(() => cancel.focus(), 60);
+  });
+}
+
+/**
+ * Name the creator of the selected "Creator not named" posts (Telegram, attribution:telegram-ambiguous). One request per post:
+ * the server checks each is still waiting under that reason, so a post that moved on fails alone and the rest still go through.
+ */
+function assignPanel({ selected, onDone, alive }) {
+  const input = h('input', {
+    class: 'input', type: 'search', autocomplete: 'off', placeholder: 'Find a creator by handle or name',
+    'aria-label': 'Find a creator by handle or name', style: { minHeight: '44px', width: '100%' },
+  });
+  const results = h('div', { class: 'stack', 'aria-live': 'polite' });
+  let timer = null; let seq = 0;
+
+  async function search(text) {
+    const q = text.trim();
+    const mine = ++seq;
+    if (q.length < 2) { results.replaceChildren(); return; }
+    let r;
+    try { r = await adminGet('/creators', { q, limit: 8 }); }
+    catch { if (mine === seq && alive()) results.replaceChildren(h('p', { class: 'muted' }, 'Search failed. Try again.')); return; }
+    if (mine !== seq || !alive()) return;
+    const active = (r.items || []).filter((c) => c.status === 'active').slice(0, 6);
+    results.replaceChildren(...(active.length
+      ? active.map((c) => h('button', {
+        class: 'btn', type: 'button', style: { minHeight: '44px', justifyContent: 'flex-start', width: '100%' },
+        onclick: (e) => assign(c, e),
+      }, `@${c.handle}${c.display_name ? ` · ${c.display_name}` : ''}`))
+      : [h('p', { class: 'muted' }, 'No active creator matches that. Check the handle.')]));
+  }
+
+  async function assign(creator, e) {
+    const items = selected();
+    if (!items.length) { toast('Select the posts first'); return; }
+    if (!(await confirmAssign(creator, items.length)) || !alive()) return;
+    let done = 0; let failed = 0;
+    await act(e && e.currentTarget, async () => {
+      for (const m of items) {
+        try { await adminPost(`/media/${m.id}/assign`, { creatorId: creator.id }); done++; }
+        catch { failed++; }
+      }
+    });
+    toast(`${done} published to @${creator.handle}${failed ? ` · ${failed} not assigned` : ''}`, failed ? 'err' : 'ok');
+    if (alive()) onDone();
+  }
+
+  input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => search(input.value), 250); });
+  return h('section', { class: 'review-assign', 'aria-label': 'Name the creator for the selected posts' },
+    h('h2', { class: 'group-label' }, 'Name the creator'),
+    h('p', { class: 'review-group-note muted' }, 'Select posts below, search for their creator, then confirm. Each selected post is published to that creator.'),
+    input, results);
+}
 
 /** One confirm for a whole hold. Cancel has the focus, so Enter does nothing by accident. */
 function confirmReason(action, row) {
@@ -324,8 +390,13 @@ export async function render(root) {
     const from = page * (r.limit || PAGE) + 1;
     const to = from + r.items.length - 1;
     const filterNote = reason ? ` · ${holdOf(reason).label}` : kind ? ` · ${KIND_FILTERS.find(([v]) => v === kind)?.[1] || kind}` : '';
+    // Telegram posts with no creator yet: name one for the selected posts. Only under that exact reason filter.
+    const assignBox = reason === AMBIGUOUS_REASON
+      ? assignPanel({ selected: () => (grid ? [...grid.selected.values()] : []), onDone: () => load(), alive: () => life.alive() })
+      : null;
     showState(h('div', { class: 'stack' },
       filterBar(r.reasons),
+      assignBox,
       holdSection,
       h('div', { class: 'row' }, h('span', { class: 'a-meta', role: 'status' }, `${fmt.int(r.total)} waiting${filterNote} · showing ${from}–${to}`), h('span', { class: 'grow' }),
         h('button', { class: 'btn sm', type: 'button', onclick: () => grid.selectAll() }, 'Select all on this page')),

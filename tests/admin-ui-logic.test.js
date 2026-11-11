@@ -29,6 +29,12 @@ describe('review queue', () => {
     assert.equal(L.holdOf('physique:heavy').kind, 'other');
     assert.equal(L.holdOf('').label, 'Held for review');
   });
+  test('a telegram post with no creator named reads as such, and stays in the other kind', () => {
+    const h = L.holdOf('attribution:telegram-ambiguous');
+    assert.equal(h.label, 'Creator not named');
+    assert.equal(h.kind, 'other');
+    assert.equal(L.AMBIGUOUS_REASON, 'attribution:telegram-ambiguous');
+  });
   test('approve, hide and remove can be undone by sending the item back to review; a block cannot', () => {
     for (const a of ['approve', 'hide', 'reject']) assert.equal(L.undoPlan(a).undoAction, 'flag', a);
     assert.equal(L.undoPlan('block'), null);
