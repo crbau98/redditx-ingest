@@ -334,6 +334,34 @@ const media = {
     return mediaQ.reviewReasonCounts.all(Math.min(40, Math.max(1, limit | 0)));
   },
 
+  /**
+   * Move every item one feed brought in to another creator, or to none (creatorId null / ''), and the feed with them:
+   * the cleanup after a feed was attached to the wrong man. Only rows whose ingest feed is this feed change; the feed's
+   * own creator_id is set in the same transaction, so its next posts follow; each creator that lost or gained rows is
+   * recounted once; one audit row records it. Nothing is merged.
+   * @returns {{moved: number, from: string[], to: string|null}|null} null when the feed or target creator does not exist
+   */
+  reassignFeed(feedId, creatorId, { actor = 'admin' } = {}) {
+    const feed = db.prepare('SELECT id, platform, target FROM feeds WHERE id = ?').get(feedId);
+    if (!feed) return null;
+    const to = creatorId ? String(creatorId) : null;
+    if (to && !db.prepare('SELECT id FROM creators WHERE id = ?').get(to)) return null;
+    const out = db.transaction(() => {
+      const from = db.prepare('SELECT DISTINCT creator_id AS id FROM media WHERE feed_id = ? AND creator_id IS NOT ?').all(feed.id, to).map((r) => r.id);
+      const moved = db.prepare("UPDATE media SET creator_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE feed_id = ? AND creator_id IS NOT ?").run(to, feed.id, to).changes;
+      // The feed itself goes with its items: a feed still owned by the old creator would credit its next posts to him
+      // again (pipeline ownedByFeed).
+      db.prepare("UPDATE feeds SET creator_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(to, feed.id);
+      return { moved, from: from.filter(Boolean) };
+    })();
+    if (out.moved) {
+      for (const id of new Set([...out.from, to].filter(Boolean))) creators.refreshStats(id);
+      countCache.clear(); // a creator filter's totals changed
+      logAction('feed', feed.id, 'reassign-media', `${out.moved} item(s) of ${feed.platform}:${String(feed.target).slice(0, 80)} from ${out.from.join(', ') || 'none'} to ${to || 'no creator'}`, actor);
+    }
+    return { moved: out.moved, from: out.from, to };
+  },
+
   update(id, patch, { deferStats = false } = {}) {
     const allowed = ['title', 'description', 'nsfw_level', 'scope'];
     const sets = []; const params = { id };

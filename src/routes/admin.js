@@ -182,6 +182,16 @@ router.patch('/feeds/:id', (req, res) => {
   res.json(repo.feeds.update(req.params.id, { label: b.label, enabled: b.enabled, trusted: b.trusted, intervalMin: b.intervalMin, priority: b.priority, resetErrors: !!b.resetErrors, runNow: !!b.runNow }));
 });
 
+// Move every item this feed brought in to another creator, or unassign them ({ creatorId: null | '' }): cleanup after a
+// feed was attached to the wrong man. Only this feed's items; affected creators are recounted; the action is audited.
+router.post('/feeds/:id/media/reassign', (req, res) => {
+  const b = req.body || {};
+  if (!('creatorId' in b)) return bad(res, 'creatorId required (a creator id, or null / "" to unassign)');
+  const out = repo.media.reassignFeed(req.params.id, b.creatorId, { actor: 'admin' });
+  if (!out) return bad(res, 'Feed or creator not found', 404);
+  res.json(out);
+});
+
 router.delete('/feeds/:id', (req, res) => {
   if (!repo.feeds.remove(req.params.id)) return bad(res, 'Not found', 404);
   res.json({ ok: true });
