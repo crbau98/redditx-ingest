@@ -14,7 +14,7 @@ const { Worker } = require('worker_threads');
 const config = require('../config');
 const { JOB_FNS, JOB_TTL_MS } = require('./aggregate-jobs');
 
-const USE_WORKER = !config.isTest && config.dbPath !== ':memory:' && process.env.PRISM_AGGREGATE_WORKER !== '0';
+const USE_WORKER = !config.isTest && config.dbPath !== ':memory:' && config.aggregateWorker;
 const RESTART_MS = 10000;
 
 const store = new Map(); // name -> { value, at }

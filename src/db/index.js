@@ -8,7 +8,7 @@ if (config.dbPath !== ':memory:') fs.mkdirSync(config.dataDir, { recursive: true
 
 // PRISM_DB_READONLY=1: the aggregate worker thread (src/lib/aggregate-worker.js). It reads only, so it
 // never migrates, writes pragmas, or runs the planner refresh below; the main thread owns all of that.
-const READONLY = process.env.PRISM_DB_READONLY === '1';
+const READONLY = config.dbReadonly;
 const db = READONLY
   ? new Database(config.dbPath, { readonly: true, fileMustExist: true })
   : new Database(config.dbPath);

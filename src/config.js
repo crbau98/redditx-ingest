@@ -38,6 +38,12 @@ function readKeyFile(file) {
 }
 
 module.exports = {
+  // Read when asked, not at load (the same moment the callers used to read process.env themselves):
+  // DEMO_ART=1 mounts /demo outside production; PRISM_DB_READONLY=1 is set by the aggregate worker thread just before
+  // it opens the database; PRISM_AGGREGATE_WORKER=0 keeps library aggregates on the main thread.
+  get demoArt() { return env.DEMO_ART === '1'; },
+  get dbReadonly() { return env.PRISM_DB_READONLY === '1'; },
+  get aggregateWorker() { return env.PRISM_AGGREGATE_WORKER !== '0'; },
   root,
   isProd,
   isTest,

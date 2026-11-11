@@ -82,7 +82,7 @@ function createApp() {
   const assetLimiter = rateLimit({ windowMs: 60 * 1000, max: 6000, standardHeaders: true, legacyHeaders: false, message: 'Too many requests, slow down' });
   const mediaLimiter = rateLimit({ windowMs: 60 * 1000, max: 4000, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many media requests' } });
 
-  if (process.env.DEMO_ART === '1' && !config.isProd) app.use('/demo', require('./routes/demo'));
+  if (config.demoArt && !config.isProd) app.use('/demo', require('./routes/demo'));
   app.use('/api/admin', adminRoutes);
   app.use('/api/proxy', mediaLimiter);
   app.use('/api/hls', mediaLimiter);
