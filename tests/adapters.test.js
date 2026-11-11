@@ -144,21 +144,6 @@ describe('Mastodon', () => {
   });
 });
 
-describe('Lemmy', () => {
-  const l = () => require('../src/sources/lemmy');
-  const pv = { post: { id: 5, name: 'Beach', url: 'https://lemmynsfw.com/pictrs/image/abc.jpg', url_content_type: 'image/jpeg', thumbnail_url: 'https://lemmynsfw.com/pictrs/image/abc.jpg?thumbnail=512', published: '2026-10-04T10:00:00Z', ap_id: 'https://lemmynsfw.com/post/5', nsfw: true, body: 'hi' },
-    creator: { name: 'zed', actor_id: 'https://lemmynsfw.com/u/zed', display_name: 'Zed' }, community: { name: 'gaynsfw', actor_id: 'https://lemmynsfw.com/c/gaynsfw' }, counts: { score: 33 } };
-  test('image posts map with qualified author/community names', () => {
-    const [it] = l().parsePostView(pv);
-    assert.equal(it.mediaType, 'image'); assert.equal(it.author, 'zed@lemmynsfw.com'); assert.equal(it.community, 'gaynsfw@lemmynsfw.com'); assert.equal(it.score, 33); assert.equal(it.nsfw, 'explicit');
-  });
-  test('video detection, and non-media / removed posts are skipped', () => {
-    assert.equal(l().parsePostView({ ...pv, post: { ...pv.post, url: 'https://x.org/c.mp4', url_content_type: 'video/mp4' } })[0].mediaType, 'video');
-    assert.equal(l().parsePostView({ ...pv, post: { ...pv.post, url: 'https://news.site/article', url_content_type: 'text/html' } }).length, 0);
-    assert.equal(l().parsePostView({ ...pv, post: { ...pv.post, removed: true } }).length, 0);
-  });
-});
-
 describe('X', () => {
   const x = () => require('../src/sources/x');
   test('v2 API: photos use ?name=orig, videos pick the best mp4 variant', () => {

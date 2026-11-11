@@ -794,11 +794,5 @@ describe('3. Brave Images/Videos, DDG Fallback & Creator Mention Search', () => 
     assert.ok(found.some((l) => l.handle === 'alex_fit' && l.service === 'Fansly'), 'extracts fans.ly handle');
     assert.ok(found.some((l) => l.platform === 'linkinbio' && l.url.includes('beacons.page')), 'extracts beacons.page link hub');
 
-    const lemmy = require('../src/sources/lemmy');
-    // Test lemmyError backoff
-    const e502 = Object.assign(new Error('Bad Gateway'), { status: 502 });
-    // call lemmy's internal or fetch with bad status
-    const wrapped = Object.assign(new Error('Lemmy test: HTTP 502'), { status: 502, retryAfter: 15 * 60 * 1000 });
-    assert.ok(wrapped.retryAfter >= 900000, '502 backoff is at least 15 minutes');
   });
 });

@@ -49,6 +49,7 @@ media / creators / feeds tables ──> src/routes/public.js serves them
 - `src/settings.js` — every toggle with a plain-language label; groups render in Admin → Settings.
 - Safety gates in one pipeline place (above); takedowns `lib/takedowns.js`, robots honoured per fetch tier.
 - Reader tiers for refused pages (`src/sources/web.js`): plain HTTP → local Chrome (raw CDP, `lib/chrome.js`) → Jina reader (`lib/jina.js`) → paid unlockers last, never on a paid platform.
+- Host policy (written in `src/sources/_policy.js`, which nothing calls): All public hosts are ingest candidates now: paid subscription pages, leak / tube-rip / file-locker mirrors and every other public gay creator content source are treated like any other public page. The admin's safety, takedown and male-only scope gates decide what actually publishes downstream.
 - Owner decisions with teeth: physique filter OFF (ranking nudge `lib/buildbias.js` instead), leak/mirror hosts in scope when publicly served, Yandex Images on.
 
 ## Where to change what

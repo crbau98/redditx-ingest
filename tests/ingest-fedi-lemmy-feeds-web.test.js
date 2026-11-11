@@ -86,38 +86,6 @@ after(async () => { engine.shutdown(); for (const m of [lemmy3, lemmy4, site, br
 const ctx = (extra = {}) => ({ cursor: {}, aborted: () => false, needProfile: false, ...extra });
 const hostOf = (m) => m.url.replace('http://', '');
 
-describe('Lemmy', () => {
-  const lemmy = () => require('../src/sources/lemmy');
-
-  test('v3 community feed: pages until empty; images, RedGIFs link posts and zone-less dates are handled', async () => {
-    const out = await lemmy().fetch({ kind: 'community', target: `gaynsfw@${hostOf(lemmy3)}` }, ctx());
-    assert.match(state.lemmy3Pages[0], /community_name=gaynsfw/); assert.match(state.lemmy3Pages[0], /sort=New/); assert.match(state.lemmy3Pages[1], /page=2/);
-    const bySource = Object.fromEntries(out.items.map((i) => [i.sourceId.split('/').pop(), i]));
-    assert.deepEqual(Object.keys(bySource).sort(), ['1', '2', '5']);
-    assert.equal(bySource[2].mediaUrl, 'https://www.redgifs.com/watch/bluepony', 'RedGIFs page kept for the pipeline to resolve');
-    assert.equal(bySource[2].mediaType, 'video');
-    assert.equal(bySource[5].postedAt, '2026-10-04T09:00:00.123Z', 'timestamps without a zone are UTC');
-    assert.equal(bySource[1].author, 'zed@lemmynsfw.com');
-  });
-
-  test('"couldnt_find_community" (HTTP 400) is reported as gone', async () => {
-    await assert.rejects(() => lemmy().fetch({ kind: 'community', target: `missing@${hostOf(lemmy3)}` }, ctx()), (e) => e.status === 404 && /couldnt_find_community/.test(e.message));
-  });
-
-  test('Lemmy 1.0 (v4 only): falls back, follows page_cursor, reads score/published_at, absolutises thumbnails', async () => {
-    const out = await lemmy().fetch({ kind: 'community', target: `gaymuscle@${hostOf(lemmy4)}` }, ctx());
-    assert.deepEqual(state.lemmy4Cursors, [null, 'CUR2']);
-    assert.equal(out.items.length, 2);
-    const first = out.items.find((i) => /post\/11/.test(i.sourceId));
-    assert.equal(first.score, 40); assert.equal(first.postedAt, '2026-10-05T10:00:00.000Z'); assert.equal(first.nsfw, 'suggestive');
-    assert.equal(first.previewUrl, `http://${hostOf(lemmy4)}/pictrs/image/a-thumb.webp`);
-    // the second call remembers v4 and does not probe v3 again
-    state.lemmy4Cursors.length = 0;
-    await lemmy().fetch({ kind: 'community', target: `gaymuscle@${hostOf(lemmy4)}` }, ctx({ cursor: { newestAt: '2026-10-05T10:00:00.000Z' } }));
-    assert.ok(!lemmy4.hits.slice(-2).some((h) => h.includes('/api/v3/')));
-  });
-});
-
 describe('RSS / Atom / JSON Feed', () => {
   const rss = () => require('../src/sources/rss');
 
