@@ -296,15 +296,22 @@ function status() {
  * request 477 ms, second 42 ms. Revisit moving this to the aggregate worker only if production passes ~150k rows
  * AND the chunked build still shows up in blockwatch.
  */
+// One statement reads at most this many rowids of media. The old single query sorted every published row (with its
+// vector) in a temporary B-tree before returning the first one: one synchronous step of minutes on a large library.
+const WARM_WINDOW = 20000;
+
 async function warmIndex() {
   ensureTable();
   if (!ix) {
     const x = emptyIndex();
-    let n = 0;
-    for (const r of db.prepare(`SELECT e.media_id, e.vec, m.creator_id, m.post_key FROM media_embeddings e JOIN media m ON m.id = e.media_id
-        WHERE e.model = ? AND m.publish_state = 'published' ORDER BY m.seq`).iterate(MODEL_ID)) {
-      addTo(x, r.media_id, r.creator_id, r.post_key, r.vec);
-      if (++n % 20000 === 0) await new Promise((res) => setImmediate(res)); // let requests (and the health check) through
+    // media walked by rowid (NOT INDEXED, outer loop), each row's vector looked up by its key: no sort, and the
+    // event loop gets a turn between windows.
+    const stmt = db.prepare(`SELECT e.media_id, e.vec, m.creator_id, m.post_key FROM media m NOT INDEXED CROSS JOIN media_embeddings e
+        WHERE m.seq > ? AND m.seq <= ? AND e.media_id = m.id AND e.model = ? AND m.publish_state = 'published' ORDER BY m.seq`);
+    const top = (db.prepare('SELECT MAX(seq) AS m FROM media').get() || {}).m || 0;
+    for (let from = 0; from < top; from += WARM_WINDOW) {
+      for (const r of stmt.iterate(from, from + WARM_WINDOW, MODEL_ID)) addTo(x, r.media_id, r.creator_id, r.post_key, r.vec);
+      await new Promise((res) => setImmediate(res)); // let requests (and the health check) through
     }
     ix = x;
   }

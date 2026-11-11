@@ -434,21 +434,30 @@ function imageSweepProgress() {
  * This only clears a column; the face sweep still reads pictures at its own rate.
  */
 const FACE_BACKFILL_DONE = 'done';
-function faceBackfill({ limit = 200 } = {}) {
+// One call reads at most this many rowids of media. The old query sorted every published row (temporary B-tree) on
+// each call, every minute: up to 25 s of blocked event loop on production.
+const FACE_BACKFILL_WINDOW = 20000;
+function faceBackfill({ limit = 200, window = FACE_BACKFILL_WINDOW } = {}) {
   const at = repo.settings.get('face_backfill_seq');
   if (at === FACE_BACKFILL_DONE) return { cleared: 0, done: true };
   const after = parseInt(at || '0', 10) || 0;
-  const rows = repo.db.prepare(`SELECT seq, id FROM media
-    WHERE seq > ? AND publish_state = 'published' AND face_at IS NOT NULL AND scope != 'excluded'
+  const cap = Math.max(1, Math.min(1000, Number(limit) || 200));
+  const top = (repo.db.prepare('SELECT MAX(seq) AS m FROM media').get() || {}).m || 0;
+  const to = after + Math.max(1, Number(window) || FACE_BACKFILL_WINDOW);
+  // rowid range, NOT INDEXED: no sort, and never more than one window of rows per statement
+  const rows = after >= top ? [] : repo.db.prepare(`SELECT seq, id FROM media NOT INDEXED
+    WHERE seq > ? AND seq <= ? AND publish_state = 'published' AND face_at IS NOT NULL AND scope != 'excluded'
       AND NOT EXISTS (SELECT 1 FROM media_faces f WHERE f.media_id = media.id)
-    ORDER BY seq LIMIT ?`).all(after, Math.max(1, Math.min(1000, Number(limit) || 200)));
+    ORDER BY seq LIMIT ?`).all(after, to, cap);
   if (rows.length) {
     const clear = repo.db.prepare('UPDATE media SET face_at = NULL WHERE id = ?');
     repo.db.transaction(() => { for (const r of rows) clear.run(r.id); })();
   }
-  const full = rows.length >= limit;
-  repo.settings.set('face_backfill_seq', full ? String(rows[rows.length - 1].seq) : FACE_BACKFILL_DONE);
-  return { cleared: rows.length, done: !full };
+  // A full batch resumes after its last row; otherwise the whole window is done and the next call starts after it.
+  const next = rows.length >= cap ? rows[rows.length - 1].seq : to;
+  const done = rows.length < cap && next >= top;
+  repo.settings.set('face_backfill_seq', done ? FACE_BACKFILL_DONE : String(next));
+  return { cleared: rows.length, done };
 }
 
 async function faceSweep({ limit = 12, settings } = {}) {
