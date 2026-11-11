@@ -135,6 +135,13 @@ router.post('/ai/triage', async (req, res) => {
 /* ------------------------------------------------------------------- feeds */
 // Read-only: account feeds attached to a creator by discovery or a deep pull although their own handle is not his.
 // Nothing is changed; clean each row up with POST /feeds/:id/media/reassign (the row carries the call).
+// Read-only scoreboard: feeds whose runs over the last ?days (default 7, at least 5 runs) fetched nothing. The engine already
+// checks these every 3 days instead of on their interval; nothing is disabled or deleted.
+router.get('/feeds/idle', (req, res) => {
+  const days = int(req.query.days, 1, 90, 7);
+  const p = page(req, 500);
+  res.json({ days, minRuns: 5, page: p.page, limit: p.limit, ...repo.runs.idleFeeds(new Date(Date.now() - days * 86400000).toISOString(), { minRuns: 5, limit: p.limit, offset: p.page * p.limit }) });
+});
 router.get('/feeds/foreign', (req, res) => res.json(require('../engine/deepsearch').foreignFeeds({ limit: req.query.limit, offset: req.query.offset })));
 router.get('/feeds', (req, res) => {
   const { platform, kind, status, q, creatorId, enabled } = req.query;

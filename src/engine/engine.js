@@ -126,6 +126,22 @@ function tempo(feed, added) {
   return Math.min(3, 1 + 0.5 * (streak - 1));
 }
 
+/**
+ * Zero-yield backoff: a feed whose runs over the last IDLE_DAYS (at least IDLE_MIN_RUNS of them) fetched nothing at all is
+ * checked every IDLE_BACKOFF_DAYS instead of on its interval (the tempo above stops at 3x and a day). Not deleted, not
+ * disabled: the first item it fetches puts it back on its normal pace, and admins see the list (GET /api/admin/feeds/idle).
+ * Same switch as the tempo (adaptiveScheduling).
+ */
+const IDLE_DAYS = 7;
+const IDLE_MIN_RUNS = 5;
+const IDLE_BACKOFF_DAYS = 3;
+function idleNextRun(feed, fetchedNow, now = Date.now()) {
+  if (fetchedNow > 0 || !settingsStore.get().adaptiveScheduling) return null;
+  const score = repo.runs.yieldSince(feed.id, new Date(now - IDLE_DAYS * 86400000).toISOString());
+  if (score.runs < IDLE_MIN_RUNS || score.fetched > 0) return null;
+  return new Date(now + IDLE_BACKOFF_DAYS * 86400000 * (0.9 + Math.random() * 0.2)).toISOString();
+}
+
 /** next_run_at after a run: jittered interval on success, exponential backoff on failure. */
 function computeNextRun(feed, failures, retryAfterMs = 0, factor = 1) {
   const base = Math.min(Math.max(5, feed.interval_min) * 60000 * factor, Math.max(24 * 3600000, feed.interval_min * 60000));
@@ -400,7 +416,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     }
     repo.feeds.finishRun(feed.id, {
       status, cursor: cursorOut, addedItems: stats.added, failures: 0,
-      nextRunAt: more && !ctx.aborted() ? new Date(Date.now() + cfg.backfillGapMin * 60000).toISOString() : computeNextRun(feed, 0, 0, tempo(feed, stats.added)),
+      nextRunAt: more && !ctx.aborted() ? new Date(Date.now() + cfg.backfillGapMin * 60000).toISOString() : (idleNextRun(feed, stats.fetched) || computeNextRun(feed, 0, 0, tempo(feed, stats.added))),
       error: (result.notes && result.notes.length) ? `via ${result.via}: ${result.notes[0]}` : null,
     });
     breaker.success(feed.platform);
@@ -764,4 +780,4 @@ function shutdown() {
   state.timer = null; state.hotTimer = null; state.stopRequested = true;
 }
 
-module.exports = { _nextWork: nextWork, slotsFor, runningOn, start, shutdown, tick, runFeed, enqueue, enqueuePlatforms, stopAll, pause, resume, status, seedDefaults, seedCuratedCreators, backfillCreatorStats, computeNextRun, tempo, adoptDiscoveredFeeds, _profileDue: profileDue, _state: state, _waysIn: { noteWaysIn, followWaysIn } };
+module.exports = { _nextWork: nextWork, slotsFor, runningOn, start, shutdown, tick, runFeed, enqueue, enqueuePlatforms, stopAll, pause, resume, status, seedDefaults, seedCuratedCreators, backfillCreatorStats, computeNextRun, tempo, idleNextRun, IDLE: { days: IDLE_DAYS, minRuns: IDLE_MIN_RUNS, backoffDays: IDLE_BACKOFF_DAYS }, adoptDiscoveredFeeds, _profileDue: profileDue, _state: state, _waysIn: { noteWaysIn, followWaysIn } };

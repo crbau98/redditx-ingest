@@ -670,6 +670,21 @@ const runs = {
     }));
   },
   /** Items added by a feed's last few finished runs, newest first (for adaptive scheduling). */
+  /** Yield scoreboard: how many finished runs this feed had since `sinceIso`, and how many items they fetched. */
+  yieldSince(feedId, sinceIso) {
+    const r = db.prepare("SELECT COUNT(*) AS runs, COALESCE(SUM(fetched), 0) AS fetched FROM feed_runs WHERE feed_id = ? AND started_at >= ? AND status != 'running'").get(feedId, sinceIso);
+    return { runs: r.runs, fetched: r.fetched };
+  },
+  /** Admin: feeds whose runs since `sinceIso` (at least `minRuns` of them) fetched nothing at all. Read-only. */
+  idleFeeds(sinceIso, { minRuns = 5, limit = 200, offset = 0 } = {}) {
+    const base = `FROM feed_runs r JOIN feeds f ON f.id = r.feed_id WHERE r.started_at >= ? AND r.status != 'running'
+      GROUP BY r.feed_id HAVING COUNT(*) >= ? AND COALESCE(SUM(r.fetched), 0) = 0`;
+    const total = db.prepare(`SELECT COUNT(*) AS n FROM (SELECT r.feed_id ${base})`).get(sinceIso, minRuns).n;
+    const items = db.prepare(`SELECT f.id, f.platform, f.kind, f.target, f.enabled, f.creator_id AS creatorId, f.next_run_at AS nextRunAt,
+        f.last_status AS lastStatus, f.last_error AS lastError, COUNT(*) AS runs, SUM(r.status = 'error') AS errors ${base}
+      ORDER BY f.platform, f.target LIMIT ? OFFSET ?`).all(sinceIso, minRuns, limit, offset);
+    return { total, items: items.map((i) => ({ ...i, enabled: !!i.enabled })) };
+  },
   recentAdded(feedId, n = 4) {
     return db.prepare("SELECT added FROM feed_runs WHERE feed_id = ? AND status IN ('ok','empty') ORDER BY started_at DESC LIMIT ?").all(feedId, n).map((r) => r.added || 0);
   },
