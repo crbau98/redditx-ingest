@@ -110,10 +110,15 @@ function toOriginal(url) {
 const MIME_EXT = { 'image/jpg': 'jpg', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp' };
 
 /** One Reddit submission -> 0..n ingest items (galleries yield several). */
-function parsePost(post) {
+/**
+ * A Reddit post -> media items. `drops` (optional) counts posts that had media-like content but were dropped, by reason,
+ * so the run report shows them; ordinary text posts are not counted (a text-heavy community must not look broken).
+ */
+function parsePost(post, drops) {
+  const drop = (reason) => { if (drops && typeof drops === 'object') drops[reason] = (drops[reason] || 0) + 1; return []; };
   const d = (post && post.data) || post;
   if (!d || !d.id) return [];
-  if (d.removed_by_category || d.author === '[deleted]') return [];
+  if (d.removed_by_category || d.author === '[deleted]') return drop('removed or deleted');
   const cp = d.crosspost_parent_list && d.crosspost_parent_list[0];
   const ownMedia = d.is_gallery || d.is_video || (d.media && d.media.reddit_video);
   const src = cp && !ownMedia ? cp : d; // crossposts carry their media on the parent
@@ -183,7 +188,7 @@ function parsePost(post) {
     return [{ ...base, position: 0, mediaType: 'image', mediaUrl: url, previewUrl: prev.previewUrl, resolve: 'x', width: prev.width, height: prev.height }];
   }
 
-  if (host && hostBlocked(host) && !hostMatches(host, 'redd.it')) return [];
+  if (host && hostBlocked(host) && !hostMatches(host, 'redd.it')) return drop('blocked host');
 
   const isGifLike = /\.(gif|gifv)(\?|$)/i.test(url);
   if (isGifLike && prev.mp4) {
@@ -194,14 +199,16 @@ function parsePost(post) {
   }
   if (hostMatches(host, 'imgur.com') && !/\.(jpe?g|png|gif|webp)(\?|$)/i.test(url)) {
     const norm = normalizeMediaUrl(url);
-    if (!norm) return []; // album
+    if (!norm) return drop('imgur album');
     return [{ ...base, position: 0, mediaType: /\.mp4$/.test(norm) ? 'video' : 'image', mediaUrl: norm, previewUrl: prev.previewUrl, width: prev.width, height: prev.height }];
   }
   if (/\.(jpe?g|png|webp|avif|gif)(\?|$)/i.test(url) || hostMatches(host, 'i.redd.it')) {
     const full = toOriginal(url);
     return [{ ...base, position: 0, mediaType: 'image', mediaUrl: full, previewUrl: prev.previewUrl || url, width: prev.width, height: prev.height }];
   }
-  return []; // text / unsupported external link
+  // A text post has no media to lose; an external link we cannot read does.
+  if (src.is_self || !url || /\/comments\//.test(url)) return [];
+  return drop('unsupported link');
 }
 
 /** Atom entries from the .rss transport -> items (no scores / dimensions available). */
@@ -401,7 +408,8 @@ async function fetchPage(feed, sort, params, dead = new Set()) {
   throw Object.assign(new Error(`Reddit unavailable for ${label} on every transport: ${failed.join(', ')}`), { status: real.status || 502, retryAfter: real.retryAfter || firstErr.retryAfter || 0, code: real.code || firstErr.code || '' });
 }
 
-async function fetchProfile(name) {
+/** The account's profile. A failure is reported through `notes` (when given) instead of disappearing; the posts stay. */
+async function fetchProfile(name, notes) {
   if (!enabled()) return null;
   try {
     const t = await oauthToken();
@@ -417,7 +425,10 @@ async function fetchProfile(name) {
       avatarUrl: decodeHtml(d.snoovatar_img || sr.icon_img || d.icon_img || '') || null,
       bannerUrl: decodeHtml(sr.banner_img || '') || null,
     };
-  } catch { return null; }
+  } catch (e) {
+    if (Array.isArray(notes)) notes.push(`profile not read: ${String((e && e.message) || e).slice(0, 120)}`);
+    return null;
+  }
 }
 
 /** Search NSFW-inclusive subreddits by keyword (discovery). OAuth when configured, else www, else old.reddit. */
@@ -508,6 +519,7 @@ module.exports = {
     const items = [];
     const seen = new Set();
     const notes = new Set();
+    const drops = {};
     let via = null;
     let newest = cursor.newestAt || null;
 
@@ -537,7 +549,7 @@ module.exports = {
         }
         via = via || res.via;
         (res.notes || []).forEach((n) => notes.add(n));
-        const parsed = res.items || res.children.flatMap(parsePost);
+        const parsed = res.items || res.children.flatMap((c) => parsePost(c, drops));
         let reachedKnown = false;
         for (const it of parsed) {
           if (it.postedAt && (!newest || it.postedAt > newest)) newest = it.postedAt;
@@ -553,7 +565,11 @@ module.exports = {
     }
 
     let profile;
-    if (feed.kind === 'user' && (ctx.needProfile || first)) profile = await fetchProfile(feed.target);
+    const profileNotes = [];
+    if (feed.kind === 'user' && (ctx.needProfile || first)) profile = await fetchProfile(feed.target, profileNotes);
+    profileNotes.forEach((n) => notes.add(n));
+    const dropped = Object.entries(drops).sort((a, b) => b[1] - a[1]);
+    if (dropped.length) notes.add(`dropped ${dropped.reduce((n, [, v]) => n + v, 0)} post(s): ${dropped.map(([k, v]) => `${k} ×${v}`).join(', ')}`);
     return { items, cursor: newest ? { newestAt: newest } : undefined, profile, via, notes: [...notes] };
   },
 };

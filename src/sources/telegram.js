@@ -128,7 +128,9 @@ function toItems(msg, channel, profile) {
     nsfw: 'explicit',
     trusted: true,
     forwardFrom: msg.forwardFrom || null,
-    repostOf: msg.forwardFrom ? { platform: 'telegram', via: channel } : undefined,
+    // The original channel's handle is a lead (engine noteWaysIn) and is checked by takedowns; the author and the media's
+    // creator stay this channel's.
+    repostOf: msg.forwardFrom ? { platform: 'telegram', via: channel, ...(msg.forwardFrom.handle ? { handle: String(msg.forwardFrom.handle) } : {}) } : undefined,
   }));
 }
 
@@ -184,7 +186,7 @@ function messageToItem(msg, d, ch) {
     community: ch.username || ch.title || null,
     hasAudio: d.type === 'video',
     forwardFrom: mtForward(msg),
-    repostOf: forwarded ? { platform: 'telegram', via: ch.username || `c${ch.id}` } : undefined,
+    repostOf: forwarded ? { platform: 'telegram', via: ch.username || `c${ch.id}`, ...(mtForward(msg)?.handle ? { handle: String(mtForward(msg).handle) } : {}) } : undefined,
     attributionEvidence,
   };
   // stage(): fetch only the picture the image filter needs (the photo, or a video's thumbnail) and keep it in memory, so a post

@@ -198,40 +198,49 @@ function parseSyndication(html) {
   return entries.filter((e) => e.type === 'tweet' && e.content && e.content.tweet).map((e) => e.content.tweet);
 }
 
+/** API pages per read: one more page only while the last one came back full (100 posts and a next token), at most 3. */
+const API_MAX_PAGES = 3;
+/**
+ * Read up to `maxPages` API pages: `get(nextToken)` returns one page. A partial page stops the walk; so does the monthly
+ * read budget on a later page (the pages already read are kept). Returns { pages: [json], newestId }.
+ */
+async function apiPages(get, maxPages, aborted = () => false) {
+  const pages = []; let next = null;
+  for (let page = 0; page < maxPages; page++) {
+    if (page > 0 && aborted()) break;
+    let json;
+    try { json = await get(next); } catch (e) { if (page > 0 && e.budget) break; throw e; }
+    pages.push(json);
+    const meta = json.meta || {};
+    next = meta.next_token;
+    const count = meta.result_count != null ? meta.result_count : (Array.isArray(json.data) ? json.data.length : 0);
+    if (!next || count < 100) break;
+  }
+  return { pages, newestId: (pages[0] && pages[0].meta && pages[0].meta.newest_id) || null };
+}
+
 async function viaApi(feed, ctx, cursor) {
   const items = [];
   let profile;
   const since = cursor.newestId && !ctx.force ? `&since_id=${cursor.newestId}` : '';
   if (feed.kind === 'search') {
     const q = `${feed.target} has:media -is:retweet -is:reply`;
-    let newestId = null; let next = null;
-    for (let page = 0; page < (cursor.newestId && !ctx.force ? 1 : 2); page++) {
-      const json = await apiGet(`${base}/2/tweets/search/recent?query=${encodeURIComponent(q)}&max_results=100&expansions=attachments.media_keys,author_id,${REF_EXPANSIONS}&${MEDIA_FIELDS}&${TWEET_FIELDS}&user.fields=username,name,profile_image_url${since}${next ? `&next_token=${encodeURIComponent(next)}` : ''}`);
-      if (!newestId && json.meta) newestId = json.meta.newest_id;
-      items.push(...parseApi(json, feed.target));
-      next = json.meta && json.meta.next_token;
-      if (!next) break;
-    }
-    return { items, newestId, profile };
+    const r = await apiPages((next) => apiGet(`${base}/2/tweets/search/recent?query=${encodeURIComponent(q)}&max_results=100&expansions=attachments.media_keys,author_id,${REF_EXPANSIONS}&${MEDIA_FIELDS}&${TWEET_FIELDS}&user.fields=username,name,profile_image_url${since}${next ? `&next_token=${encodeURIComponent(next)}` : ''}`), API_MAX_PAGES, ctx.aborted);
+    for (const json of r.pages) items.push(...parseApi(json, feed.target));
+    return { items, newestId: r.newestId, profile };
   }
   const u = await apiGet(`${base}/2/users/by/username/${encodeURIComponent(feed.target)}?user.fields=description,profile_image_url,name,entities`);
   if (!u.data) throw Object.assign(new Error('X user not found or suspended'), { status: 404 });
   profile = { displayName: u.data.name, bio: u.data.description, avatarUrl: (u.data.profile_image_url || '').replace('_normal', '_400x400'), links: extractLinks(u.data.description || '') };
   // First sync walks back a few pages so a newly followed creator arrives with a real back catalogue;
   // later syncs are incremental via since_id.
-  let newestId = null; let next = null;
-  // Creators found by discovery start with one page: the monthly read budget goes further.
-  const pages = (cursor.newestId && !ctx.force) || feed.origin === 'discovered' ? 1 : 2;
-  for (let page = 0; page < pages; page++) {
-    if (ctx.aborted && ctx.aborted()) break;
-    const exclude = repostsOn() ? 'replies' : 'retweets,replies';
-    const json = await apiGet(`${base}/2/users/${u.data.id}/tweets?max_results=100&exclude=${exclude}&expansions=attachments.media_keys,author_id,${REF_EXPANSIONS}&${MEDIA_FIELDS}&${TWEET_FIELDS}&user.fields=username,name,profile_image_url${since}${next ? `&pagination_token=${encodeURIComponent(next)}` : ''}`);
-    if (!newestId && json.meta) newestId = json.meta.newest_id;
-    items.push(...parseApi(json, null));
-    next = json.meta && json.meta.next_token;
-    if (!next) break;
-  }
-  return { items, newestId, profile };
+  // Each further page is read only while the last one was full, so a busy account's posts since the last run are not
+  // cut at 100. Creators found by discovery start with one page: the monthly read budget goes further.
+  const maxPages = feed.origin === 'discovered' && !cursor.newestId && !ctx.force ? 1 : API_MAX_PAGES;
+  const exclude = repostsOn() ? 'replies' : 'retweets,replies';
+  const r = await apiPages((next) => apiGet(`${base}/2/users/${u.data.id}/tweets?max_results=100&exclude=${exclude}&expansions=attachments.media_keys,author_id,${REF_EXPANSIONS}&${MEDIA_FIELDS}&${TWEET_FIELDS}&user.fields=username,name,profile_image_url${since}${next ? `&pagination_token=${encodeURIComponent(next)}` : ''}`), maxPages, ctx.aborted);
+  for (const json of r.pages) items.push(...parseApi(json, null));
+  return { items, newestId: r.newestId, profile };
 }
 
 async function viaSyndication(feed) {
@@ -427,7 +436,7 @@ async function parkedRun(feed, ctx, cursor, reason) {
   return r;
 }
 
-module.exports = { _viaWebSearch: viaWebSearch, _sized: sized,
+module.exports = { _viaWebSearch: viaWebSearch, _sized: sized, _apiPages: apiPages,
   expandedLinks,
   lookupUsers,
   apiAvailable,

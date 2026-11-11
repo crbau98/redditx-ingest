@@ -35,6 +35,28 @@ const seconds = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0
 
 const cleanHandle = (a) => String(a || '').replace(/^[@/]+/, '').replace(/^u\//i, '').trim().slice(0, 80);
 
+/**
+ * A GFF scene features more than one performer: the scene is ONE media row (sourceId gff-<slug>), and every other
+ * performer the page itself names is credited on it as an alt source (one per name; the URL carries a #performer= fragment
+ * because alt sources are unique per URL). Names equal to the stored row's own creator or author are skipped.
+ * No second media row and no face or picture matching: this is the page's own actor list.
+ */
+function creditPerformers(mediaId, names, item, platform) {
+  if (!mediaId || !item.permalink) return 0;
+  const row = repo.media.get(mediaId);
+  if (!row) return 0;
+  const owner = row.creator_id ? repo.creators.get(row.creator_id) : null;
+  const key = (n) => String(n || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const own = new Set([row.author, owner && owner.handle, owner && owner.display_name].filter(Boolean).map(key));
+  let added = 0;
+  for (const name of [...new Set((names || []).map((n) => String(n || '').trim()).filter(Boolean))]) {
+    if (own.has(key(name))) continue;
+    const ok = repo.media.addAltSource(mediaId, { platform, source_url: `${item.permalink}#performer=${encodeURIComponent(key(name))}`, author: name.slice(0, 80), community: item.community || null, posted_at: item.postedAt || null });
+    if (ok) added++;
+  }
+  return added;
+}
+
 const HOST_WINDOW_MS = 20 * 60 * 1000;
 const HOST_STRIKES = 2;
 const hostState = new Map(); // host -> { ok, reason, at, strikes: Set(url) }
@@ -293,7 +315,11 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   // The source key does not depend on what a link resolves to, so an item PRISM already holds is recognised here, before the RedGIFs
   // / X lookup, the host probe and the reachability probe it would otherwise pay for on every re-read of its feed.
   const sourceKey = `${platform}:${item.sourceId}:${item.position || 0}`;
-  if (repo.media.keyExists(sourceKey)) return { outcome: 'dupe' };
+  if (repo.media.keyExists(sourceKey)) {
+    // The same GFF scene from a second performer's page: credit him on the stored scene instead of dropping him.
+    if (platform === 'gff') creditPerformers(repo.media.idByKey(sourceKey), [item.author, ...(item.credits || [])], item, platform);
+    return { outcome: 'dupe' };
+  }
 
   // ---- 1. resolve indirect links (RedGIFs pages etc.) ------------------------
   if (item.resolve === 'redgifs' || REDGIFS_PAGE.test(item.mediaUrl)) {
@@ -552,6 +578,7 @@ async function processItemInner(rawItem, feed, adapter, settings) {
     return { outcome: 'dupe' };
   }
   if (phash && (state === 'published' || state === 'review' || bodyVerdict)) dedupe.remember(mediaId, phash, { mediaType: item.mediaType, width: size.width, height: size.height });
+  if (platform === 'gff' && item.credits && item.credits.length) creditPerformers(mediaId, item.credits, item, platform);
   if (faceList && faceList.length && state === 'published' && settings.faceMatch) {
     try { require('../lib/face-match').saveMediaFaces(mediaId, faceList); } catch { /* best effort */ }
   }

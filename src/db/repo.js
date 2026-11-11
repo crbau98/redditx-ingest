@@ -1287,6 +1287,7 @@ const media = {
   },
   hashExists(hash) { return !!mediaQ.byHash.get(hash); },
   keyExists(key) { return !!mediaQ.byKey.get(key); },
+  idByKey(key) { const r = mediaQ.byKey.get(key); return r ? r.id : null; },
   postKnown(postKey) { return !!mediaQ.byPost.get(postKey); },
 
   /** @returns {string|null} new media id, or null on duplicate */

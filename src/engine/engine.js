@@ -169,7 +169,7 @@ function noteWaysIn(raw, r, feed, w) {
   if (rp && creatorId) {
     if (r.creatorId) w.originals.add(creatorId);
     const ownFeed = feed.kind === 'user' && String(feed.target).toLowerCase() === String(rp.via || '').toLowerCase();
-    if (rp.via && !ownFeed) {
+    if (rp.via && rp.handle && !ownFeed) { // a missing handle is no lead (it used to be stored as "undefined")
       const k = String(rp.via);
       if (!w.reposters.has(k)) w.reposters.set(k, new Set());
       w.reposters.get(k).add(String(rp.handle));

@@ -184,6 +184,12 @@ function videoObject(html) {
 }
 
 /** The performer's own name from a video page's JSON-LD ("actor": [{name}]}), when the page says so. */
+/** Every performer the video's JSON-LD names ("actor": [{name}, {name}]), in order. */
+function actorNames(vo) {
+  const a = vo && vo.actor;
+  return (Array.isArray(a) ? a : a ? [a] : []).map((x) => (x && x.name ? String(x.name).trim() : '')).filter(Boolean);
+}
+
 function actorName(vo) {
   const a = vo && vo.actor;
   const first = Array.isArray(a) ? a[0] : a;
@@ -478,6 +484,9 @@ module.exports = {
       // The video page names him; the performer page's <h1> can be the site's own name. With neither,
       // the slug would become a junk creator, so the video is skipped (and retried next run).
       const author = realName(actorName(vo)) || realName(page.name);
+      // A scene with two performers names both in its own JSON-LD: the others are credited on the item (alt sources),
+      // never as its creator and never through any picture or face matching.
+      const credits = actorNames(vo).map(realName).filter((n) => n && n.toLowerCase() !== String(author || '').toLowerCase());
       if (!author) { notes.push(`gayforfans: ${v.slug} — no performer name on the page, skipped`); continue; }
       seen.add(v.slug);
       items.push({
@@ -486,6 +495,7 @@ module.exports = {
         title: clip(vo.name || v.title || page.name || v.slug, 200),
         body: clip(vo.description || '', 2000),
         author,
+        ...(credits && credits.length ? { credits: [...new Set(credits)] } : {}),
         score: watchCount(vo),
         postedAt: toIso(vo.uploadDate),
         permalink: v.url,
