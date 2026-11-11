@@ -93,8 +93,8 @@ const blocklist = {
 /* ------------------------------------------------- removed content: identifiers */
 const hasTable = (name) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
 /**
- * Remove the content identifiers of media that is 'removed': face and visual embeddings, the perceptual
- * and exact hashes, and every URL. The rows, their publish state, review reason and all blocklists stay,
+ * Remove the content identifiers of media that is 'removed': face vectors and visual embeddings, the perceptual
+ * and exact hashes, every URL, the other places it was posted (alt sources) and its web matches. The rows, their publish state, review reason and all blocklists stay,
  * so an item stays removed and can never be re-imported. Only 'removed' rows are touched; a published
  * row given here is skipped by the SQL, not by the caller.
  */
@@ -108,6 +108,10 @@ function purgeRemovedContent(ids) {
     if (!gone.length) continue;
     const gph = gone.map(() => '?').join(',');
     if (hasTable('media_embeddings')) db.prepare(`DELETE FROM media_embeddings WHERE media_id IN (${gph})`).run(...gone);
+    // The same class of residue: face vectors, the other places the picture was posted (source URLs) and web matches.
+    for (const t of ['media_faces', 'media_alt_sources', 'creator_web_matches']) {
+      if (hasTable(t)) db.prepare(`DELETE FROM ${t} WHERE media_id IN (${gph})`).run(...gone);
+    }
     // hash and media_url are NOT NULL, and hash is UNIQUE: they get placeholders that no real hash or URL equals
     db.prepare(`UPDATE media SET phash = NULL, hash = 'purged:' || id, media_url = '', preview_url = NULL,
       thumbnail_url = NULL, thumb_url = NULL, hls_url = NULL, tint = NULL,

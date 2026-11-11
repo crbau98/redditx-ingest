@@ -110,6 +110,81 @@ describe('removing content purges its identifiers', () => {
   });
 });
 
+describe('removing content also purges faces, alt sources and web matches', () => {
+  const faceMatch = require('../src/lib/face-match');
+  const pipeline = require('../src/engine/pipeline');
+  const settings = require('../src/settings');
+  const FACE = [{ gender: 'male', confidence: 0.9, embedding: [0.1, 0.2, 0.3, 0.4] }];
+  const crypto = require('crypto');
+  const { canonicalUrl } = require('../src/lib/mediaurl');
+  const hashOf = (url) => crypto.createHash('md5').update(canonicalUrl(url)).digest('hex'); // the pipeline's content hash
+  const count = (t, id) => db.prepare(`SELECT COUNT(*) AS n FROM ${t} WHERE media_id = ?`).get(id).n;
+  const residue = (id) => ({ faces: count('media_faces', id), alts: count('media_alt_sources', id), web: count('creator_web_matches', id) });
+  let owner; let other;
+  const seed = (i, creatorId, phash) => {
+    repo.media.insert(mk(i, { creator_id: creatorId, phash, hash: hashOf(`https://i.redd.it/q${i}.jpg`) }), ['gym']);
+    const id = idOf(`reddit:q${i}:0`);
+    faceMatch.saveMediaFaces(id, FACE, { force: true });
+    repo.media.addAltSource(id, { platform: 'reddit', source_url: `https://reddit.com/r/other/q${i}`, author: 'reposter' });
+    faceMatch.recordWebMatch({ creatorId, mediaId: id, pageUrl: `https://example.com/page${i}`, platform: 'web', matchKind: 'phash', status: 'confirmed' });
+    return id;
+  };
+  before(() => {
+    owner = repo.creators.create({ handle: 'residue_owner', display_name: 'Residue Owner' });
+    other = repo.creators.create({ handle: 'residue_other', display_name: 'Residue Other' });
+  });
+
+  /** The same picture comes back in a NEW post: the pipeline refuses it by its hash (no new media row). */
+  const reingestBlocked = async (i, phash) => {
+    assert.ok(repo.blocklist.has('hash', hashOf(`https://i.redd.it/q${i}.jpg`)), 'the hash stays on the blocklist');
+    assert.ok(repo.media.phashBlocked().includes(phash), 'the phash stays on the phash blocklist');
+    const before = db.prepare('SELECT COUNT(*) AS n FROM media').get().n;
+    const feed = repo.feeds.upsert({ platform: 'reddit', kind: 'community', target: 'residuesub', runNow: false }).feed;
+    const r = await pipeline.processItem({ sourceId: `again${i}`, position: 0, title: 'gym', author: 'someone_else', community: 'residuesub', mediaType: 'image', mediaUrl: `https://i.redd.it/q${i}.jpg`, trusted: true },
+      feed, null, { ...settings.get(), probeUnknownHosts: false, scopeMode: 'open', imageFilter: false });
+    assert.equal(r.outcome, 'blocked', JSON.stringify(r));
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM media').get().n, before);
+  };
+
+  test('a takedown leaves no face, alt source or web match for the item; the row, reason and blocklists stay', async () => {
+    const id = seed(21, owner.id, 'e1e1e1e1e1e1e1e1');
+    assert.deepEqual(residue(id), { faces: 1, alts: 1, web: 1 });
+    repo.takedowns.add({ kind: 'url', value: 'https://i.redd.it/q21.jpg', reason: 'opt-out' });
+    const row = repo.media.get(id);
+    assert.equal(row.publish_state, 'removed');
+    assert.equal(row.review_reason, 'takedown');
+    assert.deepEqual(residue(id), { faces: 0, alts: 0, web: 0 });
+    assert.equal(identifiers(id).media_url, '');
+    assert.equal(identifiers(id).phash, null);
+    await reingestBlocked(21, 'e1e1e1e1e1e1e1e1');
+  });
+
+  test('a creator block leaves no face, alt source or web match on any of his items', async () => {
+    const a = seed(22, owner.id, 'e2e2e2e2e2e2e2e2');
+    const b = seed(23, owner.id, 'e3e3e3e3e3e3e3e3');
+    const live = seed(24, other.id, 'e4e4e4e4e4e4e4e4');
+    repo.creators.block(owner.id, 'creator opt-out', 'admin');
+    for (const id of [a, b]) {
+      assert.equal(repo.media.get(id).publish_state, 'removed');
+      assert.deepEqual(residue(id), { faces: 0, alts: 0, web: 0 });
+      assert.equal(identifiers(id).media_url, '');
+      assert.equal(identifiers(id).phash, null);
+    }
+    await reingestBlocked(22, 'e2e2e2e2e2e2e2e2');
+    assert.deepEqual(residue(live), { faces: 1, alts: 1, web: 1 }, 'an untouched live row keeps its faces and alt sources');
+    assert.equal(repo.media.get(live).publish_state, 'published');
+  });
+
+  test('blocking one item purges its residue and leaves the others alone', () => {
+    const one = seed(25, other.id, 'e5e5e5e5e5e5e5e5');
+    const live = seed(26, other.id, 'e6e6e6e6e6e6e6e6');
+    repo.media.block(one, 'bad image', 'admin');
+    assert.deepEqual(residue(one), { faces: 0, alts: 0, web: 0 });
+    assert.deepEqual(residue(live), { faces: 1, alts: 1, web: 1 });
+    assert.equal(repo.media.phashBlocked().includes('e5e5e5e5e5e5e5e5'), true);
+  });
+});
+
 describe('counters are right on write and repaired once', () => {
   const tagUsage = (name) => db.prepare('SELECT usage_count FROM tags WHERE name = ?').get(name)?.usage_count;
   const tagRows = (name) => db.prepare('SELECT COUNT(*) AS n FROM media_tags mt JOIN tags t ON t.id = mt.tag_id WHERE t.name = ?').get(name).n;
