@@ -137,6 +137,10 @@ router.post('/ai/triage', async (req, res) => {
 // Nothing is changed; clean each row up with POST /feeds/:id/media/reassign (the row carries the call).
 // Read-only scoreboard: feeds whose runs over the last ?days (default 7, at least 5 runs) fetched nothing. The engine already
 // checks these every 3 days instead of on their interval; nothing is disabled or deleted.
+// Read-only library-health counts (engine/library-health.js): no writes, no repair; a windowed pass that keeps the loop free.
+router.get('/library-health', async (req, res) => {
+  try { res.json(await require('../engine/library-health').report()); } catch (e) { res.status(500).json({ error: e.message }); }
+});
 router.get('/feeds/idle', (req, res) => {
   const days = int(req.query.days, 1, 90, 7);
   const p = page(req, 500);
