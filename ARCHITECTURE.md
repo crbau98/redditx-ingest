@@ -54,7 +54,7 @@ media / creators / feeds tables ──> src/routes/public.js serves them
 ## Where to change what
 
 - New platform source → `src/sources/<name>.js` + registry entry; kinds in `adapter.kinds`.
-- New ranking behaviour → `db/functions.js` (hot_score) + `repo.media.recomputeHot*` + `engine/backup-worker.js` (same SQL in three places, keep them identical).
+- New ranking behaviour → `db/functions.js` (hot_score and the one HOT_UPDATE statement that `repo.media.recomputeHot*` and `engine/backup-worker.js` both use).
 - New toggle → `src/settings.js` (+ its group), consumed via `settingsStore.get()`.
 - New gate → `engine/pipeline.js` only, ordered with the others.
 - Admin API → `src/routes/admin.js`; public API → `src/routes/public.js`.

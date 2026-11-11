@@ -11,10 +11,9 @@
 const { parentPort, workerData } = require('worker_threads');
 const Database = require('better-sqlite3');
 
-/** The trending score, chunked (same SQL as repo.media.recomputeHotChunked). */
+/** The trending score, chunked (the same statement as repo.media.recomputeHotChunked: db/functions HOT_UPDATE_RANGE_SQL). */
 async function recomputeHot(db, { tolerance = 0.02, chunk = 2000 } = {}) {
-  const stmt = db.prepare(`UPDATE media SET hot = hot_score(score, likes, views, epoch_ms(posted_at), @now) * COALESCE(lean_bias, 1.0)
-    WHERE seq > @from AND seq <= @to AND publish_state = 'published' AND abs(hot - hot_score(score, likes, views, epoch_ms(posted_at), @now) * COALESCE(lean_bias, 1.0)) > @tol * (hot_score(score, likes, views, epoch_ms(posted_at), @now) * COALESCE(lean_bias, 1.0))`);
+  const stmt = db.prepare(require('../db/functions').HOT_UPDATE_RANGE_SQL);
   const max = db.prepare("SELECT MAX(seq) AS m FROM media WHERE publish_state = 'published'").get();
   const top = max && max.m ? max.m : 0;
   const now = Date.now();

@@ -497,8 +497,7 @@ const media = {
   recomputeHot(tolerance = 0.02) {
     const now = Date.now();
     // lean_bias folds the owner's type preference into the ranking (NULL = neutral, lib/buildbias).
-    return quietly(db.prepare(`UPDATE media SET hot = hot_score(score, likes, views, epoch_ms(posted_at), @now) * COALESCE(lean_bias, 1.0)
-      WHERE publish_state = 'published' AND abs(hot - hot_score(score, likes, views, epoch_ms(posted_at), @now) * COALESCE(lean_bias, 1.0)) > @tol * (hot_score(score, likes, views, epoch_ms(posted_at), @now) * COALESCE(lean_bias, 1.0))`)
+    return quietly(db.prepare(require('../functions').HOT_UPDATE_SQL)
       .run({ now, tol: tolerance }).changes);
   },
 
@@ -513,8 +512,7 @@ const media = {
    */
   async recomputeHotChunked(tolerance = 0.02, chunk = 2000) { // 2k rows per statement: a 20k chunk was a 1-3 s main-thread block on a cold file
     const now = Date.now();
-    const stmt = db.prepare(`UPDATE media SET hot = hot_score(score, likes, views, epoch_ms(posted_at), @now) * COALESCE(lean_bias, 1.0)
-      WHERE seq > @from AND seq <= @to AND publish_state = 'published' AND abs(hot - hot_score(score, likes, views, epoch_ms(posted_at), @now) * COALESCE(lean_bias, 1.0)) > @tol * (hot_score(score, likes, views, epoch_ms(posted_at), @now) * COALESCE(lean_bias, 1.0))`);
+    const stmt = db.prepare(require('../functions').HOT_UPDATE_RANGE_SQL);
     const max = db.prepare('SELECT MAX(seq) AS m FROM media WHERE publish_state = ?').get('published');
     const top = max && max.m ? max.m : 0;
     let from = 0;
