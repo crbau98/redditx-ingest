@@ -101,13 +101,25 @@ const SWR = !config.isTest;
 const warmers = [];
 /** The hot list-query shapes: first execution pays SQLite statement prep (~0.4 s), so boot runs them. */
 const prep = [
-  () => repo.media.list({ sort: 'recent', limit: 48, noCount: true }),
-  () => repo.media.list({ sort: 'trending', limit: 48, noCount: true }),
-  () => repo.media.list({ sort: 'foryou', limit: 48, noCount: true }),
-  () => repo.media.list({ platform: 'reddit', limit: 48, noCount: true }),
-  () => repo.media.list({ tag: 'gay', limit: 48, noCount: true }),
-  () => repo.creators.list({ sort: 'media', limit: 48 }),
+  ['prep:recent', () => repo.media.list({ sort: 'recent', limit: 48, noCount: true })],
+  ['prep:trending', () => repo.media.list({ sort: 'trending', limit: 48, noCount: true })],
+  ['prep:foryou', () => repo.media.list({ sort: 'foryou', limit: 48, noCount: true })],
+  ['prep:reddit', () => repo.media.list({ platform: 'reddit', limit: 48, noCount: true })],
+  ['prep:tag-gay', () => repo.media.list({ tag: 'gay', limit: 48, noCount: true })],
+  ['prep:creators', () => repo.creators.list({ sort: 'media', limit: 48 })],
 ];
+/**
+ * Run one boot warm-up step under its own blockwatch label (`warm:<name>`), so a loop block during warm-up names the
+ * step in /api/health. An async step keeps its label until its promise settles; nothing is awaited here, so the queue
+ * runs exactly as before.
+ */
+function warmStep(name, fn) {
+  const leave = require('../lib/blockwatch').enter(`warm:${name}`);
+  let out;
+  try { out = fn(); } catch (e) { leave(); throw e; }
+  if (out && typeof out.then === 'function') out.then(leave, leave); else leave();
+  return out;
+}
 const ttl = (ms, fn) => {
   let at = 0; let val; let pending = false;
   const refresh = () => { try { val = fn(); at = Date.now(); } finally { pending = false; } };
@@ -122,14 +134,16 @@ const ttl = (ms, fn) => {
 };
 /** Fill every cache once, one per tick, so the first visitors after a deploy never pay for it. */
 function warm() {
-  primeSnapshots(); // the library-wide aggregates, on the worker thread, before any visitor asks
+  warmStep('snapshots', primeSnapshots); // the library-wide aggregates, on the worker thread, before any visitor asks
   // Statement prep is the expensive part of SQLite's first run of a query shape (~0.4 s here):
   // touching the hot list queries once at boot keeps the first page load fast for real users.
   // the visual index is built once here, after the first health answer, so the first 'More like this' visitor does not pay it
   // The dedupe index loads every stored hash lazily on first use — a multi-second synchronous build that used to
   // land inside the first feed run of the morning. Load it here, after the first health answer, with the rest.
-  const queue = [...prep, ...warmers, () => { try { require('../services/dedupe').loadChunked().catch(() => {}); } catch { /* index optional */ } }, () => require('../engine/visual').warmIndex()];
-  const next = () => { const g = queue.shift(); if (!g) return; try { g(); } catch (e) { console.error('[warm]', e.message); } setImmediate(next); };
+  const queue = [...prep, ...warmers.map((g, i) => [`cache#${i}`, g]),
+    ['dedupe', () => { try { return require('../services/dedupe').loadChunked().catch(() => {}); } catch { return undefined; /* index optional */ } }],
+    ['visualIndex', () => require('../engine/visual').warmIndex()]];
+  const next = () => { const g = queue.shift(); if (!g) return; try { warmStep(g[0], g[1]); } catch (e) { console.error('[warm]', e.message); } setImmediate(next); };
   setImmediate(next);
 }
 
@@ -137,7 +151,7 @@ function warm() {
  * wait for the cache warmers — a real page load in the first second pays for a cold statement. */
 function warmPrep() {
   const queue = [...prep];
-  const next = () => { const g = queue.shift(); if (!g) return; try { g(); } catch (e) { console.error('[warm]', e.message); } setImmediate(next); };
+  const next = () => { const g = queue.shift(); if (!g) return; try { warmStep(g[0], g[1]); } catch (e) { console.error('[warm]', e.message); } setImmediate(next); };
   setImmediate(next);
 }
 // Autocomplete fires per keystroke (three queries: creators, tags, communities). A 10-second
@@ -629,6 +643,7 @@ router.post('/lookup/auto', lookupFollowLimiter, async (req, res) => {
 module.exports = router;
 module.exports.publicMedia = publicMedia;
 module.exports.warm = warm;
+module.exports._warmStep = warmStep; // test hook: the label wrapper every warm-up step runs through
 module.exports.warmPrep = warmPrep;
 module.exports.publicCreator = publicCreator;
 module.exports.suggestCached = suggestCached;

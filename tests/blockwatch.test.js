@@ -178,3 +178,34 @@ test('saved profiles can be listed and downloaded by an admin only, by exact fil
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a synchronous block inside a boot warm-up step is reported against warm:<step>', async () => {
+  const bw = require('../src/lib/blockwatch');
+  const { _warmStep } = require('../src/routes/public');
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const block = (ms) => { const t = Date.now(); while (Date.now() - t < ms) { /* the stall */ } };
+  bw.start(); bw.reset(); bw.work('idle');
+  await wait(120);
+  _warmStep('visualIndex', () => block(400));
+  await wait(400);
+  const b = bw.lastBlock();
+  assert.ok(b && b.ms >= 300, `recorded (${b && b.ms})`);
+  assert.ok(b.jobs.includes('warm:visualIndex'), JSON.stringify(b.jobs));
+  // an async step keeps its label until it settles, then leaves none behind
+  let done; const p = new Promise((r) => { done = r; });
+  _warmStep('dedupe', () => p);
+  assert.ok(bw.labels().includes('warm:dedupe'));
+  done(); await p; await wait(0);
+  bw._noteBlock(0);
+  assert.ok(!bw.labels().includes('warm:dedupe'));
+  bw.stop(); bw.reset();
+});
+
+test('every boot warm-up step runs under a named label', () => {
+  const fs = require('fs'); const path = require('path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'public.js'), 'utf8');
+  for (const name of ['prep:recent', 'prep:trending', 'prep:foryou', 'prep:reddit', 'prep:tag-gay', 'prep:creators']) assert.ok(src.includes(`['${name}', `), name);
+  assert.match(src, /\['dedupe', /); assert.match(src, /\['visualIndex', /);
+  assert.match(src, /warmStep\('snapshots', primeSnapshots\)/);
+  assert.equal((src.match(/try \{ warmStep\(g\[0\], g\[1\]\); \}/g) || []).length, 2, 'warm() and warmPrep() both run steps through warmStep');
+});
