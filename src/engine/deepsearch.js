@@ -114,6 +114,41 @@ function samePerson(creator, handle) {
   return false;
 }
 
+/** The handle an account feed is known by: a link hub's own name, else the target before any "@instance". */
+function accountHandle(platform, target) {
+  if (platform === 'linkinbio') {
+    return linkHubHandle(target) || (() => { try { return new URL(target).pathname.split('/').filter(Boolean)[0] || ''; } catch { return ''; } })();
+  }
+  return String(target || '').split('@')[0];
+}
+
+/**
+ * Admin, read-only: account feeds that discovery or a deep pull attached to a creator although the account's own
+ * handle is not his (samePerson). Before f63d517 a result that only mentioned him could attach an account; this lists
+ * what to check. Web page feeds are left out: a page is attached because it names him, not as his account. Nothing is
+ * changed here; each row is cleaned up with POST /api/admin/feeds/:id/media/reassign.
+ */
+const FOREIGN_ORIGINS = ['deep-search', 'discovered'];
+function foreignFeeds({ limit = 100, offset = 0 } = {}) {
+  const rows = repo.db.prepare(`SELECT f.id, f.platform, f.kind, f.target, f.origin, f.enabled, c.id AS creatorId, c.handle AS creatorHandle,
+      c.display_name AS creatorName
+    FROM feeds f JOIN creators c ON c.id = f.creator_id
+    WHERE f.origin IN (${FOREIGN_ORIGINS.map(() => '?').join(',')}) AND f.platform != 'web'
+    ORDER BY c.handle, f.platform, f.target`).all(...FOREIGN_ORIGINS);
+  const foreign = rows.filter((r) => !samePerson({ handle: r.creatorHandle, display_name: r.creatorName }, accountHandle(r.platform, r.target)));
+  const lim = Math.max(1, Math.min(500, Number(limit) || 100));
+  const off = Math.max(0, Number(offset) || 0);
+  const page = foreign.slice(off, off + lim);
+  const counts = page.length
+    ? new Map(repo.db.prepare(`SELECT feed_id, COUNT(*) AS n FROM media WHERE feed_id IN (${page.map(() => '?').join(',')}) GROUP BY feed_id`).all(...page.map((r) => r.id)).map((r) => [r.feed_id, r.n]))
+    : new Map();
+  return {
+    total: foreign.length, limit: lim, offset: off,
+    items: page.map((r) => ({ ...r, enabled: !!r.enabled, handle: accountHandle(r.platform, r.target), mediaCount: counts.get(r.id) || 0,
+      cleanup: { method: 'POST', path: `/api/admin/feeds/${r.id}/media/reassign`, body: { creatorId: '' } } })),
+  };
+}
+
 /** The eight rotating site shapes plus the four standing phrases, name and handle substituted. */
 function buildQueries(creator) {
   const name = String(creator.display_name || creator.handle || '').trim();
@@ -189,9 +224,7 @@ async function takeResult(hit, creator, out, ctx) {
       continue;
     }
     if (!spec.ingestable) continue;
-    const handle = spec.platform === 'linkinbio'
-      ? (linkHubHandle(spec.target) || (() => { try { return new URL(spec.target).pathname.split('/').filter(Boolean)[0] || ''; } catch { return ''; } })())
-      : String(spec.target).split('@')[0];
+    const handle = accountHandle(spec.platform, spec.target);
     // The proof differs by kind: a hub or profile page must be under his own name/handle, a web page
     // must name him in its own text. Everything else is only a mention of him.
     const proven = spec.platform === 'web'
@@ -401,4 +434,4 @@ function rotate({ limit = 2 } = {}) {
   return { started: kicked.length, kicked };
 }
 
-module.exports = { pull, kick, fromLookup, rotate, status, buildQueries, samePerson, readProgress, _setSearchers, _resetSearchers };
+module.exports = { pull, kick, fromLookup, rotate, status, buildQueries, samePerson, accountHandle, foreignFeeds, readProgress, _setSearchers, _resetSearchers };

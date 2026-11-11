@@ -133,6 +133,9 @@ router.post('/ai/triage', async (req, res) => {
 });
 
 /* ------------------------------------------------------------------- feeds */
+// Read-only: account feeds attached to a creator by discovery or a deep pull although their own handle is not his.
+// Nothing is changed; clean each row up with POST /feeds/:id/media/reassign (the row carries the call).
+router.get('/feeds/foreign', (req, res) => res.json(require('../engine/deepsearch').foreignFeeds({ limit: req.query.limit, offset: req.query.offset })));
 router.get('/feeds', (req, res) => {
   const { platform, kind, status, q, creatorId, enabled } = req.query;
   const out = repo.feeds.list({ platform, kind, status, q, creatorId, enabled, ...page(req, 500) });
