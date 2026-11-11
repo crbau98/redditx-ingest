@@ -44,6 +44,8 @@ function forPlatform(key, minIntervalMs = 500, { penalty = null } = {}) {
     json: wrap((url, opts) => net.fetchJSON(url, opts)),
     text: wrap((url, opts) => net.fetchText(url, opts)),
     raw: wrap((url, opts) => net.request(url, opts)),
+    /** A rate limit the server signalled in a 200 body: hold the platform exactly as a 429 would. */
+    strike: (e) => limiter.penalize(key, penaltyFor(e, penalty, state)),
   };
 }
 

@@ -13,9 +13,15 @@
  *   4. /<path>.rss                                       - Atom, rarely blocked
  *   5. Arctic Shift archive                              - works when Reddit is down
  *
- * Public mode (no credentials) starts at 5 instead: those three requests are guaranteed 403 from this host and
- * only the archive answers. A paged read (an `after` cursor) can only use transports that carry one, so it keeps
- * the JSON ladder. The archive takes no sort and no time window.
+ * Public mode (no credentials) reads the archive first and keeps only RSS behind it: the www and old JSON legs are
+ * guaranteed 403 from a datacenter host, so they are not asked at all. With credentials, OAuth stays first and the
+ * archive is the last fallback.
+ *
+ * The archive (Arctic Shift /api/posts/search, verified 2026-11-10) returns newest first by default, takes `before` /
+ * `after` as created_utc seconds (`after` is exclusive) and `sort=asc`, limit 1-100, no time window. A first run pages
+ * back with `before`; an incremental run asks `after` the cursor's second with `sort=asc` and pages forward, so nothing
+ * between runs is skipped. Its scores lag about 36 h; the hot-score recomputation already ages them. Under load it answers
+ * 200 with an `error` field and no rows; that is treated as a 429 (same penalty as Reddit's own), never as "empty".
  */
 const config = require('../config');
 // Reddit answers an anonymous reader at about one request a minute (x-ratelimit-remaining: 0,
@@ -284,11 +290,26 @@ async function viaRss(path, params) {
 
 async function viaArchive(feed, params) {
   assertOn();
-  // Arctic Shift: /api/posts/search?subreddit=<name>|author=<name>&limit=<=100&sort=desc  ->  {data:[reddit-shaped posts]}
-  const q = { limit: Math.min(params.limit || 100, 100), sort: 'desc', ...(feed.kind === 'user' ? { author: feed.target } : { subreddit: feed.target }) };
+  // Arctic Shift: /api/posts/search?subreddit=<name>|author=<name>&limit=<=100[&after=<s>&sort=asc | &before=<s>]  ->  {data:[reddit-shaped posts]}
+  const cur = params.archive || {};
+  const limit = Math.min(params.limit || 100, 100);
+  const q = { limit, ...(feed.kind === 'user' ? { author: feed.target } : { subreddit: feed.target }) };
+  if (cur.after) { q.after = cur.after; q.sort = 'asc'; } else if (cur.before) q.before = cur.before;
   const json = await http.json(`${config.baseUrls.redditArchive}/api/posts/search?${qs(q)}`, { ...REDDIT_WAIT, headers: { 'user-agent': config.redditUserAgent } });
+  if (json && !Array.isArray(json) && json.error) {
+    // "Timeout. Maybe slow down a bit": the archive's dynamic rate limit. A wait, not an empty community.
+    const e = Object.assign(new Error(`Reddit archive is rate limiting: ${String(json.error).slice(0, 80)}`), { status: 429, retryAfter: 60_000 });
+    http.strike(e);
+    throw e;
+  }
   const rows = Array.isArray(json) ? json : json.data || [];
-  return { children: rows, rawCount: rows.length, after: null, via: 'archive' };
+  // Next page: forward from the last row (asc) or back from the oldest (desc), only after a full page that moved.
+  let next = null;
+  if (rows.length >= limit) {
+    const times = rows.map((r) => Number((r && r.data ? r.data : r).created_utc)).filter(Number.isFinite);
+    if (cur.after) { const t = Math.max(...times); if (t > cur.after) next = { after: t }; } else if (times.length) { const t = Math.min(...times); if (!cur.before || t < cur.before) next = { before: t }; }
+  }
+  return { children: rows, rawCount: rows.length, after: next ? { archive: next } : null, via: 'archive', incremental: !!cur.after };
 }
 
 /** Reddit explains refusals: {"reason":"private"|"quarantined"|"banned"...,"error":403}. Those are about ONE target. */
@@ -313,18 +334,29 @@ function targetReason(e) {
 async function fetchPage(feed, sort, params, dead = new Set()) {
   assertOn();
   const path = listingPath(feed, sort);
+  // A page 2+ that came from the archive carries the archive's own cursor: only the archive can continue it.
+  if (params.after && typeof params.after === 'object') {
+    const page = await viaArchive(feed, { ...params, after: undefined, archive: params.after.archive });
+    page.notes = [];
+    return page;
+  }
   const paged = !!params.after;
   const label = `${feed.kind === 'user' ? 'u' : 'r'}/${feed.target}`;
   // Without OAuth credentials Reddit refuses every .json/.rss request from this host with a 403 challenge, so
   // public mode asks the archive first instead of paying three doomed requests per page. The public transports
   // stay behind it as fallbacks (the archive can lag or miss a small community) and a paged read still uses them.
   const publicMode = !config.creds.redditClientId || !config.creds.redditClientSecret;
-  const attempts = [
-    ...(publicMode ? [['archive', () => viaArchive(feed, params)]] : [['oauth', () => viaOauth(path, params)]]),
-    ['json', () => viaJson(base, path, params, 'json')],
-    ['old', () => viaJson(oldBase, path, params, 'old')],
-    ...(paged ? [] : [['rss', () => viaRss(path, params)], ...(publicMode ? [] : [['archive', () => viaArchive(feed, params)]])]),
-  ];
+  const { archive: archiveStart, ...live } = params;
+  const archiveLeg = ['archive', () => viaArchive(feed, { ...live, archive: archiveStart })];
+  const attempts = publicMode
+    // www/old JSON are guaranteed 403 from a datacenter host: not asked. RSS stays for residential and dev hosts.
+    ? [archiveLeg, ...(paged ? [] : [['rss', () => viaRss(path, live)]])]
+    : [
+      ['oauth', () => viaOauth(path, live)],
+      ['json', () => viaJson(base, path, live, 'json')],
+      ['old', () => viaJson(oldBase, path, live, 'old')],
+      ...(paged ? [] : [['rss', () => viaRss(path, live)], archiveLeg]),
+    ];
   const usable = attempts.filter(([name]) => !dead.has(name));
   const notes = [];
   const failed = [];
@@ -333,7 +365,8 @@ async function fetchPage(feed, sort, params, dead = new Set()) {
     try {
       const page = await attempt();
       if (!page) continue; // OAuth not configured
-      if (!paged && page.rawCount === 0) {
+      // An incremental archive read with nothing after the cursor is an honest "nothing new", not a failed transport.
+      if (!paged && page.rawCount === 0 && !page.incremental) {
         failed.push(`${name} empty`); notes.push(`${name}: empty listing`);
         if (name === 'archive') gone++; // an archive that knows nothing agrees with "does not exist" - but only as a tie-breaker (see below)
         else empty = empty || page;
@@ -489,8 +522,12 @@ module.exports = {
       for (let page = 0; page < maxPages; page++) {
         if (ctx.aborted()) break;
         let res;
+        // The archive's incremental start: the cursor's second minus one (`after` is exclusive), so a post in the same
+        // second as the newest stored one is still read; re-read posts are deduped downstream by sourceId.
+        const archive = !first && pass.sort === 'new' && cursor.newestAt && !ctx.force && Number.isFinite(Date.parse(cursor.newestAt))
+          ? { after: Math.floor(Date.parse(cursor.newestAt) / 1000) - 1 } : undefined;
         try {
-          res = await fetchPage(feed, pass.sort, { limit: Math.min(ctx.limit || 100, 100), t: pass.t, after, sort: feed.kind === 'user' ? 'new' : undefined });
+          res = await fetchPage(feed, pass.sort, { limit: Math.min(ctx.limit || 100, 100), t: pass.t, after, sort: feed.kind === 'user' ? 'new' : undefined, archive });
         } catch (e) {
           // Public Reddit allows about one request a minute: a rate-limited later page (or the second
           // pass) must not throw away the page that already worked. Only a run with nothing at all fails.

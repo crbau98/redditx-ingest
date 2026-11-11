@@ -94,22 +94,79 @@ test('a first run from the archive reads one page, not the same page twice (top 
   assert.ok(out.notes.some((n) => /archive read once/.test(n)));
 });
 
-test('a 429 on a later page keeps the items already read and only adds a note', async () => {
-  calls = [];
-  let jsonHits = 0;
+const fullPage = (from, n = 100) => Array.from({ length: n }, (_, i) => ({ ...child(`f${from + i}`).data, created_utc: 1793940000 + from + i }));
+const penalties = [];
+limiter.penalize = (key, ms) => { penalties.push({ key, ms }); };
+
+test('a rate-limited archive page (200 with an error) keeps the items already read, adds a note and holds the platform', async () => {
+  calls = []; penalties.length = 0;
+  let hits = 0;
   net.fetchJSON = async (url, opts = {}) => {
     calls.push({ url: String(url), opts });
-    if (/arctic-shift/.test(url) || /\/about/.test(url)) challenge(); // archive down, so the JSON ladder answers
-    jsonHits++;
-    if (jsonHits === 1) return { data: { children: [child('p1'), child('p2')], after: 't3_next' } };
-    rate();
+    if (!/arctic-shift/.test(url)) challenge();
+    hits++;
+    return hits === 1 ? archive(fullPage(0)) : { error: 'Timeout. Maybe slow down a bit' };
   };
   net.fetchText = async (url) => { calls.push({ url: String(url) }); challenge(); };
   const reddit = require('../src/sources/reddit');
-  const out = await reddit.fetch(feed('community', 'gaybrosgonewild'), { cursor: { newestAt: '2026-01-01T00:00:00.000Z' }, limit: 100, aborted: () => false });
-  const parsed = out.items.filter((i) => i.mediaUrl);
-  assert.equal(parsed.length, 2, 'both items from the answered page are returned');
-  assert.ok(out.notes.some((n) => /stopped early after 2 items: .*429/.test(n)), 'the rate limit is reported, not thrown');
+  const out = await reddit.fetch(feed('community', 'gaybrosgonewild'), { cursor: { newestAt: '2026-11-01T00:00:00.000Z' }, limit: 100, aborted: () => false });
+  assert.equal(out.items.filter((i) => i.mediaUrl).length, 100, 'the answered page is returned');
+  assert.ok(out.notes.some((n) => /stopped early after 100 items: .*rate limiting/.test(n)), 'the rate limit is reported, not thrown');
+  assert.deepEqual(penalties.map((p) => p.key), ['reddit'], 'the reddit limiter is held');
+  assert.ok(penalties[0].ms >= 60000, 'with the same penalty as a Reddit 429');
+});
+
+test('an incremental run asks the archive after the cursor second, oldest first, and pages forward up to the cap', async () => {
+  calls = [];
+  const cursorAt = '2026-11-01T00:00:00.000Z';
+  const sec = Date.parse(cursorAt) / 1000;
+  net.fetchJSON = async (url, opts = {}) => {
+    calls.push({ url: String(url), opts });
+    if (!/arctic-shift/.test(url)) challenge();
+    const after = Number(new URL(url).searchParams.get('after'));
+    return archive(fullPage(after - 1793940000 + 1));
+  };
+  net.fetchText = async (url) => { calls.push({ url: String(url) }); challenge(); };
+  const reddit = require('../src/sources/reddit');
+  await reddit.fetch(feed('community', 'gaybrosgonewild'), { cursor: { newestAt: cursorAt }, limit: 100, aborted: () => false });
+  const asked = calls.map((c) => new URL(c.url));
+  assert.equal(asked.length, 2, 'two pages at most on an incremental run');
+  assert.equal(asked[0].searchParams.get('after'), String(sec - 1), 'starts at the cursor second (after is exclusive)');
+  assert.equal(asked[0].searchParams.get('sort'), 'asc');
+  assert.ok(Number(asked[1].searchParams.get('after')) > sec, 'the next page continues after the last row');
+  assert.ok(!calls.some((c) => /reddit\.com\/r\/.*\.json/.test(c.url)), 'www/old never asked');
+});
+
+test('an incremental run with nothing after the cursor is an honest empty answer, not a failure', async () => {
+  calls = [];
+  net.fetchJSON = async (url, opts = {}) => { calls.push({ url: String(url), opts }); if (/arctic-shift/.test(url)) return archive([]); challenge(); };
+  net.fetchText = async (url) => { calls.push({ url: String(url) }); challenge(); };
+  const reddit = require('../src/sources/reddit');
+  const out = await reddit.fetch(feed('community', 'gaybrosgonewild'), { cursor: { newestAt: '2026-11-01T00:00:00.000Z' }, limit: 100, aborted: () => false });
+  assert.equal(out.via, 'archive');
+  assert.equal(out.items.length, 0);
+  assert.equal(calls.length, 1, 'no fallback requests');
+});
+
+test('with OAuth credentials the OAuth leg still goes first', async () => {
+  const config = require('../src/config');
+  const saved = { id: config.creds.redditClientId, secret: config.creds.redditClientSecret };
+  config.creds.redditClientId = 'test-id'; config.creds.redditClientSecret = 'test-secret';
+  calls = [];
+  net.fetchJSON = async (url, opts = {}) => {
+    calls.push({ url: String(url), opts });
+    if (/access_token/.test(url)) return { access_token: 'tok', expires_in: 3600 };
+    if (/oauth\.reddit\.com/.test(url)) return { data: { children: [child('o1')], after: null } };
+    challenge();
+  };
+  try {
+    const reddit = require('../src/sources/reddit');
+    const out = await reddit.fetch(feed('community', 'gaybrosgonewild'), { cursor: { newestAt: '2026-01-01T00:00:00.000Z' }, limit: 100, aborted: () => false });
+    assert.equal(out.via, 'oauth');
+    assert.ok(/access_token/.test(calls[0].url), 'the token comes first');
+    assert.ok(/oauth\.reddit\.com/.test(calls[1].url), 'then the OAuth listing');
+    assert.ok(!calls.some((c) => /arctic-shift/.test(c.url)), 'the archive is not asked when OAuth answers');
+  } finally { config.creds.redditClientId = saved.id; config.creds.redditClientSecret = saved.secret; }
 });
 
 test('a run that never got a page still fails', async () => {

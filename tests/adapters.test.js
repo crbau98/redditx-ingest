@@ -43,7 +43,7 @@ describe('reddit transport ladder', () => {
     const reddit = require('../src/sources/reddit');
     const r = await reddit.fetch({ kind: 'community', target: 'laddertest' }, { cursor: {}, limit: 25, aborted: () => false });
     assert.equal(r.via, 'rss');
-    assert.ok(r.notes.length >= 2, 'records why earlier transports failed: ' + r.notes);
+    assert.ok(r.notes.length >= 1, 'records why the archive did not answer: ' + r.notes);
     const ids = [...new Set(r.items.map((i) => i.sourceId))];
     assert.ok(ids.includes('rss1') && ids.includes('rss2'), ids.join());
     assert.ok(!ids.includes('rss3'), 'text-only entry skipped');
@@ -60,11 +60,12 @@ describe('reddit transport ladder', () => {
     assert.equal(r.items[0].sourceId, 'arc1');
     assert.equal(r.items[0].mediaUrl, 'https://i.redd.it/arc1.jpg');
   });
-  test('a community is "gone" only when EVERY transport says 404 (Reddit answers blocked requests with bare 404s too)', async () => {
+  test('public mode never calls a community "gone" on an empty archive and one RSS 404 (two live 404s are needed)', async () => {
     const reddit = require('../src/sources/reddit');
     mock.hits.length = 0;
-    await assert.rejects(() => reddit.fetch({ kind: 'community', target: 'banned' }, { cursor: {}, limit: 25, aborted: () => false }), (e) => e.status === 404);
-    assert.ok(mock.hits.some((h) => h.includes('/api/posts/search')), 'the archive is asked too before declaring it gone');
+    await assert.rejects(() => reddit.fetch({ kind: 'community', target: 'banned' }, { cursor: {}, limit: 25, aborted: () => false }), (e) => e.status !== 404 && e.status !== 410);
+    assert.ok(mock.hits.some((h) => h.includes('/api/posts/search')), 'the archive is asked first');
+    assert.ok(!mock.hits.some((h) => /\/r\/banned\/\w+\.json/.test(h)), 'the www/old JSON legs are not asked without OAuth');
   });
   test('a lone 404 followed by other kinds of failure never leaves a 404 on the error (the engine would disable a healthy feed)', async () => {
     const reddit = require('../src/sources/reddit');
