@@ -65,6 +65,10 @@ test('Find names a handle with one @ and a page by host and path', async () => {
   assert.equal(targetLabel('jakipz'), '@jakipz');
   assert.equal(targetLabel('@jakipz'), '@jakipz');
   assert.equal(targetLabel('@@jakeandrich1'), '@jakeandrich1');
+  // YouTube targets carry their own @ (lookup and links.js store "@handle"): still one @ on screen.
+  for (const t of ['@jakipz', '@@jakipz', '\u200B@jakipz', '\uFEFF@@jakipz', '\uFF20jakipz', '@\uFF20jakipz', ' @ jakipz']) {
+    assert.equal(targetLabel(t), '@jakipz', JSON.stringify(t));
+  }
   assert.equal(targetLabel('https://xhamster.com/gay/creators/jakipz'), 'xhamster.com/gay/creators/jakipz');
   assert.equal(targetLabel('https://www.example.com/a/'), 'example.com/a');
   const find = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'views', 'find.js'), 'utf8');
@@ -72,6 +76,9 @@ test('Find names a handle with one @ and a page by host and path', async () => {
   assert.equal((find.match(/targetLabel\(c\.target\)/g) || []).length, 2);
 });
 
+// QA note: a stored movie preview looks like …/previews/5/83/top_1_1366x768/70378_01_01.jpg?width=500&height=281&format=webp.
+// A copy cut at "…70378_01_0" is not a real file: gammacdn itself answers it with HTTP 500, so the proxy's 502 is correct.
+// Test previews with the full stored URL (open the item, copy its preview_url) rather than a truncated one.
 test('a movie preview with a query string streams through the proxy; a broken upstream answers a clear error at once', async () => {
   const px = (u) => fetch(`${base}/api/proxy?url=${encodeURIComponent(u)}`, { headers: { cookie: 'prism_age=1' } });
   const ok = await px(`${upstream.url}/movies/70378/70378_01/previews/5/83/top_1_1366x768/70378_01_01.jpg?width=500&height=281&format=webp`);
@@ -82,4 +89,15 @@ test('a movie preview with a query string streams through the proxy; a broken up
   assert.equal(bad.status, 502);
   assert.deepEqual(await bad.json(), { error: 'Upstream error' });
   assert.ok(Date.now() - t < 3000, 'no hang');
+});
+
+test('YouTube lookup specs keep the stored "@handle" target and still label with a single @', async () => {
+  const { targetLabel } = await import('../public/js/handle-label.js');
+  const { parseProfile } = require('../src/lib/links');
+  const spec = parseProfile('https://www.youtube.com/@jakipz');
+  assert.equal(spec.target, '@jakipz', 'stored form unchanged: existing YouTube feeds are keyed on it');
+  assert.equal(targetLabel(spec.target), '@jakipz');
+  const lookup = fs.readFileSync(path.join(__dirname, '..', 'src', 'engine', 'lookup.js'), 'utf8');
+  assert.match(lookup, /platform: 'youtube', kind: 'user', target: `@\$\{handle\.toLowerCase\(\)\}`/);
+  assert.match(lookup, /if \(\/\^\[A-Za-z0-9_\.-\]\{3,40\}\$\/\.test\(handle\)\)/, 'the handle it prefixes can never itself start with @');
 });
