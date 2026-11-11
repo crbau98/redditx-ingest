@@ -119,10 +119,10 @@ describe('no code path attributes by visual similarity', () => {
 
   test('the only files that request or store visual vectors are the vector store, the image worker plumbing and the read-only display routes', () => {
     const users = walk(SRC).filter((f) => VISUAL.test(code(f))).map(rel).sort();
-    // db/repo.js and db/schema.js only DELETE embeddings, to purge removed items (takedown, block, migration v22);
+    // db/repos/takedowns.js (the purge repo.js builds) and db/schema.js only DELETE embeddings, to purge removed items (takedown, block, migration v22);
     // they never read a vector or write one. routes/admin.js only reads visual.status() — the row COUNTS for the
     // admin console, never a vector, never an attribution.
-    assert.deepEqual(users, ['db/repo.js', 'db/schema.js', 'engine/visual.js', 'lib/imagefilter-core.js', 'lib/imagefilter.js', 'routes/admin.js', 'routes/public.js']);
+    assert.deepEqual(users, ['db/repos/takedowns.js', 'db/schema.js', 'engine/visual.js', 'lib/imagefilter-core.js', 'lib/imagefilter.js', 'routes/admin.js', 'routes/public.js']);
   });
 
   test('every module that attributes or follows anything is free of visual-similarity code', () => {
