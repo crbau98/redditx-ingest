@@ -358,7 +358,13 @@ const dedupe = (list) => {
 async function search(q, { count = 20, budget = 40, fresh = false, site, preferKeyless = false, also = [] } = {}) {
   const key = `${count}|${site || ''}|${preferKeyless}|${also.join(',')}|${q}`;
   const hit = cache.get(key);
-  if (!fresh && hit && hit.results.length && Date.now() - hit.at < CACHE_MS) return hit.results;
+  if (!fresh && hit && hit.results.length && Date.now() - hit.at < CACHE_MS) {
+    // A copy marked `cached`: no engine ran, so a caller that meters searches (keyless X) does not count it.
+    const out = hit.results.slice();
+    Object.defineProperty(out, 'provider', { value: hit.results.provider, enumerable: false });
+    Object.defineProperty(out, 'cached', { value: true, enumerable: false });
+    return out;
+  }
   const configured = order().filter((p) => PROVIDERS[p].configured());
   // Engines this caller asked for on top of the configured order (e.g. Oxylabs for keyless X): tried last.
   const extra = also.filter((p) => PROVIDERS[p] && !configured.includes(p) && PROVIDERS[p].configured());

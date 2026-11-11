@@ -174,7 +174,8 @@ describe('keyless X', () => {
   test('keyless searches stop at the daily cap', async () => {
     websearch._clear();
     repo.settings.set('x.websearch', JSON.stringify({ day: new Date().toISOString().slice(0, 10), count: 100000 }));
-    await assert.rejects(() => x.fetch({ kind: 'search', target: 'gay jock' }, ctx()), (e) => e.skip && /web searches are used/.test(e.message));
+    // out of today's searches: a cooldown until after the daily reset (not a skip that retries every ~45 min)
+    await assert.rejects(() => x.fetch({ kind: 'search', target: 'gay jock' }, ctx()), (e) => e.cooldown && e.budget && /web searches are used/.test(e.message) && e.retryAfter > 0);
     repo.settings.set('x.websearch', '{}');
   });
 });

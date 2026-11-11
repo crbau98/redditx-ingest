@@ -344,6 +344,16 @@ function webUsage() {
 }
 function webSpend() { const u = webUsage(); require('../db/repo').settings.set('x.websearch', JSON.stringify({ day: u.day, count: u.count + 1 })); }
 function webBudget() { try { return require('../settings').get().xKeylessSearchesPerDay; } catch { return 150; } }
+/** Today's keyless searches are used up: come back after the daily reset (UTC midnight), spread over the next hour so the
+ *  feeds do not all retry at once. A cooldown, not a skip: the engine schedules it for then instead of retrying every ~45 min. */
+function budgetSpent() {
+  const now = Date.now();
+  const reset = new Date(new Date(now).toISOString().slice(0, 10) + 'T00:00:00.000Z').getTime() + 86400000;
+  return Object.assign(new Error(`Keyless X: today's ${webBudget()} web searches are used (Settings: X web searches per day); next try after the daily reset`),
+    { cooldown: true, budget: true, status: 429, retryAfter: reset - now + Math.floor(Math.random() * 3600000) });
+}
+/** A search that found this account's posts but none new is not repeated for this long (each search is budget). */
+const NO_NEW_TTL_MS = 12 * 3600 * 1000;
 
 const RESOLVE_PER_RUN = 20;
 const SEEN_KEEP = 400;
@@ -360,9 +370,13 @@ async function viaWebSearch(feed, ctx, cursor) {
   if (handleNow && !ctx.force && cursor.noHitAt && Date.now() - Date.parse(cursor.noHitAt) < NO_HIT_TTL_MS) {
     return { items: [], cursor, notes: [`no x.com posts for @${handleNow} on the last search; searched again after 7 days`], via: 'websearch:cached-miss' };
   }
-  if (webUsage().count >= webBudget()) throw Object.assign(new Error(`Keyless X: today's ${webBudget()} web searches are used (Settings: X web searches per day)`), { skip: true, budget: true });
+  // Found posts last time, none of them new: the same search a few hours later finds the same posts. Wait, without spending.
+  if (!ctx.force && cursor.noNewAt && Date.now() - Date.parse(cursor.noNewAt) < NO_NEW_TTL_MS) {
+    return { items: [], cursor, notes: ['no new x.com posts on the last search; searched again after 12 h'], via: 'websearch:cached-no-new',
+      retryAfter: NO_NEW_TTL_MS - (Date.now() - Date.parse(cursor.noNewAt)) };
+  }
+  if (webUsage().count >= webBudget()) throw budgetSpent();
   let budget = 40; try { budget = require('../settings').get().braveDailyBudget; } catch { /* default */ }
-  webSpend();
   const handle = feed.kind === 'user' ? String(feed.target).replace(/^@/, '') : null;
   let results;
   try {
@@ -372,9 +386,11 @@ async function viaWebSearch(feed, ctx, cursor) {
       ? await websearch.search(`"${handle}"`, { site: `x.com/${handle}`, count: 30, budget, also: ['oxylabs'] })
       : await websearch.search(feed.target, { site: 'x.com', count: 30, budget, also: ['oxylabs'] });
   } catch (e) {
+    webSpend(); // the engines were asked: it counts
     // A search outage is not X failing: skip this run instead of tripping the X circuit breaker.
     throw Object.assign(new Error(`Keyless X: web search failed: ${e.message}`), { skip: true });
   }
+  if (!results.cached) webSpend(); // a search answered from the 10-minute cache ran no engine and costs nothing
   const found = postsInResults(results);
   const posts = handle ? found.posts.filter((p) => p.handle.toLowerCase() === handle.toLowerCase()) : found.posts;
   const seen = new Set((cursor.seen || []).map(String));
@@ -397,7 +413,9 @@ async function viaWebSearch(feed, ctx, cursor) {
   if (todo.length && failed === todo.length) throw Object.assign(new Error(`X posts found by web search could not be read (${notes[0]})`), { status: 502 });
   const newestAt = items.reduce((a, it) => (it.postedAt && (!a || it.postedAt > a) ? it.postedAt : a), cursor.newestAt || null);
   const noHitAt = handle && !posts.length ? new Date().toISOString() : null;
-  return { items, cursor: { ...cursor, newestAt, seen: [...seen].slice(-SEEN_KEEP), noHitAt }, notes, via: `websearch${results.provider ? `:${results.provider}` : ''}` };
+  // Posts found but every one already seen: rest this search for NO_NEW_TTL_MS (the next run costs nothing).
+  const noNewAt = posts.length && !todo.length && !ctx.force ? new Date().toISOString() : null;
+  return { items, cursor: { ...cursor, newestAt, seen: [...seen].slice(-SEEN_KEEP), noHitAt, noNewAt }, notes, via: `websearch${results.provider ? `:${results.provider}` : ''}` };
 }
 
 /** Keyless profile (name, bio, avatar, links) through fxtwitter. */
@@ -427,11 +445,12 @@ async function parkedRun(feed, ctx, cursor, reason) {
   const retryAfter = Math.max(60_000, syndState.parkedUntil - Date.now());
   let r;
   try { r = await viaWebSearch(feed, ctx, cursor); } catch (e) {
-    throw Object.assign(new Error(`${reason}; keyless web search: ${e.message}`), { cooldown: true, retryAfter, status: 429 });
+    // Out of today's searches: come back after the daily reset, not when the park ends (that was ~45 min of churn).
+    throw Object.assign(new Error(`${reason}; keyless web search: ${e.message}`), { cooldown: true, retryAfter: e.budget ? e.retryAfter : retryAfter, status: 429, budget: !!e.budget });
   }
   r.via = `syndication:parked+${r.via}`;
   r.notes = [reason, ...(r.notes || [])];
-  if (!r.items.length) { r.rateLimited = true; r.retryAfter = retryAfter; }
+  if (!r.items.length) { r.rateLimited = true; r.retryAfter = Math.max(retryAfter, r.retryAfter || 0); }
   if (r.items.length && ctx.needProfile) { try { r.profile = await fetchProfileFx(feed.target); } catch { /* optional */ } }
   return r;
 }
