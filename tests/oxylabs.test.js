@@ -115,6 +115,30 @@ test('the daily budget stops a call before it is sent', async () => {
   } finally { settings.update({ oxylabsDailyBudget: 100 }); }
 });
 
+test('the cap is strict: 99 of 100 used lets one call through, 100 of 100 blocks it before it is sent', async () => {
+  const repo = require('../src/db/repo');
+  const day = new Date().toISOString().slice(0, 10);
+  repo.settings.set('oxylabs.usage', JSON.stringify({ day, count: 99, total: 99 }));
+  answers = [searchOk()];
+  await oxylabs.search('q');
+  assert.equal(calls.length, 1);
+  assert.equal(oxylabs.usage().count, 100);
+  await assert.rejects(oxylabs.search('q2'), (e) => e.budget === true);
+  assert.equal(calls.length, 1, 'nothing sent at 100/100');
+});
+
+test('concurrent calls and retries never end the day over the cap', async () => {
+  const repo = require('../src/db/repo');
+  const day = new Date().toISOString().slice(0, 10);
+  repo.settings.set('oxylabs.usage', JSON.stringify({ day, count: 98, total: 98 }));
+  // three calls at once with two units left, and the first one answered 503 then 200 (a retry)
+  answers = [reply(503, {}), searchOk(), searchOk(), searchOk()];
+  const out = await Promise.allSettled([oxylabs.search('a'), oxylabs.search('b'), oxylabs.search('c')]);
+  assert.equal(calls.length, 2, 'only two requests ever left PRISM');
+  assert.equal(oxylabs.usage().count, 100);
+  assert.ok(out.filter((r) => r.status === 'rejected').every((r) => r.reason.budget === true));
+});
+
 test('scrape asks for html, retries once with run_js on a block page, and caches by URL', async () => {
   answers = [reply(200, { results: [{ html: '<title>Just a moment...</title>', url: 'https://example.com/p' }], metadata: { request_id: 'r1' } }), reply(200, { results: [{ html: '<html><h1>Real</h1></html>', url: 'https://example.com/p' }], metadata: { request_id: 'r2' } })];
   const r = await oxylabs.scrape('https://example.com/p');

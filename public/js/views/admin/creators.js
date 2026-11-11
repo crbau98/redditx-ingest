@@ -1,6 +1,8 @@
 import { h, icon, fmt, toast, confirmDialog, openModal, avatar, debounce } from '../../dom.js';
 import { adminGet, adminPost, adminPatch } from '../../api.js';
 import { parse, navigate, href } from '../../router.js';
+import { adminSession } from '../../store.js';
+import { deepPullControl } from '../../components/deep-pull.js';
 import { table, pager, platBadge, pageHead, act, undoToast, searchBox, loadingState, errorState } from './ui.js';
 
 function addCreatorDialog(onDone) {
@@ -157,6 +159,7 @@ async function detailDialog(id, onDone) {
         h('a', { class: 'btn', href: href(`/creator/${c.id}`), onclick: () => m.close() }, 'Public page'),
         h('button', { class: 'btn', type: 'button', onclick: (e) => act(e.currentTarget, () => adminPost('/engine/run', { feedIds: c.feeds.map((f) => f.id), force: true }), 'Sync queued') }, icon('refresh', 'sm'), 'Sync accounts'),
         h('button', { class: 'btn', type: 'button', title: 'Search the web and every platform for more accounts of this person', onclick: () => { m.close(); findCreatorDialog(onDone, { query: c.display_name || c.handle, creatorId: c.id }); } }, icon('search', 'sm'), 'Find more accounts'),
+        deepPullControl({ creatorId: c.id, adminKey: adminSession.key, h, adminGet, adminPost }),
         h('button', { class: 'btn', type: 'button', onclick: () => { m.close(); mergeDialog(c, onDone); } }, 'Merge into another…'))),
     actions: [
       h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Close'),

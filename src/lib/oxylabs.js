@@ -15,7 +15,8 @@
  *     robots.txt is checked by the caller, as for a direct read, and the page then runs through the same pipeline gates;
  *   - success is any 2xx; retries (max 3 attempts, exponential backoff with jitter) only on a transport timeout and on
  *     408 / 429 / 5xx; 400 and 401 are surfaced at once with the field or a clear message; the request_id is logged on failures;
- *   - a daily request cap (setting oxylabsDailyBudget, 0 = never used) is checked before every call;
+ *   - a daily request cap (setting oxylabsDailyBudget, 0 = never used): every attempt, retries included, is counted
+ *     before it is sent, so the day never ends over the cap;
  *   - one URL is read at most once per 10 minutes (the answer is cached), and a page that comes back empty or as a block page
  *     is retried once with run_js, as the doc says.
  */
@@ -72,13 +73,16 @@ async function post(path, payload) {
   if (!configured()) throw fail('OXYLABS_WEB_API_KEY is not set', { skip: true });
   const budget = dailyBudget();
   if (!budget) throw fail('Oxylabs is off (setting oxylabsDailyBudget is 0)', { skip: true });
-  if (remaining(budget) <= 0) throw fail(`Oxylabs daily budget reached (${budget}/day)`, { budget: true });
   const url = `${config.baseUrls.oxylabs}${path}`;
   const opts = {
     method: 'POST', body: JSON.stringify(payload), timeout: TIMEOUT_MS, retries: 0, maxBytes: 8_000_000,
     headers: { authorization: `Bearer ${key()}`, 'content-type': 'application/json', accept: 'application/json' },
   };
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    // Reserve the request BEFORE it is sent, in the same synchronous step as the check: concurrent callers (or a retry)
+    // used to pass the check together while the count still said 99, and the day ended at 101 of 100.
+    if (remaining(budget) <= 0) throw fail(`Oxylabs daily budget reached (${budget}/day)`, { budget: true });
+    record();
     let res;
     try {
       res = requester ? await requester(url, opts) : await net.request(url, opts);
@@ -94,7 +98,6 @@ async function post(path, payload) {
     try { json = text ? JSON.parse(text) : null; } catch { json = null; }
     const requestId = json && json.metadata && json.metadata.request_id;
     if (res.status >= 200 && res.status < 300) {
-      record();
       if (!json) throw fail(`${path} -> ${res.status}: the answer was not JSON`, { status: 502, requestId });
       return json;
     }

@@ -397,20 +397,7 @@ router.get('/creators', (req, res) => {
   res.json({ ...r, items: r.items.map(publicCreator) });
 });
 
-// Deep pull status + start: the profile's "Pull from the web" button (rate-limited like lookup).
-const pullLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 12, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many web pulls from this address, try again later' } });
-router.get('/creators/:id/pull', (req, res) => {
-  const c = repo.creators.get(req.params.id);
-  if (!c || c.status !== 'active' || c.scope === 'excluded') return res.status(404).json({ error: 'Not found' });
-  res.json(require('../engine/deepsearch').status(c.id));
-});
-router.post('/creators/:id/pull', pullLimiter, (req, res) => {
-  const c = repo.creators.get(req.params.id);
-  if (!c || c.status !== 'active' || c.scope === 'excluded') return res.status(404).json({ error: 'Not found' });
-  const out = require('../engine/deepsearch').kick(c.id, { trigger: 'manual', force: true });
-  res.status(out.error ? 404 : 200).json(out);
-});
-
+// Deep pulls are admin-only (POST/GET /api/admin/creators/:id/pull): they spend paid search and unlock credits.
 router.get('/creators/:id', (req, res) => {
   const c = repo.creators.detail(req.params.id);
   if (!c || c.status !== 'active' || c.scope === 'excluded') return res.status(404).json({ error: 'Not found' });

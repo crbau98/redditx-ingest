@@ -265,7 +265,8 @@ async function pull(creatorId, { trigger = 'manual', force = false, aborted = ()
     for (const q of text) {
       if (aborted()) break;
       let results = [];
-      try { results = await searchFn(q, { count: MAX_RESULTS_PER_QUERY, budget, preferKeyless: true }); }
+      // Oxylabs answers last, only when every other engine came back empty: deep pulls are where its credits are spent.
+      try { results = await searchFn(q, { count: MAX_RESULTS_PER_QUERY, budget, preferKeyless: true, also: ['oxylabs'] }); }
       catch (e) {
         if (e && (e.budget || e.skip)) break; // out of search: keep what we have, try again next time
         events.log('WARN', `Deep pull: "${q}" — ${e.message}`);
