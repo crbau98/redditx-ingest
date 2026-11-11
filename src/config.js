@@ -44,6 +44,9 @@ module.exports = {
   get demoArt() { return env.DEMO_ART === '1'; },
   get dbReadonly() { return env.PRISM_DB_READONLY === '1'; },
   get aggregateWorker() { return env.PRISM_AGGREGATE_WORKER !== '0'; },
+  // lib/blockwatch: keep a CPU profile around a loop block over 3 s (2 files at most, in <dataDir>/profiles).
+  // On by default outside tests; PRISM_BLOCK_PROFILE=0 turns it off, =1 turns it on in tests.
+  get blockProfile() { const v = env.PRISM_BLOCK_PROFILE; return v === undefined || v === '' ? env.NODE_ENV !== 'test' : v !== '0'; },
   root,
   isProd,
   isTest,

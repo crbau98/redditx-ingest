@@ -55,6 +55,94 @@ describe('loop watchdog', () => {
     blockwatch.reset();
   });
 
+  test('a 1.5 s synchronous block under two concurrent labels reports both', async () => {
+    blockwatch.start();
+    blockwatch.reset();
+    blockwatch.work('idle');
+    const leaveA = blockwatch.enter('feed web:aaa');
+    const leaveB = blockwatch.enter('feed redgifs:bbb');
+    await wait(120);
+    block(1500);
+    await wait(400);
+    const b = blockwatch.lastBlock();
+    assert.ok(b && b.ms >= 1400, `a long block was recorded (${b && b.ms})`);
+    assert.deepEqual(b.jobs, ['feed web:aaa', 'feed redgifs:bbb'], 'both overlapping jobs are named, not only the last to start');
+    assert.equal(b.job, 'feed web:aaa, feed redgifs:bbb');
+    assert.equal(typeof b.gcMs, 'number', 'and how much of it was garbage collection');
+    leaveA(); leaveB();
+    blockwatch._noteBlock(0); // the window ends
+    assert.deepEqual(blockwatch.labels(), [], 'a finished job leaves no label behind');
+    blockwatch.stop();
+    blockwatch.reset();
+  });
+
+  test('a block inside a timer callback that also ends its job is caught, measured and labelled', async () => {
+    // The histogram alone missed this: both timers are overdue after the stall and the sampler can read the
+    // histogram before the delay lands in it. The tick's own lateness catches it; the late reading is folded in.
+    blockwatch.start();
+    blockwatch.reset();
+    const leave = blockwatch.enter('feed web:timer');
+    await new Promise((r) => setTimeout(() => { block(1200); leave(); r(); }, 300));
+    await wait(700);
+    const all = blockwatch.blocks().filter((b) => b.ms >= 1000);
+    assert.equal(all.length, 1, 'one block, not a duplicate from the late histogram reading');
+    assert.ok(all[0].ms >= 1150 && all[0].ms <= 1500, `measured ${all[0].ms}`);
+    assert.deepEqual(all[0].jobs, ['feed web:timer']);
+    blockwatch.stop();
+    blockwatch.reset();
+  });
+
+  test('around() and a shared work() label are both reported', () => {
+    blockwatch.reset();
+    const leave = blockwatch.enter('feed coomer:ccc');
+    blockwatch.work('imageSweep');
+    const rec = blockwatch._noteBlock(900);
+    assert.deepEqual(rec.jobs, ['feed coomer:ccc', 'imageSweep']);
+    leave(); blockwatch.work('idle'); blockwatch.reset();
+  });
+
+  test('a job whose last synchronous stretch is the block still owns that block', () => {
+    blockwatch.reset();
+    const leave = blockwatch.enter('feed web:ending');
+    leave(); // finished in the same tick as the block
+    const rec = blockwatch._noteBlock(3200);
+    assert.deepEqual(rec.jobs, ['feed web:ending']);
+    assert.equal(blockwatch._noteBlock(3200).job, 'idle', 'the next window no longer carries it');
+    blockwatch.reset();
+  });
+
+  test('GC pauses over 200 ms are recorded with their kind and counted into the next block', () => {
+    blockwatch.reset();
+    assert.equal(blockwatch._noteGc(50, 1), null, 'a short pause is only counted');
+    const rec = blockwatch._noteGc(450, 2);
+    assert.equal(rec.ms, 450); assert.equal(rec.kind, 'major');
+    assert.deepEqual({ ms: blockwatch.lastGc().ms, kind: blockwatch.lastGc().kind }, { ms: 450, kind: 'major' });
+    const b = blockwatch._noteBlock(1200);
+    assert.equal(b.gcMs, 500, 'the block says 500 ms of it was GC');
+    blockwatch.reset();
+  });
+
+  test('profiles are written only on request and capped at two files', async () => {
+    const fs = require('fs'); const os = require('os'); const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-prof-'));
+    try {
+      for (let i = 0; i < 4; i++) {
+        await blockwatch._writeProfile(dir, { nodes: [], samples: [], i }, { ms: 3000 + i, job: 'feed web:x', at: new Date(Date.UTC(2026, 10, 11, 0, 0, i)).toISOString() });
+      }
+      const files = fs.readdirSync(dir).sort();
+      assert.equal(files.length, blockwatch.PROFILE_KEEP);
+      assert.match(files[1], /3003ms\.cpuprofile$/, 'the newest stay');
+      assert.deepEqual(blockwatch.profiles(), files);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('a feed run labels itself by platform and feed id, and leaves the label when it finishes', () => {
+    const fs = require('fs'); const path = require('path');
+    const engine = fs.readFileSync(path.join(__dirname, '..', 'src', 'engine', 'engine.js'), 'utf8');
+    assert.match(engine, /const leaveWatch = blockwatch\.enter\(`feed \$\{feed\.platform\}:\$\{feed\.id\}`\)/);
+    assert.match(engine, /const finish = \(status, extra = \{\}\) => \{\n    leaveWatch\(\);/);
+  });
+
   test('the link-health sweep and the deep-pull rotation carry their own labels', () => {
     const fs = require('fs');
     const path = require('path');

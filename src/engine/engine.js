@@ -220,12 +220,13 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
   const runId = repo.runs.start(feed.id, trigger);
   const tag = `${feed.platform}/${feed.kind}:${feed.target}`;
   const blockwatch = require('../lib/blockwatch');
-  blockwatch.work(`feed ${feed.platform}`); // any stall inside this run is attributed to it
+  // Several feeds run at once: each one's label stays in every block report until this run finishes.
+  const leaveWatch = blockwatch.enter(`feed ${feed.platform}:${feed.id}`);
   // platforms whose feeds live on many unrelated servers: a server's gateway errors rest that server (host breaker), not the platform
   const host = ['mastodon', 'misskey', 'peertube', 'rss', 'web', 'linkinbio'].includes(feed.platform) ? breaker.feedHost(feed) : null;
 
   const finish = (status, extra = {}) => {
-    blockwatch.work('idle');
+    leaveWatch();
     repo.runs.finish(runId, { status, ...stats, via: extra.via, error: extra.error, durationMs: Date.now() - started });
     state.running.delete(feed.id);
     state.session.runs++;

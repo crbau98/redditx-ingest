@@ -191,7 +191,8 @@ router.get('/health', (req, res) => {
   loopDelay.reset();
   const disk = require('../lib/diskguard').status();
   const blockwatch = require('../lib/blockwatch');
-  const block = blockwatch.lastBlock(); // the job that was running, not just how long
+  const block = blockwatch.lastBlock(); // every job that was running, not just how long
+  const gc = blockwatch.lastGc();
   blockwatch.reset(); // next reader sees the next window, not all-time history
   const warnings = [];
   if (block && block.ms > 1000) warnings.push(`event loop blocked ${block.ms} ms during ${block.job}`);
@@ -205,7 +206,7 @@ router.get('/health', (req, res) => {
   else if (disk.level === 'paused') warnings.push(`data volume ${disk.usedPct}% full: ingestion is paused`);
   else if (disk.level === 'warn') warnings.push(`data volume ${disk.usedPct}% full`);
   // Still HTTP 200 while the database answers (the platform's health check must not restart a working site over a warning).
-  res.status(dbOk ? 200 : 503).json({ status: dbOk && disk.known ? 'ok' : 'degraded', warnings, version: config.version, uptime: Math.round(process.uptime()), db: dbOk, disk, memMb: { rss: mb(mem.rss), heap: mb(mem.heapUsed), heapTotal: mb(mem.heapTotal), external: mb(mem.external), arrayBuffers: mb(mem.arrayBuffers) }, loop, timestamp: new Date().toISOString() });
+  res.status(dbOk ? 200 : 503).json({ status: dbOk && disk.known ? 'ok' : 'degraded', warnings, version: config.version, uptime: Math.round(process.uptime()), db: dbOk, disk, memMb: { rss: mb(mem.rss), heap: mb(mem.heapUsed), heapTotal: mb(mem.heapTotal), external: mb(mem.external), arrayBuffers: mb(mem.arrayBuffers) }, loop, block, gc, profiles: blockwatch.profiles(), timestamp: new Date().toISOString() });
   // The platform's probe decides whether this deploy is good. Tell the boot sequence that the
   // server is up, so the cache warm-up does not start before the probe has been answered.
   require('../lib/ready').markHealthy();
