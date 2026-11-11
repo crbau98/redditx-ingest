@@ -116,6 +116,43 @@ test('a rate-limited archive page (200 with an error) keeps the items already re
   assert.ok(penalties[0].ms >= 60000, 'with the same penalty as a Reddit 429');
 });
 
+test('the archive rate limit as HTTP 422 ("Timeout. Maybe slow down") is read as a 429: items kept, platform held', async () => {
+  calls = []; penalties.length = 0;
+  let hits = 0;
+  net.fetchJSON = async (url, opts = {}) => {
+    calls.push({ url: String(url), opts });
+    if (!/arctic-shift/.test(url)) challenge();
+    hits++;
+    if (hits === 1) return archive(fullPage(0));
+    // What net.fetchJSON throws for a non-2xx answer: an HttpError-shaped error with the archive's JSON body.
+    const e = new Error('HTTP 422 for https://arctic-shift.photon-reddit.com/api/posts/search');
+    e.status = 422; e.body = '{"data":null,"error":"Timeout. Maybe slow down a bit"}';
+    throw e;
+  };
+  net.fetchText = async (url) => { calls.push({ url: String(url) }); challenge(); };
+  const reddit = require('../src/sources/reddit');
+  const out = await reddit.fetch(feed('community', 'gaybrosgonewild'), { cursor: { newestAt: '2026-11-01T00:00:00.000Z' }, limit: 100, aborted: () => false });
+  assert.equal(out.items.filter((i) => i.mediaUrl).length, 100, 'the page answered before the limit is returned');
+  assert.ok(out.notes.some((n) => /stopped early after 100 items: .*rate limiting/.test(n)), 'the 422 rate limit is reported, not thrown as a hard error');
+  assert.deepEqual(penalties.map((p) => p.key), ['reddit'], 'the reddit limiter is held');
+  assert.ok(penalties[0].ms >= 60000, 'with the same penalty as a Reddit 429');
+});
+
+test('an archive 422 that is not a rate limit still surfaces as an error', async () => {
+  calls = []; penalties.length = 0;
+  net.fetchJSON = async (url, opts = {}) => {
+    calls.push({ url: String(url), opts });
+    if (!/arctic-shift/.test(url)) challenge();
+    const e = new Error('HTTP 422 for https://arctic-shift.photon-reddit.com/api/posts/search');
+    e.status = 422; e.body = '{"error":"Invalid sort"}';
+    throw e;
+  };
+  net.fetchText = async (url) => { calls.push({ url: String(url) }); challenge(); };
+  const reddit = require('../src/sources/reddit');
+  await assert.rejects(() => reddit.fetch(feed('community', 'gaybrosgonewild'), { cursor: {}, limit: 100, aborted: () => false }));
+  assert.equal(penalties.length, 0, 'a real 422 does not hold the limiter as a rate limit');
+});
+
 test('an incremental run asks the archive after the cursor second, oldest first, and pages forward up to the cap', async () => {
   calls = [];
   const cursorAt = '2026-11-01T00:00:00.000Z';
