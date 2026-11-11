@@ -141,10 +141,23 @@ function warm() {
   // The dedupe index loads every stored hash lazily on first use — a multi-second synchronous build that used to
   // land inside the first feed run of the morning. Load it here, after the first health answer, with the rest.
   const queue = [...prep, ...warmers.map((g, i) => [`cache#${i}`, g]),
-    ['dedupe', () => { try { return require('../services/dedupe').loadChunked().catch(() => {}); } catch { return undefined; /* index optional */ } }],
-    ['visualIndex', () => require('../engine/visual').warmIndex()]];
-  const next = () => { const g = queue.shift(); if (!g) return; try { warmStep(g[0], g[1]); } catch (e) { console.error('[warm]', e.message); } setImmediate(next); };
+    // the two index builds, one after the other (warmIndexes labels each itself)
+    [null, () => warmIndexes(() => require('../services/dedupe').loadChunked(), () => require('../engine/visual').warmIndex())]];
+  const next = () => { const g = queue.shift(); if (!g) return; try { if (g[0]) warmStep(g[0], g[1]); else g[1](); } catch (e) { console.error('[warm]', e.message); } setImmediate(next); };
   setImmediate(next);
+}
+
+/**
+ * The dedupe index load, then the visual index build: never at the same time. Run together they contended for the
+ * same event loop and a block could only be blamed on both (2.5-11.8 s boot blocks labelled [warm:dedupe,
+ * warm:visualIndex]). The visual build starts when the dedupe load settles, success or failure.
+ */
+function warmIndexes(loadDedupe, buildVisual) {
+  let dedupe;
+  try { dedupe = warmStep('dedupe', () => Promise.resolve(loadDedupe()).catch(() => {})); } catch { dedupe = undefined; } // index optional
+  return Promise.resolve(dedupe).catch(() => {})
+    .then(() => warmStep('visualIndex', buildVisual))
+    .catch((e) => console.error('[warm]', e.message));
 }
 
 /** The statement-prep half runs immediately: it is microseconds of work per query and must not
@@ -643,7 +656,8 @@ router.post('/lookup/auto', lookupFollowLimiter, async (req, res) => {
 module.exports = router;
 module.exports.publicMedia = publicMedia;
 module.exports.warm = warm;
-module.exports._warmStep = warmStep; // test hook: the label wrapper every warm-up step runs through
+module.exports._warmStep = warmStep;
+module.exports._warmIndexes = warmIndexes; // test hook: the label wrapper every warm-up step runs through
 module.exports.warmPrep = warmPrep;
 module.exports.publicCreator = publicCreator;
 module.exports.suggestCached = suggestCached;

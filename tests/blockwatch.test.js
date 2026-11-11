@@ -205,7 +205,29 @@ test('every boot warm-up step runs under a named label', () => {
   const fs = require('fs'); const path = require('path');
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'public.js'), 'utf8');
   for (const name of ['prep:recent', 'prep:trending', 'prep:foryou', 'prep:reddit', 'prep:tag-gay', 'prep:creators']) assert.ok(src.includes(`['${name}', `), name);
-  assert.match(src, /\['dedupe', /); assert.match(src, /\['visualIndex', /);
+  assert.match(src, /warmStep\('dedupe', /); assert.match(src, /warmStep\('visualIndex', buildVisual\)/);
   assert.match(src, /warmStep\('snapshots', primeSnapshots\)/);
-  assert.equal((src.match(/try \{ warmStep\(g\[0\], g\[1\]\); \}/g) || []).length, 2, 'warm() and warmPrep() both run steps through warmStep');
+  assert.match(src, /try \{ if \(g\[0\]\) warmStep\(g\[0\], g\[1\]\); else g\[1\]\(\); \}/, 'warm() runs named steps through warmStep (the index pair labels itself)');
+  assert.match(src, /try \{ warmStep\(g\[0\], g\[1\]\); \}/, 'warmPrep() runs every step through warmStep');
+});
+
+test('the visual index build starts only after the dedupe load has settled, never alongside it', async () => {
+  const bw = require('../src/lib/blockwatch');
+  const { _warmIndexes } = require('../src/routes/public');
+  let finishDedupe; const dedupe = new Promise((r) => { finishDedupe = r; });
+  let visualStarted = 0;
+  const all = _warmIndexes(() => dedupe, () => { visualStarted++; return Promise.resolve(); });
+  for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+  assert.equal(visualStarted, 0, 'not started while dedupe is pending');
+  assert.ok(bw.labels().includes('warm:dedupe'));
+  assert.ok(!bw.labels().includes('warm:visualIndex'), 'its label is not there either');
+  finishDedupe();
+  await all;
+  assert.equal(visualStarted, 1);
+  // a failing dedupe load still lets the visual build run
+  let ran = 0;
+  await _warmIndexes(() => Promise.reject(new Error('boom')), () => { ran++; });
+  assert.equal(ran, 1);
+  bw._noteBlock(0);
+  assert.ok(!bw.labels().some((l) => l.startsWith('warm:')), 'no warm label left behind');
 });
