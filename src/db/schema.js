@@ -1042,7 +1042,17 @@ function v33(db) {
 }
 v33.ddlOnly = true;
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31, v32, v33];
+/**
+ * v34: the admin overview's daily ingest chart (repo adminOverview ingestDaily) reads the last 14 days of ALL media by
+ * ingested_at. The other ingested_at index is partial (publish_state), so this scanned the whole table on every stats
+ * refresh. A plain (ingested_at, platform) index covers the query.
+ */
+function v34(db) {
+  db.exec('CREATE INDEX IF NOT EXISTS ix_media_ingested_plat ON media(ingested_at, platform)');
+}
+v34.ddlOnly = true;
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31, v32, v33, v34];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

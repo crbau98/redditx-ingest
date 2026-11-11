@@ -1722,6 +1722,12 @@ function publicStats() {
   return { total: s.total || 0, images: s.images || 0, videos: s.videos || 0, creators: c };
 }
 
+/** The daily ingest chart: a range on ix_media_ingested_plat (v34), never a full scan. */
+const INGEST_DAILY_SQL = `SELECT substr(ingested_at, 1, 10) AS day, platform, COUNT(*) AS n FROM media
+      WHERE ingested_at >= ? GROUP BY day, platform ORDER BY day`;
+/** Start of the UTC day 14 days ago, as a full ISO timestamp (the same instant the bare date meant). */
+const ingestDailySince = (now = Date.now()) => `${new Date(now - 14 * 86400000).toISOString().slice(0, 10)}T00:00:00.000Z`;
+
 function adminOverview() {
   const states = media.countByState();
   const pubByPlatform = media.platforms();
@@ -1745,8 +1751,7 @@ function adminOverview() {
         COALESCE(SUM(blocked),0) AS blocked, COUNT(*) AS runs FROM feed_runs WHERE started_at >= ?`).get(new Date(Date.now() - 86400000).toISOString()),
     blocklist: blockQ.count.get().c,
     discovery: candidates.counts(),
-    ingestDaily: db.prepare(`SELECT substr(ingested_at, 1, 10) AS day, platform, COUNT(*) AS n FROM media
-      WHERE ingested_at >= ? GROUP BY day, platform ORDER BY day`).all(new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10)),
+    ingestDaily: db.prepare(INGEST_DAILY_SQL).all(ingestDailySince()),
   };
 }
 
@@ -2202,7 +2207,10 @@ function getDiscoveryLead(platform, externalId) {
   return db.prepare('SELECT * FROM discovery_leads WHERE platform = ? AND external_id = ?').get(platform, String(externalId)) || null;
 }
 
+// test seams (the query plan test reads the exact statement)
+const _ingestDaily = { sql: INGEST_DAILY_SQL, since: ingestDailySince };
 module.exports = {
+  _ingestDaily,
   db, nowIso, clampInt, upsertDiscoveryLead, getDiscoveryLead, cleanTag, ftsQuery, settings, hosts, blocklist, logAction, suggest, audit,
   creators, feeds, runs, media, reports, addTags, publicStats, adminOverview, discover,
   candidates, discoveryState, onlyfans, takedowns, mentionSource, discoveryTargets, communityHangouts, PLATFORM_TAGS, GENERIC_TAGS, tagIntel, library, libraryWithIndex, LibraryWarmingError,

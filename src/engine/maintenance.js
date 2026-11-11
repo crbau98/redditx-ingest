@@ -191,9 +191,26 @@ async function physiqueSweep({ limit = 12, settings } = {}) {
   return res;
 }
 
+/* ------------------------------------------------------------- progress counts */
+// The admin pages ask for these counts on every load, and each one counts a large slice of the media table. Each count is
+// kept for 60 s (in memory, per statement and arguments); the sweeps themselves always read live rows.
+const PROGRESS_TTL_MS = 60 * 1000;
+const progressCache = new Map();
+let progressClock = () => Date.now();
+function countCached(sql, ...args) {
+  const key = `${sql}|${JSON.stringify(args)}`;
+  const now = progressClock();
+  const hit = progressCache.get(key);
+  if (hit && now - hit.at < PROGRESS_TTL_MS) return hit.value;
+  const value = repo.db.prepare(sql).get(...args);
+  progressCache.set(key, { at: now, value });
+  if (progressCache.size > 100) progressCache.delete(progressCache.keys().next().value);
+  return value;
+}
+
 function physiqueSweepProgress() {
   const cursor = parseInt(repo.settings.get('physique_sweep_seq') || '0', 10) || 0;
-  const remaining = repo.db.prepare("SELECT COUNT(*) AS n FROM media WHERE publish_state IN ('published','review','hidden') AND seq > ?").get(cursor).n;
+  const remaining = countCached("SELECT COUNT(*) AS n FROM media WHERE publish_state IN ('published','review','hidden') AND seq > ?", cursor).n;
   return { cursor, remaining, version: PHYSIQUE_SWEEP_VERSION };
 }
 
@@ -225,7 +242,7 @@ async function leanBiasSweep({ limit = 4000, settings } = {}) {
 
 function leanBiasProgress() {
   const cursor = parseInt(repo.settings.get('lean_bias_seq') || '0', 10) || 0;
-  const remaining = repo.db.prepare('SELECT COUNT(*) AS n FROM media WHERE lean_bias IS NULL AND seq > ?').get(cursor).n;
+  const remaining = countCached('SELECT COUNT(*) AS n FROM media WHERE lean_bias IS NULL AND seq > ?', cursor).n;
   return { cursor, remaining };
 }
 
@@ -392,13 +409,13 @@ async function clearBorrowedPosterHashes() {
 
 function hashSweepProgress() {
   const cursor = parseInt(repo.settings.get('hash_sweep_seq') || '0', 10) || 0;
-  const remaining = repo.db.prepare("SELECT COUNT(*) AS n FROM media WHERE publish_state IN ('published','review') AND seq > ?").get(cursor).n;
+  const remaining = countCached("SELECT COUNT(*) AS n FROM media WHERE publish_state IN ('published','review') AND seq > ?", cursor).n;
   return { cursor, remaining, ...dedupe.stats() };
 }
 
 function imageSweepProgress() {
   const cursor = parseInt(repo.settings.get('image_sweep_seq') || '0', 10) || 0;
-  const q = (cmp) => repo.db.prepare(`SELECT COUNT(*) AS n FROM media WHERE publish_state IN ('published','review') AND seq ${cmp} ?`).get(cursor).n;
+  const q = (cmp) => countCached(`SELECT COUNT(*) AS n FROM media WHERE publish_state IN ('published','review') AND seq ${cmp} ?`, cursor).n;
   return { cursor, checkedUpTo: q('<='), remaining: q('>'), version: IMAGE_SWEEP_VERSION };
 }
 
@@ -466,8 +483,8 @@ async function faceSweep({ limit = 12, settings } = {}) {
 }
 
 function faceSweepProgress() {
-  const row = repo.db.prepare("SELECT COUNT(*) AS remaining FROM media WHERE face_at IS NULL AND publish_state = 'published' AND scope != 'excluded' AND (media_type = 'image' OR preview_url IS NOT NULL OR thumbnail_url IS NOT NULL)").get();
-  const faces = repo.db.prepare('SELECT COUNT(DISTINCT media_id) AS media, COUNT(*) AS descriptors FROM media_faces').get();
+  const row = countCached("SELECT COUNT(*) AS remaining FROM media WHERE face_at IS NULL AND publish_state = 'published' AND scope != 'excluded' AND (media_type = 'image' OR preview_url IS NOT NULL OR thumbnail_url IS NOT NULL)");
+  const faces = countCached('SELECT COUNT(DISTINCT media_id) AS media, COUNT(*) AS descriptors FROM media_faces');
   return { remaining: row.remaining, ...faces };
 }
 
@@ -582,4 +599,4 @@ function startupSweepIfNeeded() {
   }, 1500).unref();
 }
 
-module.exports = { clearBorrowedPosterHashes, repairSharedPosterCollapse, retireDeadFeeds, sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, faceSweep, faceSweepProgress, faceBackfill, physiqueSweep, physiqueSweepProgress, leanBiasSweep, leanBiasProgress, clearLeanBias, hashSweep, hashSweepProgress, startImageSweep, stopImageSweep };
+module.exports = { _progressCache: { clear: () => progressCache.clear(), setClock: (fn) => { progressClock = fn || (() => Date.now()); }, ttlMs: PROGRESS_TTL_MS }, clearBorrowedPosterHashes, repairSharedPosterCollapse, retireDeadFeeds, sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, faceSweep, faceSweepProgress, faceBackfill, physiqueSweep, physiqueSweepProgress, leanBiasSweep, leanBiasProgress, clearLeanBias, hashSweep, hashSweepProgress, startImageSweep, stopImageSweep };

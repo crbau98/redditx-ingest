@@ -142,7 +142,41 @@ async function sweep({ limit = 30, concurrency = 3, fetch, now = Date.now() } = 
   return res;
 }
 
-function progress() { return { remaining: q.left.get().n, waiting: retry.size }; }
+const ROUND_SECONDS = 75;
+const ROUND_CAP = 240;
+/** The backlog scaler: the per-minute setting is the calm rate, a large debt raises the round size up to 6x (cap 240). */
+const scaleFor = (remaining) => (remaining > 50000 ? 6 : remaining > 5000 ? 3 : 1);
+const perRound = (perMinute, remaining) => Math.min(Math.round(perMinute * scaleFor(remaining)), ROUND_CAP);
+
+// Published rows with no small thumbnail at all. Not the same as `remaining` (tint never computed): a row given up on
+// (tint '') or a video with no poster has a tint but no thumb_url. No index answers it, so it is counted at most once a minute.
+const NO_THUMB_SQL = "SELECT COUNT(*) AS n FROM media WHERE thumb_url IS NULL AND publish_state = 'published'";
+let noThumbCache = null;
+function noThumbCount(now = Date.now()) {
+  if (noThumbCache && now - noThumbCache.at < 60 * 1000) return noThumbCache.n;
+  noThumbCache = { at: now, n: repo.db.prepare(NO_THUMB_SQL).get().n };
+  return noThumbCache.n;
+}
+
+/**
+ * Where the thumbnail work stands. `remaining` = published rows whose tint was never computed (the sweep's queue);
+ * `noThumbUrl` = published rows with no thumbnail file, whatever the reason. The ETA uses the rate the sweep really runs at
+ * for this backlog (the scaled round every 75 s), not the calm per-minute setting.
+ */
+function progress({ perMinute } = {}) {
+  const remaining = q.left.get().n;
+  let pm = perMinute;
+  if (pm == null) { try { const s = settingsStore.get(); pm = s.thumbnails ? s.thumbnailsPerMinute : 0; } catch { pm = 0; } }
+  const round = pm > 0 ? perRound(pm, remaining) : 0;
+  const effectivePerMinute = Math.round((round * 60 / ROUND_SECONDS) * 10) / 10;
+  return {
+    remaining,
+    waiting: retry.size,
+    noThumbUrl: noThumbCount(),
+    rate: { perMinuteSetting: pm || 0, scale: scaleFor(remaining), perRound: round, roundSeconds: ROUND_SECONDS, effectivePerMinute },
+    etaMinutes: remaining === 0 ? 0 : effectivePerMinute > 0 ? Math.ceil(remaining / effectivePerMinute) : null,
+  };
+}
 
 let timer = null; let busy = false; let failures = 0; let wait = 0;
 function start() {
@@ -160,8 +194,7 @@ function start() {
       // round grows up to 6x — sharp renders off the loop, and the failure backoff below still
       // applies — then shrinks back as the debt clears. Ceiling keeps a 1-vCPU box sane.
       const remaining = q.left.get().n;
-      const scale = remaining > 50000 ? 6 : remaining > 5000 ? 3 : 1;
-      const r = await sweep({ limit: Math.min(Math.round(s.thumbnailsPerMinute * scale), 240) });
+      const r = await sweep({ limit: perRound(s.thumbnailsPerMinute, remaining) });
       // a round where nothing could be read (network down) backs off instead of retrying the same items every minute
       failures = r.checked && r.retry === r.checked ? failures + 1 : 0;
       wait = failures ? Math.min(30, 2 ** failures) : 0;
@@ -170,9 +203,9 @@ function start() {
       wait = Math.min(30, 2 ** failures);
       if (failures === 1) events.log('WARN', `Thumbnails: ${e.message}`);
     } finally { busy = false; blockwatch.work('idle'); }
-  }, 75 * 1000);
+  }, ROUND_SECONDS * 1000);
   timer.unref();
 }
 function stop() { clearInterval(timer); timer = null; }
 
-module.exports = { start, stop, sweep, make, render, progress, TODO_SQL };
+module.exports = { start, stop, sweep, make, render, progress, TODO_SQL, _clearNoThumb: () => { noThumbCache = null; } };
