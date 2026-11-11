@@ -138,6 +138,14 @@ router.post('/ai/triage', async (req, res) => {
 // Read-only scoreboard: feeds whose runs over the last ?days (default 7, at least 5 runs) fetched nothing. The engine already
 // checks these every 3 days instead of on their interval; nothing is disabled or deleted.
 // Read-only library-health counts (engine/library-health.js): no writes, no repair; a windowed pass that keeps the loop free.
+// Clear face vectors and alt sources still left on media removed before the takedown purge covered them (690c331), through
+// the one purge (repo.purgeRemovedContent), in batches with yields. ?dryRun=1 only counts; ?limit=N caps one call.
+router.post('/maintenance/purge-removed-residue', async (req, res) => {
+  const q = { ...req.query, ...(req.body || {}) };
+  const dryRun = q.dryRun === true || q.dryRun === '1' || q.dryRun === 'true';
+  const limit = q.limit !== undefined && q.limit !== '' ? int(q.limit, 0, 1000000, 0) : Infinity;
+  try { res.json(await require('../engine/residue-purge').purgeResidue({ dryRun, limit })); } catch (e) { res.status(500).json({ error: e.message }); }
+});
 router.get('/library-health', async (req, res) => {
   try { res.json(await require('../engine/library-health').report()); } catch (e) { res.status(500).json({ error: e.message }); }
 });

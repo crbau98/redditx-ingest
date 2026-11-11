@@ -1152,6 +1152,7 @@ function getDiscoveryLead(platform, externalId) {
 const _ingestDaily = { sql: INGEST_DAILY_SQL, since: ingestDailySince };
 module.exports = {
   _ingestDaily,
+  purgeRemovedContent, // engine/residue-purge: the one purge, for the pre-690c331 backlog
   db, nowIso, clampInt, upsertDiscoveryLead, getDiscoveryLead, cleanTag, ftsQuery, settings, hosts, blocklist, logAction, suggest, audit,
   creators, feeds, runs, media, reports, addTags, publicStats, adminOverview, discover,
   candidates, discoveryState, onlyfans, takedowns, mentionSource, discoveryTargets, communityHangouts, PLATFORM_TAGS, GENERIC_TAGS, tagIntel, library, libraryWithIndex, LibraryWarmingError,
