@@ -56,13 +56,8 @@ const bskyHttp = require('../sources/http').forPlatform('bluesky', 400);
 // waits behind a reddit feed's rate-limit hold.
 const archiveHttp = require('../sources/http').forPlatform('redditArchive', 300);
 
-// similar: Bluesky lists the account among those most like a followed creator (per creator, max 4)
-// hangout: a community where several followed creators post (per creator, max 6)
-// ofconfirmed: the account links to the exact OnlyFans page we were looking for (same person, proven)
-// onlyfans: the account has the same handle as an OnlyFans page creators promote (likely the same person)
-// ai: Claude read the public name and bio and judged it an adult male creator (engine/ai.js triage).
-const WEIGHTS = { identity: 6, mention: 3, cofollow: 1.5, search: 2, similar: 2, hangout: 1.5, ofconfirmed: 8, onlyfans: 2, ai: 2, poster: 6, imagesearch: 3 };
-const CAPS = { identity: 1, mention: 5, cofollow: 8, search: 3, similar: 4, hangout: 6, ofconfirmed: 1, onlyfans: 1, ai: 1, poster: 1, imagesearch: 2 };
+// The ranking itself is pure and lives in discovery-score.js (no database, no network); this file does the I/O around it.
+const { WEIGHTS, CAPS, scoreOf, describeSignals, mergeSignal } = require('./discovery-score');
 const FOLLOWABLE_KINDS = new Set(['user', 'page']);
 // Communities and custom feeds mix many posters, so they are held to a stricter bar than people.
 const SHARED_KINDS = new Set(['community', 'feedgen', 'list', 'niche']);
@@ -89,20 +84,6 @@ function coreHandle(h) {
     .replace(/^@|^u\//, '').split('@')[0]
     .replace(/\.bsky\.social$/, '').replace(/\.(bsky|social|xyz|com|net|app)$/, '')
     .replace(/[^a-z0-9]/g, '');
-}
-
-function scoreOf(signals, scope) {
-  let s = 0;
-  for (const [k, w] of Object.entries(WEIGHTS)) s += w * Math.min((signals[k] || []).length, CAPS[k]);
-  const pop = Number(signals.popularity) || 0;
-  if (pop >= 100) s += Math.min(3, Math.log10(pop) - 1);
-  if (scope === 'in') s += 2;
-  if (scope === 'excluded') s -= 20;
-  return Math.round(s * 10) / 10;
-}
-
-function describeSignals(sig) {
-  return Object.entries(sig).filter(([k, v]) => WEIGHTS[k] && v.length).map(([k, v]) => `${v.length} ${k}${v.length === 1 ? '' : 's'}`).join(', ');
 }
 
 /** Is this spec something discovery may follow at all? */
@@ -152,16 +133,8 @@ function consider(spec, type, value, meta = {}) {
     return repo.candidates.insert({ platform: spec.platform, kind: spec.kind, target, label: spec.label, url: spec.url || profileUrl(spec.platform, spec.kind, target), signals: {}, ...row });
   }
 
-  const signals = { ...(c ? c.signals : {}) };
-  // proof that an account is the creator behind an OnlyFans page supersedes the guess from the handle alone
-  if (type === 'ofconfirmed' && signals.onlyfans) delete signals.onlyfans;
-  if (type === 'onlyfans' && (signals.ofconfirmed || []).length) return c;
-  const list = new Set(signals[type] || []);
-  if (value) list.add(String(value).slice(0, 120));
-  signals[type] = [...list].slice(0, 25);
-  if (meta.ofSources) signals.ofsrc = Math.max(Number(signals.ofsrc) || 0, Number(meta.ofSources) || 0);
-  if (type === 'ofconfirmed') signals.ofsrc = Math.max(Number(signals.ofsrc) || 0, 1);
-  if (meta.popularity) signals.popularity = Math.max(Number(signals.popularity) || 0, Math.round(Number(meta.popularity)) || 0);
+  const signals = mergeSignal(c ? c.signals : null, type, value, meta);
+  if (!signals) return c; // an OnlyFans guess never overrides a confirmed OnlyFans link
   const scope = classify([displayName, bio, target], { trusted: false }).scope;
   if (bio && !(signals.ofconfirmed || []).length) {
     const own = spec.platform === 'linkinbio' ? (linkHubHandle(target) || (() => { try { return new URL(target).pathname.split('/').filter(Boolean)[0] || ''; } catch { return ''; } })()) : target;
