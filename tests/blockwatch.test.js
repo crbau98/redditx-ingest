@@ -10,7 +10,7 @@ const { prepareEnv } = require('./helpers/mock');
 let blockwatch;
 
 before(() => {
-  prepareEnv({ PRISM_SLOW_BLOCK_MS: '60' }); // a 60 ms threshold keeps the test quick
+  prepareEnv({ PRISM_SLOW_BLOCK_MS: '60', ADMIN_KEY: 'test-key' }); // a 60 ms threshold keeps the test quick
   blockwatch = require('../src/lib/blockwatch');
 });
 after(() => { blockwatch.stop(); blockwatch.reset(); });
@@ -151,4 +151,30 @@ describe('loop watchdog', () => {
     const ds = fs.readFileSync(path.join(__dirname, '..', 'src', 'engine', 'deepsearch.js'), 'utf8');
     assert.match(ds, /work\('deepPull'\)/, 'the rotation kick is tagged while it fans out');
   });
+});
+test('saved profiles can be listed and downloaded by an admin only, by exact file name', async () => {
+  const fs = require('fs'); const path = require('path');
+  const bw = require('../src/lib/blockwatch');
+  const dir = path.join(require('../src/config').dataDir, 'profiles');
+  fs.mkdirSync(dir, { recursive: true });
+  const name = 'block-2026-11-11T18-29-56-067Z-100461ms.cpuprofile';
+  fs.writeFileSync(path.join(dir, name), JSON.stringify({ nodes: [], samples: [] }));
+  const { createApp } = require('../src/app');
+  const server = createApp().listen(0);
+  await new Promise((r) => server.once('listening', r));
+  const base = `http://127.0.0.1:${server.address().port}/api/admin`;
+  try {
+    assert.equal((await fetch(`${base}/profiles`)).status, 401);
+    const list = await (await fetch(`${base}/profiles`, { headers: { 'x-admin-key': 'test-key' } })).json();
+    assert.ok(list.files.includes(name));
+    const got = await fetch(`${base}/profiles/${name}`, { headers: { 'x-admin-key': 'test-key' } });
+    assert.equal(got.status, 200);
+    assert.deepEqual(await got.json(), { nodes: [], samples: [] });
+    assert.equal((await fetch(`${base}/profiles/${encodeURIComponent('../test.db')}`, { headers: { 'x-admin-key': 'test-key' } })).status, 404);
+    assert.equal(bw.profilePath('../../etc/passwd'), null);
+  } finally {
+    require('../src/engine/engine').shutdown();
+    await new Promise((r) => server.close(r));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

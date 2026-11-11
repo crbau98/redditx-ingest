@@ -229,8 +229,18 @@ function blocks() { return recent.slice(); }
 /** The longest GC pause since the last reset() and the saved profile files (names only). */
 function lastGc() { return gcWorst.ms ? { ...gcWorst } : null; }
 function profiles() { return profile.files.slice(); }
+/** Saved profile files on disk (names only), and the full path of one, for the admin download. */
+const PROFILE_NAME = /^block-[0-9TZ-]+-\d+ms\.cpuprofile$/;
+function profileFiles() {
+  const dir = profileDir();
+  try { return dir ? fs.readdirSync(dir).filter((f) => PROFILE_NAME.test(f)).sort() : []; } catch { return []; }
+}
+function profilePath(name) {
+  const dir = profileDir();
+  return dir && PROFILE_NAME.test(String(name || '')) ? path.join(dir, String(name)) : null;
+}
 
 module.exports = {
-  work, enter, current, labels, around, start, stop, reset, lastBlock, blocks, lastGc, profiles,
+  work, enter, current, labels, around, start, stop, reset, lastBlock, blocks, lastGc, profiles, profileFiles, profilePath,
   _noteBlock: noteBlock, _extendBlock: extendBlock, _noteGc: noteGc, _writeProfile: writeProfile, PROFILE_KEEP,
 };

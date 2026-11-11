@@ -242,6 +242,16 @@ router.post('/creators/:id/restore', (req, res) => {
   res.json(repo.creators.update(req.params.id, { status: 'active' }));
 });
 
+/* --------------------------------------------------------- loop-block profiles */
+// CPU profiles lib/blockwatch saved around multi-second event-loop blocks (at most two). Open one in Chrome DevTools
+// (Performance) or speedscope to see the function that held the loop.
+router.get('/profiles', (req, res) => res.json({ files: require('../lib/blockwatch').profileFiles() }));
+router.get('/profiles/:name', (req, res) => {
+  const file = require('../lib/blockwatch').profilePath(req.params.name);
+  if (!file || !require('fs').existsSync(file)) return bad(res, 'Not found', 404);
+  res.download(file, req.params.name);
+});
+
 /* --------------------------------------------------------------- identity */
 // Same-creator queue (engine/identity): pairs of creators whose own profiles point at each other.
 router.get('/identities', (req, res) => res.json({ ...identity.queue({ status: req.query.status, ...page(req, 100) }), counts: identity.counts() }));
