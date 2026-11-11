@@ -302,3 +302,20 @@ export async function applyRecommendations(recs, patch) {
 
 /** Tone for a taste label badge. */
 export const TASTE_TONE = { 'carries your follows': 'good', steady: '', weak: 'warn', dead: 'bad' };
+
+/* ------------------------------------------------------------------ same handle */
+
+/**
+ * What a same-handle pair's buttons say and send. The merge keeps the row with more posts (the server's rule); the label
+ * names that row BEFORE the click. The body is the existing POST /creators/merge { keepId, mergeId }.
+ */
+export function sameHandleActions(p, byId) {
+  const keep = byId[p.keepId] || {}; const gone = byId[p.goneId] || {};
+  const who = (c) => `${c.name || c.handle || '?'} (${Number(c.mediaCount || 0)} post${c.mediaCount === 1 ? '' : 's'})`;
+  return {
+    mergeLabel: `Merge: keep ${who(keep)}, fold in ${who(gone)}`,
+    merge: { path: '/creators/merge', body: { keepId: p.keepId, mergeId: p.goneId } },
+    dismissLabel: 'Different people',
+    dismiss: { path: '/creators/same-handle/dismiss', body: { aId: p.aId, bId: p.bId } },
+  };
+}

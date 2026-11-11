@@ -381,6 +381,49 @@ function queue({ status = 'pending', page = 0, limit = 50 } = {}) {
   return { items, total, page, limit };
 }
 
+/**
+ * Creators that share a handle (case-insensitive), for the admin's "Same handle" queue. Read-only: no job calls it and it
+ * never merges. Each group lists its creators (most posts first) and every pair still undecided, with whether an
+ * automatic merge would be allowed (same-handle pairs never are: see mergeable) and which row a merge keeps (the one with
+ * more posts, as merge() does; a tie keeps the first). Pairs already merged or marked "different people" are left out,
+ * and a group with no undecided pair is not listed.
+ */
+function sameHandleGroups({ limit = 200 } = {}) {
+  const groups = db.prepare(`SELECT lower(handle) AS h, COUNT(*) AS n FROM creators
+    WHERE handle != '' GROUP BY lower(handle) HAVING COUNT(*) > 1 ORDER BY n DESC, h LIMIT ?`).all(Math.max(1, Math.min(1000, limit)));
+  const members = db.prepare(`SELECT c.id, c.handle, c.display_name AS name, c.status, c.media_count AS mediaCount,
+      (SELECT group_concat(DISTINCT f.platform) FROM feeds f WHERE f.creator_id = c.id) AS platforms
+    FROM creators c WHERE lower(c.handle) = ? ORDER BY c.media_count DESC, c.id`);
+  const out = [];
+  for (const g of groups) {
+    const list = members.all(g.h).map((c) => ({ ...c, mediaCount: c.mediaCount || 0, platforms: c.platforms ? c.platforms.split(',') : [] }));
+    const pairs = [];
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const x = list[i]; const y = list[j];
+        const link = q.link.get(...pair(x.id, y.id));
+        if (link && link.status !== 'pending') continue; // merged, or "different people": decided
+        const keep = (y.mediaCount || 0) > (x.mediaCount || 0) ? y : x;
+        pairs.push({
+          aId: x.id, bId: y.id, linkId: link ? link.id : null, linked: !!link,
+          autoMergeAllowed: link ? mergeable(link) : false,
+          keepId: keep.id, goneId: keep === x ? y.id : x.id,
+        });
+      }
+    }
+    if (pairs.length) out.push({ handle: g.h, creators: list, pairs });
+  }
+  return { groups: out, total: out.length };
+}
+
+/** "Different people" for two same-handle creators: recorded as a rejected identity link, so the pair stops coming back. */
+function dismissSameHandle(aId, bId, actor = 'admin') {
+  if (!aId || !bId || aId === bId || !sameHandle(aId, bId)) return false;
+  const r = noteLink(aId, bId, { type: 'same-handle', detail: String(repo.creators.get(aId).handle).toLowerCase() }, { autoMerge: false });
+  if (!r) return false;
+  return r.status === 'rejected' || reject(r.id, actor);
+}
+
 function counts() {
   const o = { pending: 0, merged: 0, rejected: 0 };
   for (const r of db.prepare('SELECT status, COUNT(*) AS n FROM identity_links GROUP BY status').all()) o[r.status] = r.n;
@@ -388,4 +431,4 @@ function counts() {
   return o;
 }
 
-module.exports = { addAlias, aliasesOf, removeAlias, findByAlias, bioAliases, noteLink, noteProfile, settle, merge, mergeCreators, reject, scan, queue, counts, pageKey, WEIGHTS, AUTO_STRENGTH };
+module.exports = { sameHandleGroups, dismissSameHandle, addAlias, aliasesOf, removeAlias, findByAlias, bioAliases, noteLink, noteProfile, settle, merge, mergeCreators, reject, scan, queue, counts, pageKey, WEIGHTS, AUTO_STRENGTH };

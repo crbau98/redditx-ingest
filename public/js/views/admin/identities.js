@@ -1,6 +1,7 @@
 import { h, icon, fmt, toast, confirmDialog, avatar, debounce } from '../../dom.js';
 import { adminGet, adminPost, adminDelete } from '../../api.js';
 import { pager, pageHead, act, openModal } from './ui.js';
+import { sameHandleActions } from './logic.js';
 
 // Same person? — pairs of creators whose own profiles point at each other (engine/identity), plus each creator's aliases.
 const EVIDENCE = {
@@ -16,7 +17,7 @@ export async function render(root) {
   const host = h('div', { class: 'stack' });
   const counts = h('span');
   let page = 0; let status = 'pending';
-  const tabs = h('div', { class: 'row wrap' }, ['pending', 'merged', 'rejected'].map((s) => h('button', { class: `btn sm${s === status ? ' primary' : ''}`, 'data-s': s, onclick: () => { status = s; page = 0; for (const b of tabs.children) b.classList.toggle('primary', b.dataset.s === s); load(); } }, s === 'pending' ? 'Waiting' : s === 'merged' ? 'Merged' : 'Different people')));
+  const tabs = h('div', { class: 'row wrap' }, ['pending', 'merged', 'rejected', 'samehandle'].map((s) => h('button', { class: `btn sm${s === status ? ' primary' : ''}`, 'data-s': s, onclick: () => { status = s; page = 0; for (const b of tabs.children) b.classList.toggle('primary', b.dataset.s === s); load(); } }, s === 'pending' ? 'Waiting' : s === 'merged' ? 'Merged' : s === 'rejected' ? 'Different people' : 'Same handle')));
 
   root.append(pageHead('Same person?', 'Creators whose own profiles link to each other, name each other as a backup account, or promote the same OnlyFans or link page. A strong match with the same name merges on its own; everything else waits here.',
     h('button', { class: 'btn', onclick: async (e) => { const r = await act(e.currentTarget, () => adminPost('/identities/scan')); if (r) { toast(`${r.links} links checked, ${r.merged} merged, ${r.aliases} new aliases`, 'ok'); load(); } } }, icon('refresh', 'sm'), 'Scan now'),
@@ -31,7 +32,32 @@ export async function render(root) {
       if (await act(e.currentTarget, () => adminPost(`/identities/${link.id}`, { action: 'merge', keepId: c.id }), 'Merged')) load();
     } }, 'Keep this one') : null);
 
+  // Same handle: creator rows that share a handle. Two men can share one, so nothing merges on its own; each pair is a click.
+  async function loadSameHandle() {
+    const r = await adminGet('/creators/same-handle');
+    counts.replaceChildren(h('span', { class: 'muted', style: { fontSize: '13px' } }, `${fmt.int(r.total)} handles on more than one creator`));
+    const rows = r.groups.map((g) => {
+      const byId = Object.fromEntries(g.creators.map((c) => [c.id, c]));
+      return h('div', { class: 'panel' },
+        h('b', null, `@${g.handle}`),
+        h('ul', { class: 'muted', style: { fontSize: '13px', margin: '6px 0 0 18px' } }, g.creators.map((c) => h('li', null,
+          `${c.name || c.handle} · ${fmt.int(c.mediaCount)} posts · ${c.platforms.length ? c.platforms.join(', ') : 'no feeds'}${c.status !== 'active' ? ` · ${c.status}` : ''}`))),
+        g.pairs.map((p) => {
+          const a = sameHandleActions(p, byId);
+          return h('div', { class: 'row wrap', style: { gap: '8px', marginTop: '8px' } },
+            h('button', { class: 'btn sm primary', type: 'button', onclick: async (e) => {
+              if (!(await confirmDialog(`${a.mergeLabel}? Media, accounts and names move across. This cannot be undone.`, { confirmLabel: 'Merge', danger: true }))) return;
+              if (await act(e.currentTarget, () => adminPost(a.merge.path, a.merge.body), 'Merged')) load();
+            } }, a.mergeLabel),
+            h('button', { class: 'btn sm ghost', type: 'button', onclick: async (e) => { if (await act(e.currentTarget, () => adminPost(a.dismiss.path, a.dismiss.body), 'Kept apart')) load(); } }, a.dismissLabel),
+            p.autoMergeAllowed ? h('span', { class: 'badge warn' }, 'auto-merge allowed') : null);
+        }));
+    });
+    host.replaceChildren(...(rows.length ? rows : [h('p', { class: 'muted' }, 'No handle is shared by two creators right now.')]));
+  }
+
   async function load() {
+    if (status === 'samehandle') return loadSameHandle();
     const r = await adminGet('/identities', { status, page, limit: 30 });
     counts.replaceChildren(h('span', { class: 'muted', style: { fontSize: '13px' } }, `${fmt.int(r.counts.pending)} waiting · ${fmt.int(r.counts.merged)} merged · ${fmt.int(r.counts.aliases)} aliases known`));
     const rows = r.items.filter((l) => l.a && l.b).map((l) => h('div', { class: 'panel' },
