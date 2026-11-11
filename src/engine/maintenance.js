@@ -409,11 +409,37 @@ function imageSweepProgress() {
  * matchable quickly. `face_at` marks every attempt, successful or not, so a dead picture is not
  * downloaded every minute. Vectors live in `media_faces`; takedown purges them.
  */
+/**
+ * One pass over the library, oldest first (cursor `face_backfill_seq`): published rows stamped `face_at` with no face
+ * vectors stored are given back to the face sweep (face_at cleared), at most `limit` per call. They were stamped while in
+ * review (vectors are only saved for published rows), so they were never enrolled. Each row is cleared at most once: the
+ * cursor moves past it, so a picture that truly has no face is re-checked once by the sweep and then keeps its stamp.
+ * This only clears a column; the face sweep still reads pictures at its own rate.
+ */
+const FACE_BACKFILL_DONE = 'done';
+function faceBackfill({ limit = 200 } = {}) {
+  const at = repo.settings.get('face_backfill_seq');
+  if (at === FACE_BACKFILL_DONE) return { cleared: 0, done: true };
+  const after = parseInt(at || '0', 10) || 0;
+  const rows = repo.db.prepare(`SELECT seq, id FROM media
+    WHERE seq > ? AND publish_state = 'published' AND face_at IS NOT NULL AND scope != 'excluded'
+      AND NOT EXISTS (SELECT 1 FROM media_faces f WHERE f.media_id = media.id)
+    ORDER BY seq LIMIT ?`).all(after, Math.max(1, Math.min(1000, Number(limit) || 200)));
+  if (rows.length) {
+    const clear = repo.db.prepare('UPDATE media SET face_at = NULL WHERE id = ?');
+    repo.db.transaction(() => { for (const r of rows) clear.run(r.id); })();
+  }
+  const full = rows.length >= limit;
+  repo.settings.set('face_backfill_seq', full ? String(rows[rows.length - 1].seq) : FACE_BACKFILL_DONE);
+  return { cleared: rows.length, done: !full };
+}
+
 async function faceSweep({ limit = 12, settings } = {}) {
   const s = settings || settingsStore.get();
   const res = { checked: 0, enrolled: 0, errors: 0, done: false };
   if (!s.faceMatch) return { ...res, off: true };
   if (!(await imagefilter.available())) return { ...res, unavailable: true };
+  try { res.backfill = faceBackfill().cleared; } catch { /* the backfill must never stop the sweep */ }
   const rows = repo.db.prepare(`SELECT id, media_type, media_url, preview_url, thumbnail_url
     FROM media
     WHERE face_at IS NULL AND publish_state = 'published' AND scope != 'excluded'
@@ -556,4 +582,4 @@ function startupSweepIfNeeded() {
   }, 1500).unref();
 }
 
-module.exports = { clearBorrowedPosterHashes, repairSharedPosterCollapse, retireDeadFeeds, sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, faceSweep, faceSweepProgress, physiqueSweep, physiqueSweepProgress, leanBiasSweep, leanBiasProgress, clearLeanBias, hashSweep, hashSweepProgress, startImageSweep, stopImageSweep };
+module.exports = { clearBorrowedPosterHashes, repairSharedPosterCollapse, retireDeadFeeds, sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, faceSweep, faceSweepProgress, faceBackfill, physiqueSweep, physiqueSweepProgress, leanBiasSweep, leanBiasProgress, clearLeanBias, hashSweep, hashSweepProgress, startImageSweep, stopImageSweep };

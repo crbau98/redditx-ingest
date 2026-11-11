@@ -1025,7 +1025,24 @@ function v32(db) {
 }
 v32.ddlOnly = true;
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31, v32];
+/**
+ * v33: a row that becomes published (approved from review, restored, re-attributed, any path) with no face vectors stored
+ * goes back to face enrolment: `face_at` is cleared, so the face sweep reads it at its own pace. Before this, a row stamped
+ * while it sat in review (no vectors are saved for review rows) was never enrolled once published.
+ */
+function v33(db) {
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS media_face_reenrol AFTER UPDATE OF publish_state ON media
+    WHEN NEW.publish_state = 'published' AND OLD.publish_state != 'published' AND NEW.face_at IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM media_faces WHERE media_id = NEW.id)
+    BEGIN
+      UPDATE media SET face_at = NULL WHERE id = NEW.id;
+    END;
+  `);
+}
+v33.ddlOnly = true;
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31, v32, v33];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

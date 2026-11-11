@@ -582,7 +582,9 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   if (faceList && faceList.length && state === 'published' && settings.faceMatch) {
     try { require('../lib/face-match').saveMediaFaces(mediaId, faceList); } catch { /* best effort */ }
   }
-  if (wantFaces && settings.faceMatch) {
+  // Stamped only when this row's faces were actually looked for AND could be saved (published): a review row keeps face_at
+  // NULL, and when it is published later the face sweep enrols it (schema v33 clears a stale stamp on any publish path).
+  if (wantFaces && settings.faceMatch && state === 'published') {
     try { repo.db.prepare('UPDATE media SET face_at = ? WHERE id = ?').run(new Date().toISOString(), mediaId); } catch { /* best effort */ }
   }
 
