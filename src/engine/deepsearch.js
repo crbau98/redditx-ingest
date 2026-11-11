@@ -116,16 +116,25 @@ function samePerson(creator, handle) {
 
 /** The handle an account feed is known by: a link hub's own name, else the target before any "@instance". */
 function accountHandle(platform, target) {
+  const t = String(target || '').trim();
   if (platform === 'linkinbio') {
-    return linkHubHandle(target) || (() => { try { return new URL(target).pathname.split('/').filter(Boolean)[0] || ''; } catch { return ''; } })();
+    return linkHubHandle(t) || (() => { try { return new URL(t).pathname.split('/').filter(Boolean)[0] || ''; } catch { return ''; } })();
   }
-  return String(target || '').split('@')[0];
+  // A page URL (pornhub / xhamster models, …): the account is its last path segment.
+  if (/^https?:\/\//i.test(t)) {
+    try { const segs = new URL(t).pathname.split('/').filter(Boolean); return decodeURIComponent(segs[segs.length - 1] || ''); } catch { return t; }
+  }
+  // A mirror target ("onlyfans/dante_colle", "fansly/jake"): the account is after the service.
+  if (platform === 'coomer' || /^[a-z]+\/[^/]+$/i.test(t)) return t.split('/').pop();
+  // "@handle" (YouTube) or "user@instance" (Mastodon, Misskey): the handle, without the "@" or the instance.
+  return t.replace(/^@+/, '').split('@')[0];
 }
 
 /**
  * Admin, read-only: account feeds that discovery or a deep pull attached to a creator although the account's own
  * handle is not his (samePerson). Before f63d517 a result that only mentioned him could attach an account; this lists
- * what to check. Web page feeds are left out: a page is attached because it names him, not as his account. Nothing is
+ * what to check. Web page and RSS feeds are left out: they are editorial (attached because they name him), not his
+ * account. Nothing is
  * changed here; each row is cleaned up with POST /api/admin/feeds/:id/media/reassign.
  */
 const FOREIGN_ORIGINS = ['deep-search', 'discovered'];
@@ -133,7 +142,7 @@ function foreignFeeds({ limit = 100, offset = 0 } = {}) {
   const rows = repo.db.prepare(`SELECT f.id, f.platform, f.kind, f.target, f.origin, f.enabled, c.id AS creatorId, c.handle AS creatorHandle,
       c.display_name AS creatorName
     FROM feeds f JOIN creators c ON c.id = f.creator_id
-    WHERE f.origin IN (${FOREIGN_ORIGINS.map(() => '?').join(',')}) AND f.platform != 'web'
+    WHERE f.origin IN (${FOREIGN_ORIGINS.map(() => '?').join(',')}) AND f.platform NOT IN ('web', 'rss')
     ORDER BY c.handle, f.platform, f.target`).all(...FOREIGN_ORIGINS);
   const foreign = rows.filter((r) => !samePerson({ handle: r.creatorHandle, display_name: r.creatorName }, accountHandle(r.platform, r.target)));
   const lim = Math.max(1, Math.min(500, Number(limit) || 100));
