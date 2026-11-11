@@ -105,6 +105,9 @@ const RUN_TIMEOUT_MS = 150_000;
  *  is capped so a feed with hundreds of items cannot hold its platform slot for the whole cycle. */
 const ITEM_TIMEOUT_MS = 45_000;
 const ITEM_PHASE_MS = 600_000;
+/** No run outlives this, whatever it is waiting on: the run is marked an error and its slot and label are released
+ *  (a run stuck for an hour held its platform slot and wore its label into every loop-block report). */
+const RUN_HARD_MS = 15 * 60_000;
 const parseJson = (s) => { try { return s ? JSON.parse(s) : {}; } catch { return {}; } };
 const withTimeout = (p, ms, label) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error(`${label} timed out after ${ms / 1000}s`), { status: 0 })), ms).unref())]);
 
@@ -225,7 +228,11 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
   // platforms whose feeds live on many unrelated servers: a server's gateway errors rest that server (host breaker), not the platform
   const host = ['mastodon', 'misskey', 'peertube', 'rss', 'web', 'linkinbio'].includes(feed.platform) ? breaker.feedHost(feed) : null;
 
+  let finished = false;
   const finish = (status, extra = {}) => {
+    if (finished) return { status, ...stats, ...extra, late: true }; // the hard deadline already closed this run
+    finished = true;
+    clearTimeout(hardStop);
     leaveWatch();
     repo.runs.finish(runId, { status, ...stats, via: extra.via, error: extra.error, durationMs: Date.now() - started });
     state.running.delete(feed.id);
@@ -235,6 +242,21 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     events.admin('run:finish', { ...entry, ...stats, status, error: extra.error || null, via: extra.via || null, durationMs: Date.now() - started });
     return { status, ...stats, ...extra };
   };
+
+  // The hard deadline covers everything the run awaits (fetch, items, profile): past it the run is closed as an error
+  // and released, and the work still in flight sees aborted() and stops at its next check.
+  const hardStop = setTimeout(() => {
+    if (finished) return;
+    const error = `run exceeded the ${Math.round((opts.hardDeadlineMs || RUN_HARD_MS) / 60000) || 1} min hard deadline and was released`;
+    events.log('WARN', `${tag}: ${error}`);
+    try {
+      breaker.release(feed.platform);
+      const failures = (feed.consecutive_failures || 0) + 1;
+      repo.feeds.finishRun(feed.id, { status: 'error', error, failures, nextRunAt: computeNextRun(feed, failures, 0) });
+    } catch { /* the release below must still happen */ }
+    finish('error', { error });
+  }, opts.hardDeadlineMs || RUN_HARD_MS);
+  if (hardStop.unref) hardStop.unref();
 
   try {
     if (!adapter || !adapter.kinds.includes(feed.kind)) {
@@ -259,7 +281,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
       cursor,
       force: !!opts.force,
       needProfile: profileDue(feed, cursor, cfg, trigger),
-      aborted: () => state.stopRequested || !!opts.aborted,
+      aborted: () => state.stopRequested || !!opts.aborted || finished,
     };
     if (opts.lane !== undefined) budget.charge(feed.platform, opts.lane); // only a run that really goes to the source uses the budget
     const result = await withTimeout(adapter.fetch(feed, ctx), RUN_TIMEOUT_MS, tag);
@@ -507,6 +529,8 @@ async function tick() {
   if (state.ticking) return;
   state.ticking = true;
   try {
+    // Watchdog: a run row still 'running' past the hard deadline belongs to no live run (or one that lost track): close it.
+    try { const n = repo.runs.timeoutStale(RUN_HARD_MS); if (n) events.log('WARN', `Watchdog: ${n} run(s) still running after ${RUN_HARD_MS / 60000} min marked as errors`); } catch { /* never stop the tick */ }
     const cfg = settingsStore.get();
     if (!state.running.size) state.stopRequested = false;
     while (state.running.size < cfg.maxConcurrentFeeds && !state.stopRequested) {

@@ -676,6 +676,12 @@ const runs = {
   prune(keepDays = 30) {
     db.prepare('DELETE FROM feed_runs WHERE started_at < ?').run(new Date(Date.now() - keepDays * 86400000).toISOString());
   },
+  /** Runs still 'running' after maxAgeMs are marked errors (engine watchdog, every tick). Uses ix_runs_running. */
+  timeoutStale(maxAgeMs) {
+    const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+    return db.prepare("UPDATE feed_runs SET status = 'error', error = ?, finished_at = ? WHERE status = 'running' AND started_at < ?")
+      .run(`timed out: still running after ${Math.round(maxAgeMs / 60000)} min (watchdog)`, nowIso(), cutoff).changes;
+  },
   abandonRunning() {
     db.prepare("UPDATE feed_runs SET status = 'error', error = 'interrupted by restart', finished_at = ? WHERE status = 'running'").run(nowIso());
   },

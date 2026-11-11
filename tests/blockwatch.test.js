@@ -140,7 +140,7 @@ describe('loop watchdog', () => {
     const fs = require('fs'); const path = require('path');
     const engine = fs.readFileSync(path.join(__dirname, '..', 'src', 'engine', 'engine.js'), 'utf8');
     assert.match(engine, /const leaveWatch = blockwatch\.enter\(`feed \$\{feed\.platform\}:\$\{feed\.id\}`\)/);
-    assert.match(engine, /const finish = \(status, extra = \{\}\) => \{\n    leaveWatch\(\);/);
+    assert.match(engine, /const finish = \(status, extra = \{\}\) => \{[^}]{0,200}\}?[\s\S]{0,200}?leaveWatch\(\);/, 'finish() leaves the label');
   });
 
   test('the link-health sweep and the deep-pull rotation carry their own labels', () => {
