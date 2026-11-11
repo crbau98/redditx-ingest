@@ -117,6 +117,8 @@ const creators = {
   },
 
   create({ handle, displayName, bio, avatarUrl, bannerUrl, scope = 'in', origin = 'ingest' }) {
+    // A handle never has a space: a "Dante Colle" / "dantecolle.bsky.social" pair is stored the right way round.
+    ({ handle, displayName } = require('../../lib/creator-names').orderNames(handle, displayName));
     const id = uuid();
     hosts.add(avatarUrl, bannerUrl);
     creatorQ.insert.run({

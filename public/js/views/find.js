@@ -1,3 +1,4 @@
+import { targetLabel } from '../handle-label.js';
 import { makeGuard } from '../guard.js';
 import { h, icon, avatar, emptyState, proxied } from '../dom.js';
 import { get, post } from '../api.js';
@@ -149,7 +150,7 @@ export async function find(root, { query }) {
         avatar({ avatar_url: c.avatarUrl, display_name: c.displayName || c.target }, 36),
         h('div', { style: { minWidth: 0, flex: '1' } },
           h('div', { class: 'find-cand-name' }, c.displayName || c.target, ' ', foundBadge()),
-          h('div', { class: 'find-cand-sub' }, h('span', { class: 'muted sm truncate' }, `@${c.target}`, ' · ', platformLabel(c.platform)))),
+          h('div', { class: 'find-cand-sub' }, h('span', { class: 'muted sm truncate' }, targetLabel(c.target), ' · ', platformLabel(c.platform)))),
         h('a', { class: 'btn sm ghost', href: c.url || '#', target: '_blank', rel: 'noopener noreferrer nofollow' }, icon('external', 'sm'), 'Open')),
       paidChips(c));
   }
@@ -176,7 +177,7 @@ export async function find(root, { query }) {
         avatar({ avatar_url: c.avatarUrl, display_name: c.displayName || c.target }, 40),
         h('div', { style: { minWidth: 0, flex: '1' } },
           h('div', { class: 'find-cand-name' }, c.displayName || c.target, ' ', foundBadge()),
-          h('div', { class: 'find-cand-sub' }, h('span', { class: 'muted sm truncate' }, `@${c.target}`, ' · ', platformLabel(c.platform))))),
+          h('div', { class: 'find-cand-sub' }, h('span', { class: 'muted sm truncate' }, targetLabel(c.target), ' · ', platformLabel(c.platform))))),
       c.bio ? h('p', { class: 'muted sm find-cand-bio' }, String(c.bio).slice(0, 160)) : null,
       evidenceChips(c),
       paidChips(c),

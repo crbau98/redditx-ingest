@@ -1052,7 +1052,25 @@ function v34(db) {
 }
 v34.ddlOnly = true;
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31, v32, v33, v34];
+/**
+ * v35: creator rows stored with the handle and display name swapped ("Dante Colle" as the handle,
+ * "dantecolle.bsky.social" as the name; the site showed "@Dante Colle") are put the right way round. Only a pair where
+ * the handle has a space AND the name looks like a platform handle is touched (lib/creator-names). Nothing is merged,
+ * no feed or account changes (account lookups go through feeds, not the handle column).
+ */
+function v35(db) {
+  const { orderNames } = require('../lib/creator-names');
+  const rows = db.prepare("SELECT id, handle, display_name FROM creators WHERE handle LIKE '% %'").all();
+  const fix = db.prepare("UPDATE creators SET handle = ?, display_name = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?");
+  let n = 0;
+  for (const r of rows) {
+    const o = orderNames(r.handle, r.display_name);
+    if (o.swapped) { fix.run(String(o.handle).slice(0, 80), o.displayName, r.id); n++; }
+  }
+  if (n && process.env.NODE_ENV !== 'test') console.log(`[migrate] v35: ${n} creator(s) had handle and display name swapped; fixed`);
+}
+
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31, v32, v33, v34, v35];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });
