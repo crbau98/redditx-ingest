@@ -28,6 +28,7 @@ before(async () => {
     '/srv/timeline-profile/screen-name/jockfit': () => ({ body: '<html>Rate limit exceeded</html>' }),
     '/srv/timeline-profile/screen-name/rate_limited_guy': () => ({ status: 429, headers: { 'retry-after': '1800' }, body: 'Rate limit exceeded' }),
     '/srv/timeline-profile/screen-name/another_guy': () => ({ status: 429, headers: { 'retry-after': '1800' }, body: 'Rate limit exceeded' }),
+    '/srv/timeline-profile/screen-name/syndguy': () => ({ body: `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps: { timeline: { entries: [{ type: 'tweet', content: { tweet: { id_str: '2001', full_text: 'gay gym', created_at: 'Wed Oct 01 10:00:00 +0000 2026', user: { screen_name: 'syndguy' }, extended_entities: { media: [{ type: 'photo', media_url_https: 'https://pbs.twimg.com/media/2001.jpg' }] } } } }] } } } })}</script>` }),
     '/jockfit': () => ({ json: { code: 200, user: { screen_name: 'jockfit', name: 'Jock Fit', description: 'gym. more at linktr.ee/jockfit', avatar_url: 'https://pbs.twimg.com/p_normal.jpg' } } }),
   });
   prepareEnv({ SEARXNG_URL: mock.url, SEARCH_PROVIDERS: 'searxng', FXTWITTER_BASE_URL: mock.url, X_EMBED_URL: mock.url, X_SYNDICATION_URL: mock.url, X_BASE_URL: mock.url, X_BEARER_TOKEN: '' });
@@ -85,26 +86,79 @@ describe('keyless X', () => {
     assert.ok(r.profile.links.some((l) => /linktr/.test(l.target || l.url || '')));
   });
 
-  test('a syndication 429 parks every profile and does not spend the web-search budget', async () => {
+  test('a syndication 429 parks the embed timeline, and parked profiles are still read through the keyless search', async () => {
     const limiter = require('../src/lib/limiter');
     x.syndState.parkedUntil = 0; x.syndState.reason = null;
+    websearch._clear();
     const before = x.webUsage().count;
-    searx.results = [{ url: 'https://x.com/rate_limited_guy/status/1001' }];
+    searx.results = [{ url: 'https://x.com/another_guy/status/1001' }];
     try {
-      const r = await x.fetch({ kind: 'user', target: 'rate_limited_guy' }, ctx());
-      assert.equal(r.via, 'syndication:parked');
-      assert.equal(r.items.length, 0);
+      const r = await x.fetch({ kind: 'user', target: 'another_guy' }, ctx());
       assert.equal(x.syndParked(), true);
+      assert.match(r.via, /^syndication:parked\+websearch/);
+      assert.deepEqual(r.items.map((it) => it.sourceId), ['1001'], 'the keyless search parsed the post');
       assert.match(r.notes[0], /429/);
-      assert.equal(x.webUsage().count, before, 'park must not spend a web search');
-      const again = await x.fetch({ kind: 'user', target: 'another_guy' }, ctx());
-      assert.equal(again.via, 'syndication:parked');
-      assert.equal(x.webUsage().count, before);
+      assert.equal(r.rateLimited, undefined, 'a run with items is a normal run');
+      assert.equal(x.webUsage().count, before + 1, 'the keyless search is counted');
+      // still parked: the next profile does not ask syndication again, it goes straight to the search
+      websearch._clear();
+      searx.results = [{ url: 'https://x.com/thirdguy/status/1002' }];
+      const hitsBefore = mock.hits.filter((h) => h.includes('timeline-profile/screen-name/thirdguy')).length;
+      await x.fetch({ kind: 'user', target: 'thirdguy' }, ctx());
+      assert.equal(mock.hits.filter((h) => h.includes('timeline-profile/screen-name/thirdguy')).length, hitsBefore, 'syndication stays parked');
+      assert.equal(x.webUsage().count, before + 2);
     } finally {
       // The 429 also held the shared X HTTP limiter; clear it so later tests can still read posts.
       x.syndState.parkedUntil = 0; x.syndState.reason = null;
       limiter.reset();
     }
+  });
+
+  test('parked syndication with a keyless search that finds nothing finishes the run as skipped (rate limited), not empty', async () => {
+    const limiter = require('../src/lib/limiter');
+    const engine = require('../src/engine/engine');
+    x.syndState.parkedUntil = Date.now() + 30 * 60000; x.syndState.reason = 'X syndication rate-limited (429); parked 30 min';
+    websearch._clear();
+    searx.results = [];
+    try {
+      // no search results at all: the run cannot read anything
+      await assert.rejects(x.fetch({ kind: 'user', target: 'quietguy' }, ctx()), (e) => e.cooldown === true && /parked/.test(e.message));
+      // results, but no post by this account: an empty answer that is rate limited, with the search's cursor kept
+      websearch._clear();
+      searx.results = [{ url: 'https://example.com/quietguy', title: 'quietguy elsewhere' }];
+      const direct = await x.fetch({ kind: 'user', target: 'quietguy' }, ctx());
+      assert.equal(direct.rateLimited, true);
+      assert.equal(direct.items.length, 0);
+      assert.ok(direct.cursor && direct.cursor.noHitAt, 'the 7-day miss is kept so the budget is not spent again');
+      searx.results = [];
+      websearch._clear();
+      const feed = repo.feeds.upsert({ platform: 'x', kind: 'user', target: 'quietguy2', trusted: 1, origin: 'admin' }).feed;
+      const run = await engine.runFeed(feed, 'manual');
+      assert.equal(run.status, 'skipped');
+      const row = repo.feeds.get(feed.id);
+      assert.equal(row.last_status, 'skipped');
+      assert.match(row.last_error, /rate limited/);
+      assert.ok(Date.parse(row.next_run_at) - Date.now() > 25 * 60000, 'comes back after the park');
+      // over the keyless budget as well: still skipped (rate limited), never an empty success
+      repo.settings.set('x.websearch', JSON.stringify({ day: new Date().toISOString().slice(0, 10), count: 100000 }));
+      const feed3 = repo.feeds.upsert({ platform: 'x', kind: 'user', target: 'quietguy3', trusted: 1, origin: 'admin' }).feed;
+      const run3 = await engine.runFeed(feed3, 'manual');
+      assert.equal(run3.status, 'skipped');
+      assert.match(repo.feeds.get(feed3.id).last_error, /rate limited/);
+    } finally {
+      repo.settings.set('x.websearch', '{}');
+      x.syndState.parkedUntil = 0; x.syndState.reason = null;
+      limiter.reset();
+    }
+  });
+
+  test('with the park clear, a profile is read through syndication first and spends no search', async () => {
+    x.syndState.parkedUntil = 0; x.syndState.reason = null;
+    const before = x.webUsage().count;
+    const r = await x.fetch({ kind: 'user', target: 'syndguy' }, ctx());
+    assert.equal(r.via, 'syndication');
+    assert.deepEqual(r.items.map((it) => it.sourceId), ['2001']);
+    assert.equal(x.webUsage().count, before);
   });
 
   test('blocked search engines are named instead of reading as "no results", and do not count as X failing', async () => {

@@ -14,6 +14,9 @@
  */
 const config = require('../config');
 const http = require('./http').forPlatform('x', 1200);
+// The embed timeline has its own limiter: its 429 is handled by the syndication park below, and must not hold the 'x' key
+// (the scheduler skips every X feed while that key cools down, and the post reads behind the keyless search share it).
+const syndHttp = require('./http').forPlatform('x-syndication', 1200);
 const { toIso, clip, repostsOn } = require('./util');
 const { extractLinks } = require('../lib/links');
 
@@ -45,8 +48,8 @@ const API_PARK_MS = 6 * 3600 * 1000;
 const apiState = { parkedUntil: 0, reason: null };
 const apiParked = () => Date.now() < apiState.parkedUntil;
 const apiAvailable = () => !!config.creds.xBearer && usage().posts < budget() && !apiParked();
-/* Syndication (publish.twitter.com embed) 429s every logged-out profile when hot. Without a park,
- * each failing user feed falls through to web search and burns the 150/day keyless budget. */
+/* Syndication (publish.twitter.com embed) 429s every logged-out profile when hot. The park stops PRISM hammering it;
+ * profiles are read through the keyless web search meanwhile (bounded by its 150/day counter and the 7-day miss cache). */
 const SYND_PARK_DEFAULT_MS = 45 * 60 * 1000;
 const SYND_PARK_MIN_MS = 30 * 60 * 1000;
 const SYND_PARK_MAX_MS = 60 * 60 * 1000;
@@ -58,7 +61,7 @@ function parkSyndication(e) {
     ? Math.min(SYND_PARK_MAX_MS, Math.max(SYND_PARK_MIN_MS, raSec * 1000))
     : SYND_PARK_DEFAULT_MS;
   syndState.parkedUntil = Date.now() + ms;
-  syndState.reason = `X syndication rate-limited (429); parked ${Math.round(ms / 60000)} min — keyless web search skipped until then`;
+  syndState.reason = `X syndication rate-limited (429); parked ${Math.round(ms / 60000)} min — profiles are read through keyless web search until then`;
 }
 async function apiGet(url) {
   if (usage().posts >= budget()) throw Object.assign(new Error(`X API monthly read budget reached (${budget()} posts) — using the keyless route until next month`), { budget: true });
@@ -237,7 +240,7 @@ async function viaSyndication(feed) {
   }
   let html;
   try {
-    html = await http.text(`${config.baseUrls.xSyndication}/srv/timeline-profile/screen-name/${encodeURIComponent(feed.target)}?showReplies=false`, {
+    html = await syndHttp.text(`${config.baseUrls.xSyndication}/srv/timeline-profile/screen-name/${encodeURIComponent(feed.target)}?showReplies=false`, {
       headers: { accept: 'text/html', referer: 'https://publish.twitter.com/' },
     });
   } catch (e) {
@@ -406,6 +409,24 @@ async function lookupUsers(usernames) {
   return (json.data || []).map((u) => ({ username: u.username, name: u.name, description: u.description || '', followers: (u.public_metrics && u.public_metrics.followers_count) || 0, avatar: (u.profile_image_url || '').replace('_normal', '_400x400') || null }));
 }
 
+/**
+ * A profile run while the embed timeline is parked: the keyless web search reads it instead. When that finds nothing,
+ * or cannot run (no engine, over budget), the run is rate limited, not a healthy empty run: the engine records it as
+ * skipped and comes back when the park is over. The search's own cursor (seen posts, the 7-day miss) is kept.
+ */
+async function parkedRun(feed, ctx, cursor, reason) {
+  const retryAfter = Math.max(60_000, syndState.parkedUntil - Date.now());
+  let r;
+  try { r = await viaWebSearch(feed, ctx, cursor); } catch (e) {
+    throw Object.assign(new Error(`${reason}; keyless web search: ${e.message}`), { cooldown: true, retryAfter, status: 429 });
+  }
+  r.via = `syndication:parked+${r.via}`;
+  r.notes = [reason, ...(r.notes || [])];
+  if (!r.items.length) { r.rateLimited = true; r.retryAfter = retryAfter; }
+  if (r.items.length && ctx.needProfile) { try { r.profile = await fetchProfileFx(feed.target); } catch { /* optional */ } }
+  return r;
+}
+
 module.exports = { _viaWebSearch: viaWebSearch, _sized: sized,
   expandedLinks,
   lookupUsers,
@@ -458,18 +479,14 @@ module.exports = { _viaWebSearch: viaWebSearch, _sized: sized,
       }
     }
     if (feed.kind === 'search') return viaWebSearch(feed, ctx, cursor);
-    // Profiles: the embed timeline first. X often serves it empty, stale or not at all to logged-out readers, so an
-    // empty or failed answer falls back to finding the account's posts through web search — except after a
-    // syndication 429, when every profile would burn the same daily search budget for the same wall.
-    if (syndParked()) {
-      return { items: [], cursor, via: 'syndication:parked', notes: [syndState.reason] };
-    }
+    // Profiles: the embed timeline first (free and richer). X often serves it empty, stale or not at all to logged-out
+    // readers, so an empty or failed answer falls back to finding the account's posts through web search. While the
+    // embed timeline is parked after a 429, the web search reads the profile on its own.
+    if (syndParked()) return parkedRun(feed, ctx, cursor, syndState.reason);
     let items = []; let embedErr = null;
     try { items = await viaSyndication(feed); } catch (e) {
       embedErr = e;
-      if (e.status === 429 || e.syndPark || e.rateLimited) {
-        return { items: [], cursor, via: 'syndication:parked', notes: [e.message] };
-      }
+      if (e.status === 429 || e.syndPark || e.rateLimited) return parkedRun(feed, ctx, cursor, e.message);
     }
     if (!items.length) {
       let r;

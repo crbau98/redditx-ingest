@@ -365,6 +365,16 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     else if (!readNow && prevCur.profileTryAt) stamp.profileTryAt = prevCur.profileTryAt;
     if (Object.keys(stamp).length && (ctx.needProfile || prevCur.profiledAt || prevCur.profileTryAt)) cursorOut = { ...(cursorOut || prevCur), ...stamp };
     const more = backfill.pending({ cursor: cursorOut });
+    // The adapter got nothing because its source is rate limited (X syndication parked and the keyless route found
+    // nothing): skipped, not a healthy empty run. Its cursor is kept (seen posts, miss cache); come back after the hold.
+    if (result.rateLimited && stats.fetched === 0) {
+      const wait = Math.max(result.retryAfter || 0, 60000) + Math.floor(Math.random() * 60000);
+      const why = (result.notes && result.notes[0]) || 'source is rate limited';
+      repo.feeds.finishRun(feed.id, { status: 'skipped', cursor: cursorOut, error: `rate limited: ${why}; trying again in ${Math.ceil(wait / 60000)} min`, failures: feed.consecutive_failures, nextRunAt: new Date(Date.now() + wait).toISOString() });
+      breaker.release(feed.platform);
+      events.log('INFO', `${tag} skipped: rate limited (${why})`);
+      return finish('skipped', { via: result.via, notes: result.notes, error: why });
+    }
     repo.feeds.finishRun(feed.id, {
       status, cursor: cursorOut, addedItems: stats.added, failures: 0,
       nextRunAt: more && !ctx.aborted() ? new Date(Date.now() + cfg.backfillGapMin * 60000).toISOString() : computeNextRun(feed, 0, 0, tempo(feed, stats.added)),
