@@ -97,21 +97,21 @@ function status(creatorId) {
 const compact = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
 /**
- * Is this result about the man we searched? A handle that contains his name (or the reverse) and
- * is long enough to be a real identity, or his name's words all appearing in the result's own text.
- * A page that only *mentions* him (a listicle, a friend's post) is never his feed.
+ * Is this ACCOUNT his? Only when the account's own handle is his: the same as his name or handle, or one containing it
+ * (enough letters to be an identity). A search result that merely mentions him (fan art, a repost, a site-wide feed or
+ * index whose snippet names him) proves nothing about whose account it is: attaching those glued other men's accounts,
+ * their posts and their names onto one creator. Pages are judged separately (namesCreator) and stay page feeds.
  */
-function samePerson(creator, handle, ...texts) {
-  const n = compact(creator.display_name || creator.handle);
+function samePerson(creator, handle) {
   const h = compact(handle);
-  // Containment counts only with enough letters to be an identity: a bare surname ("doe" in
-  // "Jake Doe") is far too common to claim somebody's account on.
-  if (n && h && (n === h || (h.length >= 5 && h.includes(n)) || (n.length >= 5 && h.length >= 4 && n.includes(h)))) return true;
-  const blob = compact(texts.join(' '));
-  if (!blob || !n) return false;
-  const words = String(creator.display_name || creator.handle).toLowerCase().split(/\s+/).filter((w) => w.length >= 3);
-  if (!words.length) return false;
-  return words.every((w) => blob.includes(compact(w)));
+  if (!h) return false;
+  for (const name of [creator.display_name, creator.handle]) {
+    const n = compact(name);
+    // Containment counts only with enough letters to be an identity: a bare surname ("doe" in
+    // "Jake Doe") is far too common to claim somebody's account on.
+    if (n && (n === h || (h.length >= 5 && n.length >= 5 && h.includes(n)) || (n.length >= 5 && h.length >= 4 && n.includes(h)))) return true;
+  }
+  return false;
 }
 
 /** The eight rotating site shapes plus the four standing phrases, name and handle substituted. */
@@ -170,7 +170,7 @@ async function takeResult(hit, creator, out, ctx) {
     const linkOut = LINK_OUT_SERVICES.has(spec.service) || /(^|\.)(threads\.(net|com)|instagram\.com|tiktok\.com)$/i.test(host);
     const handle = String(spec.handle || (spec.label || '').split('·')[1] || '').trim().replace(/^@/, '')
       || (() => { try { return decodeURIComponent(new URL(spec.url || spec.target || '').pathname.split('/').filter(Boolean)[0] || ''); } catch { return ''; } })();
-    if (linkOut && OK_HANDLE.test(handle) && samePerson(creator, handle, hit.title, hit.description, spec.target)) {
+    if (linkOut && OK_HANDLE.test(handle) && samePerson(creator, handle)) {
       try {
         require('./identity').addAlias(creator.id, handle.toLowerCase(), { kind: 'handle', source: 'lookup', evidenceUrl: hit.url });
         res.aliases++;
@@ -196,7 +196,7 @@ async function takeResult(hit, creator, out, ctx) {
     // must name him in its own text. Everything else is only a mention of him.
     const proven = spec.platform === 'web'
       ? namesCreator({ url: spec.target, title: hit.title, description: hit.description }, creator, ctx.paidHandle)
-      : samePerson(creator, handle, hit.title, hit.description, spec.target);
+      : samePerson(creator, handle);
     if (!proven) continue;
     if (spec.platform === 'web') {
       try { if (!(await require('../sources/web').robotsAllows(spec.target))) continue; } catch { continue; }

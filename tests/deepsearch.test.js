@@ -52,7 +52,7 @@ describe('corroboration', () => {
     assert.equal(deepsearch.samePerson(c, 'jakedoe'), true, 'the same handle');
     assert.equal(deepsearch.samePerson(c, 'jakedoefit'), true, 'a handle containing his name');
     assert.equal(deepsearch.samePerson(c, 'randomguy'), false, 'somebody else');
-    assert.equal(deepsearch.samePerson(c, 'xyz', 'Jake Doe posts here'), true, 'his name in the result text');
+    assert.equal(deepsearch.samePerson(c, 'xyz', 'Jake Doe posts here'), false, 'a result that mentions him does not make the account his');
     assert.equal(deepsearch.samePerson(c, 'xyz', 'a list of top models'), false, 'no name, no claim');
     assert.equal(deepsearch.samePerson(c, 'doe'), false, 'a bare surname is not enough');
   });
@@ -81,6 +81,26 @@ describe('the pull', () => {
     assert.ok(feeds.some((f) => f.platform === 'web' && String(f.target).includes('/posts/jake-interview')), 'the page that names him became a web feed');
     assert.ok(!feeds.some((f) => String(f.target).includes('unrelated.example')), 'a page that never names him was not followed');
     assert.ok(seen.length >= 8, 'the whole query bank was read');
+  });
+
+  test('accounts and feeds that only mention him are not attached to him (Dante Colle QA)', async () => {
+    const c = creator('dantecolle.bsky.social', 'Dante Colle');
+    deepsearch._setSearchers(async (q) => {
+      if (!q.includes('nude')) return [];
+      return [
+        { url: 'https://bsky.app/profile/dantecolle.bsky.social', title: 'Dante Colle (@dantecolle.bsky.social)', description: 'his own account' },
+        { url: 'https://bsky.app/profile/cartoonhunks.bsky.social', title: 'Fan art of Dante Colle', description: 'Dante Colle drawn by me' },
+        { url: 'https://bsky.app/profile/ainpostolo.bsky.social', title: 'Ain Postolos', description: 'collab with Dante Colle' },
+        { url: 'https://www.bftv.gay/rss/pornstars.xml', title: 'bftv.gay - RSS pornstar Feed', description: 'new: Dante Colle and others' },
+        { url: 'https://www.instagram.com/joshuajammersmith/', title: 'Jammer Draws', description: 'Dante Colle commission' },
+      ];
+    }, async () => []);
+    await deepsearch.pull(c.id, { trigger: 'manual', force: true });
+    const targets = repo.feeds.list({ creatorId: c.id, limit: 50 }).items.map((f) => `${f.platform}:${f.target}`);
+    assert.ok(targets.includes('bluesky:dantecolle.bsky.social'), `his own account is attached: ${targets}`);
+    for (const foreign of ['cartoonhunks', 'ainpostolo', 'bftv.gay']) assert.ok(!targets.some((t) => t.includes(foreign)), `${foreign} not attached: ${targets}`);
+    const aliases = require('../src/engine/identity').aliasesOf(c.id).map((a) => String(a.alias).toLowerCase());
+    assert.ok(!aliases.includes('joshuajammersmith'), `no foreign link-out alias: ${aliases}`);
   });
 
   test('progress is recorded so the profile can show what it is doing', async () => {
