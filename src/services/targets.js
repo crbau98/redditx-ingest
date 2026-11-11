@@ -263,4 +263,27 @@ function moderate(id, action, reason, actor = 'admin', opts = {}) {
   return repo.media.get(id);
 }
 
-module.exports = { addSpec, addCreator, addAccounts, importTargets, parseOpml, publicAccounts, moderate, tokens };
+/**
+ * An admin names the creator of a Telegram post the pipeline could not attribute (review reason
+ * attribution:telegram-ambiguous: a forward, a group, or a channel posting for several people). Only that review reason;
+ * the creator is the admin's choice, never a guess: nothing is matched from the forward and no face is used. The row gets
+ * the creator (both creators recounted) and is published like any approved review row; its attribution evidence and
+ * forward metadata are kept as they are. Returns the row, or { error, status } when refused.
+ */
+const AMBIGUOUS = 'attribution:telegram-ambiguous';
+function assignAmbiguous(id, creatorId, actor = 'admin') {
+  const m = repo.media.get(id);
+  if (!m) return { error: 'Media not found', status: 404 };
+  if (m.publish_state !== 'review' || m.review_reason !== AMBIGUOUS) {
+    return { error: `Only a row in review for ${AMBIGUOUS} can be assigned here (this one is ${m.publish_state}${m.review_reason ? `: ${m.review_reason}` : ''})`, status: 409 };
+  }
+  const c = creatorId ? repo.creators.get(String(creatorId)) : null;
+  if (!c) return { error: 'Creator not found', status: 404 };
+  if (c.status !== 'active') return { error: `Creator is ${c.status}`, status: 409 };
+  repo.media.update(id, { creator_id: c.id });
+  moderate(id, 'approve', `assigned to @${c.handle} (telegram-ambiguous)`, actor);
+  repo.logAction('media', id, 'assign', `creator ${c.id} @${c.handle}; was ${m.creator_id || 'unassigned'}`, actor);
+  return repo.media.get(id);
+}
+
+module.exports = { addSpec, addCreator, addAccounts, importTargets, parseOpml, publicAccounts, moderate, assignAmbiguous, tokens };

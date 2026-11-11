@@ -326,6 +326,14 @@ router.patch('/media/:id', (req, res) => {
   res.json(repo.media.update(req.params.id, req.body || {}));
 });
 
+// Name the creator of a Telegram post held as attribution:telegram-ambiguous, and publish it (that review reason only).
+router.post('/media/:id/assign', (req, res) => {
+  const { creatorId } = req.body || {};
+  if (!creatorId) return bad(res, 'creatorId required');
+  const out = targets.assignAmbiguous(req.params.id, creatorId, 'admin');
+  if (out && out.error) return bad(res, out.error, out.status);
+  res.json(out);
+});
 router.post('/media/:id/moderate', (req, res) => {
   const { action, reason } = req.body || {};
   const out = targets.moderate(req.params.id, action, reason);
