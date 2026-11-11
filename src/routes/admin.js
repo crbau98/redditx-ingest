@@ -162,6 +162,10 @@ router.post('/feeds/import', (req, res) => {
   res.json(out);
 });
 
+// Subreddit taste: every Reddit community feed scored by what it produced for this library, with pause/re-enable
+// suggestions. Read-only: applying a suggestion is the admin's own PATCH /feeds/:id { enabled } below.
+router.get('/subreddits', (req, res) => res.json(require('../engine/subreddit-taste').report()));
+
 router.patch('/feeds/:id', (req, res) => {
   if (!repo.feeds.get(req.params.id)) return bad(res, 'Not found', 404);
   const b = req.body || {};

@@ -13,6 +13,7 @@ const TABS = [
   ['identities', 'Same person?', 'link', () => import('./identities.js')],
   ['sources', 'Sources', 'compass', () => import('./sources.js')],
   ['feeds', 'Feeds', 'rss', () => import('./feeds.js')],
+  ['subreddits', 'Subreddits', 'compass', () => import('./subreddits.js')],
   ['discovery', 'Discovery', 'sparkle', () => import('./discovery.js')],
   ['blocklist', 'Blocklist', 'lock', () => import('./blocklist.js')],
   ['audit', 'Audit log', 'clock', () => import('./audit.js')],
@@ -23,7 +24,7 @@ const TABS = [
 /** Sidebar grouped by task (tab keys and URLs unchanged, so deep links keep working). */
 const GROUPS = [
   ['Work queue', ['overview', 'moderation', 'reports', 'media']],
-  ['Creators and sources', ['creators', 'identities', 'sources', 'feeds', 'discovery']],
+  ['Creators and sources', ['creators', 'identities', 'sources', 'feeds', 'subreddits', 'discovery']],
   ['Safety and access', ['blocklist', 'audit']],
   ['System', ['live', 'settings']],
 ];

@@ -282,3 +282,23 @@ export function physiqueLine(p) {
   if (!p.enabled) return 'Body filter is off: every picture is shown.';
   return `Hiding pictures scoring ${p.threshold}+ of 100 · ${p.hidden} pictures and ${p.creatorsHidden} creators hidden so far.`;
 }
+
+/* ------------------------------------------------------------------ subreddits */
+
+/** The PATCH a pause / re-enable sends: the enable switch and nothing else. */
+export function feedToggle(feedId, enabled) {
+  return { path: `/feeds/${encodeURIComponent(feedId)}`, body: { enabled: enabled ? 1 : 0 } };
+}
+
+/** Apply recommendations one PATCH each, in order; returns how many succeeded. `patch(path, body)` is adminPatch. */
+export async function applyRecommendations(recs, patch) {
+  let ok = 0;
+  for (const r of recs) {
+    const { path, body } = feedToggle(r.feedId, r.enabled);
+    try { await patch(path, body); ok++; } catch { /* reported by the count */ }
+  }
+  return ok;
+}
+
+/** Tone for a taste label badge. */
+export const TASTE_TONE = { 'carries your follows': 'good', steady: '', weak: 'warn', dead: 'bad' };
