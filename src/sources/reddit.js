@@ -302,13 +302,22 @@ async function viaArchive(feed, params) {
   const limit = Math.min(params.limit || 100, 100);
   const q = { limit, ...(feed.kind === 'user' ? { author: feed.target } : { subreddit: feed.target }) };
   if (cur.after) { q.after = cur.after; q.sort = 'asc'; } else if (cur.before) q.before = cur.before;
-  const json = await http.json(`${config.baseUrls.redditArchive}/api/posts/search?${qs(q)}`, { ...REDDIT_WAIT, headers: { 'user-agent': config.redditUserAgent } });
-  if (json && !Array.isArray(json) && json.error) {
+  const archiveRateLimit = (detail) => {
     // "Timeout. Maybe slow down a bit": the archive's dynamic rate limit. A wait, not an empty community.
-    const e = Object.assign(new Error(`Reddit archive is rate limiting: ${String(json.error).slice(0, 80)}`), { status: 429, retryAfter: 60_000 });
+    const e = Object.assign(new Error(`Reddit archive is rate limiting: ${String(detail).slice(0, 80)}`), { status: 429, retryAfter: 60_000 });
     http.strike(e);
-    throw e;
+    return e;
+  };
+  let json;
+  try {
+    json = await http.json(`${config.baseUrls.redditArchive}/api/posts/search?${qs(q)}`, { ...REDDIT_WAIT, headers: { 'user-agent': config.redditUserAgent } });
+  } catch (err) {
+    // The same limit also arrives as HTTP 422 with {"error":"Timeout. Maybe slow down a bit"} (seen 2026-11-11). Read it as
+    // the 429 it is; any other 422 is a real error and still surfaces.
+    if (err && err.status === 422 && /slow down|Timeout/i.test(String(err.body || ''))) throw archiveRateLimit(err.body);
+    throw err;
   }
+  if (json && !Array.isArray(json) && json.error) throw archiveRateLimit(json.error);
   const rows = Array.isArray(json) ? json : json.data || [];
   // Next page: forward from the last row (asc) or back from the oldest (desc), only after a full page that moved.
   let next = null;
