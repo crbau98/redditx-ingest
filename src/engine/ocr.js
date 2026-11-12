@@ -18,12 +18,13 @@ const MAX_PIXELS_BYTES = 8 * 1024 * 1024;
 let timer = null;
 let running = false;
 
+/** Newest ingested first, read in the order of the partial index v37 (sorting by ingested_at stalled the loop for 23 s). */
 function pick(limit) {
   return repo.db.prepare(`SELECT id, media_type, media_url, preview_url, thumbnail_url
-    FROM media
-    WHERE ocr_at IS NULL AND publish_state = 'published'
+    FROM media INDEXED BY ix_media_ocr_todo
+    WHERE ocr_at IS NULL AND publish_state = 'published' AND COALESCE(scope, 'creator') != 'excluded'
       AND (media_type = 'image' OR thumbnail_url IS NOT NULL OR preview_url IS NOT NULL)
-    ORDER BY ingested_at DESC, seq DESC LIMIT ?`).all(limit);
+    ORDER BY seq DESC LIMIT ?`).all(limit);
 }
 
 function imageUrl(row) {

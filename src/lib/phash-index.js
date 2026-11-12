@@ -25,9 +25,9 @@ class PhashIndex {
   add(id, hex, meta = {}) {
     if (!hex || hex.length !== 32) return;
     this.remove(id);
-    // compact entry: the four 32-bit words, a type flag and the aspect ratio (chunks are re-derived from the hash when needed)
-    this.entries.set(id, { w: Uint32Array.from(words(hex)), hex, t: meta.type === 'video' ? 1 : 0, a: meta.aspect || 0 });
-    const ch = PhashIndex.chunks(hex);
+    // compact entry: the four 32-bit words, the 8 bucket bytes (parsed once, reused by remove), a type flag and the aspect
+    const ch = Uint8Array.from(PhashIndex.chunks(hex));
+    this.entries.set(id, { w: Uint32Array.from(words(hex)), c: ch, hex, t: meta.type === 'video' ? 1 : 0, a: meta.aspect || 0 });
     for (let i = 0; i < 8; i++) {
       const k = i * 256 + ch[i];
       const arr = this.buckets.get(k);
@@ -38,7 +38,7 @@ class PhashIndex {
   remove(id) {
     const e = this.entries.get(id);
     if (!e) return;
-    const ch = PhashIndex.chunks(e.hex);
+    const ch = e.c;
     for (let i = 0; i < 8; i++) {
       const k = i * 256 + ch[i];
       const arr = this.buckets.get(k);
@@ -59,9 +59,10 @@ class PhashIndex {
     const limit = Math.min(Math.max(max, 0), MAX_DISTANCE);
     const seen = new Set(); const out = [];
     const q = words(hex);
-    PhashIndex.chunks(hex).forEach((c, i) => {
-      const set = this.buckets.get(i * 256 + c);
-      if (!set) return;
+    const qc = PhashIndex.chunks(hex);
+    for (let i = 0; i < 8; i++) {
+      const set = this.buckets.get(i * 256 + qc[i]);
+      if (!set) continue;
       for (const id of set) {
         if (seen.has(id)) continue;
         seen.add(id);
@@ -73,7 +74,7 @@ class PhashIndex {
         const d = pop32((q[2] ^ e.w[2]) >>> 0) + pop32((q[3] ^ e.w[3]) >>> 0);
         if (d <= limit + 6) out.push({ id, p, d });
       }
-    });
+    }
     return out.sort((a, b) => a.p + a.d - (b.p + b.d));
   }
 }

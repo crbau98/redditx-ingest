@@ -466,11 +466,13 @@ async function faceSweep({ limit = 12, settings } = {}) {
   if (!s.faceMatch) return { ...res, off: true };
   if (!(await imagefilter.available())) return { ...res, unavailable: true };
   try { res.backfill = faceBackfill().cleared; } catch { /* the backfill must never stop the sweep */ }
+  // Newest ingested first, in the order of v28's partial index: ORDER BY posted_at sorted every un-enrolled published
+  // row into a temp B-tree each minute (34-83 s main-thread stalls on production).
   const rows = repo.db.prepare(`SELECT id, media_type, media_url, preview_url, thumbnail_url
-    FROM media
+    FROM media INDEXED BY ix_media_face_todo
     WHERE face_at IS NULL AND publish_state = 'published' AND scope != 'excluded'
       AND (media_type = 'image' OR preview_url IS NOT NULL OR thumbnail_url IS NOT NULL)
-    ORDER BY posted_at DESC, seq DESC LIMIT ?`).all(Math.max(1, Math.min(120, Number(limit) || 12)));
+    ORDER BY seq DESC LIMIT ?`).all(Math.max(1, Math.min(120, Number(limit) || 12)));
   if (!rows.length) return { ...res, done: true };
   for (const row of rows) {
     res.checked++;

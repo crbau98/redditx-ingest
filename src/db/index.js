@@ -46,8 +46,8 @@ const migration = READONLY ? null : migrate(db);
 // Planner statistics. Without them SQLite assumes "publish_state = 'published'" is selective and
 // sorts the whole library instead of walking the right index (ids / community / creator lookups
 // measured 20-50x slower on a 60k-item library). optimize=0x10002 analyses whatever needs it at open
-// (bounded by analysis_limit, so it stays cheap); a light re-run every 6 hours keeps it current.
+// (bounded by analysis_limit, so it stays cheap). The nightly backup worker re-runs it off the main thread
+// (engine/backup-worker.js); a 6-hourly re-run here blocked the loop for 5.5 s on production.
 try { db.exec('PRAGMA analysis_limit = 400; PRAGMA optimize = 0x10002;'); } catch { /* older SQLite: harmless */ }
-setInterval(() => { try { db.exec('PRAGMA optimize;'); } catch { /* ignore */ } }, 6 * 3600 * 1000).unref();
 
 module.exports = { db, migration };

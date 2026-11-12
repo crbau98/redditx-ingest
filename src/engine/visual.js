@@ -212,26 +212,55 @@ function similarCreators(id, k = 24) {
 /**
  * The items that still need a picture, newest first.
  *
- * The old statement asked the whole library for "published, in scope, without a vector" and sorted it by
- * seq DESC: on the live database that sorted 389k rows into a temporary B-tree on the MAIN thread, every
- * minute, for 8-16 seconds — the server could not answer a request while it ran.
- *
- * media.seq is the INTEGER PRIMARY KEY, so it IS the rowid: walking the table backwards is exactly the same
- * order, and it needs no sort at all. `NOT INDEXED` tells SQLite to take that walk instead of hopping
- * through the publish_state index and sorting the result afterwards. Same rows, same order, no sort.
- *
- * The walk stops as soon as it has `limit` rows. It only crosses the whole library when there is genuinely
- * nothing left to embed, which is the one moment the old statement was cheap to avoid but the new one is not.
+ * media.seq is the INTEGER PRIMARY KEY (the rowid), so "newest first" is a backward walk of the table with no sort.
+ * One walk from the top every minute still re-read every already-embedded row first: with the top 300k done that was
+ * 2.5-3.5 s on the main thread per tick. So the walk keeps a cursor:
+ *   - rows above `top` (inserted since the last call) are read first, every call;
+ *   - then the walk resumes at `cursor`, downward, at most WINDOWS windows of WINDOW rowids per call;
+ *   - at the bottom it rests REST_MS and then starts again from the top. That later pass is what picks up a failure
+ *     whose retry is due, or a row published after the walk passed it.
+ * A call can return fewer than `limit` rows (or none) while the walk crosses an embedded stretch; the next call goes on.
  */
+const WINDOW_SQL = `SELECT m.rowid AS rid, m.id, m.media_type, m.media_url, m.preview_url, m.thumbnail_url, m.source_url, m.creator_id, m.post_key
+    FROM media m NOT INDEXED
+    WHERE m.publish_state = 'published' AND m.scope != 'excluded'
+      AND NOT EXISTS (SELECT 1 FROM media_embeddings e WHERE e.media_id = m.id AND (e.model = ? OR (e.model = 'fail' AND e.created_at > ?)))
+      AND m.rowid > ? AND m.rowid <= ?
+    ORDER BY m.rowid DESC LIMIT ?`;
+const REST_MS = 60 * 60 * 1000;
+let scan = null;
+const scanStats = { windows: 0 };
+function resetScan({ window = 5000, windows = 2 } = {}) { scan = { top: null, cursor: 0, restUntil: 0, window, windows }; }
+resetScan();
+
 function pending(limit) {
   ensureTable();
   const retry = new Date(Date.now() - FAIL_RETRY_DAYS * 86400000).toISOString();
-  // NOT INDEXED: walk the table newest first and stop at the first `limit` rows. Left to itself the planner takes
-  // ix_media_state and sorts every published row (about 2 s per minute on 260k rows, 0.3 s this way).
-  return db.prepare(`SELECT m.id, m.media_type, m.media_url, m.preview_url, m.thumbnail_url, m.source_url, m.creator_id, m.post_key FROM media m NOT INDEXED
-      WHERE m.publish_state = 'published' AND m.scope != 'excluded'
-        AND NOT EXISTS (SELECT 1 FROM media_embeddings e WHERE e.media_id = m.id AND (e.model = ? OR (e.model = 'fail' AND e.created_at > ?)))
-      ORDER BY m.rowid DESC LIMIT ?`).all(MODEL_ID, retry, limit);
+  const stmt = db.prepare(WINDOW_SQL);
+  const max = db.prepare('SELECT MAX(rowid) AS r FROM media').get().r || 0;
+  if (scan.top === null || max < scan.top) { scan.top = max; scan.cursor = max; scan.restUntil = 0; }
+  const out = [];
+  // New rows first. The top only moves past rows that were all handed out, and stays below the ones handed out, so a
+  // pass that stops early (model unavailable) sees them again.
+  if (max > scan.top) {
+    const fresh = stmt.all(MODEL_ID, retry, scan.top, max, limit);
+    scanStats.windows++;
+    out.push(...fresh);
+    scan.top = fresh.length >= limit ? scan.top : fresh.length ? fresh[fresh.length - 1].rid - 1 : max;
+  }
+  if (out.length < limit && Date.now() >= scan.restUntil) {
+    if (scan.cursor <= 0) scan.cursor = scan.top; // the rest is over: a new pass from the top
+    for (let w = 0; w < scan.windows && out.length < limit; w++) {
+      const lo = Math.max(0, scan.cursor - scan.window);
+      const rows = stmt.all(MODEL_ID, retry, lo, scan.cursor, limit - out.length);
+      scanStats.windows++;
+      out.push(...rows);
+      if (out.length >= limit) { scan.cursor = rows[0].rid; break; } // resume at these rows (inclusive) next time
+      scan.cursor = lo;
+      if (lo === 0) { scan.restUntil = Date.now() + REST_MS; break; }
+    }
+  }
+  return out;
 }
 
 const save = () => db.prepare(`INSERT INTO media_embeddings (media_id, model, vec) VALUES (?, ?, ?)
@@ -320,6 +349,6 @@ async function warmIndex() {
 }
 
 /** Tests: forget the in-memory index and cached answers. */
-function _reset() { ix = null; profiles = null; cache.clear(); }
+function _reset() { ix = null; profiles = null; cache.clear(); resetScan(); }
 
-module.exports = { similar, similarCreators, backfill, start, stop, status, ensureTable, warmIndex, _reset, _nearest: nearest, _index: index, _pending: pending, _MODEL_ID: MODEL_ID };
+module.exports = { _WINDOW_SQL: WINDOW_SQL, _resetScan: resetScan, _scanStats: () => ({ ...scanStats }), similar, similarCreators, backfill, start, stop, status, ensureTable, warmIndex, _reset, _nearest: nearest, _index: index, _pending: pending, _MODEL_ID: MODEL_ID };

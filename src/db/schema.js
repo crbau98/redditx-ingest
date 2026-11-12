@@ -1068,6 +1068,15 @@ function v36(db) {
 }
 v36.ddlOnly = true;
 
+/**
+ * v37: the OCR queue's own partial index, the twin of v28's face queue. ocr.pick sorted every unread published row by
+ * ingested_at on the main thread (23 s on production); it now reads this index newest first and stops at its limit.
+ */
+function v37(db) {
+  db.exec("CREATE INDEX IF NOT EXISTS ix_media_ocr_todo ON media(seq DESC) WHERE ocr_at IS NULL AND publish_state = 'published'");
+}
+v37.ddlOnly = true;
+
 function v35(db) {
   const { orderNames } = require('../lib/creator-names');
   const rows = db.prepare("SELECT id, handle, display_name FROM creators WHERE handle LIKE '% %'").all();
@@ -1080,7 +1089,7 @@ function v35(db) {
   if (n && process.env.NODE_ENV !== 'test') console.log(`[migrate] v35: ${n} creator(s) had handle and display name swapped; fixed`);
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31, v32, v33, v34, v35, v36];
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31, v32, v33, v34, v35, v36, v37];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });
