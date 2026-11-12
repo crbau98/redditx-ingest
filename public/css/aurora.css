@@ -136,7 +136,6 @@ body {
   .hero-actions::-webkit-scrollbar { display: none; }
   .hero-actions .btn { flex: none; scroll-snap-align: start; }
   .hero-note { margin: 12px 0 0; text-align: left; }
-  .hero-chips { justify-content: flex-start; }
 
   /* section heads: a one-line sub and a "see all" that never wraps */
   .section { margin-top: 28px; }
@@ -230,10 +229,7 @@ a, button, summary, label, select, input, [role='button'] { touch-action: manipu
 
 @media (max-width: 899px) {
   /* Nothing is smaller than 12px (labels, badges, chips on pictures, tab labels). */
-  .bottomnav a, .lb-lab, .follow-new, .reel-act, .reel-handle, .reel-of-chip,
-  .badge, .badge.of, .badge.fansly, .badge.jff, .card-foot .badge.plat, .find-cand-sub .badge.plat, .pill, .card-badges .pill,
-  .fresh-mark, .creator-fresh, .card-why, .rise, .smart-chip .new, .free-on-label, .menu-group, .suggest-label, .chart-axis,
-  .card-meta, .density-s .card-meta, .lb-dock-handle, .hero-kicker, .search .kbd { font-size: 12px; }
+  .bottomnav a, .lb-lab, .follow-new, .reel-act, .reel-handle, .reel-of-chip, .badge, .badge.of, .badge.fansly, .badge.jff, .card-foot .badge.plat, .find-cand-sub .badge.plat, .pill, .card-badges .pill, .card-why, .rise, .free-on-label, .menu-group, .suggest-label, .chart-axis, .card-meta, .density-s .card-meta, .lb-dock-handle, .hero-kicker, .search .kbd{ font-size: 12px; }
 
   /* The sticky filter bar tucks away while scrolling down and returns on the first scroll up (components/scroll-chrome.js). */
   .filterbar { transition: transform var(--dur-base) var(--spring-glide), visibility 0s linear 0s; }

@@ -27,18 +27,11 @@
 }
 
 /* ---------- page canvas: a faint aurora at the top, painted once (it scrolls away with the page) ---------- */
-body {
-  background:
-    radial-gradient(1100px 520px at 8% -140px, var(--aurora-1), transparent 70%),
-    radial-gradient(900px 480px at 100% -120px, var(--aurora-2), transparent 70%),
-    var(--bg);
-  background-repeat: no-repeat;
-}
 body.reels-mode { background: var(--bg); }
 
 /* ---------- type ---------- */
 .page-head h1, .explore-head h1 { font-size: var(--fs-xl); letter-spacing: -.035em; }
-.section-head h2 { font-size: var(--fs-lg); letter-spacing: -.025em; }
+.section-head h2 { font-size: var(--fs-lg);}
 @media (min-width: 561px) {
   /* phones keep the hero's own smaller sizes (app.css), so the feed starts sooner */
   .hero h1 { font-size: var(--fs-display); line-height: .98; letter-spacing: -.045em; }
@@ -64,7 +57,7 @@ body.reels-mode { background: var(--bg); }
     to { background-color: color-mix(in srgb, #ffffff 92%, transparent); box-shadow: 0 1px 0 var(--line), 0 12px 30px -20px rgba(24, 16, 56, .3); }
   }
 }
-.brand span { background: linear-gradient(90deg, var(--text), color-mix(in srgb, var(--text) 70%, var(--accent))); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.brand span {-webkit-background-clip: text; background-clip: text;}
 
 /* desktop nav: one highlight that slides between tabs (positioned by main.js) */
 .nav { position: relative; isolation: isolate; }
@@ -97,7 +90,7 @@ body.reels-mode { background: var(--bg); }
     box-shadow: var(--hi), 0 20px 48px -12px rgba(0, 0, 0, .7);
   }
   .bn-ind { background: color-mix(in srgb, var(--accent) 16%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent), 0 6px 18px -8px color-mix(in srgb, var(--accent) 60%, transparent); }
-  .bottomnav a { font-size: 10.5px; letter-spacing: .01em; }
+  .bottomnav a {letter-spacing: .01em; }
   .bottomnav a[aria-current='page'] { color: var(--text); }
   .bottomnav a[aria-current='page'] svg { color: var(--accent); filter: drop-shadow(0 2px 8px color-mix(in srgb, var(--accent) 55%, transparent)); }
   :root[data-theme='light'] .bottomnav { box-shadow: var(--hi), 0 18px 40px -14px rgba(24, 16, 56, .28); }
@@ -135,7 +128,7 @@ body.reels-mode { background: var(--bg); }
 @media (max-width: 639px) { .card, .card-media { border-radius: 14px; } }
 
 /* creator cards, collections, tiles: one radius, one lift */
-.creator-card, .coll-card, .since-tile, .browse-tile, .topic-card { border-radius: var(--radius); }
+.creator-card, .coll-card, .browse-tile, .topic-card{ border-radius: var(--radius); }
 @media (hover: hover) {
   .creator-card:hover, .coll-card:hover, .browse-tile:hover, .topic-card:hover { transform: translateY(-3px); }
 }
@@ -143,9 +136,7 @@ body.reels-mode { background: var(--bg); }
 /* ---------- buttons: the primary carries a slow sheen on hover ----------
    A second background layer that slides across: no pseudo-element and no change to the button's own
    positioning (some primaries sit absolutely positioned inside a search field). */
-.btn.primary, .btn.primary:hover {
-  background-image: linear-gradient(110deg, transparent 38%, rgba(255, 255, 255, .26) 50%, transparent 62%), var(--grad);
-  background-size: 260% 100%, 100% 100%;
+.btn.primary, .btn.primary:hover {  background-size: 260% 100%, 100% 100%;
   background-repeat: no-repeat;
 }
 .btn.primary { background-position: 130% 0, 0 0; transition: background-position var(--dur-slow) var(--ease-out), box-shadow var(--dur-base), filter var(--dur-base), transform var(--dur-slow) var(--spring); }
@@ -158,8 +149,6 @@ body.reels-mode { background: var(--bg); }
 .chip { height: 32px; font-size: 13.5px; }
 
 /* ---------- creator profile: the banner melts into the page in both themes ---------- */
-.profile-banner { border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
-.profile-banner::after { background: linear-gradient(180deg, transparent 10%, color-mix(in srgb, var(--bg) 45%, transparent) 55%, var(--bg) 98%); }
 .profile-head .avatar { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 65%, transparent), 0 22px 48px -16px rgba(0, 0, 0, .8); }
 .profile-info h1 { font-size: clamp(30px, 4vw, 52px); letter-spacing: -.04em; }
 
@@ -186,7 +175,7 @@ body.reels-mode { background: var(--bg); }
    ========================================================================== */
 
 /* ---------- Tactile micro-interactions (:active feedback) ---------- */
-.btn:active, .chip:active, .seg button:active, .free-pill:active, .smart-chip:active, .topic-card:active {
+.btn:active, .chip:active, .seg button:active, .free-pill:active, .topic-card:active{
   transform: scale(0.97);
   transition-duration: var(--dur-quick);
 }
@@ -535,11 +524,7 @@ body.reels-mode { background: var(--bg); }
   }
 
   /* Search input & buttons */
-  .search-bar,
-  .search-bar .input,
-  .search-btn,
-  .input,
-  .select {
+  .input, .select{
     min-height: 44px;
     box-sizing: border-box;
   }
@@ -669,11 +654,6 @@ body.reels-mode { background: var(--bg); }
 
 /* Ensure inline text links meet touch bounds on mobile */
 @media (pointer: coarse), (max-width: 899px) {
-  .text-link {
-    min-height: 44px;
-    display: inline-flex;
-    align-items: center;
-  }
 }
 
 /* ---------- touch targets: every link chip, pill and "see all" is at least 44px tall on touch ---------- */
@@ -696,7 +676,7 @@ body.reels-mode { background: var(--bg); }
 
 /* ---------- creator page: plain group labels, so accounts, links, paid pages and posts read as separate groups ---------- */
 .group { display: grid; gap: 8px; margin-top: 18px; min-width: 0; }
-.group-label { font-size: 11.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.group-label {color: var(--muted); }
 .group .ps-pills, .group .ps-paid, .group .linkrow { margin-top: 0; }
 /* Explore: the labels sit over chip rails and do not add their own spacing. The type label is the first item of the type row. */
 .rail-group { margin-top: 8px; }

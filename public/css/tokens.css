@@ -62,20 +62,9 @@
   --of-glow: rgba(0, 175, 240, 0.35);
   --of-ink: #ffffff;
   --gold: #f59e0b;
-  --glass: rgba(14, 14, 18, 0.82);
-  --glass-strong: rgba(18, 18, 24, 0.94);
-  --glass-blur: blur(20px) saturate(180%);
-
   --dur-quick: 120ms;
   --dur-base: 200ms;
-  --dur-slow: 320ms;
-  --ease-out: cubic-bezier(.2, .8, .2, 1);
-  --hit: 40px;     /* pointer targets; becomes 44px on coarse pointers */
-
-  /* ---- aliases so existing rules keep working during the migration ---- */
-  --radius: var(--r-lg);
-  --radius-card: var(--r-md);
-  --radius-sm: var(--r-sm);
+  --dur-slow: 320ms;  --hit: 40px;  --radius-sm: var(--r-sm);
   --radius-lg: var(--r-lg);
   --appbar-h: 60px;
 }

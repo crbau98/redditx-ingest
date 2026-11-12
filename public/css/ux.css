@@ -42,7 +42,6 @@
   .lb-top { gap: 8px; padding-bottom: 6px; }
   .lb-title .s { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .lb-actions { display: flex; justify-content: space-evenly; align-items: center; gap: 6px; position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); z-index: 4; padding: 8px; border-radius: 22px; background: rgba(12, 12, 18, .62); border: 1px solid rgba(255, 255, 255, .1); backdrop-filter: blur(18px) saturate(1.4); -webkit-backdrop-filter: blur(18px) saturate(1.4); }
-  .lb-actions .btn.icon { width: 44px; height: 44px; }
   .lb-stage { padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
   .lb.chrome-off .lb-stage { padding-bottom: 14px; }
   .lb.chrome-off .lb-actions { transform: translateY(16px); }
@@ -64,7 +63,6 @@
   .reels-top { padding-top: calc(10px + env(safe-area-inset-top)); }
 }
 @media (max-width: 480px) {
-  .reels-top .select { display: none; }
   .reels-tune { display: inline-flex; color: #fff; background: rgba(0, 0, 0, .4); border: 1px solid rgba(255, 255, 255, .2); flex: none; }
 }
 
@@ -174,7 +172,6 @@
 
 /* ---- Viewer dock labels (phones): icon + word under the thumb ---- */
 .lb-lab { display: none; }
-.lb-dl { display: contents; }
 @media (max-width: 900px) {
   .lb-actions .btn.icon { flex: 1 1 0; flex-direction: column; gap: 3px; width: auto; height: auto; min-height: 52px; padding: 7px 4px 6px; border: 0; background: none; border-radius: 14px; }
   .lb-actions .btn.icon:hover, .lb-actions .btn.icon:focus-visible { background: rgba(255, 255, 255, .08); }
