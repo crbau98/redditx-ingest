@@ -119,7 +119,7 @@ describe('thumbnail or preview for a grid card (images.js)', () => {
     assert.match(dom, /video\.poster = proxied\(chain\[i \+ 1\]\)/);
     const reports = fs.readFileSync(path.join(JS, 'views', 'admin', 'reports.js'), 'utf8');
     assert.match(reports, /paintCover\(cover, stillChain\(x\)/);
-    const repo = fs.readFileSync(path.join(JS, '..', '..', 'src', 'db', 'repo.js'), 'utf8');
+    const repo = fs.readFileSync(path.join(JS, '..', '..', 'src', 'db', 'repos', 'reports.js'), 'utf8');
     assert.match(repo, /m\.thumb_url, m\.preview_url, m\.thumbnail_url, m\.media_url, m\.media_type/);
   });
 
