@@ -34,7 +34,7 @@ media / creators / feeds tables ──> src/routes/public.js serves them
 | Module | Job |
 |---|---|
 | `engine.js` | feed scheduler, engine start/stop, health |
-| `discovery.js` | finds NEW creators: Coomer index, scout queries, image-keyword search, link hubs (`crawlLinkHubs`), paid-page leads (`services/targets.js`) |
+| `discovery.js` (+ `discovery/`: core, social, paid, performers, decisions) | finds NEW creators: Coomer index, scout queries, image-keyword search, link hubs (`crawlLinkHubs`), paid-page leads (`services/targets.js`) |
 | `deepsearch.js` | whole-web sweep for ONE creator (text/video/image/reverse-image), cooldowns, `rotate()` = universal hourly rotation |
 | `lookup.js` | "who is this name?" — resolves a query to accounts/creators |
 | `identity.js` | same-man merges: duplicate creator rows, aliases |

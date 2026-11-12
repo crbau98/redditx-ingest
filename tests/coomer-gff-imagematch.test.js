@@ -109,7 +109,7 @@ describe('discovery wiring', () => {
   });
 
   test('harvest queries are all male-creator queries', () => {
-    const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'engine', 'discovery.js'), 'utf8');
+    const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'engine', 'discovery', 'paid.js'), 'utf8');
     const block = src.match(/const HARVEST_QUERIES = \[([\s\S]*?)\];/);
     assert.ok(block, 'HARVEST_QUERIES is declared');
     const queries = block[1].match(/'[^']+'/g);

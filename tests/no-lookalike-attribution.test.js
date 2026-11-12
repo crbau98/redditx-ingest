@@ -358,8 +358,11 @@ describe('Reddit: switched off by default, reversible, never a failure', () => {
     assert.equal(row.last_status, 'skipped');
   });
 
-  test('discovery reaches Reddit only through the two guarded functions (the mention search at discovery.js:1136 and the community search)', () => {
-    const src = fs.readFileSync(path.join(SRC, 'engine', 'discovery.js'), 'utf8');
+  test('discovery reaches Reddit only through the two guarded functions (the mention search and the community search)', () => {
+    // discovery.js and its strategies in engine/discovery/*.js, read as one
+    const dir = path.join(SRC, 'engine', 'discovery');
+    const src = [path.join(SRC, 'engine', 'discovery.js'), ...fs.readdirSync(dir).filter((f) => f.endsWith('.js')).map((f) => path.join(dir, f))]
+      .map((f) => fs.readFileSync(f, 'utf8')).join('\n');
     const calls = [...src.matchAll(/\breddit\.(\w+)\(/g)].map((m) => m[1]);
     assert.ok(calls.length >= 2);
     // parsePost is a pure row mapper: it turns an already-fetched row into media items and never touches the network
