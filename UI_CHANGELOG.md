@@ -1,5 +1,16 @@
 # UI changelog
 
+## 2026-11-12 — Live deep search and a visible lookup
+
+- **Find more across the web is on every creator page.** Visitors see the button; an admin session still starts a forced sweep. A sweep already running (for example one a lookup started on Find) opens its banner by itself, with no click.
+- **The live banner shows four stages.** Profiles & Aliases, Video Indexes, Visual & Face Match, Pulling New Posts. The current stage is marked; finished stages get a check; a stopped sweep marks the stage it stopped in. Each stage is a row on phones and a column on wider screens.
+- **Live counts as pills.** Accounts linked, New posts pulled, Videos matched, Paid leads. A count the server has not sent shows a dash, never a zero. The line under the banner is read out to screen readers only when the stage changes.
+- **The page follows a running sweep.** When accounts, videos or posts go up, the grid, the post and video counts, the tabs and the Free on / Other links rows refresh in place. The page keeps its scroll position; nothing navigates.
+- **Find shows the steps of a lookup while it runs.** The four checks are listed in order. The steps are timed to the usual order of work and are not reported progress; the last one stays in progress until the answer arrives.
+- **Each result says why it matched.** Pills: Exact handle, Bio backlink, Web search, Directory match. Alias and visual matches appear only when the server reports them.
+- **A followed account shows its live sweep.** Its card gets an Open profile link, and a badge reading “Live web sweep active on profile →” while that creator’s deep search is running.
+- **Mobile touch targets stay 44 px** for the new controls (measured at 360 px).
+
 ## 2026-11-10 — Faster first screen, lighter grids, video that remembers
 
 - **Home shows Latest uploads while Discover is still loading.** The grid is created before `/api/discover` returns, so the first cards are not stuck behind the snapshot. When the snapshot arrives, the hero and rails are inserted above that same grid.

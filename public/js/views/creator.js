@@ -139,6 +139,7 @@ export async function creator(root, { params, query }) {
   // The header skeleton and the posts are already up. Hand back the way out before the profile returns,
   // so leaving destroys that feed and a late profile cannot replace the next page.
   let extra = () => {};
+  let liveRefresh = null; // set once the profile is on screen: a running deep search refreshes it in place
   const life = makeGuard(() => {
     extra();
     extra = () => {};
@@ -202,18 +203,28 @@ export async function creator(root, { params, query }) {
     bus.on('follow', () => { if (alertBtn.isConnected) paintAlert(); });
   }
 
-  // "Find more across the web": the admin-only deep pull (it spends search and unlock credits). Without an admin
-  // session this is null: nothing rendered, nothing requested, the public page is unchanged.
-  const pullCtl = deepPullControl({ creatorId: c.id, adminKey: adminSession.key, h, adminGet, adminPost,
-    onFound: () => navigate(`/creator/${c.id}`, { type, sort, platform, q: qFilter }) });
+  // "Find more across the web": every visitor can start and watch a deep search; an admin session starts a forced one.
+  // A sweep already running (a lookup on #/find started it) opens its banner by itself. While it runs, the grid, the
+  // counts and the account rows refresh in place as new posts, accounts and videos arrive.
+  const pullCtl = deepPullControl({ creatorId: c.id, adminKey: adminSession.key, h,
+    getStatus: (path) => get(path, undefined, { fresh: true }), post, adminGet, adminPost,
+    onUpdate: () => { if (liveRefresh) void liveRefresh(); } });
 
-  // "Free on": every account where his posts cost nothing, his free OnlyFans included, as lit pills.
-  const freeOn = (c.accounts || []).map((a) => h('a', { class: 'free-pill', href: a.url, target: '_blank', rel: 'noopener noreferrer nofollow', style: { '--c': platformColor(a.platform) } }, h('span', { class: 'dot' }), h('b', null, platformLabel(a.platform)), h('span', { class: 'h' }, String(a.label).replace(/^[@/]?(?:u\/)?/, ''))));
-  if (c.onlyfans && c.onlyfans.free) freeOn.unshift(h('a', { class: 'free-pill of', href: c.onlyfans.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), h('b', null, 'OnlyFans'), h('span', { class: 'h' }, 'free')));
-  // The OnlyFans page gets its own button in the header; the other external links stay chips.
-  // paid pages are listed once, under their own label (platform switcher); the other-links row keeps everything else
-  const paidUrls = new Set(paidPages(c).map((p) => p.url));
-  const ext = (c.links || []).filter((l) => l.url && !paidUrls.has(l.url) && !(c.onlyfans && /onlyfans\.com/i.test(l.url))).map((l) => h('a', { class: 'linkchip ext', href: l.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, icon('link', 'sm'), l.label || l.service));
+  // The account rows ("Free on" and "Other links") come from one profile: the first paint and every live refresh.
+  const accountRows = (x) => {
+    // "Free on": every account where his posts cost nothing, his free OnlyFans included, as lit pills.
+    const freeOn = (x.accounts || []).map((a) => h('a', { class: 'free-pill', href: a.url, target: '_blank', rel: 'noopener noreferrer nofollow', style: { '--c': platformColor(a.platform) } }, h('span', { class: 'dot' }), h('b', null, platformLabel(a.platform)), h('span', { class: 'h' }, String(a.label).replace(/^[@/]?(?:u\/)?/, ''))));
+    if (x.onlyfans && x.onlyfans.free) freeOn.unshift(h('a', { class: 'free-pill of', href: x.onlyfans.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, h('span', { class: 'of-mark', 'aria-hidden': 'true' }), h('b', null, 'OnlyFans'), h('span', { class: 'h' }, 'free')));
+    // The OnlyFans page gets its own button in the header; the other external links stay chips.
+    // paid pages are listed once, under their own label (platform switcher); the other-links row keeps everything else
+    const paidUrls = new Set(paidPages(x).map((p) => p.url));
+    const ext = (x.links || []).filter((l) => l.url && !paidUrls.has(l.url) && !(x.onlyfans && /onlyfans\.com/i.test(l.url))).map((l) => h('a', { class: 'linkchip ext', href: l.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, icon('link', 'sm'), l.label || l.service));
+    return {
+      free: freeOn.length ? h('div', { class: 'free-on' }, h('span', { class: 'free-on-label' }, 'Free on'), h('div', { class: 'free-on-row' }, freeOn)) : null,
+      links: ext.length ? h('div', { class: 'group' }, h('div', { class: 'group-label' }, 'Other links'), h('div', { class: 'linkrow' }, ext)) : null,
+    };
+  };
+  const acct = accountRows(c);
 
   // names and handles he uses elsewhere (creator identity), shown once each
   const aka = [...new Set((c.aliases || []).map((a) => (typeof a === 'string' ? a : a && a.alias)).filter(Boolean))].slice(0, 4);
@@ -236,7 +247,7 @@ export async function creator(root, { params, query }) {
       h('button', { class: 'btn icon', 'aria-label': 'Copy profile link', title: 'Copy link', onclick: async () => toast((await copyText(location.href)) ? 'Link copied' : 'Could not copy') }, icon('share')),
       h('button', { class: 'btn icon', 'aria-label': 'Report', title: 'Report', onclick: () => openReport({ creatorId: c.id, title: 'Report this creator' }) }, icon('flag'))));
 
-  const tabs = h('div', { class: 'tabs', role: 'tablist' }, [['', `All`, c.media_count], ['image', 'Photos', c.media_count - c.video_count], ['video', 'Videos', c.video_count]].map(([v, l, n]) =>
+  const tabsRow = (x) => h('div', { class: 'tabs', role: 'tablist' }, [['', `All`, x.media_count], ['image', 'Photos', x.media_count - x.video_count], ['video', 'Videos', x.video_count]].map(([v, l, n]) =>
     h('button', { class: type === v ? 'on' : '', role: 'tab', 'aria-selected': String(type === v), onclick: () => setQ({ type: v }) }, `${l} `, h('span', { class: 'muted num' }, fmt.num(n)))));
   const sortSel = h('select', { class: 'select sm', style: { width: 'auto', marginLeft: 'auto', marginBottom: '8px' }, 'aria-label': 'Sort', onchange: (e) => setQ({ sort: e.target.value }) }, [['recent', 'Newest'], ['top', 'Top rated'], ['trending', 'Trending'], ['oldest', 'Oldest']].map(([v, l]) => h('option', { value: v, selected: sort === v }, l)));
 
@@ -248,23 +259,43 @@ export async function creator(root, { params, query }) {
     h('div', { class: 'stage-tint', 'aria-hidden': 'true' }), h('div', { class: 'stage-wash', 'aria-hidden': 'true' }), // the wash sits on top so the page edge is always plain background
     head);
   // Stats count up the first time you open a creator in a visit; coming back shows them settled.
-  const stat = (n, f = fmt.int) => { const b = h('b', { class: 'num' }, f(n)); if (!counted.has(c.id)) countUp(b, n, f); return b; };
-  const stats = h('div', { class: 'profile-stats' }, h('span', null, stat(c.media_count), 'posts'), h('span', null, stat(c.video_count), 'videos'), c.total_score ? h('span', null, stat(c.total_score, fmt.num), 'total score') : null, c.last_media_at ? h('span', null, `Active ${fmt.ago(c.last_media_at)}`) : null);
+  // A refresh rebuilds this row too; the count-up runs only the first time (counted holds the creator after that).
+  const statsRow = (x) => {
+    const stat = (n, f = fmt.int) => { const b = h('b', { class: 'num' }, f(n)); if (!counted.has(x.id)) countUp(b, n, f); return b; };
+    return h('div', { class: 'profile-stats' }, h('span', null, stat(x.media_count), 'posts'), h('span', null, stat(x.video_count), 'videos'), x.total_score ? h('span', null, stat(x.total_score, fmt.num), 'total score') : null, x.last_media_at ? h('span', null, `Active ${fmt.ago(x.last_media_at)}`) : null);
+  };
+  const stats = statsRow(c);
   counted.add(c.id);
 
   if (life.isLeft()) return;
   root.replaceChildren(stage,
     c.bio ? h('p', { class: 'profile-bio' }, c.bio) : null,
-    stats,
-    freeOn.length ? h('div', { class: 'free-on' }, h('span', { class: 'free-on-label' }, 'Free on'), h('div', { class: 'free-on-row' }, freeOn)) : null,
-    ext.length ? h('div', { class: 'group' }, h('div', { class: 'group-label' }, 'Other links'), h('div', { class: 'linkrow' }, ext)) : null,
+    h('div', { class: 'live-slot', 'data-live': 'stats' }, stats),
+    h('div', { class: 'live-slot', 'data-live': 'free' }, acct.free),
+    h('div', { class: 'live-slot', 'data-live': 'links' }, acct.links),
     c.topTags && c.topTags.length ? h('div', { class: 'group' }, h('div', { class: 'group-label' }, 'Tags'), h('div', { class: 'row wrap', style: { gap: '6px' } }, c.topTags.slice(0, 10).map((t) => h('a', { class: 'tag', href: href('/explore', { tag: t.name }) }, `#${t.name}`)))) : null,
     h('div', { style: { height: '22px' } }),
     connectionsStrip(c, { onElsewhere: () => openElsewhere(c.id, { name: c.display_name || c.handle }) }),
     alsoOnWebSection(c),
     platformSwitcher(c, { value: platform, onChange: (p) => setQ({ platform: p }) }), // pills per platform, plus his paid-page cards
-    h('div', { class: 'row wrap', style: { alignItems: 'flex-end', gap: '8px' } }, h('div', { class: 'grow' }, tabs), searchPost, sortSel),
+    h('div', { class: 'row wrap', style: { alignItems: 'flex-end', gap: '8px' } }, h('div', { class: 'grow' }, h('div', { class: 'live-slot', 'data-live': 'tabs' }, tabsRow(c))), searchPost, sortSel),
     feed.el);
+  // While a deep search runs: the grid, the counts, the tabs and the account rows follow what the server now holds.
+  // Only the parts that changed are rebuilt; the page keeps its place.
+  liveRefresh = refreshProfile;
+  async function refreshProfile() {
+    if (life.isLeft()) return;
+    if (feed) { try { await feed.refresh(); } catch { /* the grid shows its own error */ } }
+    let x;
+    try { x = await get(`/api/creators/${c.id}`, undefined, { fresh: true }); } catch { return; }
+    if (life.isLeft()) return;
+    const put = (name, node) => { const slot = root.querySelector(`[data-live="${name}"]`); if (slot) slot.replaceChildren(...[node].filter(Boolean)); };
+    put('stats', statsRow(x));
+    put('tabs', tabsRow(x));
+    const fresh = accountRows(x);
+    put('free', fresh.free);
+    put('links', fresh.links);
+  }
   landAvatar(headAvatar, c.id); // the avatar tapped on the way here flies into place
   // Activity and "Similar creators" load after the page is usable; a failure just means they are missing.
   get(`/api/creators/${c.id}/activity`).then((a) => {

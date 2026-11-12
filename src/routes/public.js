@@ -425,7 +425,34 @@ router.get('/creators', (req, res) => {
   res.json({ ...r, items: r.items.map(publicCreator) });
 });
 
-// Deep pulls are admin-only (POST/GET /api/admin/creators/:id/pull): they spend paid search and unlock credits.
+// A visitor may start one creator's deep pull. Six starts per minute per address, and start() keeps a 10-minute
+// gap per creator. The admin route is unchanged and can still force a pull.
+function publicCreatorByRef(ref) {
+  const key = String(ref || '').trim();
+  if (!key) return null;
+  const byId = repo.creators.get(key);
+  let c = byId;
+  if (!c) {
+    const row = repo.db.prepare("SELECT id FROM creators WHERE handle = ? COLLATE NOCASE ORDER BY media_count DESC LIMIT 1").get(key);
+    c = row ? repo.creators.get(row.id) : null;
+  }
+  if (!c || c.status !== 'active' || c.scope === 'excluded') return null;
+  return c;
+}
+const pullLimiter = rateLimit({ windowMs: 60_000, max: 6, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many deep searches from this address, try again in a minute' } });
+router.get('/creators/:id/pull', (req, res) => {
+  const c = publicCreatorByRef(req.params.id);
+  if (!c) return res.status(404).json({ error: 'Not found' });
+  res.json({ job: require('../engine/deepsearch').status(c.id) });
+});
+router.post('/creators/:id/pull', pullLimiter, (req, res) => {
+  const c = publicCreatorByRef(req.params.id);
+  if (!c) return res.status(404).json({ error: 'Not found' });
+  // force stays false: a visitor body cannot skip the per-creator cooldown.
+  const out = require('../engine/deepsearch').start(c.id, { force: false });
+  res.status(out.error ? 404 : 200).json({ ...out, job: require('../engine/deepsearch').status(c.id) });
+});
+
 router.get('/creators/:id', (req, res) => {
   const c = repo.creators.detail(req.params.id);
   if (!c || c.status !== 'active' || c.scope === 'excluded') return res.status(404).json({ error: 'Not found' });

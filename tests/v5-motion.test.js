@@ -110,9 +110,9 @@ describe('v5 creator stage (phase 2)', () => {
   });
 
   test('stats count up once per creator per visit, and Free on lists his free accounts', () => {
-    assert.match(cr, /if \(!counted\.has\(c\.id\)\) countUp\(/);
+    assert.match(cr, /if \(!counted\.has\(\w+\.id\)\) countUp\(/);
     assert.match(cr, /class: 'free-on'/);
-    assert.match(cr, /c\.onlyfans && c\.onlyfans\.free\) freeOn\.unshift/);
+    assert.match(cr, /\w+\.onlyfans && \w+\.onlyfans\.free\) freeOn\.unshift/);
   });
 
   test('no :has() in the stage styles (it made feed style work ~45% worse in v4.16)', () => {

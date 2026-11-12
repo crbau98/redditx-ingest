@@ -1,72 +1,159 @@
 /**
- * "Find more across the web": the admin-only deep pull for one creator (engine/deepsearch.js through
- * POST/GET /api/admin/creators/:id/pull). Deep pulls spend paid search and unlock credits, so the control
- * exists only for an admin session: with no admin key it renders nothing and sends no request.
+ * "Find more across the web": the deep search for one creator. Every visitor sees the control on a creator page.
  *
- * Dependencies are passed in (the DOM helper, the admin API calls, the key) so the control can be tested
+ *   - On mount it reads the status once (silently). If a sweep is already running, for example one started by a lookup
+ *     on #/find, the live banner opens by itself.
+ *   - A visitor starts a sweep through POST /api/creators/:id/pull (the server enforces the cooldown).
+ *   - An admin session starts it through POST /api/admin/creators/:id/pull with { force: true }.
+ *   - While it runs, the banner shows a four-stage stepper and live count pills. When accounts, videos or posts go up,
+ *     onUpdate(job, { incremental: true }) lets the page refresh its grid and counts without a full reload.
+ *
+ * The state logic lives in deep-pull-model.js. Everything DOM- or network-facing is passed in, so this can be tested
  * without a browser.
  */
+import { normalizeJob, stageStates, counterPills, grew, statusLine, fmtElapsed, refusalText } from './deep-pull-model.js';
 
-const PHASES = ['text', 'video', 'image'];
-const PHASE_LABEL = { text: 'Searching the web', video: 'Searching videos', image: 'Matching pictures and reverse image' };
+const CONTROL_TITLE = 'Search the web for more of this creator’s pages, pictures and videos. One search per creator every ten minutes.';
+const ADMIN_TITLE = 'Admin: start a fresh sweep now (spends search and unlock credits)';
 
-/** The inline line for a status answer: progress while running, the result counts when done. */
-export function pullLine(st) {
-  if (!st) return '';
-  if (st.running) {
-    const i = PHASES.indexOf(st.phase);
-    return `${PHASE_LABEL[st.phase] || 'Starting'}… ${i >= 0 ? i + 1 : 1}/${PHASES.length} phases`;
-  }
-  if (st.error) return `Last sweep failed: ${st.error}`;
-  if (st.done) {
-    const f = st.found || {};
-    return `Done: ${f.feeds || 0} new page${f.feeds === 1 ? '' : 's'}, ${f.pictures || 0} picture${f.pictures === 1 ? '' : 's'} matched, ${f.results || 0} result${f.results === 1 ? '' : 's'} read`;
-  }
-  return '';
+function headline(job) {
+  if (job.running) return 'Deep search running';
+  if (job.status === 'failed') return 'Deep search stopped';
+  return 'Deep search finished';
+}
+
+function meta(job) {
+  const bits = [];
+  if (job.elapsedMs !== undefined) bits.push(fmtElapsed(job.elapsedMs));
+  if (job.queriesTotal) bits.push(`${job.queriesRun || 0} of ${job.queriesTotal} searches`);
+  return bits.join(' · ');
 }
 
 /**
- * @param {{creatorId: string, adminKey: string, h: Function, adminGet: Function, adminPost: Function,
- *          onFound?: Function, every?: number, setTimer?: Function, clearTimer?: Function}} deps
- * @returns {HTMLElement|null} null when there is no admin session (nothing rendered, nothing requested)
+ * @param {object} deps
+ * @param {string} deps.creatorId
+ * @param {string} [deps.adminKey]          set only for an admin session
+ * @param {Function} deps.h                 DOM helper
+ * @param {(path: string) => Promise<any>} deps.getStatus   fresh GET of a full path (/api/...), never from cache
+ * @param {(path: string, body?: object) => Promise<any>} deps.post     POST of a full path (/api/...)
+ * @param {(path: string) => Promise<any>} [deps.adminGet]  relative to /api/admin; used only if the public status route is missing
+ * @param {(path: string, body?: object) => Promise<any>} [deps.adminPost] relative to /api/admin
+ * @param {(job: object, opts: object) => void} [deps.onUpdate]
+ * @param {number} [deps.every]             poll interval in ms
+ * @returns {HTMLElement|null} null when there is no creator id
  */
-export function deepPullControl({ creatorId, adminKey, h, adminGet, adminPost, onFound, every = 3000, setTimer = setInterval, clearTimer = clearInterval }) {
-  if (!adminKey || !creatorId) return null;
-  const path = `/creators/${encodeURIComponent(creatorId)}/pull`;
-  const line = h('span', { class: 'muted deep-pull-line', role: 'status', 'aria-live': 'polite' });
-  const btn = h('button', { class: 'btn', type: 'button', title: 'Admin: search the whole web for his pages, pictures and videos (spends search and unlock credits)' }, 'Find more across the web');
-  const wrap = h('span', { class: 'deep-pull' }, btn, line);
+export function deepPullControl({ creatorId, adminKey = '', h, getStatus, post, adminGet, adminPost, onUpdate, every = 2500, setTimer = setInterval, clearTimer = clearInterval }) {
+  if (!creatorId) return null;
+  const id = encodeURIComponent(creatorId);
+  const publicPath = `/api/creators/${id}/pull`;   // status (GET) and visitor start (POST)
+  const adminPath = `/creators/${id}/pull`;        // relative to /api/admin
+
+  const btn = h('button', { class: 'btn dp-btn', type: 'button', title: adminKey ? ADMIN_TITLE : CONTROL_TITLE }, 'Find more across the web');
+  const liveLine = h('span', { class: 'dp-sr', role: 'status', 'aria-live': 'polite' });
+  const banner = h('div', { class: 'deep-pull-banner', hidden: true, 'aria-label': 'Deep search progress' });
+  const note = h('span', { class: 'muted sm deep-pull-note', role: 'status' });
+  // A div, not a span: the banner is a block and the wrapper must be able to hold it (valid HTML).
+  const wrap = h('div', { class: 'deep-pull' }, btn, note, banner, liveLine);
+
   let timer = null;
-  let busy = false;
-  let sawRunning = false;
+  let running = false;
+  let busy = false;          // a start request is in flight
+  let sawThisSession = false; // the banner shows only for a sweep this page saw start or run
+  let lastFound;
+  let misses = 0;
 
   const stop = () => { if (timer) { clearTimer(timer); timer = null; } };
-  const paint = (st) => {
-    if (wrap.isConnected === false && timer) return stop();
-    busy = !!(st && st.running);
-    btn.disabled = busy;
-    line.textContent = pullLine(st);
-    if (busy) { sawRunning = true; if (!timer) timer = setTimer(poll, every); return; }
-    stop();
-    if (sawRunning && st && st.done) {
-      sawRunning = false;
-      const f = st.found || {};
-      if ((f.feeds || f.pictures) && onFound) onFound(st);
+  const say = (text) => { if (liveLine.textContent !== text) liveLine.textContent = text; };
+
+  function paint(job) {
+    banner.hidden = false;
+    banner.replaceChildren(
+      h('div', { class: 'dp-head' },
+        h('strong', { class: 'dp-title' }, headline(job)),
+        meta(job) ? h('span', { class: 'muted sm dp-meta' }, meta(job)) : null),
+      h('ol', { class: 'dp-stepper', 'aria-label': 'Deep search stages' }, stageStates(job).map((s, i) =>
+        h('li', { class: `dp-step ${s.state}`, 'aria-current': s.state === 'active' ? 'step' : null },
+          h('span', { class: 'dp-dot', 'aria-hidden': 'true' }, s.state === 'done' ? '✓' : s.state === 'failed' ? '!' : String(i + 1)),
+          h('span', { class: 'dp-step-label' }, s.label)))),
+      h('ul', { class: 'dp-pills', 'aria-label': 'Live counts' }, counterPills(job.found).map((p) =>
+        h('li', { class: 'dp-pill', 'data-pill': p.id }, h('b', { class: 'num' }, p.text), h('span', null, p.label)))));
+    say(statusLine(job));
+  }
+
+  /** Apply one status answer: paint, keep polling while it runs, and refresh the page when the counts moved. */
+  function apply(job) {
+    if (!wrap.isConnected) return stop();
+    const wasRunning = running;
+    // A finished sweep this page never saw run stays hidden; one that was running here ends with a final refresh.
+    if (!job || (!job.running && !wasRunning && !sawThisSession)) { stop(); return; }
+    const prev = lastFound;
+    lastFound = job.found;
+    running = job.running;
+    paint(job);
+    btn.disabled = running || busy;
+    btn.textContent = running ? 'Searching…' : 'Find more across the web';
+    if (running) {
+      if (!timer) timer = setTimer(tick, every);
+      if (grew(prev, job.found) && onUpdate) onUpdate(job, { incremental: true });
+      return;
     }
-  };
-  // A key that is no longer valid (401): the control goes away instead of offering a button that cannot work.
-  const lost = (e) => { stop(); if (e && (e.status === 401 || e.status === 403)) wrap.remove(); };
-  function poll() { return adminGet(path).then(paint, lost); }
+    stop();
+    if (wasRunning && onUpdate) onUpdate(job, { incremental: true, final: true });
+  }
+
+  /** The public status route, or (before it exists) the admin status route for an admin session. */
+  async function readStatus() {
+    try {
+      return normalizeJob(await getStatus(publicPath));
+    } catch (e) {
+      if (e && e.status === 404 && adminKey && adminGet) return normalizeJob(await adminGet(adminPath));
+      throw e;
+    }
+  }
+
+  async function tick() {
+    if (!wrap.isConnected) return stop();
+    let job;
+    try { job = await readStatus(); misses = 0; }
+    catch (e) {
+      if (++misses < 3) return;
+      stop();
+      say('Lost contact with the sweep. Reload the page to see where it stands.');
+      return;
+    }
+    apply(job);
+  }
 
   btn.addEventListener('click', async () => {
-    if (busy) return; // a second click while a sweep runs does nothing (the server refuses it too)
-    busy = true; btn.disabled = true;
+    if (busy || running) return;
+    busy = true; btn.disabled = true; note.textContent = '';
     try {
-      const r = await adminPost(path, { force: true });
-      if (r && r.started) paint({ running: true, phase: 'text' });
-      else { line.textContent = r && r.reason === 'already running' ? 'Already sweeping…' : String((r && (r.error || r.reason)) || 'Could not start'); await poll(); }
-    } catch (e) { line.textContent = String((e && e.message) || e); lost(e); busy = false; btn.disabled = false; }
+      const r = adminKey && adminPost ? await adminPost(adminPath, { force: true }) : await post(publicPath, {});
+      if (r && r.started) {
+        sawThisSession = true;
+        // A start answer may not carry a running job yet; show the first stage rather than nothing.
+        const started = normalizeJob(r);
+        apply(started && started.running ? started : normalizeJob({ job: { phase: 'starting', status: 'running' } }));
+        return;
+      }
+      if (r && r.reason === 'already running') {
+        sawThisSession = true;
+        note.textContent = 'Already searching…';
+        const job = await readStatus().catch(() => null);
+        apply(job);
+        return;
+      }
+      note.textContent = refusalText(r);
+    } catch (e) {
+      if (adminKey && (e.status === 401 || e.status === 403)) { stop(); wrap.remove(); return; }
+      note.textContent = e && e.status === 404 ? 'Deep search is not available here yet.' : String((e && e.message) || 'Could not start a search.');
+    } finally {
+      busy = false;
+      btn.disabled = running;
+    }
   });
-  poll();
+
+  // Silent check on mount: a sweep that is already running opens its banner without a click.
+  readStatus().then((job) => { if (wrap.isConnected) apply(job); }).catch(() => {});
   return wrap;
 }

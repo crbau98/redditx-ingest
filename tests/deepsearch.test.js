@@ -55,6 +55,11 @@ describe('corroboration', () => {
     assert.equal(deepsearch.samePerson(c, 'xyz', 'Jake Doe posts here'), false, 'a result that mentions him does not make the account his');
     assert.equal(deepsearch.samePerson(c, 'xyz', 'a list of top models'), false, 'no name, no claim');
     assert.equal(deepsearch.samePerson(c, 'doe'), false, 'a bare surname is not enough');
+    assert.equal(deepsearch.samePerson(c, 'officialjakedoe'), true, 'official- prefix is the same stem');
+    assert.equal(deepsearch.samePerson({ handle: 'jake', display_name: 'Jake' }, 'mrmusclebearx', ['mrmusclebear']), true, 'a trailing x on a known handle');
+    assert.equal(deepsearch.samePerson({ handle: 'jake', display_name: 'Jake' }, 'mrmusclebeaz', ['mrmusclebear']), true, 'one edit on a 7+ character handle');
+    assert.equal(deepsearch.samePerson({ handle: 'jake', display_name: 'Jake' }, 'totallyunrelated', ['mrmusclebear']), false, 'a different known handle is not him');
+    assert.equal(deepsearch.samePerson({ handle: 'theodore', display_name: 'Theodore' }, 'odorexxx'), false, 'Theodore does not lose its the-');
   });
 });
 
@@ -144,7 +149,7 @@ describe('the pull', () => {
     const c = creator('empty', 'Empty Guy');
     deepsearch._setSearchers(async () => [], async () => []);
     const out = await deepsearch.pull(c.id, { trigger: 'manual', force: true });
-    assert.deepEqual(out, { ok: true, pages: 0, feeds: 0, paid: 0, pictures: 0, reviews: 0, results: 0, aliases: 0 });
+    assert.deepEqual(out, { ok: true, pages: 0, feeds: 0, paid: 0, pictures: 0, reviews: 0, results: 0, aliases: 0, enqueuedFeeds: 0, postsAdded: 0 });
   });
 
   test('fromLookup sweeps the creator the search resolved to', () => {
@@ -172,5 +177,125 @@ describe('whole-library rotation', () => {
     assert.ok(!second.kicked.includes('Jake Doe'), 'a creator pulled today is skipped');
     assert.ok(second.kicked.length >= 1, 'rotation continues down the list');
     settings.update({ creatorSeeds: '' });
+  });
+});
+
+describe('known handles', () => {
+  test('aliases, live leads, and account feeds are loaded; a rejected lead is not', () => {
+    const c = creator('handlebank', 'Jake');
+    repo.db.prepare("INSERT INTO creator_aliases (creator_id, norm, alias, kind, source) VALUES (?, 'mrmusclebear', 'mrmusclebear', 'handle', 'account')").run(c.id);
+    repo.db.prepare("INSERT INTO creator_aliases (creator_id, norm, alias, kind, source) VALUES (?, 'cartoonhunks', 'cartoonhunks', 'handle', 'bio')").run(c.id);
+    repo.db.prepare("INSERT INTO onlyfans_leads (service, handle, creator_id, status) VALUES ('OnlyFans', 'claimedbear', ?, 'claimed')").run(c.id);
+    repo.db.prepare("INSERT INTO onlyfans_leads (service, handle, creator_id, status) VALUES ('OnlyFans', 'rejectedbear', ?, 'rejected')").run(c.id);
+    repo.feeds.upsert({ platform: 'x', kind: 'user', target: 'secretbear', creatorId: c.id, origin: 'admin', runNow: false });
+    repo.feeds.upsert({ platform: 'web', kind: 'page', target: 'https://example.com/not-a-handle', creatorId: c.id, origin: 'admin', runNow: false });
+    const known = deepsearch.loadCreatorKnownHandles(c.id);
+    for (const want of ['mrmusclebear', 'cartoonhunks', 'claimedbear', 'secretbear']) {
+      assert.ok(known.includes(want), `missing ${want} in ${known}`);
+    }
+    assert.ok(!known.includes('rejectedbear'), `rejected lead leaked: ${known}`);
+    assert.ok(!known.some((h) => String(h).includes('example.com')), `a page url is not a handle: ${known}`);
+    const { text } = deepsearch.buildQueries(c);
+    assert.ok(text.some((q) => q.includes('"mrmusclebear"') && q.includes('onlyfans') && q.includes('bsky')), 'alias platform query');
+    assert.ok(text.some((q) => q.includes('"mrmusclebear"') && q.includes('muscle') && q.includes('xxx')), 'alias phrase query');
+    assert.ok(text.some((q) => q.includes('Jake')), 'his name is still searched');
+    assert.ok(!text.some((q) => q.includes('rejectedbear')), 'a rejected lead is not searched');
+  });
+
+  test('a bio-only alias is searched but does not attach that account', async () => {
+    const c = creator('quietname', 'Quiet Name');
+    repo.db.prepare("INSERT INTO creator_aliases (creator_id, norm, alias, kind, source) VALUES (?, 'cartoonhunks', 'cartoonhunks', 'handle', 'bio')").run(c.id);
+    const seen = [];
+    deepsearch._setSearchers(async (q) => {
+      seen.push(q);
+      if (q.includes('cartoonhunks')) return [{ url: 'https://bsky.app/profile/cartoonhunks.bsky.social', title: 'Cartoon Hunks', description: 'fan art' }];
+      return [];
+    }, async () => []);
+    await deepsearch.pull(c.id, { trigger: 'manual', force: true });
+    assert.ok(seen.some((q) => q.includes('"cartoonhunks"')), 'the bio handle is still a search');
+    const targets = repo.feeds.list({ creatorId: c.id, limit: 20 }).items.map((f) => f.target);
+    assert.ok(!targets.some((t) => String(t).includes('cartoonhunks')), `bio alias is not proof: ${targets}`);
+  });
+
+  test('a live lead is matched and the new feed is enqueued once', async () => {
+    const c = creator('plainjake', 'Jake');
+    repo.db.prepare("INSERT INTO onlyfans_leads (service, handle, creator_id, status) VALUES ('OnlyFans', 'leadbearx', ?, 'claimed')").run(c.id);
+    const enqueued = [];
+    deepsearch._setEnqueuer((ids) => { enqueued.push(...ids); return ids.length; });
+    deepsearch._setSearchers(async (q) => {
+      if (String(q).includes('leadbearx')) return [{ url: 'https://x.com/leadbearx', title: 'leadbearx', description: '' }];
+      return [];
+    }, async () => []);
+    const out = await deepsearch.pull(c.id, { trigger: 'manual', force: true });
+    const feeds = repo.feeds.list({ creatorId: c.id, limit: 20 }).items;
+    const x = feeds.find((f) => f.platform === 'x' && f.target === 'leadbearx');
+    assert.ok(x, `lead became a feed: ${feeds.map((f) => `${f.platform}:${f.target}`)}`);
+    assert.deepEqual(enqueued, [x.id], `enqueued once: ${enqueued}`);
+    assert.ok(out.enqueuedFeeds >= 1);
+    const st = deepsearch.status(c.id);
+    assert.equal(typeof st.postsAdded, 'number');
+    assert.equal(st.found.enqueuedFeeds, out.enqueuedFeeds);
+    assert.equal(st.phase, 'done');
+  });
+
+  test('a feed fetched in the last 10 minutes is not enqueued again', async () => {
+    const c = creator('freshguy', 'Fresh Guy');
+    const feed = repo.feeds.upsert({ platform: 'x', kind: 'user', target: 'freshguy', creatorId: c.id, origin: 'admin', runNow: false }).feed;
+    repo.db.prepare('UPDATE feeds SET last_run_at = ? WHERE id = ?').run(new Date().toISOString(), feed.id);
+    const enqueued = [];
+    deepsearch._setEnqueuer((ids) => { enqueued.push(...ids); return ids.length; });
+    deepsearch._setSearchers(async (q) => {
+      if (q.includes('site:x.com')) return [{ url: 'https://x.com/freshguy', title: 'Fresh Guy (@freshguy)', description: '' }];
+      return [];
+    }, async () => []);
+    const out = await deepsearch.pull(c.id, { trigger: 'manual', force: true });
+    assert.ok(!enqueued.includes(feed.id), `fresh feed was enqueued: ${enqueued}`);
+    assert.equal(out.enqueuedFeeds, 0);
+  });
+});
+
+describe('public pull routes', () => {
+  let server; let base;
+  before(async () => {
+    deepsearch._setSearchers(async () => [], async () => []);
+    const { createApp } = require('../src/app');
+    server = createApp().listen(0);
+    await new Promise((r) => server.once('listening', r));
+    base = `http://127.0.0.1:${server.address().port}`;
+  });
+  after(async () => { if (server) await new Promise((r) => server.close(r)); });
+
+  test('GET and POST /api/creators/:id/pull resolve id or handle, keep the cooldown, and rate-limit', async () => {
+    assert.equal((await fetch(`${base}/api/creators/no-such-creator-zz/pull`)).status, 404);
+    const c = creator('pullslug', 'Pull Slug');
+    const got = await fetch(`${base}/api/creators/pullslug/pull`);
+    assert.equal(got.status, 200);
+    const job = (await got.json()).job;
+    assert.equal(job.running, false);
+    assert.equal(typeof job.postsAdded, 'number');
+    const started = await fetch(`${base}/api/creators/${c.id}/pull`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"force":true}' });
+    assert.equal(started.status, 200);
+    const first = await started.json();
+    assert.equal(first.started, true, JSON.stringify(first));
+    assert.ok(first.job);
+    const deadline = Date.now() + 8000;
+    let settled = first.job;
+    while (settled.running && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 40));
+      settled = (await (await fetch(`${base}/api/creators/${c.id}/pull`)).json()).job;
+    }
+    assert.equal(settled.running, false, 'the pull finished before the cooldown check');
+    const again = await fetch(`${base}/api/creators/${c.id}/pull`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"force":true}' });
+    assert.equal(again.status, 200);
+    const second = await again.json();
+    assert.equal(second.started, false);
+    assert.equal(second.reason, 'cooldown');
+    const statuses = [];
+    for (let i = 0; i < 5; i++) {
+      const extra = creator(`pullextra${i}`, `Pull Extra ${i}`);
+      const res = await fetch(`${base}/api/creators/${extra.id}/pull`, { method: 'POST' });
+      statuses.push(res.status);
+    }
+    assert.deepEqual(statuses, [200, 200, 200, 200, 429], `sixth start in the window is refused: ${statuses}`);
   });
 });

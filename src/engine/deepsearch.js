@@ -38,7 +38,10 @@ const KEY = (id) => `deepsearch.${id}`;
 const ROTATE_KEY = 'deepsearch.rotate';
 
 /** Manual pulls may repeat sooner than the automatic ones a search triggers. */
-const COOLDOWN_MS = { manual: 15 * 60 * 1000, lookup: 6 * 60 * 60 * 1000, rotation: 24 * 60 * 60 * 1000 };
+const COOLDOWN_MS = { manual: 15 * 60 * 1000, lookup: 6 * 60 * 60 * 1000, rotation: 24 * 60 * 60 * 1000, public: 10 * 60 * 1000 };
+const FEED_FRESH_MS = 10 * 60 * 1000;
+const PULL_WAIT_MS = 8_000;
+const PULL_POLL_MS = 500;
 const MAX_TEXT_QUERIES = 8;
 const MAX_VIDEO_QUERIES = 3;
 const MAX_PAGES = 8;
@@ -77,7 +80,7 @@ function writeProgress(creatorId, patch) {
 function status(creatorId) {
   const p = readProgress(creatorId);
   const lastAt = p && p.lastAt ? Date.parse(p.lastAt) : 0;
-  const cooldown = COOLDOWN_MS.lookup;
+  const found = p && p.found ? { enqueuedFeeds: 0, ...p.found } : null;
   return {
     running: running.has(creatorId),
     phase: p ? p.phase || null : null,
@@ -85,12 +88,32 @@ function status(creatorId) {
     startedAt: p ? p.startedAt || null : null,
     lastAt: p ? p.lastAt || null : null,
     error: p ? p.error || null : null,
-    found: p ? p.found || { pages: 0, feeds: 0, paid: 0, pictures: 0, reviews: 0, results: 0, aliases: 0 } : null,
+    found,
+    postsAdded: p ? postsAddedFromProgress(creatorId, p) : 0,
     queries: p ? p.queries || [] : [],
-    cooldownMs: lastAt ? Math.max(0, lastAt + cooldown - Date.now()) : 0,
+    // Visitors may start another pull after this window. Lookup and rotation keep their own, longer gaps.
+    cooldownMs: lastAt ? Math.max(0, lastAt + COOLDOWN_MS.public - Date.now()) : 0,
     enabled: !!settingsStore.get().deepSearch,
   };
 }
+
+function publishedMediaCount(creatorId) {
+  try {
+    return repo.db.prepare("SELECT COUNT(*) AS n FROM media WHERE creator_id = ? AND publish_state = 'published'").get(creatorId).n || 0;
+  } catch { return 0; }
+}
+
+function postsAddedOf(job) {
+  if (!job) return 0;
+  return Math.max(0, publishedMediaCount(job.creatorId) - (job.baselineMediaCount || 0)) + (job.directAdded || 0);
+}
+
+function postsAddedFromProgress(creatorId, p) {
+  if (!p || p.baselineMediaCount == null) return (p && p.postsAdded) || 0;
+  return Math.max(0, publishedMediaCount(creatorId) - p.baselineMediaCount) + (p.directAdded || 0);
+}
+
+const blankFound = () => ({ pages: 0, feeds: 0, paid: 0, pictures: 0, reviews: 0, results: 0, aliases: 0, enqueuedFeeds: 0 });
 
 /* ------------------------------------------------------------------ queries */
 
@@ -102,14 +125,78 @@ const compact = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
  * index whose snippet names him) proves nothing about whose account it is: attaching those glued other men's accounts,
  * their posts and their names onto one creator. Pages are judged separately (namesCreator) and stay page feeds.
  */
-function samePerson(creator, handle) {
+// A real given name that starts with a filler ("the" in Theodore) must not lose that stem.
+const GIVEN_STEM = /^(theodor|theophil|theobald|theodoric|thelonious)/;
+const STEM_WORDS = ['official', 'real', 'the', 'vip', 'free', 'xxx', 'xx', 'nsfw', 'gay', 'fit'];
+
+/** Platform filler off a compact handle: official/real/the/vip/free/xxx/xx/nsfw/gay/fit, one trailing x, or 1–2 trailing digits. */
+function stemHandle(norm) {
+  let s = String(norm || '');
+  let prev;
+  do {
+    prev = s;
+    for (const w of STEM_WORDS) {
+      const rest = s.length - w.length;
+      if (rest < 5) continue;
+      if (s.startsWith(w) && !(w === 'the' && GIVEN_STEM.test(s))) s = s.slice(w.length);
+      if (s.endsWith(w) && s.length - w.length >= 5) s = s.slice(0, s.length - w.length);
+    }
+    if (s.endsWith('x') && s.length - 1 >= 5) s = s.slice(0, -1);
+    const digits = /^(.*?)(\d{1,2})$/.exec(s);
+    if (digits && digits[1].length >= 5) s = digits[1];
+  } while (s !== prev && s.length);
+  return s;
+}
+
+/** True when the two compact handles differ by at most one insert, delete, or substitution. */
+function editWithinOne(a, b) {
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  const m = a.length;
+  const n = b.length;
+  let prev = new Array(n + 1);
+  let cur = new Array(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    cur[0] = i;
+    let rowMin = cur[0];
+    for (let j = 1; j <= n; j++) {
+      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (cur[j] < rowMin) rowMin = cur[j];
+    }
+    if (rowMin > 1) return false;
+    const swap = prev; prev = cur; cur = swap;
+  }
+  return prev[n] <= 1;
+}
+
+/**
+ * Is this ACCOUNT his? His own name or handle (containment needs enough letters), a known alias or lead,
+ * the same stem once filler is removed, or one edit away on a handle of 7+ characters.
+ * A third argument that is not a list is ignored: a snippet that merely mentions him is not a handle.
+ * @param {object} creator
+ * @param {string} handle
+ * @param {string[]} [knownHandles]
+ */
+function samePerson(creator, handle, knownHandles = []) {
   const h = compact(handle);
   if (!h) return false;
-  for (const name of [creator.display_name, creator.handle]) {
-    const n = compact(name);
-    // Containment counts only with enough letters to be an identity: a bare surname ("doe" in
-    // "Jake Doe") is far too common to claim somebody's account on.
-    if (n && (n === h || (h.length >= 5 && n.length >= 5 && h.includes(n)) || (n.length >= 5 && h.length >= 4 && n.includes(h)))) return true;
+  const extras = Array.isArray(knownHandles) ? knownHandles : [];
+  const primary = [creator && creator.display_name, creator && creator.handle, creator && creator.slug];
+  const seen = new Set();
+  for (let i = 0; i < primary.length + extras.length; i++) {
+    const raw = i < primary.length ? primary[i] : extras[i - primary.length];
+    const n = compact(raw);
+    if (!n || seen.has(n)) continue;
+    seen.add(n);
+    if (n === h) return true;
+    // Containment stays on his own name and handle. An alias of "smith" must not claim every *smith account.
+    if (i < primary.length && ((h.length >= 5 && n.length >= 5 && h.includes(n)) || (n.length >= 5 && h.length >= 4 && n.includes(h)))) return true;
+    const hs = stemHandle(h);
+    const ns = stemHandle(n);
+    if (hs.length >= 5 && hs === ns) return true;
+    if (h.length >= 7 && n.length >= 7 && editWithinOne(h, n)) return true;
   }
   return false;
 }
@@ -144,7 +231,15 @@ function foreignFeeds({ limit = 100, offset = 0 } = {}) {
     FROM feeds f JOIN creators c ON c.id = f.creator_id
     WHERE f.origin IN (${FOREIGN_ORIGINS.map(() => '?').join(',')}) AND f.platform NOT IN ('web', 'rss')
     ORDER BY c.handle, f.platform, f.target`).all(...FOREIGN_ORIGINS);
-  const foreign = rows.filter((r) => !samePerson({ handle: r.creatorHandle, display_name: r.creatorName }, accountHandle(r.platform, r.target)));
+  // Already-attached feeds are not proof of themselves, or a wrong account would vanish from this list.
+  const matchByCreator = new Map();
+  const matchHandles = (id) => {
+    if (!matchByCreator.has(id)) {
+      matchByCreator.set(id, gatherKnown(id).filter((row) => row.match && row.source !== 'feed').map((row) => row.handle));
+    }
+    return matchByCreator.get(id);
+  };
+  const foreign = rows.filter((r) => !samePerson({ handle: r.creatorHandle, display_name: r.creatorName }, accountHandle(r.platform, r.target), matchHandles(r.creatorId)));
   const lim = Math.max(1, Math.min(500, Number(limit) || 100));
   const off = Math.max(0, Number(offset) || 0);
   const page = foreign.slice(off, off + lim);
@@ -158,15 +253,77 @@ function foreignFeeds({ limit = 100, offset = 0 } = {}) {
   };
 }
 
+/**
+ * Handles we already believe are his.
+ * Columns are the live ones: creator_aliases.alias (not term), onlyfans_leads.status (not state),
+ * feeds.target (there is no feeds.handle). A bio-only alias is searched but not trusted to attach an account.
+ * @returns {{handle: string, match: boolean, source: 'alias'|'lead'|'feed'}[]}
+ */
+function gatherKnown(creatorId) {
+  const out = [];
+  if (!creatorId) return out;
+  try {
+    for (const row of repo.db.prepare('SELECT alias, kind, source FROM creator_aliases WHERE creator_id = ?').all(creatorId)) {
+      if (row.alias) out.push({ handle: row.alias, match: row.source !== 'bio', source: 'alias' });
+    }
+    for (const row of repo.db.prepare("SELECT handle FROM onlyfans_leads WHERE creator_id = ? AND status != 'rejected'").all(creatorId)) {
+      if (row.handle) out.push({ handle: row.handle, match: true, source: 'lead' });
+    }
+    for (const row of repo.db.prepare('SELECT platform, target FROM feeds WHERE creator_id = ? AND target IS NOT NULL AND enabled = 1').all(creatorId)) {
+      const handle = feedHandle(row.platform, row.target);
+      if (handle) out.push({ handle, match: true, source: 'feed' });
+    }
+  } catch { /* identity tables must never fail a pull */ }
+  return out;
+}
+
+/** The strings loadCreatorKnownHandles promises: every alias, live lead, and enabled account feed. */
+function loadCreatorKnownHandles(creatorId) {
+  return gatherKnown(creatorId).map((row) => row.handle);
+}
+
+/** A feed target worth searching as a handle. Page and RSS URLs are not handles. */
+function feedHandle(platform, target) {
+  if (!platform || platform === 'web' || platform === 'rss') return '';
+  const h = accountHandle(platform, target);
+  if (!h || /[/?#\s]/.test(h) || h.length > 40) return '';
+  if (compact(h).length < 4) return '';
+  return h;
+}
+
+/** Up to three aliases that say more than his display name. Longer compact forms first. */
+function pickSearchHandles(creator, known) {
+  const own = new Set([compact(creator && creator.handle), compact(creator && creator.display_name)].filter(Boolean));
+  const scored = [];
+  const seen = new Set();
+  for (const raw of known || []) {
+    const alias = String(raw || '').trim().replace(/["']/g, '').slice(0, 40);
+    const n = compact(alias);
+    if (n.length < 4 || own.has(n) || seen.has(n)) continue;
+    seen.add(n);
+    scored.push({ alias, n });
+  }
+  scored.sort((a, b) => b.n.length - a.n.length || a.alias.localeCompare(b.alias));
+  return scored.slice(0, 3).map((row) => row.alias);
+}
+
 /** The eight rotating site shapes plus the four standing phrases, name and handle substituted. */
-function buildQueries(creator) {
+function buildQueries(creator, knownHandles) {
   const name = String(creator.display_name || creator.handle || '').trim();
   const handle = String(creator.handle || '').trim();
   const phrase = (s) => s.replace(/\{name\}/g, name).replace(/\{handle\}/g, handle || name);
   const rotate = parseInt(repo.discoveryState.get(ROTATE_KEY) || '0', 10) || 0;
   const sites = SITE_SHAPES.map((_, i) => SITE_SHAPES[(i + rotate) % SITE_SHAPES.length]);
+  const known = knownHandles === undefined
+    ? loadCreatorKnownHandles(creator && creator.id)
+    : (Array.isArray(knownHandles) ? knownHandles : []);
+  const extras = [];
+  for (const alias of pickSearchHandles(creator, known)) {
+    extras.push(`"${alias}" (onlyfans OR linktree OR twitter OR x.com OR instagram OR tiktok OR reddit OR bsky)`);
+    extras.push(`"${alias}" (gay OR nsfw OR muscle OR bear OR hunk OR jock OR porn OR xxx)`);
+  }
   return {
-    text: [...PHRASE_SHAPES.map(phrase), ...sites.slice(0, MAX_TEXT_QUERIES - PHRASE_SHAPES.length).map((s) => `"${name}" ${s}`)],
+    text: [...PHRASE_SHAPES.map(phrase), ...sites.slice(0, MAX_TEXT_QUERIES - PHRASE_SHAPES.length).map((s) => `"${name}" ${s}`), ...extras],
     video: [`${name} video`, `"${name}" (nude OR naked OR full video)`].slice(0, MAX_VIDEO_QUERIES),
     rotate,
   };
@@ -214,7 +371,7 @@ async function takeResult(hit, creator, out, ctx) {
     const linkOut = LINK_OUT_SERVICES.has(spec.service) || /(^|\.)(threads\.(net|com)|instagram\.com|tiktok\.com)$/i.test(host);
     const handle = String(spec.handle || (spec.label || '').split('·')[1] || '').trim().replace(/^@/, '')
       || (() => { try { return decodeURIComponent(new URL(spec.url || spec.target || '').pathname.split('/').filter(Boolean)[0] || ''); } catch { return ''; } })();
-    if (linkOut && OK_HANDLE.test(handle) && samePerson(creator, handle)) {
+    if (linkOut && OK_HANDLE.test(handle) && samePerson(creator, handle, ctx && ctx.matchHandles)) {
       try {
         require('./identity').addAlias(creator.id, handle.toLowerCase(), { kind: 'handle', source: 'lookup', evidenceUrl: hit.url });
         res.aliases++;
@@ -238,12 +395,16 @@ async function takeResult(hit, creator, out, ctx) {
     // must name him in its own text. Everything else is only a mention of him.
     const proven = spec.platform === 'web'
       ? namesCreator({ url: spec.target, title: hit.title, description: hit.description }, creator, ctx.paidHandle)
-      : samePerson(creator, handle);
+      : samePerson(creator, handle, ctx && ctx.matchHandles);
     if (!proven) continue;
     if (spec.platform === 'web') {
       try { if (!(await require('../sources/web').robotsAllows(spec.target))) continue; } catch { continue; }
     }
     const r = targets.addSpec(spec, { creatorId: creator.id, origin: 'deep-search', trusted: true });
+    if (r && r.feed && ctx && ctx.enqueuedFeedIds && shouldEnqueueFeed(r.feed, r.status === 'created') && !ctx.enqueuedFeedIds.has(r.feed.id)) {
+      ctx.enqueuedFeedIds.add(r.feed.id);
+      try { enqueueDiscovered([r.feed.id]); } catch { /* a pull finishes even when the scheduler is down */ }
+    }
     if (r && r.status === 'created') {
       res.feeds++;
       faceMatch.recordWebMatch({
@@ -266,7 +427,60 @@ async function takeResult(hit, creator, out, ctx) {
 let searchFn = (...a) => websearch.search(...a);
 let videoFn = (...a) => brave.videos(...a);
 const _setSearchers = (s, v) => { if (s) searchFn = s; if (v) videoFn = v; };
-const _resetSearchers = () => { searchFn = (...a) => websearch.search(...a); videoFn = (...a) => brave.videos(...a); };
+let enqueueImpl = null;
+const _setEnqueuer = (fn) => { enqueueImpl = typeof fn === 'function' ? fn : null; };
+const _resetSearchers = () => {
+  searchFn = (...a) => websearch.search(...a);
+  videoFn = (...a) => brave.videos(...a);
+  enqueueImpl = null;
+};
+
+/** A new feed, or one this creator has not fetched in the last 10 minutes, should run now. */
+function shouldEnqueueFeed(feed, created) {
+  if (!feed || !feed.id) return false;
+  if (created) return true;
+  const at = feed.last_run_at ? Date.parse(feed.last_run_at) : NaN;
+  if (!at || Number.isNaN(at)) return true;
+  return Date.now() - at >= FEED_FRESH_MS;
+}
+
+function enqueueDiscovered(feedIds) {
+  if (!feedIds || !feedIds.length) return 0;
+  try {
+    if (enqueueImpl) return enqueueImpl(feedIds) || 0;
+    // Tests must not start live platform fetches. Production enqueues with force so the new account is read now.
+    if (config.isTest) return 0;
+    return require('./engine').enqueue(feedIds, { force: true, trigger: 'deep-search' }) || 0;
+  } catch { return 0; }
+}
+
+function enqueuedSettled(job) {
+  let engine;
+  try { engine = require('./engine'); } catch { return true; }
+  const state = engine._state;
+  if (!state) return true;
+  for (const id of job.enqueuedFeedIds) {
+    if (state.running.has(id)) return false;
+    if (state.queue.some((q) => q.feedId === id)) return false;
+  }
+  return true;
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** After the search, give the enqueued feeds a short window to land posts. Tests do not wait. */
+async function waitForEnqueued(job, aborted) {
+  const budget = config.isTest ? 0 : PULL_WAIT_MS;
+  const deadline = Date.now() + budget;
+  while (Date.now() < deadline) {
+    if (typeof aborted === 'function' && aborted()) break;
+    if (postsAddedOf(job) > 0) break;
+    if (enqueuedSettled(job)) break;
+    const slice = Math.min(PULL_POLL_MS, deadline - Date.now());
+    if (slice <= 0) break;
+    await sleep(slice);
+  }
+}
 
 /* ------------------------------------------------------------------ the pull */
 
@@ -292,16 +506,24 @@ async function pull(creatorId, { trigger = 'manual', force = false, aborted = ()
   }
 
   const startedAt = new Date().toISOString();
-  writeProgress(creatorId, { startedAt, phase: 'text', done: false, error: null, lastAt: startedAt });
+  const baselineMediaCount = publishedMediaCount(creatorId);
+  const job = { creatorId, baselineMediaCount, enqueuedFeedIds: new Set(), directAdded: 0 };
+  writeProgress(creatorId, { startedAt, phase: 'text', done: false, error: null, lastAt: startedAt, baselineMediaCount, postsAdded: 0 });
   const work = (async () => {
-    const found = { pages: 0, feeds: 0, paid: 0, pictures: 0, reviews: 0, results: 0, aliases: 0 };
+    const found = blankFound();
     const s = settingsStore.get();
     const of = require('../lib/onlyfans').creatorOnlyFans(creator);
     const paid = of ? { service: 'onlyfans', handle: of.handle } : (require('../lib/paid').creatorPaid(creator)[0] || {});
-    const ctx = { paidHandle: paid.handle || null };
-    const { text, video, rotate } = buildQueries(creator);
+    const gathered = gatherKnown(creator.id);
+    const ctx = {
+      paidHandle: paid.handle || null,
+      enqueuedFeedIds: job.enqueuedFeedIds,
+      matchHandles: gathered.filter((row) => row.match).map((row) => row.handle),
+    };
+    const { text, video, rotate } = buildQueries(creator, gathered.map((row) => row.handle));
     const budget = s.braveDailyBudget;
-    writeProgress(creatorId, { phase: 'text', queries: [...text, ...video], found: { pages: 0, feeds: 0, paid: 0, pictures: 0, reviews: 0, results: 0, aliases: 0 } });
+    const foundNow = () => ({ ...found, enqueuedFeeds: job.enqueuedFeedIds.size });
+    writeProgress(creatorId, { phase: 'text', queries: [...text, ...video], found: foundNow(), postsAdded: 0, baselineMediaCount });
 
     // 1. text
     for (const q of text) {
@@ -323,7 +545,7 @@ async function pull(creatorId, { trigger = 'manual', force = false, aborted = ()
         if (r.pages) found.pages++;
       }
     }
-    writeProgress(creatorId, { phase: 'video', found: { ...found } });
+    writeProgress(creatorId, { phase: 'video', found: foundNow(), postsAdded: postsAddedOf(job), baselineMediaCount });
 
     // 2. video
     for (const q of video) {
@@ -339,7 +561,7 @@ async function pull(creatorId, { trigger = 'manual', force = false, aborted = ()
         if (r.pages) found.pages++;
       }
     }
-    writeProgress(creatorId, { phase: 'image', found: { ...found } });
+    writeProgress(creatorId, { phase: 'image', found: foundNow(), postsAdded: postsAddedOf(job), baselineMediaCount });
 
     // 3 + 4. image sweep (same picture / face / reverse image) — engine/imagematch does the attribution
     if (s.imageMatch !== false) {
@@ -358,11 +580,17 @@ async function pull(creatorId, { trigger = 'manual', force = false, aborted = ()
 
     repo.discoveryState.set(ROTATE_KEY, String((rotate + 1) % SITE_SHAPES.length));
     try { repo.discoveryState.set(`imgmatch.${creator.id}`, new Date().toISOString()); } catch { /* optional */ }
+    if (job.enqueuedFeedIds.size > 0) {
+      writeProgress(creatorId, { phase: 'pulling', found: foundNow(), postsAdded: postsAddedOf(job), baselineMediaCount });
+      await waitForEnqueued(job, aborted);
+    }
+    const postsAdded = postsAddedOf(job);
     writeProgress(creatorId, {
-      phase: 'done', done: true, error: null, lastAt: new Date().toISOString(), found: { ...found },
+      phase: 'done', done: true, error: null, lastAt: new Date().toISOString(),
+      found: foundNow(), postsAdded, baselineMediaCount, directAdded: job.directAdded,
     });
-    events.log('OK', `Deep pull ${creator.display_name || creator.handle}: ${found.feeds} new feed(s) (cap ${MAX_FEEDS}), ${found.pictures} picture(s) matched, ${found.reviews} review row(s), ${found.results} result(s) read`);
-    return { ok: true, ...found };
+    events.log('OK', `Deep pull ${creator.display_name || creator.handle}: ${found.feeds} new feed(s) (cap ${MAX_FEEDS}), ${job.enqueuedFeedIds.size} enqueued, ${postsAdded} new post(s), ${found.pictures} picture(s) matched, ${found.reviews} review row(s), ${found.results} result(s) read`);
+    return { ok: true, ...foundNow(), postsAdded };
   })().catch((e) => {
     writeProgress(creatorId, { phase: 'done', done: true, error: String(e.message || e).slice(0, 200), lastAt: new Date().toISOString() });
     events.log('ERR', `Deep pull failed: ${e.message}`);
@@ -371,6 +599,14 @@ async function pull(creatorId, { trigger = 'manual', force = false, aborted = ()
 
   running.set(creatorId, work);
   return work;
+}
+
+/**
+ * Visitor entry: the public route calls this with force false, so the 10-minute public cooldown holds.
+ * A client cannot skip it; the route does not forward a force flag.
+ */
+function start(creatorId, { force = false } = {}) {
+  return kick(creatorId, { trigger: 'public', force: !!force });
 }
 
 /** Fire and forget: used by the lookup routes and the profile button (it returns at once). */
@@ -443,4 +679,7 @@ function rotate({ limit = 2 } = {}) {
   return { started: kicked.length, kicked };
 }
 
-module.exports = { pull, kick, fromLookup, rotate, status, buildQueries, samePerson, accountHandle, foreignFeeds, readProgress, _setSearchers, _resetSearchers };
+module.exports = {
+  pull, kick, start, fromLookup, rotate, status, buildQueries, samePerson, stemHandle,
+  loadCreatorKnownHandles, accountHandle, foreignFeeds, readProgress, _setSearchers, _setEnqueuer, _resetSearchers,
+};

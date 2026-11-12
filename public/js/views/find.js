@@ -6,6 +6,17 @@ import { navigate, href } from '../router.js';
 import { platformLabel, platformColor } from '../store.js';
 import { attachSuggest } from '../components/suggest.js';
 import { lookupCache } from '../lookup-cache.js';
+import { normalizeJob, provenanceOf } from '../components/deep-pull-model.js';
+
+// What a lookup checks, in order. The server answers in one response, so these steps are timed to the usual order of
+// work. They are not reported progress: the last step stays "in progress" until the answer arrives.
+const LOOKUP_STEPS = [
+  'Checking existing PRISM creators & aliases',
+  'Sweeping Reddit, X, Bluesky & Fediverse',
+  'Crawling Linktree, Beacons & bio links',
+  'Verifying avatars & enqueueing feeds',
+];
+const LOOKUP_STEP_AT = [0, 4000, 12000, 20000]; // ms after the lookup starts
 
 const EXAMPLES = ['Reno Gold', 'Christian Hogue', 'Alejandro Pino', '@jakipz', 'Diego Sans', 'Malik Delgaty', 'Austin Wolf'];
 /** Popular niches as one-tap hints: the most-used tags in the library, each opening Explore for that tag. */
@@ -152,7 +163,8 @@ export async function find(root, { query }) {
           h('div', { class: 'find-cand-name' }, c.displayName || c.target, ' ', foundBadge()),
           h('div', { class: 'find-cand-sub' }, h('span', { class: 'muted sm truncate' }, targetLabel(c.target), ' · ', platformLabel(c.platform)))),
         h('a', { class: 'btn sm ghost', href: c.url || '#', target: '_blank', rel: 'noopener noreferrer nofollow' }, icon('external', 'sm'), 'Open')),
-      paidChips(c));
+      paidChips(c),
+      c.status === 'following' ? profileLink(c) : null);
   }
 
   /** Accounts tied together by evidence: the only thing that may be followed as one creator. */
@@ -179,26 +191,64 @@ export async function find(root, { query }) {
           h('div', { class: 'find-cand-name' }, c.displayName || c.target, ' ', foundBadge()),
           h('div', { class: 'find-cand-sub' }, h('span', { class: 'muted sm truncate' }, targetLabel(c.target), ' · ', platformLabel(c.platform))))),
       c.bio ? h('p', { class: 'muted sm find-cand-bio' }, String(c.bio).slice(0, 160)) : null,
+      provenanceRow(c),
       evidenceChips(c),
       paidChips(c),
       sampleLink(c),
       h('div', { class: 'muted sm', style: { marginTop: '8px' } }, 'Name match only. Nothing shows this is the same person as the other accounts.'),
       c.status === 'following'
-        ? h('div', { class: 'muted sm', style: { marginTop: '6px' } }, 'Already following')
+        ? h('div', { class: 'find-following' }, h('span', { class: 'muted sm' }, 'Already following'), profileLink(c))
         : h('button', { class: 'btn', style: { marginTop: '8px' }, onclick: () => followSelected([c], c.displayName || c.target) }, icon('plus', 'sm'), 'Follow this account'));
+  }
+
+  let stopSteps = null;
+  /** The timed lookup steps (see LOOKUP_STEPS). Their timers are cleared when the result or an error paints. */
+  function lookupSteps() {
+    const items = LOOKUP_STEPS.map((label) => h('li', { class: 'find-step' }, h('span', { class: 'find-step-dot', 'aria-hidden': 'true' }), h('span', null, label)));
+    const timers = [];
+    const show = (i) => items.forEach((li, j) => { li.classList.toggle('done', j < i); li.classList.toggle('active', j === i); });
+    LOOKUP_STEP_AT.forEach((ms, i) => { if (i === 0) show(0); else timers.push(setTimeout(() => show(i), ms)); });
+    stopSteps = () => { timers.forEach(clearTimeout); timers.length = 0; };
+    return h('div', { class: 'find-loading find-steps', 'aria-live': 'polite' },
+      h('p', { class: 'muted find-steps-lede' }, 'Checking every public platform and the web. Usually about half a minute.'),
+      h('ol', { class: 'find-steplist', 'aria-label': 'What PRISM is checking' }, items));
+  }
+
+  /** Why this account matched, as pills: the reasons the lookup recorded for it. */
+  function provenanceRow(c) {
+    const kinds = provenanceOf(c);
+    if (!kinds.length) return null;
+    return h('div', { class: 'prov-row', 'aria-label': 'Why this account matched' }, kinds.map((p) => h('span', { class: `prov-pill prov-${p.kind}` }, p.label)));
+  }
+
+  // One status read per creator per visit: a creator's deep search that is running shows the badge on its card.
+  const sweepSeen = new Map();
+  function watchSweep(creatorId, badge) {
+    if (!sweepSeen.has(creatorId)) {
+      sweepSeen.set(creatorId, get(`/api/creators/${encodeURIComponent(creatorId)}/pull`, undefined, { fresh: true }).then((r) => normalizeJob(r), () => null));
+    }
+    sweepSeen.get(creatorId).then((job) => { if (life.alive() && job && job.running) badge.hidden = false; });
+  }
+
+  /** A followed account: its creator's profile, and a subtle badge while that creator's deep search is running. */
+  function profileLink(c) {
+    if (!c.creatorId) return null;
+    const badge = h('span', { class: 'live-badge', role: 'status' }, 'Live web sweep active on profile →');
+    badge.hidden = true;
+    watchSweep(c.creatorId, badge);
+    return h('div', { class: 'find-profile' }, h('a', { class: 'btn sm ghost', href: href(`/creator/${c.creatorId}`) }, 'Open profile'), badge);
   }
 
   function paint() {
     if (life.isLeft()) return;
+    if (stopSteps) { stopSteps(); stopSteps = null; }
     btn.disabled = state.loading || state.following;
     btn.setAttribute('aria-busy', String(state.loading || state.following));
     input.disabled = state.loading;
     out.replaceChildren();
     if (state.loading) {
       out.append(
-        h('div', { class: 'find-loading', 'aria-label': 'Searching for accounts' },
-          h('div', { class: 'spinner', 'aria-hidden': 'true' }),
-          h('p', { class: 'muted' }, 'Checking every public platform and the web — usually about half a minute…')),
+        lookupSteps(),
         h('div', { class: 'creator-grid', 'aria-hidden': 'true' }, [0, 1, 2].map(() => h('div', { class: 'card find-cand' }, h('div', { class: 'skeleton', style: { height: '86px' } }), h('div', { class: 'skeleton', style: { height: '14px', marginTop: '10px' } })))),
       );
     } else if (state.following) {

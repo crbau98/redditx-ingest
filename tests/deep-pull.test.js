@@ -1,8 +1,9 @@
 'use strict';
 /**
- * "Find more across the web": the admin-only deep pull. The control renders (and requests) nothing without an admin
- * session; with one it starts the pull on the real admin endpoint, shows inline progress from the status endpoint, and
- * a second click while it runs does nothing. The public pull route is gone (deep pulls spend paid credits).
+ * "Find more across the web" on a creator page. Every visitor sees the control. A visitor's start goes to
+ * POST /api/creators/:id/pull (rate-limited, 10-minute cooldown). An admin session starts a forced sweep on the admin
+ * endpoint. A sweep that is already running opens its banner by itself, the four stages and the live counts show while
+ * it runs, and a second click while it runs does nothing.
  */
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
@@ -34,58 +35,81 @@ const load = () => import('../public/js/components/deep-pull.js');
 
 /** A minimal DOM stand-in for the control. */
 function fakeH(tag, props, ...children) {
-  const el = { tag, props: props || {}, children: children.filter(Boolean), textContent: '', disabled: false, isConnected: true, listeners: {} };
+  const el = { tag, props: props || {}, children: children.filter(Boolean), textContent: '', disabled: false, hidden: !!(props && props.hidden), isConnected: true, listeners: {} };
   el.addEventListener = (type, fn) => { el.listeners[type] = fn; };
   el.remove = () => { el.isConnected = false; };
+  el.replaceChildren = (...nodes) => { el.children = nodes.flat().filter(Boolean); };
   return el;
 }
 const button = (wrap) => wrap.children.find((c) => c.tag === 'button');
-const line = (wrap) => wrap.children.find((c) => c.tag === 'span');
+const note = (wrap) => wrap.children.find((c) => c.props.class === 'muted sm deep-pull-note');
+const banner = (wrap) => wrap.children.find((c) => c.props.class === 'deep-pull-banner');
+const live = (wrap) => wrap.children.find((c) => c.props.class === 'dp-sr');
+const until = async (fn, ms = 5000) => { const end = Date.now() + ms; while (!(await fn())) { if (Date.now() > end) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 20)); } };
+const tick = () => new Promise((r) => setTimeout(r, 10));
 
-/** The admin API calls, sent to the real server (only fetch's transport is real; no browser). */
+/**
+ * The real server over fetch (only the transport is real; no browser). Admin calls are recorded relative to /api/admin,
+ * as they always were; the visitor's status read and start are recorded by their full path.
+ */
 function adminApi(key) {
   const calls = [];
-  const call = async (method, path, body) => {
-    calls.push(`${method} ${path}`);
-    const res = await fetch(`${base}/api/admin${path}`, { method, headers: { 'x-admin-key': key, 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  const send = async (method, url, body, headers) => {
+    const res = await fetch(`${base}${url}`, { method, headers: { 'content-type': 'application/json', ...headers }, body: body ? JSON.stringify(body) : undefined });
     const data = await res.json().catch(() => null);
     if (!res.ok) throw Object.assign(new Error((data && data.error) || res.statusText), { status: res.status });
     return data;
   };
-  return { calls, adminGet: (p) => call('GET', p), adminPost: (p, b) => call('POST', p, b) };
+  const call = (method, path, body) => { calls.push(`${method} ${path}`); return send(method, `/api/admin${path}`, body, { 'x-admin-key': key }); };
+  const visitor = (method, full, body) => { calls.push(`${method} ${full}`); return send(method, full, body, {}); };
+  return {
+    calls,
+    adminGet: (p) => call('GET', p),
+    adminPost: (p, b) => call('POST', p, b),
+    getStatus: (full) => visitor('GET', full),
+    post: (full, b) => visitor('POST', full, b),
+  };
 }
-const until = async (fn, ms = 5000) => { const end = Date.now() + ms; while (!(await fn())) { if (Date.now() > end) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 20)); } };
 
-test('the progress line names the phase and the result counts', async () => {
-  const { pullLine } = await load();
-  assert.equal(pullLine({ running: true, phase: 'text' }), 'Searching the web… 1/3 phases');
-  assert.equal(pullLine({ running: true, phase: 'image' }), 'Matching pictures and reverse image… 3/3 phases');
-  assert.equal(pullLine({ running: false, done: true, found: { feeds: 2, pictures: 1, results: 14 } }), 'Done: 2 new pages, 1 picture matched, 14 results read');
-});
-
-test('without an admin session there is no button and no request', async () => {
+test('a visitor sees the control; nothing starts until a click, and the click goes to the visitor route', async () => {
   const { deepPullControl } = await load();
-  let requests = 0;
-  const api = () => { requests++; return Promise.resolve({}); };
-  assert.equal(deepPullControl({ creatorId: 'c1', adminKey: '', h: fakeH, adminGet: api, adminPost: api }), null);
-  assert.equal(deepPullControl({ creatorId: 'c1', adminKey: undefined, h: fakeH, adminGet: api, adminPost: api }), null);
-  await new Promise((r) => setTimeout(r, 20));
-  assert.equal(requests, 0);
+  const reads = []; const starts = [];
+  const wrap = deepPullControl({ creatorId: 'c1', h: fakeH,
+    getStatus: async (p) => { reads.push(p); return {}; },
+    post: async (p, b) => { starts.push([p, b]); return { ok: true, started: false, reason: 'cooldown' }; } });
+  assert.ok(wrap, 'rendered for a visitor (no admin key)');
+  assert.equal(deepPullControl({ creatorId: '', h: fakeH, getStatus: async () => ({}), post: async () => ({}) }), null, 'no creator, no control');
+  await tick();
+  assert.deepEqual(reads, ['/api/creators/c1/pull'], 'one silent status read on mount');
+  assert.deepEqual(starts, [], 'nothing is started on mount');
+  await button(wrap).listeners.click();
+  assert.deepEqual(starts, [['/api/creators/c1/pull', {}]]);
+  assert.equal(note(wrap).textContent, 'Searched recently. Try again in a few minutes.');
+  assert.equal(button(wrap).disabled, false);
 });
 
-test('a key the server rejects removes the control', async () => {
+test('a key the server rejects removes the control when an admin starts a sweep', async () => {
   const { deepPullControl } = await load();
   const creator = repo.creators.create({ handle: 'pull_reject', displayName: 'Pull Reject' });
   const api = adminApi('wrong-key');
   const wrap = deepPullControl({ creatorId: creator.id, adminKey: 'wrong-key', h: fakeH, ...api });
+  await tick();
+  assert.equal(wrap.isConnected, true, 'the status read is public, so the control stays until a start is refused');
+  await button(wrap).listeners.click();
   await until(() => wrap.isConnected === false);
 });
 
-test('the public pull route is gone: a visitor cannot start a deep pull', async () => {
+test('a visitor can start a deep pull on the public route', async () => {
   const creator = repo.creators.create({ handle: 'pull_public', displayName: 'Pull Public' });
-  const res = await fetch(`${base}/api/creators/${creator.id}/pull`, { method: 'POST' });
-  assert.equal(res.status, 404);
-  assert.equal(deepsearch.status(creator.id).running, false);
+  const res = await fetch(`${base}/api/creators/${creator.id}/pull`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"force":true}' });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.started, true, JSON.stringify(body));
+  assert.equal(typeof body.job.postsAdded, 'number');
+  // This file parks the first search. Let this pull finish, then arm the park again for the admin test.
+  if (release) { const go = release; release = null; go(); }
+  await until(() => deepsearch.status(creator.id).done === true);
+  searches = 0;
 });
 
 test('an admin click starts the pull, shows progress while it runs, ignores a second click, and shows the result', async () => {
@@ -96,12 +120,13 @@ test('an admin click starts the pull, shows progress while it runs, ignores a se
   const wrap = deepPullControl({ creatorId: creator.id, adminKey: 'test-key', h: fakeH, ...api, every: 20,
     setTimer: (fn, ms) => { const t = setInterval(fn, ms); timers.push(t); return t; }, clearTimer: clearInterval });
   try {
-    assert.equal(button(wrap).props.class, 'btn');
+    assert.match(button(wrap).props.class, /\bbtn\b/);
     await until(() => api.calls.length >= 1); // the initial status read
     await button(wrap).listeners.click();
     assert.ok(api.calls.includes(`POST /creators/${creator.id}/pull`));
     await until(() => deepsearch.status(creator.id).running);
-    assert.match(line(wrap).textContent, /1\/3 phases/);
+    assert.match(live(wrap).textContent, /step 1 of 4/, 'the first stage is shown while the first search runs');
+    assert.ok(banner(wrap).hidden === false, 'the banner is open while the sweep runs');
     assert.equal(button(wrap).disabled, true);
     const posts = api.calls.filter((c) => c.startsWith('POST')).length;
     await button(wrap).listeners.click();
@@ -111,8 +136,8 @@ test('an admin click starts the pull, shows progress while it runs, ignores a se
     assert.equal(again.started, false);
     assert.equal(again.reason, 'already running');
     release();
-    await until(() => /^Done:/.test(line(wrap).textContent));
-    assert.match(line(wrap).textContent, /results? read/);
+    await until(() => /^Done:/.test(live(wrap).textContent));
+    assert.match(live(wrap).textContent, /new posts? pulled/);
     assert.equal(button(wrap).disabled, false);
     assert.ok(api.calls.filter((c) => c.startsWith('GET')).length >= 2, 'progress came from the status endpoint');
   } finally { timers.forEach(clearInterval); if (release) release(); }

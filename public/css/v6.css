@@ -704,3 +704,111 @@ body.reels-mode { background: var(--bg); }
 .filter-label { flex: none; align-self: center; margin-right: 6px; }
 /* The hidden attribute must win over the display set on these groups and chips (their own display rules would otherwise show them). */
 .group[hidden], .rail-group[hidden], .conn-strip[hidden], .conn-chip[hidden] { display: none !important; }
+
+/* ==========================================================================
+   Wave 2: live deep search (creator page) and live lookup (find)
+   Crisp at 360px and 1280px: every row can wrap, nothing is wider than its card, and motion honours reduced-motion.
+   ========================================================================== */
+
+/* Creator page: the control stays in the actions row; the live banner takes the full row when it opens. */
+.profile-actions > .deep-pull { display: contents; }
+.profile-actions .deep-pull-note { flex: 1 1 100%; font-size: 12.5px; }
+.profile-actions .deep-pull-note:empty { display: none; }
+.profile-actions .deep-pull-banner { flex: 1 1 100%; order: 20; min-width: 0; }
+/* Slots that the page refreshes in place: they take no room of their own. */
+.live-slot { display: contents; }
+.deep-pull-banner[hidden], .live-badge[hidden] { display: none; }
+.dp-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.deep-pull-banner {
+  display: grid; gap: 12px; box-sizing: border-box; min-width: 0; max-width: 100%;
+  padding: 14px 16px; border-radius: var(--radius-card);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  animation: dp-in var(--dur-base, 220ms) var(--ease-out, ease-out) both;
+}
+.dp-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; }
+.dp-title { font-size: 14.5px; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.dp-meta { font-variant-numeric: tabular-nums; }
+
+.dp-stepper {
+  list-style: none; margin: 0; padding: 0; min-width: 0;
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px;
+}
+.dp-step { display: grid; justify-items: start; gap: 6px; min-width: 0; color: var(--muted); font-size: 12px; line-height: 1.3; }
+.dp-dot {
+  display: inline-grid; place-items: center; flex: none; width: 24px; height: 24px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 700; color: var(--muted);
+  background: var(--surface-3); border: 1px solid var(--line-strong);
+}
+.dp-step-label { min-width: 0; overflow-wrap: anywhere; }
+.dp-step.done { color: var(--text-2); }
+.dp-step.done .dp-dot { color: var(--good); border-color: var(--good); background: color-mix(in srgb, var(--good) 20%, transparent); }
+.dp-step.active { color: var(--text); font-weight: 600; }
+.dp-step.active .dp-dot { color: var(--text); border-color: var(--accent); animation: dp-pulse 1.6s var(--ease, ease-in-out) infinite; }
+.dp-step.failed .dp-dot { color: var(--bad, #ef4444); border-color: var(--bad, #ef4444); }
+
+.dp-pills { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.dp-pill {
+  display: inline-flex; align-items: baseline; gap: 6px; max-width: 100%; min-height: 28px; padding: 3px 11px;
+  border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); color: var(--text-2); font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.dp-pill b { color: var(--text); font-size: 13px; font-variant-numeric: tabular-nums; }
+
+@keyframes dp-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@keyframes dp-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+  50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 8%, transparent); }
+}
+/* Phones: the four stages read as a short list, one per row, so the labels never wrap into a narrow column. */
+@media (max-width: 639px) {
+  .dp-stepper { grid-template-columns: 1fr; gap: 8px; }
+  .dp-step { grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; font-size: 13px; }
+  .deep-pull-banner { padding: 12px 14px; }
+}
+
+/* Find: the timed lookup steps (shown while the server works; the last step stays in progress until the answer). */
+.find-steps { display: grid; gap: 12px; padding: 16px 4px; min-width: 0; align-items: start; }
+.find-steps-lede { margin: 0; overflow-wrap: anywhere; }
+.find-steplist { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; min-width: 0; }
+.find-step { display: flex; align-items: center; gap: 10px; min-width: 0; color: var(--muted); font-size: 13.5px; transition: color var(--dur-base, 220ms) var(--ease-out, ease-out); }
+.find-step > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.find-step-dot {
+  flex: none; width: 10px; height: 10px; border-radius: 999px;
+  background: var(--surface-3); border: 1px solid var(--line-strong);
+  transition: background var(--dur-base, 220ms), border-color var(--dur-base, 220ms);
+}
+.find-step.done { color: var(--text-2); }
+.find-step.done .find-step-dot { background: var(--good); border-color: var(--good); }
+.find-step.active { color: var(--text); font-weight: 600; }
+.find-step.active .find-step-dot { background: var(--accent); border-color: var(--accent); animation: dp-pulse 1.4s ease-in-out infinite; }
+
+/* Find: why an account matched. Exact handle is the strongest; the others are shown as the reason they matched. */
+.prov-row { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.prov-pill {
+  display: inline-flex; align-items: center; max-width: 100%; height: 24px; padding: 0 9px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 600; color: var(--text); overflow-wrap: anywhere;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+}
+.prov-pill.prov-exact { background: color-mix(in srgb, var(--good) 16%, transparent); border-color: color-mix(in srgb, var(--good) 45%, var(--line)); }
+.prov-pill.prov-backlink, .prov-pill.prov-alias { background: color-mix(in srgb, var(--warn, #f59e0b) 16%, transparent); border-color: color-mix(in srgb, var(--warn, #f59e0b) 40%, var(--line)); }
+
+/* Find: a followed account's profile link, and the badge while that creator's deep search runs. */
+.find-following, .find-profile { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-width: 0; margin-top: 6px; }
+.find-profile { margin-top: 8px; }
+.live-badge {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-height: 24px; padding: 0 9px;
+  border-radius: 999px; font-size: 11.5px; font-weight: 600; color: var(--good); overflow-wrap: anywhere;
+  background: color-mix(in srgb, var(--good) 14%, transparent);
+}
+.live-badge::before {
+  content: ''; flex: none; width: 6px; height: 6px; border-radius: 999px; background: var(--good);
+  animation: dp-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .deep-pull-banner, .dp-step.active .dp-dot, .find-step.active .find-step-dot, .live-badge::before { animation: none; }
+  .find-step, .find-step-dot { transition: none; }
+}
