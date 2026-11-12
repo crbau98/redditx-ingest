@@ -55,6 +55,27 @@ const bskyHttp = require('../sources/http').forPlatform('bluesky', 400);
 // The Reddit archive is its own host with no Reddit quota, so it gets its own limiter key and never
 // waits behind a reddit feed's rate-limit hold.
 const archiveHttp = require('../sources/http').forPlatform('redditArchive', 300);
+const { normalizeBskyActor } = require('../lib/bsky-actor');
+
+/**
+ * getProfiles for a list of actors. The AppView fails the whole request (HTTP 400) when any one actor is invalid, so a 400
+ * splits the list in half and retries each half; an actor that still fails alone is dropped (added to `rejected`) and the
+ * other profiles come back. Any other failure is thrown to the caller as before.
+ */
+async function fetchBskyProfiles(actors, rejected = []) {
+  const list = [...new Set(actors.filter(Boolean))];
+  if (!list.length) return [];
+  const qs = list.map((a) => `actors=${encodeURIComponent(a)}`).join('&');
+  try {
+    const json = await bskyHttp.json(`${config.baseUrls.bsky}/xrpc/app.bsky.actor.getProfiles?${qs}`);
+    return (json && json.profiles) || [];
+  } catch (e) {
+    if (!e || e.status !== 400) throw e;
+    if (list.length === 1) { rejected.push(list[0]); return []; }
+    const mid = Math.ceil(list.length / 2);
+    return [...await fetchBskyProfiles(list.slice(0, mid), rejected), ...await fetchBskyProfiles(list.slice(mid), rejected)];
+  }
+}
 
 // The ranking itself is pure and lives in discovery-score.js (no database, no network); this file does the I/O around it.
 const { WEIGHTS, CAPS, scoreOf, describeSignals, mergeSignal } = require('./discovery-score');
@@ -440,10 +461,49 @@ const POSTER_7D = 4;    // media posts in the last 7 days
 const POSTER_30D = 12;  // or media posts in the last 30 days
 const POSTER_LOOKBACK = 100; // archive rows per request; the API's maximum
 
+// Arctic Shift answers 422 two ways. "Timeout. Maybe slow down a bit" is its rate limit: a wait, so it is thrown as one,
+// never an empty result. Any other 422 is a name it will not search (an odd character): retried once with letters,
+// digits, "_" and "-" only; a name with nothing to clean is a clean empty result.
+const archiveErrorText = (e) => (typeof e.body === 'string' ? e.body : JSON.stringify(e.body ?? e.message ?? ''));
+const isArchiveRateLimit = (e) => /slow down|timeout/i.test(archiveErrorText(e));
+const rateLimitedArchive = (e) => Object.assign(new Error(`Reddit archive is rate limiting: ${archiveErrorText(e).slice(0, 80)}`), { status: 429, retryAfter: 60_000 });
 async function archivePosts(params) {
-  const q = new URLSearchParams({ limit: String(POSTER_LOOKBACK), sort: 'desc', ...params });
-  const json = await archiveHttp.json(`${config.baseUrls.redditArchive}/api/posts/search?${q}`);
+  const send = (p) => archiveHttp.json(`${config.baseUrls.redditArchive}/api/posts/search?${new URLSearchParams({ limit: String(POSTER_LOOKBACK), sort: 'desc', ...p })}`);
+  let json;
+  try {
+    json = await send(params);
+  } catch (e) {
+    if (!e || e.status !== 422) throw e;
+    if (isArchiveRateLimit(e)) throw rateLimitedArchive(e);
+    const clean = Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v).replace(/[^A-Za-z0-9_-]/g, '')]));
+    if (Object.keys(params).every((k) => clean[k] === String(params[k]))) return [];
+    try {
+      json = await send(clean);
+    } catch (e2) {
+      if (!e2 || e2.status !== 422) throw e2;
+      if (isArchiveRateLimit(e2)) throw rateLimitedArchive(e2);
+      return [];
+    }
+  }
   return ((Array.isArray(json) ? json : json.data) || []).filter((r) => r && r.id);
+}
+
+/** The performer directory's sister sites: the same /performer/<slug> pages, so a refusal from one is read from the other. */
+const GFF_DIRECTORY_HOSTS = ['https://gayforfans.com', 'https://justthegays.tv'];
+/**
+ * One page of the performer directory. gayforfans.com refusing (403) or failing (503) is read from JustTheGays, the sister
+ * directory gff.js already uses when gayforfans is bot-checked. Any other failure is thrown as before.
+ */
+async function fetchPerformerDirectory(client, page) {
+  const path = `/performer${page ? `?page=${page + 1}` : ''}`;
+  const opts = { maxBytes: 3_000_000, retries: 1, headers: { accept: 'text/html' } };
+  try {
+    return { host: GFF_DIRECTORY_HOSTS[0], html: await client.text(`${GFF_DIRECTORY_HOSTS[0]}${path}`, opts) };
+  } catch (e) {
+    if (!e || (e.status !== 403 && e.status !== 503)) throw e;
+    events.log('INFO', `Discovery: gayforfans directory HTTP ${e.status} — reading the JustTheGays performer directory`);
+    return { host: GFF_DIRECTORY_HOSTS[1], html: await client.text(`${GFF_DIRECTORY_HOSTS[1]}${path}`, opts) };
+  }
 }
 
 /** Posts inside the window that really parse to media (galleries and videos included). */
@@ -757,9 +817,7 @@ async function probeOnlyFans(lead, found, { budget, search = true } = {}) {
     const actors = [`${bh}.bsky.social`];
     if (bskyDash !== bh && BSKY_HANDLE.test(bskyDash)) actors.push(`${bskyDash}.bsky.social`);
     try {
-      const qs = actors.map((a) => `actors=${encodeURIComponent(a)}`).join('&');
-      const json = await bskyHttp.json(`${config.baseUrls.bsky}/xrpc/app.bsky.actor.getProfiles?${qs}`);
-      for (const p of json.profiles || []) {
+      for (const p of await fetchBskyProfiles(actors)) {
         if ((p.labels || []).some((l) => l.val === '!no-unauthenticated')) continue;
         const proven = linked(p.description);
         found(parseProfile(`https://bsky.app/profile/${p.handle}`), proven, { displayName: p.displayName, bio: p.description, avatarUrl: p.avatar, popularity: p.followersCount });
@@ -1528,11 +1586,17 @@ async function enrich({ limit = 12 } = {}) {
   const bsky = repo.candidates.needingDetails('bluesky', 25);
   if (bsky.length) {
     try {
-      const qs = bsky.map((c) => `actors=${encodeURIComponent(c.target)}`).join('&');
-      const json = await bskyHttp.json(`${config.baseUrls.bsky}/xrpc/app.bsky.actor.getProfiles?${qs}`);
-      const byHandle = new Map((json.profiles || []).map((p) => [String(p.handle).toLowerCase(), p]));
-      for (const c of bsky) {
-        const p = byHandle.get(String(c.target).toLowerCase());
+      // A target that is not a valid Bluesky actor is marked not found now: sent, it would fail the batch for the others.
+      const actorOf = new Map(bsky.map((c) => [c.id, normalizeBskyActor(c.target)]));
+      for (const c of bsky) if (!actorOf.get(c.id)) repo.candidates.update(c.id, nothingFound(c));
+      const sendable = bsky.filter((c) => actorOf.get(c.id));
+      const byActor = new Map();
+      for (const p of await fetchBskyProfiles(sendable.map((c) => actorOf.get(c.id)))) {
+        byActor.set(String(p.handle).toLowerCase(), p);
+        if (p.did) byActor.set(p.did, p);
+      }
+      for (const c of sendable) {
+        const p = byActor.get(actorOf.get(c.id));
         if (!p) { repo.candidates.update(c.id, nothingFound(c)); continue; }
         const j = judgeLookup(c, p.displayName, p.description);
         if (j.reject) { repo.candidates.update(c.id, j.reject); continue; }
@@ -1711,9 +1775,9 @@ async function gffDiscovery({ pages = 2, perPage = 6, coomerLimit = 12, maxFollo
   let page = parseInt(repo.discoveryState.get('gff.page', '0'), 10) || 0;
   for (let p = 0; p < Math.max(1, pages); p++) {
     if (aborted()) break;
-    let html;
+    let html; let host = GFF_DIRECTORY_HOSTS[0];
     try {
-      html = await http.text(`https://gayforfans.com/performer${page ? `?page=${page + 1}` : ''}`, { maxBytes: 3_000_000, retries: 1, headers: { accept: 'text/html' } });
+      ({ html, host } = await fetchPerformerDirectory(http, page));
     } catch (e) { events.log('WARN', `Discovery: gayforfans directory — ${e.message}`); break; }
     const cheerio = require('cheerio');
     const $ = cheerio.load(String(html));
@@ -1725,7 +1789,7 @@ async function gffDiscovery({ pages = 2, perPage = 6, coomerLimit = 12, maxFollo
       if (!m || seen.has(m[1])) return;
       seen.add(m[1]);
       const label = ($(el).text() || '').replace(/#\d+\s*/, '').replace(/\s+/g, ' ').trim();
-      links.push({ url: /^https?:/i.test(href) ? href : `https://gayforfans.com${href}`, slug: m[1], label });
+      links.push({ url: /^https?:/i.test(href) ? href : `${host}${href}`, slug: m[1], label });
     });
     await consider(links);
     page = gffNextPage(page);
@@ -1997,4 +2061,4 @@ function start() {
 }
 function stop() { stopFlag = true; clearInterval(timer); timer = null; }
 
-module.exports = { seedCreators, seedStatus, onlyfansDiscovery, coomerDiscovery, coomerIndexDiscovery, coomerNameDiscovery, gffDiscovery, gffNextPage, xhamsterDiscovery, pornhubDiscovery, directoryHarvest, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, redditPosters, imageKeywordDiscovery, _setImageProvider: (fn) => { imageProvider = fn; }, blueskySuggested, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };
+module.exports = { normalizeBskyActor, fetchBskyProfiles, archivePosts, fetchPerformerDirectory, seedCreators, seedStatus,onlyfansDiscovery, coomerDiscovery, coomerIndexDiscovery, coomerNameDiscovery, gffDiscovery, gffNextPage, xhamsterDiscovery, pornhubDiscovery, directoryHarvest, discoverCreatorMentions, mentionSearchQuery, probeFediMentions, noteOnlyFans, notePaidHandles, noteSearchedPaid, probeOnlyFans, run, status, statusSummary: status, start, stop, follow, reject, promote, consider, mineMentions, blueskyGraph, braveIdentity, braveTopics, communityDiscovery, creatorHangouts, redditPosters, imageKeywordDiscovery, _setImageProvider: (fn) => { imageProvider = fn; }, blueskySuggested, peopleSearch, signalYield, enrich, scoreOf, coreHandle, usable };

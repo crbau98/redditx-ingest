@@ -1,8 +1,8 @@
 'use strict';
 /**
  * v5 iteration item 3: Misskey people search closes the people-search gap beyond Bluesky/RedGIFs.
- * Uses the public `users/search-by-username` endpoint (no sign-in on open servers); gated
- * instances raise a skip error that discovery logs instead of failing the run.
+ * Uses the public `users/search` endpoint (no sign-in on open servers; `users/search-by-username` is the 404 fallback,
+ * covered in discovery-hardening.test.js). Gated instances raise a skip error that discovery logs instead of failing the run.
  */
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert/strict');
@@ -12,7 +12,7 @@ let mock; let host; let repo; let discovery; let misskey;
 
 before(async () => {
   mock = await start({
-    '/api/users/search-by-username': (req, res, url) => {
+    '/api/users/search': (req, res, url) => {
       let body = {};
       try { body = JSON.parse(req.bodyText || '{}'); } catch { /* ignore */ }
       if (!body.query) return { status: 400, json: { error: 'query required' } };

@@ -41,7 +41,7 @@ before(async () => {
         { username: 'plainfan', acct: 'plainfan', display_name: 'Plain Fan', note: '<p>just passing through</p>', followers_count: 2 },
       ] } };
     },
-    '/api/users/search-by-username': (req) => {
+    '/api/users/search': (req) => {
       let body = {};
       try { body = JSON.parse(req.bodyText || '{}'); } catch { /* ignore */ }
       if (!String(body.query || '').toLowerCase().includes('atlas_fit')) return { json: [] };

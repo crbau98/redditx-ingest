@@ -29,6 +29,8 @@ const config = require('../config');
 // Retry-After window instead of giving up at the shared 30 s ceiling.
 const REDDIT_WAIT = { maxCooldownWaitMs: 70_000 };
 const http = require('./http').forPlatform('reddit', 1100, { penalty: { ms: 60_000 } });
+// The archive is its own host and limiter key (same key discovery's archive reads use).
+const archiveHttp = require('./http').forPlatform('redditArchive', 300);
 const net = require('../lib/net');
 const rss = require('./rss');
 const events = require('../engine/events');
@@ -440,9 +442,40 @@ async function fetchProfile(name, notes) {
   }
 }
 
-/** Search NSFW-inclusive subreddits by keyword (discovery). OAuth when configured, else www, else old.reddit. */
+/**
+ * Search NSFW-inclusive subreddits by keyword (discovery). Reddit first: OAuth when configured, else www, else old.reddit.
+ * old.reddit answers 403/404 from datacenter IPs, and an empty answer is not proof of an empty search, so when Reddit
+ * throws or finds nothing the Arctic Shift archive's subreddit search answers the same question keyless.
+ */
 async function searchSubreddits(q, limit = 25) {
   if (!enabled()) return []; // discovery asks for a list: with Reddit off there is none, and no request is made
+  let found = null; let lastErr = null;
+  try { found = await searchSubredditsOnReddit(q, limit); } catch (e) { lastErr = e; }
+  if (found && found.length) return found;
+  return searchSubredditsOnArchive(q, limit, lastErr);
+}
+
+/** Arctic Shift subreddit search (prefix match). Rows map to the same shape as the Reddit search. */
+async function searchSubredditsOnArchive(q, limit, origErr) {
+  const prefix = encodeURIComponent(String(q || '').replace(/\s+/g, ''));
+  let json;
+  try {
+    json = await archiveHttp.json(`${config.baseUrls.redditArchive}/api/subreddits/search?subreddit_prefix=${prefix}&limit=${Math.max(1, Math.min(15, limit))}`, { headers: { 'user-agent': config.redditUserAgent } });
+  } catch (e) {
+    if (origErr) throw origErr; // both refused: report Reddit's error, the one the caller reads
+    return [];
+  }
+  return ((json && json.data) || []).filter((d) => d && d.display_name).map((d) => {
+    aiguard.mark([d.title, d.public_description], 'reddit');
+    return {
+      name: d.display_name, title: d.title || null, description: d.public_description || null, subscribers: d.subscribers || 0,
+      over18: !!d.over18, icon: decodeHtml(d.community_icon || d.icon_img || '').split('?')[0] || null,
+    };
+  });
+}
+
+async function searchSubredditsOnReddit(q, limit = 25) {
+  if (!enabled()) return [];
   const qs = `q=${encodeURIComponent(q)}&include_over_18=on&limit=${limit}&raw_json=1`;
   const t = await oauthToken().catch(() => null);
   const tries = t

@@ -18,6 +18,7 @@ const net = require('../lib/net');
 const http = require('./http').forPlatform('bluesky', 400);
 const { toIso, clip, errorDetail, repostsOn } = require('./util');
 const { extractLinks } = require('../lib/links');
+const { normalizeBskyActor } = require('../lib/bsky-actor');
 
 const base = config.baseUrls.bsky;
 const ADULT_LABELS = new Set(['porn', 'sexual', 'nudity', 'graphic-media']);
@@ -188,7 +189,10 @@ async function searchActors(q, limit = 25) {
 
 /** Bluesky's own "similar accounts" for an actor (discovery suggestions). Public AppView endpoint. */
 async function suggestedFor(actor) {
-  const json = await http.json(`${base}/xrpc/app.bsky.graph.getSuggestedFollowsByActor?actor=${encodeURIComponent(actor)}`);
+  // A bare name ("Trick") is a 400 for this endpoint: send the domain handle it means, or nothing at all.
+  const actorName = normalizeBskyActor(actor);
+  if (!actorName) return [];
+  const json = await http.json(`${base}/xrpc/app.bsky.graph.getSuggestedFollowsByActor?actor=${encodeURIComponent(actorName)}`);
   return (json.suggestions || []).map(actorOut).filter((a) => a.handle);
 }
 

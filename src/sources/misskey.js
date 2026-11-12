@@ -161,11 +161,20 @@ module.exports = {
 
   /**
    * People search: accounts whose username or name match, on one instance.
-   * `users/search-by-username` needs no sign-in on open servers; instances that gate it
-   * raise a skip error (reported on the feed, never fatal to discovery).
+   * Current servers serve `users/search`; the older `users/search-by-username` answers 404 there. Only a 404
+   * from the current endpoint falls back to the older one. Instances that gate either endpoint raise a skip
+   * error (reported on the feed, never fatal to discovery).
    */
   async searchUsers(q, host, limit = 10) {
-    const users = await api(host, 'users/search-by-username', { query: String(q || '').slice(0, 60), limit: Math.max(1, Math.min(30, limit)) });
+    const term = String(q || '').slice(0, 60);
+    const n = Math.max(1, Math.min(30, limit));
+    let users;
+    try {
+      users = await api(host, 'users/search', { query: term, limit: n, offset: 0, localOnly: true });
+    } catch (e) {
+      if (!e || e.status !== 404) throw e;
+      users = await api(host, 'users/search-by-username', { username: term, limit: n, local: true });
+    }
     return (Array.isArray(users) ? users : []).slice(0, limit).map((u) => ({
       username: u.username, host: (u.host || host).toLowerCase(),
       displayName: u.name || u.username, description: u.description || null,
