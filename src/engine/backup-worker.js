@@ -11,30 +11,47 @@
 const { parentPort, workerData } = require('worker_threads');
 const Database = require('better-sqlite3');
 
-/** The trending score, chunked (the same statement as repo.media.recomputeHotChunked: db/functions HOT_UPDATE_RANGE_SQL). */
-async function recomputeHot(db, { tolerance = 0.02, chunk = 2000 } = {}) {
-  const stmt = db.prepare(require('../db/functions').HOT_UPDATE_RANGE_SQL);
+/**
+ * Trending score, chunked. The scan is a read (HOT_SELECT_RANGE_SQL): the JS score functions run under a shared
+ * snapshot and hold no write lock. Only the rows that actually drifted are written, 250 at a time, so the exclusive
+ * lock is a short transaction instead of the whole scan.
+ */
+async function recomputeHot(db, { tolerance = 0.02, chunk = 2000, now = Date.now(), writeBatch = 0 } = {}) {
+  const fns = require('../db/functions');
+  const batchSize = writeBatch > 0 ? writeBatch : fns.HOT_WRITE_BATCH;
+  const select = db.prepare(fns.HOT_SELECT_RANGE_SQL);
+  const write = db.prepare(fns.HOT_WRITE_ONE_SQL);
+  const apply = db.transaction((rows) => {
+    let n = 0;
+    for (const row of rows) n += write.run(row.next_hot, row.seq).changes;
+    return n;
+  });
   const max = db.prepare("SELECT MAX(seq) AS m FROM media WHERE publish_state = 'published'").get();
   const top = max && max.m ? max.m : 0;
-  const now = Date.now();
   let from = 0;
   let updated = 0;
   while (from < top) {
     const to = Math.min(from + chunk, top);
-    try { updated += stmt.run({ now, tol: tolerance, from, to }).changes; } catch (e) { /* a live writer held a row: take it next pass */ }
+    try {
+      const rows = select.all({ now, tol: tolerance, from, to });
+      for (let i = 0; i < rows.length; i += batchSize) updated += apply(rows.slice(i, i + batchSize));
+    } catch { /* a live writer held a row: take it next pass */ }
     from = to;
-    await new Promise((r) => setTimeout(r, 5)); // one writer at a time in WAL: let ingest take its turn
+    await new Promise((r) => setTimeout(r, 5)); // let the serving connection take a write between chunks
   }
   return updated;
 }
 
-(async () => {
+async function main() {
   let db = null;
   try {
     db = new Database(workerData.dbPath);
     db.pragma('busy_timeout = 10000');
     db.pragma('journal_mode = WAL');
     if (workerData.task === 'hot') {
+      // Checkpoints belong to the nightly backup. A hot pass that dirties thousands of pages must not
+      // checkpoint mid-scan on this connection while other writers are waiting.
+      db.pragma('wal_autocheckpoint = 0');
       require('../db/functions').hotScore(db);
       const updated = await recomputeHot(db);
       db.close();
@@ -58,4 +75,8 @@ async function recomputeHot(db, { tolerance = 0.02, chunk = 2000 } = {}) {
     try { if (db) db.close(); } catch { /* ignore */ }
     parentPort.postMessage({ ok: false, error: String(e.message || e) });
   }
-})();
+}
+
+if (parentPort) main();
+
+module.exports = { recomputeHot };

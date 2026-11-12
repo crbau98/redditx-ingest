@@ -20,6 +20,8 @@ const dir = () => path.join(config.dataDir, 'backups');
 const enabled = () => config.dbPath !== ':memory:';
 const WORKER_TIMEOUT_MS = 10 * 60 * 1000;
 let timer = null;
+/** Hot and backup workers share one writer. A second spawn while one is in flight is skipped, not queued. */
+let activeWorkers = 0;
 
 function list() {
   if (!enabled() || !fs.existsSync(dir())) return [];
@@ -50,10 +52,20 @@ function runInline(file) {
 
 /** Production path: backup + optimize + checkpoint on their own connection and thread. */
 function runOnWorker(file, task = 'backup') {
+  activeWorkers++;
+  let released = false;
+  const release = () => { if (released) return; released = true; activeWorkers--; };
   return new Promise((resolve, reject) => {
-    const w = new Worker(path.join(__dirname, 'backup-worker.js'), { workerData: { dbPath: config.dbPath, file, task } });
+    let w;
+    try {
+      w = new Worker(path.join(__dirname, 'backup-worker.js'), { workerData: { dbPath: config.dbPath, file, task } });
+    } catch (e) {
+      release();
+      reject(e);
+      return;
+    }
     let settled = false;
-    const finish = (fn, value) => { if (settled) return; settled = true; clearTimeout(timer); fn(value); };
+    const finish = (fn, value) => { if (settled) return; settled = true; clearTimeout(timer); release(); fn(value); };
     const timer = setTimeout(() => {
       w.terminate().catch(() => {});
       finish(reject, new Error('backup worker did not finish within 10 minutes'));
@@ -99,6 +111,7 @@ function run({ backup = true } = {}) {
 
 /** The trending-score refresh, off the serving thread (engine/engine.js calls this every ten minutes). */
 function hotScore() {
+  if (activeWorkers > 0) return Promise.resolve({ updated: 0, skipped: true });
   if (!enabled() || config.isTest || process.env.PRISM_BACKUP_INLINE === '1') return Promise.resolve({ updated: 0 });
   return runOnWorker(null, 'hot');
 }
@@ -128,4 +141,6 @@ function start() {
 
 function stop() { clearInterval(timer); timer = null; }
 
-module.exports = { run, hotScore, list, prune, nightly, start, stop, dir };
+function _setActiveWorkers(n) { activeWorkers = n; }
+
+module.exports = { run, hotScore, list, prune, nightly, start, stop, dir, _setActiveWorkers };

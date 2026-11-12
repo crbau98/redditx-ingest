@@ -22,9 +22,11 @@ test('repo.media.recomputeHot and recomputeHotChunked prepare exactly the export
   assert.ok(seen.every((s) => s === fns.HOT_UPDATE_SQL || s === fns.HOT_UPDATE_RANGE_SQL), 'no other hot UPDATE text is built');
 });
 
-test('the backup worker builds the same range statement, with no copy of its own', () => {
+test('the backup worker reads drifted rows, then writes them, and does not copy the SQL', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'engine', 'backup-worker.js'), 'utf8');
-  assert.match(src, /db\.prepare\(require\('\.\.\/db\/functions'\)\.HOT_UPDATE_RANGE_SQL\)/);
+  assert.match(src, /HOT_SELECT_RANGE_SQL/);
+  assert.match(src, /HOT_WRITE_ONE_SQL/);
+  assert.match(src, /wal_autocheckpoint = 0/);
   assert.doesNotMatch(src, /UPDATE media SET hot/);
   assert.match(src, /require\('\.\.\/db\/functions'\)\.hotScore\(db\)/, 'and still registers hot_score on its own connection');
   const media = fs.readFileSync(path.join(__dirname, '..', 'src', 'db', 'repos', 'media.js'), 'utf8');
