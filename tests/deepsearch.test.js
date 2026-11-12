@@ -57,9 +57,15 @@ describe('corroboration', () => {
     assert.equal(deepsearch.samePerson(c, 'doe'), false, 'a bare surname is not enough');
     assert.equal(deepsearch.samePerson(c, 'officialjakedoe'), true, 'official- prefix is the same stem');
     assert.equal(deepsearch.samePerson({ handle: 'jake', display_name: 'Jake' }, 'mrmusclebearx', ['mrmusclebear']), true, 'a trailing x on a known handle');
-    assert.equal(deepsearch.samePerson({ handle: 'jake', display_name: 'Jake' }, 'mrmusclebeaz', ['mrmusclebear']), true, 'one edit on a 7+ character handle');
+    assert.equal(deepsearch.samePerson({ handle: 'jake', display_name: 'Jake' }, 'mrmusclebeaz', ['mrmusclebear']), true, 'one trailing edit on a 10+ character handle');
     assert.equal(deepsearch.samePerson({ handle: 'jake', display_name: 'Jake' }, 'totallyunrelated', ['mrmusclebear']), false, 'a different known handle is not him');
     assert.equal(deepsearch.samePerson({ handle: 'theodore', display_name: 'Theodore' }, 'odorexxx'), false, 'Theodore does not lose its the-');
+    assert.equal(deepsearch.samePerson({ display_name: 'Ryan Fitness', handle: 'ryanfitness', slug: 'ryanfitness' }, 'ryan'), false, 'a bare given-name slice of his handle is not his account');
+    assert.equal(deepsearch.samePerson({ display_name: 'Ryan Fitness', handle: 'ryanfitness', slug: 'ryanfitness' }, 'fitness'), false, 'a generic word slice of his handle is not his account');
+    assert.equal(deepsearch.samePerson({ display_name: 'Ben Smith', handle: 'bensmith', slug: 'bensmith' }, 'bens'), false, 'a 4-char prefix slice is not his account');
+    assert.equal(deepsearch.samePerson({ display_name: 'Brandon', handle: 'brandon', slug: 'brandon' }, 'brendon'), false, 'vowel swap on a 7-char given name is a different man');
+    assert.equal(deepsearch.samePerson({ display_name: 'Brandon', handle: 'brandon', slug: 'brandon' }, 'brandan'), false, 'vowel swap brandon/brandan stays separate');
+    assert.equal(deepsearch.samePerson({ display_name: 'José', handle: 'jose', slug: 'jose' }, 'josé'), true, 'diacritics fold cleanly');
   });
 });
 

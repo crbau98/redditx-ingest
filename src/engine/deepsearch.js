@@ -117,7 +117,7 @@ const blankFound = () => ({ pages: 0, feeds: 0, paid: 0, pictures: 0, reviews: 0
 
 /* ------------------------------------------------------------------ queries */
 
-const compact = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const compact = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
 /**
  * Is this ACCOUNT his? Only when the account's own handle is his: the same as his name or handle, or one containing it
@@ -148,32 +148,35 @@ function stemHandle(norm) {
   return s;
 }
 
-/** True when the two compact handles differ by at most one insert, delete, or substitution. */
+/**
+ * True when two long compact handles (>= 10 chars) share the exact prefix and differ only in their
+ * final character, or when an 8+ char handle has one trailing char or one doubled letter.
+ * Internal vowel/letter swaps on given names (brandon / brendon / branden) are rejected.
+ */
 function editWithinOne(a, b) {
   if (a === b) return true;
-  if (Math.abs(a.length - b.length) > 1) return false;
-  const m = a.length;
-  const n = b.length;
-  let prev = new Array(n + 1);
-  let cur = new Array(n + 1);
-  for (let j = 0; j <= n; j++) prev[j] = j;
-  for (let i = 1; i <= m; i++) {
-    cur[0] = i;
-    let rowMin = cur[0];
-    for (let j = 1; j <= n; j++) {
-      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
-      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
-      if (cur[j] < rowMin) rowMin = cur[j];
-    }
-    if (rowMin > 1) return false;
-    const swap = prev; prev = cur; cur = swap;
+  const minLen = Math.min(a.length, b.length);
+  const maxLen = Math.max(a.length, b.length);
+  if (maxLen - minLen > 1) return false;
+  if (a.length === b.length && a.length >= 10) {
+    return a.slice(0, -1) === b.slice(0, -1);
   }
-  return prev[n] <= 1;
+  if (maxLen - minLen === 1 && minLen >= 8) {
+    const longer = a.length > b.length ? a : b;
+    const shorter = a.length > b.length ? b : a;
+    if (longer.startsWith(shorter)) return true;
+    for (let i = 1; i < longer.length; i++) {
+      if (longer[i] === longer[i - 1] && longer.slice(0, i) + longer.slice(i + 1) === shorter) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**
  * Is this ACCOUNT his? His own name or handle (containment needs enough letters), a known alias or lead,
- * the same stem once filler is removed, or one edit away on a handle of 7+ characters.
+ * the same stem once filler is removed, or a near-suffix match on a long handle.
  * A third argument that is not a list is ignored: a snippet that merely mentions him is not a handle.
  * @param {object} creator
  * @param {string} handle
@@ -191,12 +194,12 @@ function samePerson(creator, handle, knownHandles = []) {
     if (!n || seen.has(n)) continue;
     seen.add(n);
     if (n === h) return true;
-    // Containment stays on his own name and handle. An alias of "smith" must not claim every *smith account.
-    if (i < primary.length && ((h.length >= 5 && n.length >= 5 && h.includes(n)) || (n.length >= 5 && h.length >= 4 && n.includes(h)))) return true;
+    // Containment only when the candidate handle contains his full 5+ char name/handle (never a short slice like "ryan" or "bens" inside his name).
+    if (i < primary.length && h.length >= 5 && n.length >= 5 && h.includes(n)) return true;
     const hs = stemHandle(h);
     const ns = stemHandle(n);
     if (hs.length >= 5 && hs === ns) return true;
-    if (h.length >= 7 && n.length >= 7 && editWithinOne(h, n)) return true;
+    if (h.length >= 8 && n.length >= 8 && editWithinOne(h, n)) return true;
   }
   return false;
 }
