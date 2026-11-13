@@ -271,8 +271,13 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
       repo.feeds.finishRun(feed.id, { status: 'error', error, failures, nextRunAt: computeNextRun(feed, failures, 0) });
     } catch { /* the release below must still happen */ }
     finish('error', { error });
+    // The hung promise never settles, so tick()'s .finally() never refills this slot: refill it here.
+    if (!state.stopRequested && state.timer) setImmediate(tick);
   }, opts.hardDeadlineMs || RUN_HARD_MS);
   if (hardStop.unref) hardStop.unref();
+  // For tick()'s in-memory watchdog: a run whose timers were lost can still be closed and its slot freed.
+  entry.startedMs = started;
+  entry.forceFinish = (err) => finish('error', { error: err });
 
   try {
     if (!adapter || !adapter.kinds.includes(feed.kind)) {
@@ -547,6 +552,13 @@ async function tick() {
   try {
     // Watchdog: a run row still 'running' past the hard deadline belongs to no live run (or one that lost track): close it.
     try { const n = repo.runs.timeoutStale(RUN_HARD_MS); if (n) events.log('WARN', `Watchdog: ${n} run(s) still running after ${RUN_HARD_MS / 60000} min marked as errors`); } catch { /* never stop the tick */ }
+    // And in memory: an entry past the hard deadline (plus grace) must never hold a concurrency slot for good.
+    for (const [feedId, entry] of state.running) {
+      if (!entry.startedMs || Date.now() - entry.startedMs <= RUN_HARD_MS + 15000) continue;
+      try { if (entry.forceFinish) entry.forceFinish('watchdog: evicted stuck in-memory run'); } catch { /* the delete below must still happen */ }
+      state.running.delete(feedId);
+      events.log('WARN', `Watchdog: evicted stuck in-memory run ${entry.platform}:${feedId}`);
+    }
     const cfg = settingsStore.get();
     if (!state.running.size) state.stopRequested = false;
     while (state.running.size < cfg.maxConcurrentFeeds && !state.stopRequested) {
@@ -752,7 +764,7 @@ function start() {
     // Chunked: the refresh rewrites every published row whose score drifted, and one statement
     // for the whole library blocks the event loop for minutes on a large one.
     refreshHot().then(() => { try { repo.settings.set('hot_recomputed_at', new Date().toISOString()); } catch { /* ignore */ } }).catch((e) => events.log('ERR', `maintenance: ${e.message}`));
-    try { repo.runs.prune(settingsStore.get().keepRunHistoryDays); } catch (e) { events.log('ERR', `maintenance: ${e.message}`); }
+    require('../lib/blockwatch').around('runsPrune', () => repo.runs.prune(settingsStore.get().keepRunHistoryDays)).catch((e) => events.log('ERR', `maintenance: ${e.message}`));
   }, 10 * 60000);
   state.hotTimer.unref();
   setTimeout(() => {

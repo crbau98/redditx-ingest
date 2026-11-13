@@ -41,7 +41,10 @@ const FRESH_MAX = 8;       // newest RSS videos read per run
 const SITEMAP_MAX_BYTES = 8_000_000;
 const PAGE_MAX_BYTES = 900_000;
 const SEEN_KEEP = 2000;
-const DEFAULT_PER_RUN = 40;
+// 18 video pages = up to 36 requests at the 1.2 s spacing: well inside the 150 s run timeout (40 timed out on production).
+const DEFAULT_PER_RUN = 18;
+/** Stop starting new pages after this long, so the run returns its items and cursor before the engine's 150 s timeout. */
+const SOFT_TIMEOUT_MS = 95_000;
 const DEFAULT_DAILY = 200;
 
 const idOf = (url) => {
@@ -158,6 +161,9 @@ async function fetchFeed(feed, ctx = {}) {
   const room = Math.max(0, daily - pagesToday);
   const budget = Math.min(perRun, room, Number(ctx.limit) || perRun);
   const notes = [];
+  const deadlineMs = Date.now() + (Number(ctx.softTimeoutMs) || SOFT_TIMEOUT_MS);
+  let late = false;
+  const pastDeadline = () => { if (!late && Date.now() >= deadlineMs) { late = true; notes.push('soft deadline reached: stopping early, the cursor resumes here'); } return late; };
   const cursor = { ...cursor0, day, pagesToday, seen: Array.isArray(cursor0.seen) ? cursor0.seen : [] };
   if (!budget) return { items: [], cursor, notes: [`daily page cap reached (${daily})`], via: 'boyfriendtv' };
 
@@ -214,7 +220,7 @@ async function fetchFeed(feed, ctx = {}) {
   const fresh = await freshVideos(seen).catch(() => []);
   for (const v of fresh) {
     if (!budget || pages >= budget || items.length >= budget) break;
-    if (ctx.aborted && ctx.aborted()) break;
+    if ((ctx.aborted && ctx.aborted()) || pastDeadline()) break;
     if (await read(v.url, v.id, v)) cursor.pagesToday = ++pagesToday;
     seen.add(v.id);
   }
@@ -223,7 +229,7 @@ async function fetchFeed(feed, ctx = {}) {
   let offset = Number(cursor.offset) || 0;
   let children = null;
   while (items.length < budget && pages < budget) {
-    if (ctx.aborted && ctx.aborted()) break;
+    if ((ctx.aborted && ctx.aborted()) || pastDeadline()) break;
     if (!children) {
       children = await sitemapChildren().catch(() => []);
       if (!children.length) { notes.push('sitemap index could not be read'); break; }
@@ -239,10 +245,13 @@ async function fetchFeed(feed, ctx = {}) {
     }
     if (offset >= urls.length) { offset = 0; const next = children[children.indexOf(child) + 1]; if (!next) break; child = next; continue; }
     const want = Math.min(budget - pages, budget - items.length);
+    const start = offset;
     const slice = urls.slice(offset, offset + want);
     offset += slice.length;
-    for (const url of slice) {
-      if (pages >= budget || items.length >= budget) break;
+    for (let k = 0; k < slice.length; k++) {
+      // A stop mid-slice resumes at the first url not read, not past the slice.
+      if (pages >= budget || items.length >= budget || pastDeadline()) { offset = start + k; break; }
+      const url = slice[k];
       const id = idOf(url);
       if (!id || seen.has(id)) continue;
       if (await read(url, id)) cursor.pagesToday = ++pagesToday;
@@ -293,6 +302,8 @@ async function resolve(pageUrl) {
 module.exports = {
   _videoPage: videoPage,
   _hlsFromEmbed: hlsFromEmbed,
+  DEFAULT_PER_RUN,
+  SOFT_TIMEOUT_MS,
   platform: 'boyfriendtv',
   label: 'BoyfriendTV',
   color: '#38bdf8',

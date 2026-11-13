@@ -14,6 +14,10 @@ const DEAD = [
 /** Platform rows that the host does not speak: gayfr.social is a Mastodon server, so Misskey rows there always 404. */
 const WRONG_PLATFORM = [
   { platform: 'misskey', host: 'gayfr.social', reason: 'gayfr.social is Mastodon: /api/users/show is 404' },
+  { platform: 'mastodon', host: 'fanhub.com', reason: 'fanhub.com is not a Mastodon server (/api/v1/accounts/lookup returns HTML)' },
+  { platform: 'mastodon', host: 'theb.co', reason: 'theb.co is not a Mastodon server (/api/v1/accounts/lookup returns HTML)' },
+  { platform: 'peertube', host: 'xxxerome.com', reason: 'xxxerome.com is not a PeerTube server' },
+  { platform: 'peertube', host: 'onlyfaphouse.com', reason: 'onlyfaphouse.com is not a PeerTube server' },
 ];
 
 /**

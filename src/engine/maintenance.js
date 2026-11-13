@@ -105,7 +105,7 @@ async function imageSweep({ limit = 12, settings } = {}) {
   if (!rows.length) { res.done = true; return res; }
   for (const row of rows) {
     after = row.seq;
-    await new Promise((res2) => setImmediate(res2)); // never a whole pass in one blocking stretch (see faceSweep)
+    await new Promise((res2) => setTimeout(res2, 0)); // never a whole pass in one blocking stretch; a timer, not setImmediate, so health probes are not starved
     const v = await imagefilter.checkItem({ mediaType: row.media_type, mediaUrl: row.media_url, previewUrl: row.preview_url, thumbnailUrl: row.thumbnail_url },
       { threshold: (s.imageFilterThreshold || 50) / 100 });
     res.checked++;
@@ -146,7 +146,7 @@ async function physiqueSweep({ limit = 12, settings } = {}) {
   if (!rows.length) { res.done = true; return res; }
   const creators = new Set();
   for (const row of rows) {
-    await new Promise((res2) => setImmediate(res2)); // one picture at a time: never a whole pass in one block
+    await new Promise((res2) => setTimeout(res2, 0)); // one picture at a time; a timer (like hashSweep) so incoming requests get a turn
     const v = await imagefilter.checkItem({ mediaType: row.media_type, mediaUrl: row.media_url, previewUrl: row.preview_url, thumbnailUrl: row.thumbnail_url },
       { threshold: (s.imageFilterThreshold || 50) / 100, faces: s.imageFilter === true, body: true });
     // the settings may have changed while the model was busy (that request already re-applied the library): judge this row
@@ -528,7 +528,7 @@ function startImageSweep() {
   if (sweepTimer) return;
   const blockwatch = require('../lib/blockwatch');
   sweepTimer = setInterval(async () => {
-    try { retireDeadFeeds(); } catch (e) { events.log('WARN', `Feed retirement: ${e.message}`); }
+    try { await blockwatch.around('retireDeadFeeds', () => retireDeadFeeds()); } catch (e) { events.log('WARN', `Feed retirement: ${e.message}`); }
     if (sweepBusy) return;
     const s = settingsStore.get();
     // Face enrolment gets its own small newest-first pass even when the image sweep is off: it is

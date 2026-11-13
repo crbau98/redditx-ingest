@@ -313,6 +313,8 @@ async function imageKeywordDiscovery({ keywords = 1, hits = IMAGE_HITS, leads = 
     try { rows = await searchImages(kw, hits); } catch (e) { events.log('WARN', `Discovery: image search "${kw}" — ${e.message}`); continue; }
     out.searched++;
     const seen = new Set();
+    // Loaded once per batch, not per hit: the index is complete before a check (a partial one can miss a duplicate or a blocked picture).
+    if (rows.length) await dedupe.loadChunked().catch(() => {});
     for (const hit of rows) {
       if (aborted() || out.found >= leads) break;
       const page = hit.pageUrl || hit.url;
@@ -331,7 +333,7 @@ async function imageKeywordDiscovery({ keywords = 1, hits = IMAGE_HITS, leads = 
         hex = await phash.hashBuffer(res.body);
       } catch { /* an unreadable picture still proves the page exists, but cannot be de-duplicated */ }
       if (hex) {
-        await dedupe.loadChunked().catch(() => {}); // the index is complete before a check: a partial one can miss a duplicate or a blocked picture
+        await new Promise((r) => setTimeout(r, 0)); // one hit at a time: a batch of checks never blocks the loop in one stretch
         const d = dedupe.check({ phash: hex, mediaType: 'image' }, { distance: 6 });
         if (d.dup || d.blocked) { out.duplicates++; continue; }
       }

@@ -416,7 +416,13 @@ async function search(q, { count = 20, budget = 40, fresh = false, site, preferK
     const dropped = [];
     for (const a of answered) {
       if (!a.results.length) continue;
-      if (!coherent(a.results, q)) { dropped.push(a.name); continue; }
+      if (!coherent(a.results, q)) {
+        // SearXNG merges several engines: one noisy engine can sink the whole set's share. Keep its hits that name the
+        // query themselves; Bing/DuckDuckGo decoy sets are still dropped whole.
+        const own = a.name === 'searxng' ? a.results.filter((r) => coherent([r], q, { minShare: 1 })) : [];
+        if (own.length) { kept.push({ ...a, results: own }); continue; }
+        dropped.push(a.name); continue;
+      }
       kept.push(a);
     }
     const merged = dedupe(kept.flatMap((a) => a.results.map((r) => ({ ...r, provider: a.name }))));
