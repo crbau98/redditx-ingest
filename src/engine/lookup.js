@@ -25,6 +25,7 @@ const takedowns = require('../lib/takedowns');
 const { femaleCheck, classify } = require('../lib/scope');
 const { ofLink } = require('../lib/onlyfans');
 const paid = require('../lib/paid');
+const { normAlias, usableAlias } = require('../lib/alias');
 const events = require('./events');
 const settingsStore = require('../settings');
 
@@ -158,7 +159,7 @@ const keyOf = (c) => `${c.platform}:${c.kind}:${String(c.target).toLowerCase()}`
 
 class Pool {
   constructor() { this.map = new Map(); }
-  add(spec, { source, evidence, displayName, bio, avatarUrl, followers, handleExact } = {}) {
+  add(spec, { source, evidence, displayName, bio, avatarUrl, followers, handleExact, revealed } = {}) {
     if (!spec || spec.external || !spec.ingestable) return null;
     if (!['user', 'page'].includes(spec.kind) && !(spec.kind === 'channel' && spec.platform === 'youtube')) return null; // a person's accounts, not communities / searches
     if (spec.platform === 'web' || spec.platform === 'rss') return null;
@@ -177,6 +178,7 @@ class Pool {
     if (avatarUrl && !c.avatarUrl) c.avatarUrl = avatarUrl;
     if (followers) c.followers = Math.max(c.followers, followers);
     if (handleExact) c.handleExact = true;
+    if (revealed) c.revealed = true; // a handle a bio or paid page revealed (Coomer), not one a visitor typed
     return c;
   }
   list() { return [...this.map.values()]; }
@@ -548,7 +550,7 @@ async function lookup(input, { imageCheck = true } = {}) {
         for (const eh of extraHandles) {
           const hit = index.lookup(eh);
           if (hit) {
-            pl.add({ platform: 'coomer', kind: 'user', target: `${hit.service}/${hit.id}`, label: `${hit.id} (${hit.service} on Coomer)`, ingestable: true }, { source: 'bio-link', evidence: `handle “${hit.id}” on ${c.label || c.platform}`, displayName: c.displayName || hit.id });
+            pl.add({ platform: 'coomer', kind: 'user', target: `${hit.service}/${hit.id}`, label: `${hit.id} (${hit.service} on Coomer)`, ingestable: true }, { source: 'bio-link', evidence: `handle “${hit.id}” on ${c.label || c.platform}`, displayName: c.displayName || hit.id, revealed: true });
           }
         }
       }
@@ -599,6 +601,14 @@ async function lookup(input, { imageCheck = true } = {}) {
   }
   const queryLinks = externals.slice(); // paid pages named in the query itself, before any account's own pages are added
   const out = []; const poolOf = new Map(); // shown account -> the pool candidate it came from
+  const paidOf = new Map(); // shown account -> whether one of its paid pages points at the query (a backlink)
+  // The names PRISM already holds for a followed creator (creator_aliases, normalised), read once per creator per lookup.
+  const aliasNorms = new Map();
+  const creatorAliasNorms = (creatorId) => {
+    if (!creatorId) return null;
+    if (!aliasNorms.has(creatorId)) aliasNorms.set(creatorId, repo.db.prepare('SELECT norm FROM creator_aliases WHERE creator_id = ?').all(creatorId).map((r) => r.norm));
+    return aliasNorms.get(creatorId);
+  };
   for (const c of pl.list()) {
     const cExt = paidByCandidate.get(c) || [];
     if (c.platform === 'linkinbio') { externals.push(...cExt); continue; }
@@ -633,7 +643,7 @@ async function lookup(input, { imageCheck = true } = {}) {
       confidence: Math.round(conf * 100) / 100, tier: conf >= 0.7 ? 'strong' : conf >= 0.45 ? 'likely' : 'weak',
       status: blocked ? 'blocked' : existing ? 'following' : 'new', feedId: existing ? existing.id : null, creatorId: existing ? existing.creator_id : null,
     };
-    out.push(entry); poolOf.set(entry, c);
+    out.push(entry); poolOf.set(entry, c); paidOf.set(entry, paidMatch);
   }
   out.sort((a, b) => b.confidence - a.confidence || b.sampleCount - a.sampleCount);
 
@@ -654,6 +664,8 @@ async function lookup(input, { imageCheck = true } = {}) {
     c.groupId = grouping.groupOf.get(k) || null;
     c.sameAs = grouping.edges.filter((e) => e.a === k || e.b === k).map((e) => ({ type: e.type, detail: e.detail, with: e.a === k ? e.b : e.a }));
     c.externalLinks = (paidByCandidate.get(poolOf.get(c)) || []).slice(0, 6);
+    // Why it matched, as explicit keys: computed after grouping, so a link edge found there counts as a backlink too.
+    c.provenance = provenanceKinds(poolOf.get(c), c, { q, paidMatch: paidOf.get(c) === true, creatorAliases: creatorAliasNorms(c.creatorId) });
   }
 
   const seenExt = new Set();
@@ -714,6 +726,45 @@ function sharedName(A, B) {
   const names = (c) => [c.displayName, String(c.target || '').split('@')[0].replace(/\.bsky\.social$/i, '')].map((x) => normAlias(x)).filter(usableAlias);
   const a = new Set(names(A));
   return names(B).some((n) => a.has(n));
+}
+
+/* ------------------------------------------------------------------ provenance */
+// Why a shown account matched, as the keys the front end labels (find.js). A key is set only on evidence the lookup
+// actually has: a guess is never labelled, and an unnamed or fuzzy match gets no pill at all.
+const PROVENANCE_ORDER = ['exact', 'backlink', 'alias', 'directory', 'web'];
+/**
+ * The provenance keys for one shown account.
+ *   exact      its handle is the one typed (case, accents and punctuation ignored)
+ *   backlink   a bio or link-in-bio names it, one of its paid pages points at the query, or it shares a link page with
+ *              another found account or links to one that links back (grouping edges 'link-page' and mutual 'profile-link')
+ *   alias      it is another spelling of the typed name (the same name key, so a filler word, a platform suffix or
+ *              punctuation differs), a handle a bio or paid page revealed, or a name PRISM already holds for the creator
+ *              it belongs to. Only when its own handle is not the typed one.
+ *   directory  a platform's own people search or performer directory returned it
+ *   web        a web or media search returned its page
+ *
+ * @param {object} pool   the pool candidate (sources, revealed)
+ * @param {object} shown  the shown entry (target, sameAs)
+ * @param {object} opts   { q: parseQuery() result, paidMatch: boolean, creatorAliases: string[] | null (normalised names) }
+ * @returns {string[]}    the keys, once each, in PROVENANCE_ORDER
+ */
+function provenanceKinds(pool, shown, { q, paidMatch = false, creatorAliases = null } = {}) {
+  const kinds = new Set();
+  const sources = (pool && pool.sources) || new Set();
+  const typed = [compact(q.raw), compact(q.handles[0])].filter(Boolean);
+  const exact = typed.includes(compact(String(shown.target).split('@')[0]));
+  if (exact) kinds.add('exact');
+  // A one-way profile link is not a backlink for the account that links out: the target gets the bio-link source itself.
+  const linked = (shown.sameAs || []).some((e) => e.type === 'link-page' || (e.type === 'profile-link' && /link to each other/.test(e.detail || '')));
+  if (sources.has('bio-link') || paidMatch || linked) kinds.add('backlink');
+  const queryNorms = [normAlias(q.raw), ...q.handles.map((h) => normAlias(h))].filter(usableAlias);
+  const own = normAlias(shown.target);
+  const spelled = !exact && usableAlias(own) && queryNorms.includes(own);
+  const namedByCreator = !exact && !!creatorAliases && creatorAliases.some((n) => queryNorms.includes(n));
+  if (spelled || namedByCreator || (pool && pool.revealed)) kinds.add('alias');
+  if (sources.has('people-search')) kinds.add('directory');
+  if (sources.has('web-search') || sources.has('media-search')) kinds.add('web');
+  return PROVENANCE_ORDER.filter((k) => kinds.has(k));
 }
 
 /**
@@ -950,4 +1001,4 @@ async function findAndFollow(input, { minConfidence = 0.7 } = {}) {
   return { ...found, followed };
 }
 
-module.exports = { lookup, run: lookup, follow, findAndFollow, checkSelections, groupAccounts, searchWeb, parseQuery, nameSimilarity, directSpecs, dice, isNamesake };
+module.exports = { lookup, run: lookup, follow, findAndFollow, checkSelections, groupAccounts, searchWeb, parseQuery, nameSimilarity, directSpecs, dice, isNamesake, provenanceKinds, PROVENANCE_ORDER };

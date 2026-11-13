@@ -6,7 +6,7 @@ import { navigate, href } from '../router.js';
 import { platformLabel, platformColor } from '../store.js';
 import { attachSuggest } from '../components/suggest.js';
 import { lookupCache } from '../lookup-cache.js';
-import { normalizeJob, provenanceOf } from '../components/deep-pull-model.js';
+import { normalizeJob, provenanceOf, PROVENANCE } from '../components/deep-pull-model.js';
 
 // What a lookup checks, in order. The server answers in one response, so these steps are timed to the usual order of
 // work. They are not reported progress: the last step stays "in progress" until the answer arrives.
@@ -163,6 +163,7 @@ export async function find(root, { query }) {
           h('div', { class: 'find-cand-name' }, c.displayName || c.target, ' ', foundBadge()),
           h('div', { class: 'find-cand-sub' }, h('span', { class: 'muted sm truncate' }, targetLabel(c.target), ' · ', platformLabel(c.platform)))),
         h('a', { class: 'btn sm ghost', href: c.url || '#', target: '_blank', rel: 'noopener noreferrer nofollow' }, icon('external', 'sm'), 'Open')),
+      provenanceRow(c),
       paidChips(c),
       c.status === 'following' ? profileLink(c) : null);
   }
@@ -214,9 +215,18 @@ export async function find(root, { query }) {
       h('ol', { class: 'find-steplist', 'aria-label': 'What PRISM is checking' }, items));
   }
 
-  /** Why this account matched, as pills: the reasons the lookup recorded for it. */
+  /**
+   * The why-it-matched pills. The server's list is authoritative when it sends one (an empty list means the lookup
+   * holds no such evidence); the evidence lines are read only for a result that came without a list.
+   */
+  function provenancePills(c) {
+    if (Array.isArray(c.provenance)) return c.provenance.filter((k) => PROVENANCE[k]).map((k) => ({ kind: k, label: PROVENANCE[k] }));
+    return provenanceOf(c);
+  }
+
+  /** Why this account matched, as pills, on single results and on the accounts inside a linked group. */
   function provenanceRow(c) {
-    const kinds = provenanceOf(c);
+    const kinds = provenancePills(c);
     if (!kinds.length) return null;
     return h('div', { class: 'prov-row', 'aria-label': 'Why this account matched' }, kinds.map((p) => h('span', { class: `prov-pill prov-${p.kind}` }, p.label)));
   }
