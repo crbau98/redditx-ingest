@@ -197,7 +197,7 @@ describe('5. an unknown disk size is "degraded", not a silent ok', () => {
   test('the admin console shows a banner for it', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'views', 'admin', 'index.js'), 'utf8');
     assert.match(src, /Disk size unknown/); assert.match(src, /overview\.disk/);
-    assert.match(fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'admin.js'), 'utf8'), /disk: require\('\.\.\/lib\/diskguard'\)\.status\(\)/);
+    assert.match(fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'admin', 'engine.js'), 'utf8'), /disk: require\('\.\.\/\.\.\/lib\/diskguard'\)\.status\(\)/);
   });
 });
 

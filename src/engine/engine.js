@@ -556,6 +556,7 @@ async function tick() {
     for (const [feedId, entry] of state.running) {
       if (!entry.startedMs || Date.now() - entry.startedMs <= RUN_HARD_MS + 15000) continue;
       try { if (entry.forceFinish) entry.forceFinish('watchdog: evicted stuck in-memory run'); } catch { /* the delete below must still happen */ }
+      try { if (entry.platform) breaker.release(entry.platform, false, 'watchdog: evicted stuck in-memory run'); } catch { /* ignore */ }
       state.running.delete(feedId);
       events.log('WARN', `Watchdog: evicted stuck in-memory run ${entry.platform}:${feedId}`);
     }
