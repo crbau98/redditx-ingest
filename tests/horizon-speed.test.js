@@ -286,7 +286,7 @@ test('the review queue can filter by hold kind or one named reason', () => {
   assert.ok(src.includes("q.reason = reason"), 'named reason is sent to the queue');
   assert.ok(src.includes('q.kind = kind'), 'hold kind is sent to the queue');
   assert.match(src, /Filter by named hold reason/);
-  const route = fs.readFileSync(path.join(__dirname, '../src/routes/admin.js'), 'utf8');
+  const route = fs.readFileSync(path.join(__dirname, '../src/routes/admin/moderation.js'), 'utf8');
   assert.match(route, /reviewReason: reason/);
   assert.match(route, /reviewKind: kind/);
 });
