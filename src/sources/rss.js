@@ -99,7 +99,7 @@ function parseFeed(text, baseUrl) {
     title: (isAtom ? root.children('title') : root.children('title')).first().text().trim() || null,
     image: absUrl(
       isAtom ? (root.children('logo').first().text() || root.children('icon').first().text())
-        : (root.children('image').first().children('url').first().text() || root.find('itunes\\:image').first().attr('href')),
+        : (root.children('image').first().children('url').first().text() || root.children('itunes\\:image').first().attr('href')),
       baseUrl),
     description: (root.children('subtitle, description').first().text() || '').trim() || null,
     link: null,

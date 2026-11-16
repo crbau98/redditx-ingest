@@ -15,16 +15,30 @@
 const path = require('path');
 const { Worker } = require('worker_threads');
 
+const crypto = require('crypto');
+
 const PREFLIGHT_MIN = 16 * 1024;          // below this even the worst shapes stay well under 100 ms
 const IDLE_MS = 5 * 60_000;
-const START_WAIT_MS = 5000;
-const budgetMs = () => {
+const START_WAIT_MS = 1000;               // the worker is up in ~70 ms; a start that takes longer counts as failed
+const START_RETRY_MS = 5 * 60_000;        // after a failed start, the text scan alone guards until this has passed
+const REFUSED_TTL_MS = 6 * 3600_000;      // a document refused once is refused again from memory (no second wait)
+const REFUSED_MAX = 1000;
+/** Budget: MARKUP_PREFLIGHT_MS (default 400) plus 300 ms per MB, so a large ordinary page on a busy CPU is not refused. */
+const budgetMs = (bytes = 0) => {
   const v = Number(process.env.MARKUP_PREFLIGHT_MS);
-  return Number.isFinite(v) && v > 0 ? v : 400;
+  const base = Number.isFinite(v) && v > 0 ? v : 400;
+  return Math.round(base + 300 * (bytes / 1048576));
 };
 
-let worker = null; let i32 = null; let idleTimer = null; let warned = false;
-const stats = { checked: 0, refusedSlow: 0, refusedError: 0, unavailable: 0, restarts: 0 };
+let WORKER_FILE = path.join(__dirname, 'markup-preflight-worker.js');
+let worker = null; let i32 = null; let idleTimer = null; let warned = false; let startFailedAt = 0;
+const refused = new Map(); // sha1 of the text -> { why, at }
+const stats = { checked: 0, refusedSlow: 0, refusedError: 0, refusedRemembered: 0, unavailable: 0, restarts: 0 };
+const digest = (text) => crypto.createHash('sha1').update(text).digest('base64');
+function remember(key, why) {
+  refused.set(key, { why, at: Date.now() });
+  if (refused.size > REFUSED_MAX) refused.delete(refused.keys().next().value);
+}
 
 function stop() {
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
@@ -36,24 +50,27 @@ function start() {
   const sab = new SharedArrayBuffer(12);
   const view = new Int32Array(sab);
   let w;
-  try { w = new Worker(path.join(__dirname, 'markup-preflight-worker.js'), { workerData: { sab } }); } catch { return false; }
+  try { w = new Worker(WORKER_FILE, { workerData: { sab } }); } catch { startFailedAt = Date.now(); return false; }
   w.unref();
   w.on('error', () => { if (worker === w) { worker = null; i32 = null; } });
   w.on('exit', () => { if (worker === w) { worker = null; i32 = null; } });
   Atomics.wait(view, 0, 0, START_WAIT_MS);
-  if (Atomics.load(view, 0) !== 3) { w.terminate().catch(() => {}); return false; }
-  worker = w; i32 = view; stats.restarts++;
+  if (Atomics.load(view, 0) !== 3) { w.terminate().catch(() => {}); startFailedAt = Date.now(); return false; }
+  worker = w; i32 = view; stats.restarts++; startFailedAt = 0;
   return true;
 }
 
 /**
  * @param {string} text
- * @param {'html'|'fragment'} kind
+ * @param {'html'|'xml'|'fragment'} kind
  * @returns {null | {elements: number, depth: number} | {refused: string}} null: not checked (small, or no worker)
  */
 function check(text, kind) {
   if (text.length < PREFLIGHT_MIN) return null;
-  if (!worker && !start()) {
+  const key = digest(text);
+  const seen = refused.get(key);
+  if (seen && Date.now() - seen.at < REFUSED_TTL_MS) { stats.refusedRemembered++; return { refused: seen.why }; }
+  if (!worker && (Date.now() - startFailedAt < START_RETRY_MS || !start())) {
     stats.unavailable++;
     if (!warned) { warned = true; console.error('[markup] parser preflight worker unavailable; falling back to the text scan only'); }
     return null;
@@ -64,12 +81,14 @@ function check(text, kind) {
   const view = i32;
   Atomics.store(view, 0, 0);
   worker.postMessage({ text, kind });
-  const ms = budgetMs();
+  const ms = budgetMs(text.length);
   Atomics.wait(view, 0, 0, ms);
   const state = Atomics.load(view, 0);
-  if (state === 0) { stats.refusedSlow++; stop(); return { refused: `the parser needed more than ${ms} ms` }; }
-  if (state === 2) { stats.refusedError++; return { refused: 'the parser failed on it' }; }
+  if (state === 0) { stats.refusedSlow++; stop(); const why = `the parser needed more than ${ms} ms`; remember(key, why); return { refused: why }; }
+  if (state === 2) { stats.refusedError++; const why = 'the parser failed on it'; remember(key, why); return { refused: why }; }
   return { elements: Atomics.load(view, 1), depth: Atomics.load(view, 2) };
 }
 
-module.exports = { check, stop, stats: () => ({ ...stats, running: !!worker }), PREFLIGHT_MIN };
+/** Test hooks: point at another worker file (a broken one) and forget the start-failure and refused-document memory. */
+function _reset({ workerFile } = {}) { stop(); refused.clear(); startFailedAt = 0; warned = false; if (workerFile) WORKER_FILE = workerFile; }
+module.exports = { check, stop, stats: () => ({ ...stats, running: !!worker, remembered: refused.size }), PREFLIGHT_MIN, budgetMs, _reset };

@@ -49,7 +49,8 @@ function assertParseable(text, kind = 'html') {
     if (i === -1) break;
     const c1 = s.charCodeAt(i + 1);
     if (c1 === 33 /* ! */) { // comment, CDATA, doctype
-      if (s.startsWith('<!--', i)) { const e = s.indexOf('-->', i + 4); i = e === -1 ? n : e + 3; continue; }
+      // '<!-->' and '<!--->' are complete (empty) comments to both parsers: the closing '-->' may overlap the opening '<!--'.
+      if (s.startsWith('<!--', i)) { const e = s.indexOf('-->', i + 2); i = e === -1 ? n : e + 3; continue; }
       // CDATA is real only in XML; an HTML parser reads "<![CDATA[" as a bogus comment that ends at the FIRST ">", so skipping to "]]>" there would hide tags from the scanner
       if (!html && s.startsWith('<![CDATA[', i)) { const e = s.indexOf(']]>', i + 9); i = e === -1 ? n : e + 3; continue; }
       const e = s.indexOf('>', i + 2); i = e === -1 ? n : e + 1; continue;
@@ -104,8 +105,8 @@ function parseable(text, kind = 'fragment') {
 function load(html, kind = 'html') {
   const text = String(html ?? '');
   assertParseable(text, kind);
-  if (kind !== 'xml') {
-    // The real parser decides for larger HTML (lib/markup-preflight): the text scan above cannot model every parse5 rule.
+  {
+    // The real parser decides for larger documents (lib/markup-preflight): the text scan above cannot model every parser rule.
     const pf = require('./markup-preflight').check(text, kind);
     if (pf && pf.refused) throw new MarkupRefused(pf.refused);
     const lim = LIMITS[kind];

@@ -12,7 +12,8 @@ const i32 = new Int32Array(workerData.sab);
 
 parentPort.on('message', ({ text, kind }) => {
   try {
-    const $ = kind === 'fragment' ? cheerio.load(`<div>${text}</div>`, null, false) : cheerio.load(text);
+    const $ = kind === 'fragment' ? cheerio.load(`<div>${text}</div>`, null, false)
+      : kind === 'xml' ? cheerio.load(text, { xmlMode: true }) : cheerio.load(text);
     let elements = 0; let deepest = 0;
     // iterative: a deep tree must not overflow the stack here either
     const nodes = [$.root()[0]]; const depths = [0];
