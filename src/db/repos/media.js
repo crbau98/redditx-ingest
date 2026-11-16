@@ -270,6 +270,16 @@ function countIndexFor(f) {
 }
 
 const media = {
+  /**
+   * True when `f.cursor` is a token list(f) will actually follow: the effective sort supports cursors (not random / relevance /
+   * a text match without a sort / explicit ids) and the token decodes for that sort.
+   */
+  validCursor(f = {}) {
+    if (!f.cursor) return false;
+    const sort = SORTS[f.sort] ? f.sort : 'recent';
+    const capable = !f.ids && (!f.q || f.sort) && f.sort !== 'random' && f.sort !== 'relevance';
+    return capable && !!decodeMediaCursor(f.cursor, sort);
+  },
   /** Subscribe to publish-state changes: fn(id, state). */
   onState(fn) { stateHooks.push(fn); },
   onPhashBlocked(fn) { blockedHooks.push(fn); },

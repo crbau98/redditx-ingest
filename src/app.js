@@ -73,14 +73,14 @@ function createApp() {
 
   // Generous limiter for the JSON API; the media proxy has its own, much higher ceiling
   // (a single page of results legitimately fires dozens of image requests).
-  const apiLimiter = rateLimit({
+  const apiLimiter = rateLimit({ keyGenerator: require('./lib/ipkey').keyGenerator,
     windowMs: 60 * 1000, max: 400, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many requests, slow down' },
     skip: (req) => req.path === '/proxy' || req.path === '/hls' || req.path === '/stream' || req.path === '/health' || req.path.startsWith('/admin'),
   });
   // The app's own scripts and styles (served from memory once compressed; the first request for a file reads it from disk): a
   // ceiling far above any page load (about 70 modules) that still bounds a client hammering the route.
-  const assetLimiter = rateLimit({ windowMs: 60 * 1000, max: 6000, standardHeaders: true, legacyHeaders: false, message: 'Too many requests, slow down' });
-  const mediaLimiter = rateLimit({ windowMs: 60 * 1000, max: 4000, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many media requests' } });
+  const assetLimiter = rateLimit({ keyGenerator: require('./lib/ipkey').keyGenerator, windowMs: 60 * 1000, max: 6000, standardHeaders: true, legacyHeaders: false, message: 'Too many requests, slow down' });
+  const mediaLimiter = rateLimit({ keyGenerator: require('./lib/ipkey').keyGenerator, windowMs: 60 * 1000, max: 4000, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many media requests' } });
 
   if (config.demoArt && !config.isProd) app.use('/demo', require('./routes/demo'));
   app.use('/api/admin', adminRoutes);

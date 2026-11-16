@@ -36,6 +36,46 @@ describe('depth cap', () => {
   });
 });
 
+describe('a junk cursor does not lift the depth cap', () => {
+  const real = repo.media.list;
+  const spy = (fn) => { let calls = 0; repo.media.list = (...a) => { calls++; return real(...a); }; try { fn(); } finally { repo.media.list = real; } return calls; };
+  test('malformed, wrong-sort and cursor-less-sort requests are capped like any deep page', () => {
+    const good = pub.mediaList({ sort: 'recent', limit: '10' }).nextCursor;
+    const topCursor = pub.mediaList({ sort: 'top', limit: '10' }).nextCursor;
+    const calls = spy(() => {
+      for (const q of [
+        { sort: 'recent', page: '100000', cursor: 'x' },
+        { sort: 'recent', page: '100000', cursor: 'not-base64-json' },
+        { sort: 'recent', page: '100000', cursor: topCursor }, // a valid token, for another sort
+        { q: 'gay', page: '100000', cursor: good },            // text match without a sort: cursors are ignored
+        { sort: 'relevance', q: 'gay', page: '100000', cursor: good },
+        { sort: 'random', page: '100000', cursor: good },
+      ]) { const r = pub.mediaList(q); assert.equal(r.items.length, 0, JSON.stringify(q)); }
+    });
+    assert.equal(calls, 0, 'none of them reached the database');
+  });
+  test('a valid cursor on a cursor-capable sort still pages (no cap)', () => {
+    const first = pub.mediaList({ sort: 'recent', limit: '10' });
+    const calls = spy(() => { assert.equal(pub.mediaList({ sort: 'recent', limit: '10', page: '100000', cursor: first.nextCursor }).items.length, 10); });
+    assert.equal(calls, 1);
+  });
+  test('the creator media route is under the same cap', async () => {
+    const http = require('http');
+    const c = repo.creators.create({ handle: 'w11capc', origin: 'admin' });
+    repo.media.insert({ creator_id: c.id, platform: 'reddit', source_id: 'w11cc1', source_key: 'reddit:w11cc1:0', post_key: 'reddit:w11cc1', media_type: 'image', media_url: 'https://i.redd.it/w11cc1.jpg', hash: 'w11cch1', posted_at: new Date().toISOString() }, []);
+    repo.creators.refreshStats(c.id);
+    const server = require('../src/app').createApp().listen(0);
+    await new Promise((r) => server.once('listening', r));
+    try {
+      const get = async (q) => (await fetch(`http://127.0.0.1:${server.address().port}/api/creators/${c.id}/media?${q}`, { headers: { cookie: 'prism_age=1' } })).json();
+      assert.equal((await get('page=0')).items.length, 1);
+      let calls = 0; repo.media.list = (...a) => { calls++; return real(...a); };
+      const deep = await get('sort=recent&page=100000&cursor=x');
+      assert.equal(deep.items.length, 0); assert.equal(calls, 0);
+    } finally { repo.media.list = real; server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }
+  });
+});
+
 describe('bounded totals', () => {
   test('exact below the cap, a flagged lower bound above it; tag-driven and plain filters agree', () => {
     const exact = repo.media.list({ tag: 'w11bear', since: 'year', limit: 5 });
