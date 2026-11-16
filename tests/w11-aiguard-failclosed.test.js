@@ -35,4 +35,18 @@ describe('aiguard fails closed', () => {
     assert.throws(() => aiguard.scrub({ q: `${caption} · more` }, 'search'), (e) => e.aiGuard && e.source === 'reddit');
     assert.equal(aiguard.tainted('a bluesky bio that never came from telegram or reddit'), false);
   });
+
+  test('old text embedded in a longer string is refused, even among many stored strings with the same start', () => {
+    const { db } = require('../src/db/repo');
+    const ins = db.prepare('INSERT OR IGNORE INTO telegram_text (norm) VALUES (?)');
+    db.transaction(() => { for (let i = 0; i < 5000; i++) ins.run(`shared opening words of caption ${i} and its tail`); })();
+    for (let i = 0; i < aiguard.MAX_TAINT + 100; i++) aiguard.mark(`newest filler caption ${i} pushing the old ones out`, 'telegram');
+    aiguard._reset({ keepDb: true });
+    const old = 'shared opening words of caption 1234 and its tail';
+    for (const v of [`bio: ${old}`, `Hello there. ${old} Thanks.`, `x, ${old}, y`, `{"bio":"${old}"}`, { prompt: `Describe this creator: ${old}` }]) {
+      assert.equal(aiguard.tainted(v), true, JSON.stringify(v));
+    }
+    assert.equal(aiguard.tainted('bio: shared opening words of caption 1234 and its'), false, 'a cut-off copy is not a stored string');
+    assert.equal(aiguard.tainted('bio: shared opening words of caption 99999 and its tail'), false, 'never stored');
+  });
 });

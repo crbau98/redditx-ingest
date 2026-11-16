@@ -86,22 +86,61 @@ function load() {
   } catch { /* reddit_text arrives with migration v30 */ }
 }
 
-/** Indexed lookup in the persisted provenance tables: the whole string, then each line / " · " / " | " segment of it. */
+/**
+ * Indexed lookup in the persisted provenance tables (source of truth once a string has left the memory caches):
+ *   1. the whole string, and each line / " · " / " | " segment of it, by primary key;
+ *   2. text embedded anywhere in a longer string ("bio: <caption>", a quoted JSON field, a sentence): at every word start,
+ *      find a stored string that is a prefix of the rest of the input. The largest stored key <= the rest is either such a
+ *      prefix, or every such prefix is also a prefix of its common start with the rest, so the search narrows to that common
+ *      start and repeats. A few indexed point queries per word start; no table scan, no row limit to miss a match.
+ */
+const PREFIX = 12;
+const WORDISH = /[\p{L}\p{N}]/u;
 let stmts = null;
+function prepared(d) {
+  if (!stmts || stmts.db !== d) {
+    stmts = {
+      db: d,
+      tg: d.prepare('SELECT 1 FROM telegram_text WHERE norm = ?'),
+      rd: d.prepare('SELECT 1 FROM reddit_text WHERE norm = ?'),
+      tgF: d.prepare('SELECT norm FROM telegram_text WHERE norm <= ? AND norm >= ? ORDER BY norm DESC LIMIT 1'),
+      rdF: d.prepare('SELECT norm FROM reddit_text WHERE norm <= ? AND norm >= ? ORDER BY norm DESC LIMIT 1'),
+    };
+  }
+  return stmts;
+}
 function inStore(value) {
   const d = db(); if (!d) return null;
   try {
-    if (!stmts || stmts.db !== d) {
-      stmts = { db: d, tg: d.prepare('SELECT 1 FROM telegram_text WHERE norm = ?'), rd: d.prepare('SELECT 1 FROM reddit_text WHERE norm = ?') };
-    }
+    const q = prepared(d);
     const raw = String(value);
     const keys = new Set([norm(raw)]);
     if (raw.length >= 24) for (const part of raw.split(/\r?\n+|\s[·•|—–]\s|\t+/)) keys.add(norm(part));
     for (const k of keys) {
       if (k.length < 3) continue;
       const key = k.slice(0, 4000);
-      if (stmts.tg.get(key)) return 'telegram';
-      if (stmts.rd.get(key)) return 'reddit';
+      if (q.tg.get(key)) return 'telegram';
+      if (q.rd.get(key)) return 'reddit';
+    }
+    const t = norm(raw);
+    if (t.length < PREFIX) return null;
+    const asked = new Set();
+    for (let pos = 0; pos + PREFIX <= t.length; pos++) {
+      if (t[pos] === ' ' || (pos > 0 && WORDISH.test(t[pos - 1]))) continue; // word starts only
+      const p = t.slice(pos, pos + PREFIX);
+      if (asked.has(p)) continue;
+      asked.add(p);
+      for (const [stmt, src] of [[q.tgF, 'telegram'], [q.rdF, 'reddit']]) {
+        let rest = t.slice(pos, pos + 4000);
+        for (let step = 0; step < 32 && rest.length >= PREFIX; step++) {
+          const f = stmt.get(rest, p);
+          if (!f) break;
+          if (rest.startsWith(f.norm)) return src;
+          let l = 0; while (l < f.norm.length && f.norm[l] === rest[l]) l++;
+          if (l < PREFIX || l >= rest.length) break;
+          rest = rest.slice(0, l);
+        }
+      }
     }
   } catch { /* tables not there yet (very first start) */ }
   return null;
