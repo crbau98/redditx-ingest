@@ -202,7 +202,8 @@ let progressClock = () => Date.now();
 // MB on production) to save a figure only the admin page shows.
 const FACE_PROGRESS_TTL_MS = 10 * 60 * 1000;
 // blockwatch.slice (w11-stalls) names a synchronous chunk in loop-block reports; a plain call until it lands.
-const slice = (label, fn) => { const bw = require('../lib/blockwatch'); return typeof bw.slice === 'function' ? bw.slice(label, fn) : fn(); };
+// blockwatch.slice times fn and returns the elapsed ms, not fn's value, so the value is captured here.
+const slice = (label, fn) => { const bw = require('../lib/blockwatch'); if (typeof bw.slice !== 'function') return fn(); let out; bw.slice(label, () => { out = fn(); }); return out; };
 function countCached(sql, ...args) { return countCachedFor(PROGRESS_TTL_MS, sql, ...args); }
 function countCachedFor(ttlMs, sql, ...args) {
   const key = `${sql}|${JSON.stringify(args)}`;
