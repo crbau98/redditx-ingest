@@ -34,16 +34,32 @@ const HOSTS = [
 
 const enabled = () => String(process.env.DIRECT_MEDIA ?? '1').trim() !== '0';
 
-/** What the client needs: hosts for pictures, and the subset that may also serve video. Empty when switched off. */
+/**
+ * Stored media (config.storeHost, S3 mode) is a second direct source: /api/proxy answers it with a redirect to a presigned
+ * bucket URL (lib/objectstore.directUrl). Its origin is the one extra source in the CSP. STORE_DIRECT=0 switches it off
+ * independently of DIRECT_MEDIA.
+ */
+const storeOrigin = () => require('./objectstore').directOrigin();
+
+/**
+ * What the client needs: hosts for pictures, the subset that may also serve video, and `store` (the reserved store host name
+ * when stored media is redirected to the bucket, else false; the client uses it to skip pixel reads of such pictures).
+ * `images`/`video` are empty when DIRECT_MEDIA=0.
+ */
 function clientConfig() {
-  if (!enabled()) return { enabled: false, images: [], video: [] };
-  return { enabled: true, images: HOSTS.map((h) => h.host), video: HOSTS.filter((h) => h.video).map((h) => h.host) };
+  const store = storeOrigin() ? require('../config').storeHost : false;
+  if (!enabled()) return { enabled: false, images: [], video: [], store };
+  return { enabled: true, images: HOSTS.map((h) => h.host), video: HOSTS.filter((h) => h.video).map((h) => h.host), store };
 }
 
-/** Exact origins for the CSP, never wildcards. */
+/**
+ * Exact origins for the CSP, never wildcards. The bucket origin is added to img-src and media-src (the redirect lands there) and
+ * to connect-src: with offline content on, the service worker re-fetches pictures itself and that fetch follows the redirect.
+ */
 function cspSources() {
   const c = clientConfig();
-  return { img: c.images.map((h) => `https://${h}`), media: c.video.map((h) => `https://${h}`) };
+  const bucket = storeOrigin();
+  return { img: [...c.images.map((h) => `https://${h}`), ...(bucket ? [bucket] : [])], media: [...c.video.map((h) => `https://${h}`), ...(bucket ? [bucket] : [])], connect: bucket ? [bucket] : [] };
 }
 
-module.exports = { HOSTS, enabled, clientConfig, cspSources };
+module.exports = { HOSTS, enabled, clientConfig, cspSources, storeOrigin };

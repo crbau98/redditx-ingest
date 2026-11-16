@@ -60,12 +60,16 @@ function keyOf(url) {
 const isStoreUrl = (url) => { try { return new URL(url).hostname.toLowerCase() === STORE_HOST; } catch { return false; } };
 
 /* -------------------------------------------------------------------------------- s3 */
-function s3Request(method, key, { headers = {}, body, contentLength } = {}) {
+/** Path-style path of an object on the endpoint (what both the header signer and the presigner sign). */
+function s3Path(key) {
   const c = config.store;
   const base = new URL(c.endpoint);
   const objectPath = `/${[c.bucket, ...(prefix() + key).split('/')].map(sigv4.enc).join('/')}`;
-  const basePath = base.pathname.replace(/\/+$/, '');
-  const fullPath = `${basePath}${objectPath}`;
+  return { base, fullPath: `${base.pathname.replace(/\/+$/, '')}${objectPath}` };
+}
+function s3Request(method, key, { headers = {}, body, contentLength } = {}) {
+  const c = config.store;
+  const { base, fullPath } = s3Path(key);
   const signed = sigv4.sign({ method, host: base.host, path: fullPath, headers, region: c.region, accessKeyId: c.accessKeyId, secretAccessKey: c.secretAccessKey });
   const hdrs = { ...headers, ...signed.headers };
   delete hdrs.host;
@@ -80,6 +84,49 @@ async function s3Fail(res, what) {
   await new Promise((resolve) => { res.on('data', (c) => { if (n < 600) { chunks.push(c); n += c.length; } }); res.on('end', resolve); res.on('error', resolve); res.on('close', resolve); });
   const msg = Buffer.concat(chunks).toString('utf8').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
   return Object.assign(new Error(`object store ${what} failed: http ${res.statusCode}${msg ? ` (${msg})` : ''}`), { status: res.statusCode });
+}
+
+/* -------------------------------------------------------------------------------- direct delivery
+ * In bucket mode the browser can fetch an object from the bucket itself, with a presigned GET URL, instead of streaming it
+ * through PRISM (Railway egress; R2 charges none). /api/proxy answers a store URL with a redirect to this URL.
+ *
+ *   STORE_DIRECT=0       back to proxying every byte
+ *   STORE_URL_TTL_S      how long a signature lives (default 3600, 60..86400)
+ *
+ * Signatures are issued on a fixed grid (every TTL/2 seconds) so a key gets the SAME URL for a while: the browser's cache
+ * keeps working across the redirect. A URL issued at any moment of its window has at least TTL/2 left, and the redirect
+ * that carries it is cacheable for TTL/4 only, so a cached redirect never outlives the signature.
+ */
+const directOn = () => String(process.env.STORE_DIRECT ?? '1').trim() !== '0';
+const urlTtlS = () => { const n = Number(process.env.STORE_URL_TTL_S); return Number.isFinite(n) && n >= 60 ? Math.min(Math.floor(n), 86400) : 3600; };
+
+/**
+ * Origin the browser fetches stored media from, or null when it cannot or must not (disk mode, STORE_DIRECT=0, an endpoint that
+ * is only reachable from inside our network, or plain http in production where the page is https). One value: the CSP and the
+ * redirect both use it, so they cannot disagree.
+ */
+function directOrigin() {
+  if (!directOn() || kind() !== 's3') return null;
+  let u; try { u = new URL(config.store.endpoint); } catch { return null; }
+  if ((config.internalHosts || []).includes(u.hostname.toLowerCase())) return null;
+  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && !config.isProd && !config.isHosted)) return null;
+  return u.origin;
+}
+
+/**
+ * A presigned GET URL for a store URL, or null when the file should go through the proxy: no direct origin, an invalid key, or an
+ * object that still lives on the data volume (written before the bucket was set up: the bucket has no copy yet).
+ * @returns {{url: string, maxAge: number}|null} maxAge: seconds the redirect to it may be cached
+ */
+function directUrl(storeUrl, now = Date.now()) {
+  if (!directOrigin()) return null;
+  const key = keyOf(storeUrl);
+  if (!key || legacyFile(key)) return null;
+  const ttl = urlTtlS(); const grid = Math.max(30, Math.floor(ttl / 2)) * 1000;
+  const { base, fullPath } = s3Path(key);
+  const c = config.store;
+  const signed = sigv4.presign({ method: 'GET', host: base.host, path: fullPath, expires: ttl, region: c.region, accessKeyId: c.accessKeyId, secretAccessKey: c.secretAccessKey, date: new Date(Math.floor(now / grid) * grid) });
+  return { url: `${base.protocol}//${base.host}${fullPath}?${signed.query}`, maxAge: Math.floor(ttl / 4) };
 }
 
 /* -------------------------------------------------------------------------------- disk */
@@ -236,4 +283,4 @@ function* localObjects({ after = null } = {}) {
   yield* walk(root, '');
 }
 
-module.exports = { kind, describe, put, putS3, headS3, hashS3, s3Ready, localObjects, has, remove, open, urlFor, keyOf, isStoreUrl, validKey, typeOfKey };
+module.exports = { directOrigin, directUrl, kind, describe, put, putS3, headS3, hashS3, s3Ready, localObjects, has, remove, open, urlFor, keyOf, isStoreUrl, validKey, typeOfKey };

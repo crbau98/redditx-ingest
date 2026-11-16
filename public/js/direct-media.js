@@ -17,12 +17,14 @@ const PLAYLIST = /\.m3u8(?:[?#]|$)/i;
 
 let images = new Set();
 let video = new Set();
+let storeHost = ''; // the reserved store host name while stored media is redirected to the bucket (cfg.store), else ''
 
 /** Apply the server's list. Anything else (undefined, enabled:false) means "all through the proxy". */
 export function configureDirectMedia(cfg) {
   const ok = cfg && cfg.enabled !== false && Array.isArray(cfg.images);
   images = new Set(ok ? cfg.images.map((h) => String(h).toLowerCase()) : []);
   video = new Set(ok && Array.isArray(cfg.video) ? cfg.video.map((h) => String(h).toLowerCase()) : []);
+  storeHost = cfg && typeof cfg.store === 'string' ? cfg.store.toLowerCase() : ''; // independent of `enabled`: STORE_DIRECT has its own switch
 }
 
 export const proxyUrl = (url) => `/api/proxy?url=${encodeURIComponent(url)}`;
@@ -46,6 +48,20 @@ export function mediaSrc(url) {
   if (!url) return '';
   if (url.startsWith('/') || url.startsWith('data:') || url.startsWith('blob:')) return url;
   return directAllowed(url) ? url : proxyUrl(url);
+}
+
+/**
+ * Will the browser end up on another origin for this src? True for a direct CDN URL, and for a same-origin /api/proxy URL of
+ * stored media while the server redirects those to the bucket. Such a picture cannot be read back from a canvas (no CORS), so
+ * the colour and backdrop readers skip it instead of downloading it for nothing. (Not for the error fallback: a proxy URL is
+ * already the fallback, so isDirectSrc stays false for it.)
+ */
+export function isCrossOriginSrc(src) {
+  if (isDirectSrc(src)) return true;
+  if (!storeHost || typeof src !== 'string' || !src.startsWith('/api/proxy?')) return false;
+  const q = new URLSearchParams(src.slice('/api/proxy?'.length));
+  if (q.get('mark')) return false; // the watermarked download is always relayed
+  try { return new URL(q.get('url') || '').hostname.toLowerCase() === storeHost; } catch { return false; }
 }
 
 /** Is this src a direct one (so a failure may be retried through the proxy)? */

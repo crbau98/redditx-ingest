@@ -166,7 +166,7 @@ describe('server: one list for the CSP and the client', () => {
       assert.deepEqual(c['connect-src'], ["'self'"], 'fetch stays same-origin');
       assert.deepEqual(c['script-src'], ["'self'"]);
       const meta = await (await fetch(`${base}/api/meta`)).json();
-      assert.deepEqual(meta.directMedia, { enabled: true, images: HOSTS, video: ['media.redgifs.com'] });
+      assert.deepEqual(meta.directMedia, { enabled: true, images: HOSTS, video: ['media.redgifs.com'], store: false }, 'no bucket in these tests (disk store): nothing to redirect to');
       const dm = require('../src/lib/directmedia');
       assert.deepEqual(dm.cspSources().img, HOSTS.map((h) => `https://${h}`), 'the CSP is built from the same constant');
     } finally { await new Promise((r) => server.close(r)); }
@@ -180,7 +180,7 @@ describe('server: one list for the CSP and the client', () => {
       assert.deepEqual(c['img-src'], ["'self'", 'data:', 'blob:']);
       assert.deepEqual(c['media-src'], ["'self'", 'blob:']);
       const meta = await (await fetch(`${base}/api/meta`)).json();
-      assert.deepEqual(meta.directMedia, { enabled: false, images: [], video: [] });
+      assert.deepEqual(meta.directMedia, { enabled: false, images: [], video: [], store: false });
     } finally { await new Promise((r) => server.close(r)); delete process.env.DIRECT_MEDIA; }
   });
 
