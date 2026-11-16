@@ -19,6 +19,7 @@ const { creatorPaid } = require('../lib/paid');
 const { normAlias } = require('../lib/alias');
 const webpush = require('../lib/webpush');
 
+const { httpUrl } = require('../lib/safeurl');
 const router = express.Router();
 
 /* ------------------------------------------------------------ serialisation */
@@ -32,7 +33,7 @@ function publicMedia(m, opts = {}) {
     media_url: m.media_url, preview_url: m.preview_url, thumbnail_url: m.thumbnail_url,
     thumb_url: m.thumb_url || null, tint: m.tint || null,
     hls_url: m.hls_url, has_audio: m.has_audio, width: m.width, height: m.height, duration: m.duration,
-    platform: m.platform, community: m.community, author: m.author, source_url: m.source_url,
+    platform: m.platform, community: m.community, author: m.author, source_url: httpUrl(m.source_url),
     score: m.score, likes: m.likes, views: m.views, nsfw_level: m.nsfw_level, posted_at: m.posted_at,
     creator_id: m.creator_id, creator_handle: m.creator_handle, creator_name: m.creator_name, creator_avatar: m.creator_avatar,
     onlyfans: m.creator_links ? creatorOnlyFans({ links: m.creator_links }) : null,

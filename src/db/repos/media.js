@@ -46,6 +46,7 @@ function decodeMediaCursor(token, sort) {
 // BM25 column weights for media_fts(title, author, community, tags_text, description, ocr_text).
 const FTS_WEIGHTS = '5.0, 4.0, 2.0, 4.0, 1.0, 1.0';
 
+const { httpUrl, safeLinks } = require('../../lib/safeurl');
 const MEDIA_SELECT = `SELECT m.*, c.handle AS creator_handle, c.display_name AS creator_name, c.avatar_url AS creator_avatar, c.links AS creator_links
   FROM media m LEFT JOIN creators c ON c.id = m.creator_id`;
 
@@ -55,6 +56,10 @@ function serializeMedia(row) {
   delete out.seq;
   delete out.ocr_text;
   delete out.ocr_at;
+  if ('source_url' in out) out.source_url = httpUrl(out.source_url);
+  if (typeof out.creator_links === 'string') {
+    try { out.creator_links = JSON.stringify(safeLinks(JSON.parse(out.creator_links))); } catch { out.creator_links = '[]'; }
+  }
   return out;
 }
 
@@ -263,7 +268,7 @@ const media = {
     return db.prepare('INSERT OR IGNORE INTO media_alt_sources (media_id, platform, source_url, author, community, posted_at) VALUES (?, ?, ?, ?, ?, ?)')
       .run(mediaId, platform || 'web', String(source_url).slice(0, 600), author, community, posted_at).changes > 0;
   },
-  altSources(id, limit = 8) { return db.prepare('SELECT platform, source_url, author, community, posted_at FROM media_alt_sources WHERE media_id = ? ORDER BY posted_at ASC, id ASC LIMIT ?').all(id, limit); },
+  altSources(id, limit = 8) { return db.prepare('SELECT platform, source_url, author, community, posted_at FROM media_alt_sources WHERE media_id = ? ORDER BY posted_at ASC, id ASC LIMIT ?').all(id, limit).filter((r) => httpUrl(r.source_url)); },
   phashBlocked() { return db.prepare('SELECT phash FROM phash_blocklist').all().map((r) => r.phash); },
   blockPhash(hex, reason) { return !!hex && db.prepare('INSERT OR IGNORE INTO phash_blocklist (phash, reason) VALUES (?, ?)').run(hex, reason || null).changes > 0; },
   serialize: serializeMedia,

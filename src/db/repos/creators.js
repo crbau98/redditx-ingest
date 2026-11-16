@@ -21,10 +21,11 @@ const SELECT_CREATOR_CARD = `
     (SELECT group_concat(p) FROM (SELECT DISTINCT m.platform AS p FROM media m WHERE m.creator_id = c.id AND m.publish_state = 'published')) AS platforms
   FROM creators c`;
 
+const { safeLinks } = require('../../lib/safeurl');
 function serializeCreator(row) {
   if (!row) return null;
   const out = { ...row };
-  try { out.links = JSON.parse(row.links || '[]'); } catch { out.links = []; }
+  try { out.links = safeLinks(JSON.parse(row.links || '[]')); } catch { out.links = []; }
   if (row.previews !== undefined) {
     try {
       const parsed = JSON.parse(row.previews || '[]');
@@ -171,7 +172,7 @@ const creators = {
       // A page that says it is free now (or no longer) updates the stored link's flag. Paid pages
       // match by (service, handle) so 'Fansly.com/Jake' never duplicates 'fansly.com/jake'.
       let changed = false;
-      for (const l of links) {
+      for (const l of safeLinks(links)) {
         let old = l.handle
           ? existing.find((e) => e.handle && String(e.handle).toLowerCase() === String(l.handle).toLowerCase() && (e.service || '') === (l.service || ''))
           : null;
