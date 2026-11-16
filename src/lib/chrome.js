@@ -116,6 +116,13 @@ function chownTree(dir, uid, gid) {
 
 let sandboxFailed = false; // auto mode: the sandbox could not start once, so this process launches without it
 
+/**
+ * Did Chromium fail BECAUSE of its sandbox? Only then may `auto` drop it, for the rest of the process. A timeout, a crash or a
+ * missing binary is retried with the sandbox next time. Chromium's own wording, from its Linux sandbox and zygote startup.
+ */
+const SANDBOX_ERROR = /No usable sandbox|Failed to move to new namespace|setuid sandbox|SUID sandbox|zygote_host_impl_linux|credentials\.cc|sandbox_linux|unshare.*(?:Operation not permitted|EPERM)|(?:user|PID|network) namespaces? .*(?:not|unavailable|disabled)|Check failed: .*sandbox/i;
+const isSandboxFailure = (e) => !!(e && SANDBOX_ERROR.test(String(e.chromeStderr || '')));
+
 async function launch() {
   const bin = executable();
   if (!bin) throw skip('Chrome is not installed on this host (set CHROME_PATH)');
@@ -127,7 +134,7 @@ async function launch() {
   try {
     return await start(bin, dir, temp, plan);
   } catch (e) {
-    if (plan.noSandbox || config.chrome.sandbox !== 'auto') { if (temp) rmProfile(dir); throw e; }
+    if (plan.noSandbox || config.chrome.sandbox !== 'auto' || !isSandboxFailure(e)) { if (temp) rmProfile(dir); throw e; }
     // No usable sandbox here (typically: no unprivileged user namespaces in the container). The strongest setup that
     // still works: an unprivileged browser user, without the sandbox. Logged once.
     sandboxFailed = true;
@@ -151,7 +158,10 @@ async function start(bin, dir, temp, plan) {
   ];
   if (plan.noSandbox) args.unshift('--no-sandbox');
   if (!config.chrome.headed) args.unshift('--headless=new');
-  const proc = spawn(bin, args, { stdio: 'ignore', env: plan.env, ...(plan.asUser || {}) });
+  const proc = spawn(bin, args, { stdio: ['ignore', 'ignore', 'pipe'], env: plan.env, ...(plan.asUser || {}) });
+  // Startup stderr is kept (8 KB at most) to tell a sandbox failure from any other; afterwards it is drained and dropped.
+  let stderr = ''; let keep = true;
+  proc.stderr.on('data', (d) => { if (keep && stderr.length < 8192) stderr += d.toString('utf8'); });
   proc.on('exit', () => { if (browser && browser.proc === proc) browser = null; });
   const portFile = path.join(dir, 'DevToolsActivePort');
   let port = 0;
@@ -163,7 +173,11 @@ async function start(bin, dir, temp, plan) {
     if (proc.exitCode !== null) break;
     await sleep(250);
   }
-  if (!port) { try { proc.kill(); } catch { /* gone */ } throw new Error(proc.exitCode !== null ? `Chrome exited at start (code ${proc.exitCode})` : 'Chrome did not open its DevTools port'); }
+  keep = false;
+  if (!port) {
+    try { proc.kill(); } catch { /* gone */ }
+    throw Object.assign(new Error(proc.exitCode !== null ? `Chrome exited at start (code ${proc.exitCode})` : 'Chrome did not open its DevTools port'), { chromeStderr: stderr });
+  }
   const version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
   browser = { proc, port, version, proxy, dir, temp, sandbox: !plan.noSandbox, user: plan.asUser ? plan.asUser.uid : (process.getuid ? process.getuid() : null) };
   return browser;
@@ -339,4 +353,4 @@ async function status() {
   };
 }
 
-module.exports = { _launchPlan: launchPlan, available, enabled, renderPages, readPage, status, close, nextLink, _executable: executable };
+module.exports = { _launchPlan: launchPlan, _isSandboxFailure: isSandboxFailure, _launch: () => launch(), _resetSandbox: () => { sandboxFailed = false; }, available, enabled, renderPages, readPage, status, close, nextLink, _executable: executable };

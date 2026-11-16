@@ -190,6 +190,52 @@ describe('6. the challenge browser never runs as root, and keeps its sandbox whe
   });
 });
 
+describe('6b. auto drops the sandbox only for a sandbox failure', () => {
+  const fs = require('fs'); const os = require('os'); const path = require('path');
+  const chrome = require('../src/lib/chrome');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-chrome-'));
+  const log = path.join(dir, 'calls');
+  // A stand-in browser that fails at start: it records its arguments and prints what it is told to.
+  const fake = (stderr) => {
+    const bin = path.join(dir, `chrome-${Math.random().toString(36).slice(2)}`);
+    fs.writeFileSync(bin, `#!/bin/sh\necho "$*" >> ${log}\necho "${stderr}" >&2\nexit 1\n`, { mode: 0o755 });
+    return bin;
+  };
+  const saved = { path: config.chrome.path, sandbox: config.chrome.sandbox };
+  const run = async (stderr) => {
+    fs.rmSync(log, { force: true }); chrome._resetSandbox();
+    config.chrome.path = fake(stderr); config.chrome.sandbox = 'auto';
+    await assert.rejects(chrome._launch());
+    return { calls: fs.readFileSync(log, 'utf8').trim().split('\n'), status: await chrome.status() };
+  };
+  after(() => { Object.assign(config.chrome, saved); chrome._resetSandbox(); fs.rmSync(dir, { recursive: true, force: true }); });
+
+  test('the error text decides', () => {
+    for (const t of ['[1:1:FATAL:zygote_host_impl_linux.cc(127)] No usable sandbox! Update your kernel or see https://chromium.googlesource.com/...',
+      'Failed to move to new namespace: PID namespaces supported, Network namespace supported, but failed: errno = Operation not permitted',
+      '[FATAL:credentials.cc(127)] Check failed: . : Operation not permitted']) assert.equal(chrome._isSandboxFailure({ chromeStderr: t }), true, t);
+    for (const t of ['', 'error while loading shared libraries: libnss3.so', 'Segmentation fault', 'Chrome did not open its DevTools port']) assert.equal(chrome._isSandboxFailure({ chromeStderr: t }), false, t);
+    assert.equal(chrome._isSandboxFailure(new Error('timeout')), false);
+  });
+
+  test('a sandbox failure: retried at once without the sandbox, and later launches skip it', async (t) => {
+    if (process.getuid && process.getuid() === 0) { t.skip('runs as root: the sandbox is off anyway'); return; }
+    const r = await run('[1:1:FATAL:zygote_host_impl_linux.cc(127)] No usable sandbox!');
+    assert.equal(r.calls.length, 2, 'two attempts');
+    assert.ok(!/--no-sandbox/.test(r.calls[0]), 'first with the sandbox');
+    assert.match(r.calls[1], /--no-sandbox/, 'then without');
+    assert.equal(r.status.sandbox, false, 'remembered for the process');
+  });
+
+  test('any other failure (crash, missing library): no retry, the sandbox stays on for the next launch', async (t) => {
+    if (process.getuid && process.getuid() === 0) { t.skip('runs as root: the sandbox is off anyway'); return; }
+    const r = await run('error while loading shared libraries: libnss3.so: cannot open shared object file');
+    assert.equal(r.calls.length, 1, 'one attempt');
+    assert.ok(!/--no-sandbox/.test(r.calls[0]));
+    assert.equal(r.status.sandbox, null, 'nothing remembered');
+  });
+});
+
 describe('7. memory watchdog thresholds', () => {
   const memwatch = require('../src/engine/memwatch');
   test('the soft limit is capped at 3 GB on a big container; the hard one stays proportional; env still wins', () => {
