@@ -197,11 +197,18 @@ async function physiqueSweep({ limit = 12, settings } = {}) {
 const PROGRESS_TTL_MS = 60 * 1000;
 const progressCache = new Map();
 let progressClock = () => Date.now();
-function countCached(sql, ...args) {
+// The face backlog count reads every un-enrolled published row (its partial index does not cover scope / media_type / the
+// picture columns): 235 ms at 300k rows, so it is kept 10 minutes. A covering index would hold two URLs per row (hundreds of
+// MB on production) to save a figure only the admin page shows.
+const FACE_PROGRESS_TTL_MS = 10 * 60 * 1000;
+// blockwatch.slice (w11-stalls) names a synchronous chunk in loop-block reports; a plain call until it lands.
+const slice = (label, fn) => { const bw = require('../lib/blockwatch'); return typeof bw.slice === 'function' ? bw.slice(label, fn) : fn(); };
+function countCached(sql, ...args) { return countCachedFor(PROGRESS_TTL_MS, sql, ...args); }
+function countCachedFor(ttlMs, sql, ...args) {
   const key = `${sql}|${JSON.stringify(args)}`;
   const now = progressClock();
   const hit = progressCache.get(key);
-  if (hit && now - hit.at < PROGRESS_TTL_MS) return hit.value;
+  if (hit && now - hit.at < ttlMs) return hit.value;
   const value = repo.db.prepare(sql).get(...args);
   progressCache.set(key, { at: now, value });
   if (progressCache.size > 100) progressCache.delete(progressCache.keys().next().value);
@@ -494,8 +501,8 @@ async function faceSweep({ limit = 12, settings } = {}) {
 }
 
 function faceSweepProgress() {
-  const row = countCached("SELECT COUNT(*) AS remaining FROM media WHERE face_at IS NULL AND publish_state = 'published' AND scope != 'excluded' AND (media_type = 'image' OR preview_url IS NOT NULL OR thumbnail_url IS NOT NULL)");
-  const faces = countCached('SELECT COUNT(DISTINCT media_id) AS media, COUNT(*) AS descriptors FROM media_faces');
+  const row = slice('faceSweepProgress', () => countCachedFor(FACE_PROGRESS_TTL_MS, "SELECT COUNT(*) AS remaining FROM media WHERE face_at IS NULL AND publish_state = 'published' AND scope != 'excluded' AND (media_type = 'image' OR preview_url IS NOT NULL OR thumbnail_url IS NOT NULL)"));
+  const faces = slice('faceSweepProgress', () => countCachedFor(FACE_PROGRESS_TTL_MS, 'SELECT COUNT(DISTINCT media_id) AS media, COUNT(*) AS descriptors FROM media_faces'));
   return { remaining: row.remaining, ...faces };
 }
 
@@ -611,4 +618,4 @@ function startupSweepIfNeeded() {
   }, 1500).unref();
 }
 
-module.exports = { _progressCache: { clear: () => progressCache.clear(), setClock: (fn) => { progressClock = fn || (() => Date.now()); }, ttlMs: PROGRESS_TTL_MS }, clearBorrowedPosterHashes, repairSharedPosterCollapse, retireDeadFeeds, sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, faceSweep, faceSweepProgress, faceBackfill, physiqueSweep, physiqueSweepProgress, leanBiasSweep, leanBiasProgress, clearLeanBias, hashSweep, hashSweepProgress, startImageSweep, stopImageSweep };
+module.exports = { _progressCache: { clear: () => progressCache.clear(), setClock: (fn) => { progressClock = fn || (() => Date.now()); }, ttlMs: PROGRESS_TTL_MS, faceTtlMs: FACE_PROGRESS_TTL_MS }, clearBorrowedPosterHashes, repairSharedPosterCollapse, retireDeadFeeds, sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, faceSweep, faceSweepProgress, faceBackfill, physiqueSweep, physiqueSweepProgress, leanBiasSweep, leanBiasProgress, clearLeanBias, hashSweep, hashSweepProgress, startImageSweep, stopImageSweep };

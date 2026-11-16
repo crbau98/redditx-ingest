@@ -8,8 +8,10 @@
  *   hard limit  write the same report and restart cleanly (SQLite closed, Docker starts PRISM again in seconds) before the
  *               kernel kills it.
  *
- * Limits default to 50% / 68% of the machine's (or the container's) memory; MEM_SOFT_MB / MEM_HARD_MB override, 0 turns
- * one off.
+ * Limits default to 50% / 68% of the machine's (or the container's) memory, the soft one capped at SOFT_CAP_MB: a hosted
+ * container's limit can be far above what PRISM needs (after the Wave 11 cuts it runs ~1 GB on a 300k-item library), and a
+ * soft limit at half of 8 or 32 GB would never fire. The soft step only logs and refreshes the image workers, so a low cap
+ * is harmless; the hard restart stays proportional. MEM_SOFT_MB / MEM_HARD_MB override, 0 turns one off.
  */
 const fs = require('fs');
 const os = require('os');
@@ -18,6 +20,7 @@ const config = require('../config');
 const events = require('./events');
 
 const mb = (n) => Math.round(n / 1048576);
+const SOFT_CAP_MB = 3072;
 
 /** Memory this process may use: the container's cgroup limit when there is one, else the machine's. */
 function totalBytes() {
@@ -30,7 +33,8 @@ function totalBytes() {
 function limits() {
   const total = totalBytes();
   const env = (k, frac) => { const v = process.env[k]; return v !== undefined && v !== '' ? Math.max(0, parseInt(v, 10) || 0) * 1048576 : Math.round(total * frac); };
-  return { total, soft: env('MEM_SOFT_MB', 0.5), hard: env('MEM_HARD_MB', 0.68) };
+  const soft = process.env.MEM_SOFT_MB !== undefined && process.env.MEM_SOFT_MB !== '' ? env('MEM_SOFT_MB', 0.5) : Math.min(env('MEM_SOFT_MB', 0.5), SOFT_CAP_MB * 1048576);
+  return { total, soft, hard: env('MEM_HARD_MB', 0.68) };
 }
 
 function report(kind, lim) {
