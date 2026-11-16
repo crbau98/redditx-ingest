@@ -133,10 +133,12 @@ const takedowns = {
       }
 
       // Retroactively purge matching media items
-      const mediaRows = db.prepare(`SELECT id, creator_id, platform, author, title, description,
+      // Streamed, not .all(): at 1M+ rows the full array cost about 1.4 GB (Crucible wave 11, item 7). Matches are collected
+      // first and written after the scan, since better-sqlite3 cannot write while an iterator is open.
+      const matched = [];
+      for (const m of db.prepare(`SELECT id, creator_id, platform, author, title, description,
         source_url, media_url, preview_url, thumbnail_url, hash, source_key, phash
-        FROM media WHERE publish_state != 'removed'`).all();
-      for (const m of mediaRows) {
+        FROM media WHERE publish_state != 'removed'`).iterate()) {
         const matchedByCreator = m.creator_id && blockedCreatorIds.has(m.creator_id);
         const matchedByRule = matchedByCreator || takedownLib.checkItem({
           creator_id: m.creator_id,
@@ -155,7 +157,9 @@ const takedowns = {
           thumbnailUrl: m.thumbnail_url,
         }, null, [td]);
         if (!matchedByRule) continue;
-
+        matched.push({ id: m.id, creator_id: m.creator_id, hash: m.hash, source_key: m.source_key, phash: m.phash });
+      }
+      for (const m of matched) {
         db.prepare("UPDATE media SET publish_state = 'removed', review_reason = 'takedown', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(m.id);
         try {
           db.prepare('DELETE FROM media_faces WHERE media_id = ?').run(m.id);
@@ -205,7 +209,29 @@ module.exports.buildPurge = function buildPurge({ db, blocklist, hasTable }) {
  * so an item stays removed and can never be re-imported. Only 'removed' rows are touched; a published
  * row given here is skipped by the SQL, not by the caller.
  */
+const storedUrls = new Set();
+let dropScheduled = false;
+/** Delete the bytes behind purged URLs: object-store copies and cached proxy images. Runs once the caller's sync work is done. */
+function scheduleDrop() {
+  if (dropScheduled || !storedUrls.size) return;
+  dropScheduled = true;
+  setImmediate(async () => {
+    dropScheduled = false;
+    const urls = [...storedUrls]; storedUrls.clear();
+    let store = null; let cache = null;
+    try { store = require('../../lib/objectstore'); } catch { /* not configured */ }
+    try { cache = require('../../lib/media-cache'); } catch { /* not configured */ }
+    for (const u of urls) {
+      try { if (cache && cache.drop) cache.drop(u); } catch { /* best effort */ }
+      const key = store && store.keyOf(u);
+      if (key) { try { await store.remove(key); } catch { /* best effort: the row no longer points at it */ } }
+    }
+  }).unref?.();
+}
 function purgeRemovedContent(ids) {
+  try { return purgeRemovedContentNow(ids); } finally { scheduleDrop(); }
+}
+function purgeRemovedContentNow(ids) {
   const all = [...new Set(ids.filter(Boolean))];
   let purged = 0;
   for (let i = 0; i < all.length; i += 500) {
@@ -219,9 +245,17 @@ function purgeRemovedContent(ids) {
     for (const t of ['media_faces', 'media_alt_sources', 'creator_web_matches']) {
       if (hasTable(t)) db.prepare(`DELETE FROM ${t} WHERE media_id IN (${gph})`).run(...gone);
     }
-    // hash and media_url are NOT NULL, and hash is UNIQUE: they get placeholders that no real hash or URL equals
+    if (hasTable('media_tags')) db.prepare(`DELETE FROM media_tags WHERE media_id IN (${gph})`).run(...gone);
+    // The stored bytes go too (after this transaction commits): our object-store copies and the proxy's disk cache.
+    for (const r of db.prepare(`SELECT media_url, preview_url, thumbnail_url, thumb_url, hls_url FROM media WHERE id IN (${gph})`).all(...gone)) {
+      for (const u of Object.values(r)) if (u) storedUrls.add(u);
+    }
+    // hash and media_url are NOT NULL, and hash is UNIQUE: they get placeholders that no real hash or URL equals.
+    // The text that identifies the post goes as well; the update trigger takes it out of media_fts, so search no longer
+    // finds it. source_key and post_key stay: they are opaque ids that keep the post from being imported again.
     db.prepare(`UPDATE media SET phash = NULL, hash = 'purged:' || id, media_url = '', preview_url = NULL,
       thumbnail_url = NULL, thumb_url = NULL, hls_url = NULL, tint = NULL,
+      source_url = NULL, title = NULL, description = NULL, ocr_text = NULL, author = NULL, community = NULL, tags_text = '',
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE publish_state = 'removed' AND id IN (${gph})`).run(...gone);
     purged += gone.length;
   }
