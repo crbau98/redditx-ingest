@@ -104,6 +104,14 @@ function parseable(text, kind = 'fragment') {
 function load(html, kind = 'html') {
   const text = String(html ?? '');
   assertParseable(text, kind);
+  if (kind !== 'xml') {
+    // The real parser decides for larger HTML (lib/markup-preflight): the text scan above cannot model every parse5 rule.
+    const pf = require('./markup-preflight').check(text, kind);
+    if (pf && pf.refused) throw new MarkupRefused(pf.refused);
+    const lim = LIMITS[kind];
+    if (pf && pf.elements > lim.maxElements * 1.2) throw new MarkupRefused(`the parsed tree has ${pf.elements} elements (limit ${lim.maxElements})`);
+    if (pf && pf.depth > lim.maxDepth + 20) throw new MarkupRefused(`the parsed tree nests ${pf.depth} deep (limit ${lim.maxDepth})`);
+  }
   if (kind === 'fragment') return cheerio.load(`<div>${text}</div>`, null, false);
   const $ = kind === 'xml' ? cheerio.load(text, { xmlMode: true }) : cheerio.load(text);
   // Belt and braces: the scanner models the parser; if the real tree is bigger than the limit allows, later passes over it are

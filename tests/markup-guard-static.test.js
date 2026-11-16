@@ -7,6 +7,8 @@ const path = require('node:path');
 
 const SRC = path.join(__dirname, '..', 'src');
 const WRAPPER = path.join(SRC, 'lib', 'markup-guard.js');
+// The parser preflight worker builds a throwaway tree (in its own thread, under a time limit) to size the document for the wrapper.
+const PREFLIGHT = path.join(SRC, 'lib', 'markup-preflight-worker.js');
 function walk(dir, out = []) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, e.name);
@@ -20,7 +22,7 @@ const code = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/
 test('no file in src/ requires cheerio or calls cheerio.load outside lib/markup-guard.js', () => {
   const offenders = [];
   for (const file of walk(SRC)) {
-    if (file === WRAPPER) continue;
+    if (file === WRAPPER || file === PREFLIGHT) continue;
     const text = code(fs.readFileSync(file, 'utf8'));
     if (/require\(\s*['"]cheerio['"]\s*\)/.test(text) || /\bcheerio\s*\.\s*load\s*\(/.test(text) || /\bfrom\s+['"]cheerio['"]/.test(text)) offenders.push(path.relative(SRC, file));
   }
