@@ -49,6 +49,18 @@ function put(url, buffer, type) {
   } catch { /* cache is best-effort */ }
 }
 
+/** Forget one URL's cached image (a takedown purges the bytes, not only the row). */
+function drop(url) {
+  if (!url) return false;
+  const file = filePath(keyOf(url));
+  let size = 0;
+  try { size = fs.statSync(file).size; } catch { return false; }
+  try { fs.unlinkSync(file); } catch { /* gone */ }
+  try { fs.unlinkSync(`${file}.json`); } catch { /* gone */ }
+  if (approx >= 0) approx = Math.max(0, approx - size);
+  return true;
+}
+
 // Eviction never runs on the request path: the proxy calls put() per image, and a full
 // directory walk (tens of thousands of stats on a big cache) would stall every other request.
 // Instead puts only schedule one run, at most once a minute, and the run itself skips the walk
@@ -105,4 +117,4 @@ async function walk() {
   }
 }
 
-module.exports = { get, put, evict, MAX_FILE, get enabled() { return enabled; } };
+module.exports = { get, put, drop, evict, MAX_FILE, get enabled() { return enabled; } };
