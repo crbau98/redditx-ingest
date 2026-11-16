@@ -21,7 +21,11 @@ const exact = new Set();   // 3+ characters: matched only when the whole string 
 const sourceOf = new Map();
 let loaded = false;
 const db = () => { try { return require('../db/repo').db; } catch { return null; } };
-const MAX_TAINT = 40000;
+// In-memory caches only. The database tables (telegram_text, reddit_text) are the source of truth: a string that has aged
+// out of memory, or was never loaded after a restart, is still found by an indexed lookup (inStore), so the guard fails
+// closed instead of open (Crucible, 2026-11-16: after 40,100 marks the first caption passed scrub()).
+const MAX_TAINT = 40000;    // substring list: scanned per check, so it stays bounded
+const MAX_EXACT = 200000;   // whole-string set: a hash lookup, so it can be larger
 const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
 const POST_LINK = /(?:^|[^a-z0-9])(?:t|telegram)\.me\/(?:c\/\d+|s\/[a-z0-9_]+|[a-z0-9_]{4,})\/\d+/i;
 const REDDIT_POST = /(?:^|[^a-z0-9])(?:www\.|old\.|np\.)?reddit\.com\/r\/[a-z0-9_]+\/comments\/[a-z0-9]+|(?:^|[^a-z0-9])redd\.it\/[a-z0-9]+/i;
@@ -40,9 +44,12 @@ function mark(value, source = 'telegram') {
   persist(t, src);
 }
 function remember(t, source = 'telegram') {
-  if (t.length >= 12) { taint.add(t); if (taint.size > MAX_TAINT) taint.delete(taint.values().next().value); }
+  if (t.length >= 12) {
+    taint.add(t);
+    if (taint.size > MAX_TAINT) { const old = taint.values().next().value; taint.delete(old); if (!exact.has(old)) sourceOf.delete(old); }
+  }
   exact.add(t);
-  if (exact.size > MAX_TAINT) exact.delete(exact.values().next().value);
+  if (exact.size > MAX_EXACT) { const old = exact.values().next().value; exact.delete(old); if (!taint.has(old)) sourceOf.delete(old); }
   if (!sourceOf.has(t)) sourceOf.set(t, asSource(source));
 }
 
@@ -79,6 +86,27 @@ function load() {
   } catch { /* reddit_text arrives with migration v30 */ }
 }
 
+/** Indexed lookup in the persisted provenance tables: the whole string, then each line / " · " / " | " segment of it. */
+let stmts = null;
+function inStore(value) {
+  const d = db(); if (!d) return null;
+  try {
+    if (!stmts || stmts.db !== d) {
+      stmts = { db: d, tg: d.prepare('SELECT 1 FROM telegram_text WHERE norm = ?'), rd: d.prepare('SELECT 1 FROM reddit_text WHERE norm = ?') };
+    }
+    const raw = String(value);
+    const keys = new Set([norm(raw)]);
+    if (raw.length >= 24) for (const part of raw.split(/\r?\n+|\s[·•|—–]\s|\t+/)) keys.add(norm(part));
+    for (const k of keys) {
+      if (k.length < 3) continue;
+      const key = k.slice(0, 4000);
+      if (stmts.tg.get(key)) return 'telegram';
+      if (stmts.rd.get(key)) return 'reddit';
+    }
+  } catch { /* tables not there yet (very first start) */ }
+  return null;
+}
+
 function linkSource(value) {
   if (POST_LINK.test(value)) return 'telegram';
   if (REDDIT_POST.test(value)) return 'reddit';
@@ -94,7 +122,7 @@ function tainted(value, depth = 0) {
     if (t.length < 3) return false;
     if (exact.has(t) || exact.has(t.replace(/\s*\(\d+\)$/, ''))) return true; // "gym (12)" is the tag "gym" with its count
     if (t.length >= 12) for (const s of taint) if (t.includes(s)) return true; // a bio/caption embedded in a longer string
-    return false;
+    return inStore(value) !== null;
   }
   if (Array.isArray(value)) return value.some((v) => tainted(v, depth + 1));
   if (typeof value === 'object') {
@@ -117,7 +145,7 @@ function which(value, depth = 0) {
     const bare = t.replace(/\s*\(\d+\)$/, '');
     if (sourceOf.has(bare)) return sourceOf.get(bare);
     if (t.length >= 12) for (const s of taint) if (t.includes(s) && sourceOf.has(s)) return sourceOf.get(s);
-    return null;
+    return inStore(value);
   }
   if (Array.isArray(value)) {
     for (const v of value) { const s = which(v, depth + 1); if (s) return s; }
@@ -158,9 +186,9 @@ function refuse(purpose, source) {
 }
 
 function _reset({ keepDb = false } = {}) {
-  taint.clear(); exact.clear(); sourceOf.clear(); loaded = false; loadedAt = 0;
+  taint.clear(); exact.clear(); sourceOf.clear(); loaded = false; loadedAt = 0; stmts = null;
   if (!keepDb) {
     try { const d = db(); if (d) { d.prepare('DELETE FROM telegram_text').run(); d.prepare('DELETE FROM reddit_text').run(); } } catch { /* none */ }
   }
 }
-module.exports = { mark, load, tainted, scrub, refuse, _reset };
+module.exports = { mark, load, tainted, scrub, refuse, _reset, MAX_TAINT, MAX_EXACT };
