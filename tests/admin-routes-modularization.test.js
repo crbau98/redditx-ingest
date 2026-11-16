@@ -35,6 +35,7 @@ POST /ai/triage
 POST /maintenance/purge-removed-residue
 GET /library-health
 GET /feeds/idle
+GET /feeds/yield
 GET /feeds/foreign
 GET /feeds
 POST /feeds

@@ -259,6 +259,7 @@ function unwrapTrackingUrls(urls) {
 
 function extractPage(html, pageUrl0, opts = {}) {
   const rawHtml = String(html || '');
+  require('../lib/markup-guard').assertParseable(rawHtml, 'html'); // refuse before any tree is built (size, depth, element count)
   const $ = cheerio.load(rawHtml);
   const pageUrl = absUrl($('base[href]').first().attr('href'), pageUrl0) || pageUrl0;
 
@@ -701,7 +702,7 @@ function downgradeSameHost(page, plainUrl) {
   return page;
 }
 
-async function fetchHtmlWithMeta(targetUrl, maxBytes = 3_000_000) {
+async function fetchHtmlWithMeta(targetUrl, maxBytes = 2_000_000) {
   const read = async (u) => {
     const res = await http.raw(u, {
       headers: { accept: 'text/html,application/xhtml+xml' },

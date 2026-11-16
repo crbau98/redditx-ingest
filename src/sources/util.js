@@ -28,6 +28,7 @@ function decodeHtml(s) {
 
 function htmlToText(html, max = 500) {
   if (!html) return '';
+  if (!require('../lib/markup-guard').parseable(html)) return String(html).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max); // too deep or large to parse: tags stripped, nothing built
   const $ = cheerio.load(`<div>${html}</div>`, null, false);
   $('script,style').remove();
   $('br').replaceWith('\n');

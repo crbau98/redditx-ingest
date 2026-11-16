@@ -50,8 +50,24 @@ const runs = {
   /** Items added by a feed's last few finished runs, newest first (for adaptive scheduling). */
   /** Yield scoreboard: how many finished runs this feed had since `sinceIso`, and how many items they fetched. */
   yieldSince(feedId, sinceIso) {
-    const r = db.prepare("SELECT COUNT(*) AS runs, COALESCE(SUM(fetched), 0) AS fetched FROM feed_runs WHERE feed_id = ? AND started_at >= ? AND status != 'running'").get(feedId, sinceIso);
-    return { runs: r.runs, fetched: r.fetched };
+    const r = db.prepare("SELECT COUNT(*) AS runs, COALESCE(SUM(fetched), 0) AS fetched, COALESCE(SUM(added), 0) AS added FROM feed_runs WHERE feed_id = ? AND started_at >= ? AND status != 'running'").get(feedId, sinceIso);
+    return { runs: r.runs, fetched: r.fetched, added: r.added };
+  },
+  /** Added-item timestamps of a feed's productive runs since `sinceIso`, newest first (the feed's own posting rhythm). Uses ix_runs_feed. */
+  productiveRuns(feedId, sinceIso, limit = 12) {
+    return db.prepare("SELECT started_at FROM feed_runs WHERE feed_id = ? AND started_at >= ? AND added > 0 ORDER BY started_at DESC LIMIT ?").all(feedId, sinceIso, limit).map((r) => r.started_at);
+  },
+  /**
+   * Admin, read-only: runs, fetched and added per feed since `sinceIso`. The range scan runs on ix_runs_started and aggregates
+   * before it joins feeds; `limit` bounds the join. Sorted by runs (default), added, or fetched.
+   */
+  yieldByFeed(sinceIso, { platform = null, limit = 200, offset = 0, sort = 'runs' } = {}) {
+    const col = { runs: 'runs', added: 'added', fetched: 'fetched' }[sort] || 'runs';
+    return db.prepare(`SELECT a.feed_id AS id, f.platform, f.kind, f.target, f.enabled, a.runs, a.fetched, a.added, a.dupes, a.errors
+      FROM (SELECT feed_id, COUNT(*) AS runs, COALESCE(SUM(fetched), 0) AS fetched, COALESCE(SUM(added), 0) AS added, COALESCE(SUM(dupes), 0) AS dupes,
+              SUM(status = 'error') AS errors
+            FROM feed_runs WHERE started_at >= ? AND status != 'running' GROUP BY feed_id ORDER BY ${col} DESC LIMIT ? OFFSET ?) a
+      JOIN feeds f ON f.id = a.feed_id ${platform ? 'WHERE f.platform = ?' : ''} ORDER BY a.${col} DESC`).all(...(platform ? [sinceIso, limit, offset, platform] : [sinceIso, limit, offset]));
   },
   /** Admin: feeds whose runs since `sinceIso` (at least `minRuns` of them) fetched nothing at all. Read-only. */
   idleFeeds(sinceIso, { minRuns = 5, limit = 200, offset = 0 } = {}) {

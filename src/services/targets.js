@@ -57,6 +57,7 @@ function addSpec(spec, { creatorId = null, origin = 'admin', trusted, hint, body
     }
     return { status: 'external', spec };
   }
+  { const why = require('../lib/target-valid').invalidTarget(spec); if (why) return { status: 'invalid', reason: why }; }
   spec = require('./telegram-public').upgradeSpec(spec); // adult Telegram channels have no web preview: read them by username over MTProto when that works
   if (repo.blocklist.has('creator', `${spec.platform}:${String(spec.target).toLowerCase()}`)) {
     return { status: 'invalid', reason: 'This account is on the blocklist' };

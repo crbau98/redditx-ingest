@@ -135,16 +135,63 @@ function tempo(feed, added) {
 const IDLE_DAYS = 7;
 const IDLE_MIN_RUNS = 5;
 const IDLE_BACKOFF_DAYS = 3;
-function idleNextRun(feed, fetchedNow, now = Date.now()) {
-  if (fetchedNow > 0 || !settingsStore.get().adaptiveScheduling) return null;
+// Duplicate-only backoff: a feed that keeps fetching items but has added none in IDLE_DAYS (every item already stored: a caught-up
+// web page, a creator whose posts all exist) is checked every DUPE_BACKOFF_DAYS. Shorter than the zero-fetch backoff because a page
+// that lists items can start adding at any run; the first added item puts it back on its normal pace.
+const DUPE_BACKOFF_DAYS = 2;
+// A backfill slice that read items but added none (history already stored) waits this many times the normal gap before the next slice (history already stored).
+const BACKFILL_DRY_GAP_FACTOR = 4;
+const BACKFILL_DRY_STOP = 6;
+const BFDONE_PLATFORMS = new Set(['redgifs', 'bluesky']); // their cursors close a backfill with bfDone
+function idleNextRun(feed, fetchedNow, now = Date.now(), addedNow) {
+  if (!settingsStore.get().adaptiveScheduling) return null;
   const score = repo.runs.yieldSince(feed.id, new Date(now - IDLE_DAYS * 86400000).toISOString());
+  const jitter = 0.9 + Math.random() * 0.2;
+  if (fetchedNow > 0) {
+    // addedNow is undefined for callers that only ask about the zero-fetch case.
+    if (addedNow === undefined || addedNow > 0) return null;
+    if (score.runs < IDLE_MIN_RUNS || score.added > 0) return null;
+    return new Date(now + DUPE_BACKOFF_DAYS * 86400000 * jitter).toISOString();
+  }
   if (score.runs < IDLE_MIN_RUNS || score.fetched > 0) return null;
-  return new Date(now + IDLE_BACKOFF_DAYS * 86400000 * (0.9 + Math.random() * 0.2)).toISOString();
+  return new Date(now + IDLE_BACKOFF_DAYS * 86400000 * jitter).toISOString();
+}
+
+// Platforms whose feeds yield almost nothing for their run volume are polled no more often than this, whatever interval the feed
+// was created with (GFF: 134 adds in 3,729 runs a week; link-in-bio hubs: 0 in 605). Not disabled: a new item restores the feed's tempo.
+const PLATFORM_MIN_INTERVAL_MIN = { gff: 3 * 1440, linkinbio: 7 * 1440 };
+
+// Pace by the feed's own rhythm (coomer, redgifs): after a run that added nothing, the next run waits about half the median gap
+// between this feed's productive runs, never less than its base interval and never more than PACE_MAX_DAYS.
+const PACED_PLATFORMS = new Set(['coomer', 'redgifs']);
+const PACE_MAX_DAYS = 2;
+const PACE_WINDOW_DAYS = 30;
+const PACE_MIN_POINTS = 3;
+function paceNextRun(feed, addedNow, now = Date.now()) {
+  if (addedNow > 0 || !PACED_PLATFORMS.has(feed.platform) || !settingsStore.get().adaptiveScheduling) return null;
+  const base = Math.max(5, feed.interval_min) * 60000;
+  const max = PACE_MAX_DAYS * 86400000;
+  const stamps = repo.runs.productiveRuns(feed.id, new Date(now - PACE_WINDOW_DAYS * 86400000).toISOString()).map((t) => Date.parse(t)).filter(Number.isFinite);
+  let delay;
+  if (stamps.length >= PACE_MIN_POINTS) {
+    const gaps = []; for (let i = 0; i < stamps.length - 1; i++) gaps.push(stamps[i] - stamps[i + 1]);
+    gaps.sort((a, b) => a - b);
+    const median = gaps[Math.floor(gaps.length / 2)];
+    delay = median / 2;
+  } else {
+    // too little history to read a rhythm: a feed with no added item in a week of runs is slow, otherwise leave it to the tempo
+    const quiet = repo.runs.yieldSince(feed.id, new Date(now - 7 * 86400000).toISOString());
+    if (quiet.runs < IDLE_MIN_RUNS || quiet.added > 0) return null;
+    delay = max;
+  }
+  delay = Math.min(max, Math.max(base, delay));
+  return new Date(now + delay * (0.9 + Math.random() * 0.2)).toISOString();
 }
 
 /** next_run_at after a run: jittered interval on success, exponential backoff on failure. */
 function computeNextRun(feed, failures, retryAfterMs = 0, factor = 1) {
-  const base = Math.min(Math.max(5, feed.interval_min) * 60000 * factor, Math.max(24 * 3600000, feed.interval_min * 60000));
+  const intervalMin = Math.max(feed.interval_min, PLATFORM_MIN_INTERVAL_MIN[feed.platform] || 0);
+  const base = Math.min(Math.max(5, intervalMin) * 60000 * factor, Math.max(24 * 3600000, intervalMin * 60000));
   const jitter = 0.9 + Math.random() * 0.2;
   const delay = failures > 0 ? Math.min(base * 2 ** (failures - 1), 24 * 3600000) * jitter : base * jitter;
   return new Date(Date.now() + Math.max(delay, retryAfterMs)).toISOString();
@@ -408,6 +455,12 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     if (ctx.needProfile && !result.profile && PROFILE_REFRESH_PLATFORMS.has(feed.platform)) stamp.profileTryAt = new Date().toISOString();
     else if (!readNow && prevCur.profileTryAt) stamp.profileTryAt = prevCur.profileTryAt;
     if (Object.keys(stamp).length && (ctx.needProfile || prevCur.profiledAt || prevCur.profileTryAt)) cursorOut = { ...(cursorOut || prevCur), ...stamp };
+    // A backfill that has read BACKFILL_DRY_STOP slices in a row without adding anything has reached history that is already
+    // stored: it is closed (bfDone), not run on for ever. Any added item resets the count.
+    if (BFDONE_PLATFORMS.has(feed.platform) && backfill.pending({ cursor: cursorOut }) && cursorOut && typeof cursorOut === 'object') {
+      const dry = stats.added > 0 ? 0 : (Number(prevCur.bfDry) || 0) + 1;
+      cursorOut = dry >= BACKFILL_DRY_STOP ? { ...cursorOut, backfillPending: false, bfDone: true, bfDry: 0, bfStopped: 'dry' } : { ...cursorOut, bfDry: dry };
+    }
     const more = backfill.pending({ cursor: cursorOut });
     // The adapter got nothing because its source is rate limited (X syndication parked and the keyless route found
     // nothing): skipped, not a healthy empty run. Its cursor is kept (seen posts, miss cache); come back after the hold.
@@ -421,7 +474,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     }
     repo.feeds.finishRun(feed.id, {
       status, cursor: cursorOut, addedItems: stats.added, failures: 0,
-      nextRunAt: more && !ctx.aborted() ? new Date(Date.now() + cfg.backfillGapMin * 60000).toISOString() : (idleNextRun(feed, stats.fetched) || computeNextRun(feed, 0, 0, tempo(feed, stats.added))),
+      nextRunAt: more && !ctx.aborted() ? new Date(Date.now() + cfg.backfillGapMin * 60000 * (stats.fetched > 0 && stats.added === 0 ? BACKFILL_DRY_GAP_FACTOR : 1)).toISOString() : (idleNextRun(feed, stats.fetched, Date.now(), stats.added) || paceNextRun(feed, stats.added) || computeNextRun(feed, 0, 0, tempo(feed, stats.added))),
       error: (result.notes && result.notes.length) ? `via ${result.via}: ${result.notes[0]}` : null,
     });
     breaker.success(feed.platform);
@@ -793,4 +846,4 @@ function shutdown() {
   state.timer = null; state.hotTimer = null; state.stopRequested = true;
 }
 
-module.exports = { _nextWork: nextWork, slotsFor, runningOn, start, shutdown, tick, runFeed, enqueue, enqueuePlatforms, stopAll, pause, resume, status, seedDefaults, seedCuratedCreators, backfillCreatorStats, computeNextRun, tempo, idleNextRun, IDLE: { days: IDLE_DAYS, minRuns: IDLE_MIN_RUNS, backoffDays: IDLE_BACKOFF_DAYS }, adoptDiscoveredFeeds, _profileDue: profileDue, _state: state, _waysIn: { noteWaysIn, followWaysIn } };
+module.exports = { paceNextRun, computeNextRun, BACKFILL_DRY_STOP, PLATFORM_MIN_INTERVAL_MIN, _nextWork: nextWork, slotsFor, runningOn, start, shutdown, tick, runFeed, enqueue, enqueuePlatforms, stopAll, pause, resume, status, seedDefaults, seedCuratedCreators, backfillCreatorStats, computeNextRun, tempo, idleNextRun, IDLE: { days: IDLE_DAYS, minRuns: IDLE_MIN_RUNS, backoffDays: IDLE_BACKOFF_DAYS }, adoptDiscoveredFeeds, _profileDue: profileDue, _state: state, _waysIn: { noteWaysIn, followWaysIn } };

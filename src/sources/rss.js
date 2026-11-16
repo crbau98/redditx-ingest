@@ -9,6 +9,7 @@
  * not break the way HTML scraping does.
  */
 const cheerio = require('cheerio');
+const markupGuard = require('../lib/markup-guard');
 const http = require('./http').forPlatform('rss', 800);
 const net = require('../lib/net');
 const limiter = require('../lib/limiter');
@@ -24,7 +25,7 @@ const kindOf = (url, mime) => {
 };
 
 function mediaFromHtml(html, base) {
-  if (!html) return [];
+  if (!html || !markupGuard.parseable(html)) return [];
   const $ = cheerio.load(`<div>${html}</div>`, null, false);
   const out = [];
   $('video').each((_, v) => {
@@ -58,7 +59,7 @@ function mediaFromHtml(html, base) {
 
 /** Every outbound http(s) link in an HTML fragment (used to spot e.g. RedGIFs pages inside feed entries). */
 function linksFromHtml(html, base) {
-  if (!html) return [];
+  if (!html || !markupGuard.parseable(html)) return [];
   const $ = cheerio.load(`<div>${html}</div>`, null, false);
   const out = [];
   $('a[href]').each((_, a) => { const u = absUrl($(a).attr('href'), base); if (u && /^https?:/i.test(u)) out.push(u); });
@@ -74,12 +75,24 @@ function dateOf(e) {
   return null;
 }
 
+/** A document over the feed byte limit is cut after its last complete entry, so a big but honest feed still yields its newest items. */
+function trimmedToLimit(text) {
+  const max = markupGuard.LIMITS.xml.maxBytes;
+  if (text.length <= max) return text;
+  const head = text.slice(0, max);
+  const cut = Math.max(head.lastIndexOf('</item>'), head.lastIndexOf('</entry>'));
+  return cut > 0 ? head.slice(0, cut + (head.startsWith('</item>', cut) ? 7 : 8)) : head;
+}
+
 /** Parse any supported feed document. Never throws on malformed entries. */
 function parseFeed(text, baseUrl) {
   const trimmed = String(text || '').trim();
   if (trimmed.startsWith('{')) return parseJsonFeed(JSON.parse(trimmed), baseUrl);
 
-  const $ = cheerio.load(trimmed, { xmlMode: true });
+  // Bound the work before any tree is built: size (cut at the last whole entry), nesting depth, element count.
+  const doc = trimmedToLimit(trimmed);
+  markupGuard.assertParseable(doc, 'xml');
+  const $ = cheerio.load(doc, { xmlMode: true });
   const isAtom = $('feed').length > 0;
   const root = isAtom ? $('feed').first() : $('channel').first();
   const feed = {
@@ -92,8 +105,10 @@ function parseFeed(text, baseUrl) {
     link: null,
     entries: [],
   };
-  const entries = $(isAtom ? 'entry' : 'item');
+  const entries = $(isAtom ? 'entry' : 'item').slice(0, markupGuard.FEED_MAX_ENTRIES);
+  const deadline = Date.now() + markupGuard.FEED_PARSE_BUDGET_MS;
   entries.each((_, el) => {
+    if (Date.now() > deadline) throw new markupGuard.MarkupRefused(`entry pass over its ${markupGuard.FEED_PARSE_BUDGET_MS} ms time budget`);
     const e = $(el);
     try {
       const linkEl = e.children('link').filter((_, l) => !$(l).attr('rel') || $(l).attr('rel') === 'alternate').first();
@@ -134,7 +149,7 @@ function parseFeed(text, baseUrl) {
         categories: e.children('category').map((_, c) => $(c).attr('term') || $(c).text()).get().filter(Boolean).slice(0, 12),
         media: media.slice(0, MAX_PER_ENTRY),
       });
-    } catch { /* skip malformed entry */ }
+    } catch (err) { if (err && err.markupGuard) throw err; /* skip malformed entry */ }
   });
   return feed;
 }

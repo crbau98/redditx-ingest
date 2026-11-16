@@ -30,8 +30,8 @@ test('the scoreboard counts runs and fetched items inside the window only', () =
   const f = feed('https://linktr.ee/scoreboard');
   seedRuns(f.id, [{ daysAgo: 1, fetched: 0 }, { daysAgo: 2, fetched: 0 }, { daysAgo: 9, fetched: 12 }]);
   const since = new Date(Date.now() - 7 * DAY).toISOString();
-  assert.deepEqual(repo.runs.yieldSince(f.id, since), { runs: 2, fetched: 0 }, 'the 9-day-old productive run is outside the 7 days');
-  assert.deepEqual(repo.runs.yieldSince(f.id, new Date(Date.now() - 10 * DAY).toISOString()), { runs: 3, fetched: 12 });
+  assert.deepEqual(repo.runs.yieldSince(f.id, since), { runs: 2, fetched: 0, added: 0 }, 'the 9-day-old productive run is outside the 7 days');
+  assert.deepEqual(repo.runs.yieldSince(f.id, new Date(Date.now() - 10 * DAY).toISOString()), { runs: 3, fetched: 12, added: 0 });
 });
 
 test('a feed with 5+ empty runs over 7 days backs off to 3 days; a recent item or too few runs keeps its pace', () => {
@@ -63,7 +63,7 @@ test('an empty run of an idle feed is scheduled 3 days out; nothing is disabled'
   const r = await engine.runFeed(f, 'schedule');
   assert.equal(r.status, 'empty');
   const after7 = repo.runs.yieldSince(f.id, new Date(Date.now() - 7 * DAY).toISOString());
-  assert.deepEqual([before7, after7], [{ runs: 5, fetched: 0 }, { runs: 6, fetched: 0 }]);
+  assert.deepEqual([before7, after7], [{ runs: 5, fetched: 0, added: 0 }, { runs: 6, fetched: 0, added: 0 }]);
   const row = repo.feeds.get(f.id);
   assert.equal(row.enabled, 1, 'still enabled');
   assert.ok(Date.parse(row.next_run_at) - Date.now() > 2.6 * DAY);
