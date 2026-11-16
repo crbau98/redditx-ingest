@@ -1,7 +1,7 @@
 // Tiny DOM toolkit. Content is only ever inserted as text nodes or attributes —
 // there is no innerHTML anywhere, so scraped titles/bios cannot inject markup.
 
-import { mediaSrc, isDirectSrc, viaProxy, probeImage } from './direct-media.js';
+import { mediaSrc, isDirectSrc, viaProxy, probeImage, isMissingStub } from './direct-media.js';
 export { probeImage };
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -115,6 +115,16 @@ export function proxied(url) {
 export function installDirectFallback() {
   if (typeof document === 'undefined' || installDirectFallback.done) return;
   installDirectFallback.done = true;
+  // A direct picture that "loads" as the host's 404 stub (see isMissingStub) is retried like an error.
+  document.addEventListener('load', (e) => {
+    const el = e.target;
+    if (!el || el.tagName !== 'IMG') return;
+    const cur = el.getAttribute('src');
+    if (!cur || el.dataset.directFb || !isDirectSrc(cur) || !isMissingStub(cur, el.naturalWidth, el.naturalHeight)) return;
+    el.dataset.directFb = '1';
+    el.setAttribute('src', viaProxy(cur));
+    e.stopImmediatePropagation();
+  }, true);
   document.addEventListener('error', (e) => {
     const el = e.target;
     if (!el || !el.tagName || (el.tagName !== 'IMG' && el.tagName !== 'SOURCE')) return;
@@ -187,7 +197,11 @@ export function avatar(entity, size = 40) {
     // Eager, not lazy: an avatar inside a horizontal rail can sit off-screen for ever, and a lazy
     // image that is never near the viewport never loads — the card kept showing its initials.
     const img = h('img', { src: proxied(url), alt: '', loading: 'eager', decoding: 'async', fetchpriority: size >= 60 ? 'high' : 'auto' });
-    img.addEventListener('load', () => { el.textContent = ''; el.appendChild(img); }, { once: true });
+    img.addEventListener('load', () => {
+      const cur = img.getAttribute('src');
+      if (isDirectSrc(cur) && !img.dataset.directFb && isMissingStub(cur, img.naturalWidth, img.naturalHeight)) { img.dataset.directFb = '1'; img.src = viaProxy(cur); return; } // the host's 404 stub: initials stay
+      el.textContent = ''; el.appendChild(img);
+    });
     // This image is detached until it loads, so the document-level fallback never sees its errors: a refused direct
     // load is retried once through the proxy here; if that fails too, the initials stay.
     img.addEventListener('error', () => {

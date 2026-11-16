@@ -1,5 +1,9 @@
 # UI changelog
 
+## 2026-11-16 — Direct media: the i.redd.it "not found" picture is a failure, not a picture
+
+- **Fixed (found on prod, v4.21.0):** for a deleted file `i.redd.it` answers status 404 with a 130×60 PNG body. A browser treats that as a loaded picture, so a direct tile showed Reddit's stub and never fell back or reported the item broken (through the proxy the same 404 was JSON, which did). A direct `i.redd.it` picture of exactly 130×60 is now handled as a failed load: retried once through the proxy, which restores the old behaviour. Covers `<img>` tiles and Reels/viewer pictures (document-level `load` listener), avatars (initials stay) and probes (tile backgrounds, posters). No other listed host answers a missing file with an image (probed).
+
 ## 2026-11-16 — Less proxy traffic: pictures straight from their CDN, full-size files only when wanted
 
 - **Verified hosts load directly.** i.redd.it, i.imgur.com, cdn.bsky.app, pbs.twimg.com, img.coomer.st (pictures) and media.redgifs.com (pictures and video files) are fetched by the browser itself with no referrer, instead of streaming through `/api/proxy`. Hosts that need a Referer (gff.network, phncdn.com), HLS playlists, the object store, `preview.redd.it` (could not be probed) and downloads (watermark) stay on the proxy. The host list is one server constant; it drives the Content-Security-Policy and `/api/meta.directMedia`. `DIRECT_MEDIA=0` switches it off.

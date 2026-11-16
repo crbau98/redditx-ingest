@@ -60,6 +60,7 @@ export const viaProxy = (srcOrUrl) => (srcOrUrl && srcOrUrl.startsWith('/') ? sr
  */
 export function probeImage(src, onFail, onProxy) {
   const p = new Image();
+  p.onload = () => { if (isMissingStub(src, p.naturalWidth, p.naturalHeight)) p.onerror(); }; // a "found" picture that is the host's 404 stub
   p.onerror = () => {
     if (!isDirectSrc(src)) { onFail && onFail(); return; }
     const alt = viaProxy(src);
@@ -69,4 +70,15 @@ export function probeImage(src, onFail, onProxy) {
     q.src = alt;
   };
   p.src = src;
+}
+
+/**
+ * i.redd.it answers a missing file with status 404 and a 130x60 PNG body (1048 bytes). An <img> treats that as a good
+ * load, so no error fires and the tile would show the stub instead of falling back. Through the proxy the same 404 became
+ * JSON, which did fire. A direct i.redd.it picture of exactly that size is therefore handled as a failed load.
+ * (Probed 2026-11-16: no other listed host answers a missing file with an image.)
+ */
+export function isMissingStub(src, width, height) {
+  if (width !== 130 || height !== 60 || typeof src !== 'string') return false;
+  try { return new URL(src).hostname.toLowerCase() === 'i.redd.it'; } catch { return false; }
 }

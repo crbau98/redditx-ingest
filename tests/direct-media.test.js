@@ -65,6 +65,40 @@ describe('client helper', () => {
   });
 });
 
+describe('the i.redd.it missing-file stub', () => {
+  test('only a direct i.redd.it picture of exactly 130x60 counts as the 404 stub', async () => {
+    const M = await loadClient();
+    assert.equal(M.isMissingStub('https://i.redd.it/a.jpg', 130, 60), true);
+    assert.equal(M.isMissingStub('https://i.redd.it/a.jpg', 130, 61), false);
+    assert.equal(M.isMissingStub('https://i.redd.it/a.jpg', 640, 60), false);
+    assert.equal(M.isMissingStub('https://cdn.bsky.app/a', 130, 60), false, 'another host: a real 130x60 picture');
+    assert.equal(M.isMissingStub('https://i.redd.it.evil.com/a.jpg', 130, 60), false);
+    assert.equal(M.isMissingStub('/api/proxy?url=x', 130, 60), false);
+    assert.equal(M.isMissingStub(undefined, 130, 60), false);
+  });
+
+  test('probeImage treats the stub as a failed direct load and tries the proxy; a real picture is left alone', async () => {
+    const M = await loadClient();
+    M.configureDirectMedia(CFG);
+    const made = [];
+    globalThis.Image = class { constructor() { made.push(this); } set src(v) { this._src = v; } get src() { return this._src; } };
+    try {
+      const log = [];
+      M.probeImage('https://i.redd.it/a.jpg', () => log.push('fail'), (alt) => log.push(`proxy:${alt}`));
+      const [first] = made; first.naturalWidth = 130; first.naturalHeight = 60; first.onload();
+      assert.equal(made.length, 2, 'the proxy copy was requested');
+      assert.equal(made[1].src, PROXY('https://i.redd.it/a.jpg'));
+      made[1].onload();
+      assert.deepEqual(log, [`proxy:${PROXY('https://i.redd.it/a.jpg')}`]);
+      made.length = 0; log.length = 0;
+      M.probeImage('https://i.redd.it/b.jpg', () => log.push('fail'), () => log.push('proxy'));
+      made[0].naturalWidth = 640; made[0].naturalHeight = 480; made[0].onload();
+      assert.equal(made.length, 1, 'a real picture needs no retry');
+      assert.deepEqual(log, []);
+    } finally { delete globalThis.Image; }
+  });
+});
+
 describe('source contracts', () => {
   const read = (...p) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
 

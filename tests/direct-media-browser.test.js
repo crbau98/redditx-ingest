@@ -20,6 +20,17 @@ describe('browser: direct loads and the proxy fallback', { skip: haveBrowser ? f
   let server; let base; let browser; let engine; let repo;
   const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 
+  // what i.redd.it sends for a missing file: status 404 with a 130x60 PNG body, which an <img> counts as a good load
+  const stubPng = (() => {
+    const zlib = require('zlib');
+    const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+    const crc = (b) => { let c = 0xffffffff; for (const x of b) c = crcTable[(c ^ x) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+    const chunk = (t, d) => { const len = Buffer.alloc(4); len.writeUInt32BE(d.length); const td = Buffer.concat([Buffer.from(t), d]); const c = Buffer.alloc(4); c.writeUInt32BE(crc(td)); return Buffer.concat([len, td, c]); };
+    const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(130, 0); ihdr.writeUInt32BE(60, 4); ihdr[8] = 8; ihdr[9] = 0;
+    const raw = Buffer.concat(Array.from({ length: 60 }, () => Buffer.concat([Buffer.from([0]), Buffer.alloc(130, 200)])));
+    return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+  })();
+
   before(async () => {
     delete process.env.DIRECT_MEDIA;
     const dir = prepareEnv({ DEMO_ART: '1', AGE_GATE_ENFORCE: 'false' });
@@ -47,6 +58,7 @@ describe('browser: direct loads and the proxy fallback', { skip: haveBrowser ? f
     page.on('request', (r) => { if (r.method() === 'POST' && /\/api\/media\/[^/]+\/broken/.test(r.url())) seen.broken++; });
     await page.route(/^https:\/\/(i\.redd\.it|cdn\.bsky\.app)\//, (r) => {
       seen.direct++;
+      if (directStatus === 'stub') return /^https:\/\/i\.redd\.it\//.test(r.request().url()) ? r.fulfill({ status: 404, contentType: 'image/png', body: stubPng }) : r.fulfill({ status: 200, contentType: 'image/png', body: PNG }); // only i.redd.it sends the stub
       return directStatus === 200 ? r.fulfill({ status: 200, contentType: 'image/png', body: PNG }) : r.fulfill({ status: directStatus, body: 'no' });
     });
     await page.route('**/api/proxy**', (r) => {
@@ -62,6 +74,7 @@ describe('browser: direct loads and the proxy fallback', { skip: haveBrowser ? f
     await page.locator('.card-media').first().click();
     await page.waitForTimeout(1800);
     const viewerImg = await page.evaluate(() => { const i = document.querySelector('.lb-stage img, .lightbox img'); return i ? { src: i.getAttribute('src'), ok: i.complete && i.naturalWidth > 0 } : null; });
+    const viewerStubs = await page.evaluate(() => [...document.images].filter((i) => i.complete && i.naturalWidth === 130 && i.naturalHeight === 60).length);
     await page.keyboard.press('Escape'); await page.waitForTimeout(600);
     await page.evaluate(() => window.scrollTo(0, 0));
     const brokenImgs = await page.evaluate(() => [...document.images].filter((i) => i.complete && i.naturalWidth === 0 && /redd\.it|bsky\.app/.test(i.getAttribute('src') || '')).length);
@@ -71,8 +84,9 @@ describe('browser: direct loads and the proxy fallback', { skip: haveBrowser ? f
     await page.goto(`${base}/#/reels`, { waitUntil: 'networkidle' });
     await page.waitForTimeout(2500);
     const reelsImgs = await page.evaluate(() => { const all = [...document.querySelectorAll('.reel img')].filter((i) => /redd\.it/.test(decodeURIComponent(i.getAttribute('src') || ''))); return { n: all.length, broken: all.filter((i) => i.complete && i.naturalWidth === 0).length }; });
+    const stubsShown = await page.evaluate(() => [...document.images].filter((i) => i.complete && i.naturalWidth === 130 && i.naturalHeight === 60).length);
     await ctx.close();
-    return { ...seen, brokenBeforeReels, viewerImg, brokenImgs, avatars, reelsImgs, gridDirect };
+    return { ...seen, stubsShown, viewerStubs, brokenBeforeReels, viewerImg, brokenImgs, avatars, reelsImgs, gridDirect };
   }
 
   test('a direct picture loads from its CDN: grid pictures from the unprobed host use the proxy, the full file does not', async () => {
@@ -98,6 +112,17 @@ describe('browser: direct loads and the proxy fallback', { skip: haveBrowser ? f
     assert.ok(r.reelsImgs.n >= 1, 'Reels has direct-host photos attached to the page');
     assert.equal(r.reelsImgs.broken, 0, 'a refused direct photo in the page was retried through the proxy');
     assert.ok(r.proxyRedd <= r.direct + 1, 'one retry per failed direct load, not a loop');
+  });
+
+  test('a 404 that comes with a picture body (the i.redd.it stub) is a failed load: retried through the proxy, never shown', async () => {
+    const r = await run({ directStatus: 'stub' });
+    assert.ok(r.direct >= 1, 'the direct load was tried first');
+    assert.ok(r.proxyRedd >= 1, 'the stub counted as a failure, so the same file was asked for through the proxy');
+    assert.equal(r.viewerStubs, 0, 'the viewer, whose full file preloads and is then attached, shows no stub');
+    assert.equal(r.stubsShown, 0, 'no stub picture is left on the page (tiles, avatars, viewer, Reels)');
+    assert.ok(r.viewerImg && r.viewerImg.ok, 'the viewer shows the proxied picture');
+    assert.equal(r.csp, 0);
+    assert.ok(r.proxyRedd <= r.direct + 1, 'one retry per stub, not a loop');
   });
 
   test('with DIRECT_MEDIA=0 nothing goes direct', async () => {
