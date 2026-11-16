@@ -152,3 +152,55 @@ describe('5. proxy egress counters', () => {
     assert.ok(saved[day].video.miss.bytes >= 1000);
   });
 });
+
+describe('6. the challenge browser never runs as root, and keeps its sandbox where it can', () => {
+  const { _launchPlan: plan } = require('../src/lib/chrome');
+  const chrome = (o = {}) => ({ ...config.chrome, uid: 10001, gid: 10001, sandbox: 'auto', ...o });
+  test('PRISM as root with a browser user: Chromium drops to it, sandbox on', () => {
+    const p = plan({ uid: 0, chrome: chrome(), env: { PATH: '/usr/bin', ADMIN_KEY: 'secret', OXYLABS_PASSWORD: 'x' }, home: '/tmp/p' });
+    assert.deepEqual(p.asUser, { uid: 10001, gid: 10001 });
+    assert.equal(p.root, false);
+    assert.equal(p.noSandbox, false);
+    assert.equal(p.env.HOME, '/tmp/p', 'the browser user gets its profile dir as HOME');
+    assert.ok(!('ADMIN_KEY' in p.env) && !('OXYLABS_PASSWORD' in p.env), 'the renderer inherits no secrets');
+  });
+  test('auto: after the sandbox failed once, it runs without it (still as the browser user)', () => {
+    const p = plan({ uid: 0, chrome: chrome(), env: {}, home: '/tmp/p', sandboxFailed: true });
+    assert.equal(p.noSandbox, true);
+    assert.deepEqual(p.asUser, { uid: 10001, gid: 10001 });
+  });
+  test('CHROME_SANDBOX=on never falls back; =off always runs without it', () => {
+    assert.equal(plan({ uid: 0, chrome: chrome({ sandbox: 'on' }), env: {}, sandboxFailed: true }).noSandbox, false);
+    assert.equal(plan({ uid: 0, chrome: chrome({ sandbox: 'off' }), env: {} }).noSandbox, true);
+  });
+  test('root with no browser user configured: the old behaviour (root, --no-sandbox), so nothing breaks', () => {
+    const p = plan({ uid: 0, chrome: chrome({ uid: -1 }), env: {} });
+    assert.equal(p.asUser, null); assert.equal(p.root, true); assert.equal(p.noSandbox, true);
+  });
+  test('an unprivileged PRISM (a developer machine): no user switch, sandbox on', () => {
+    const p = plan({ uid: 501, chrome: chrome(), env: {} });
+    assert.equal(p.asUser, null); assert.equal(p.noSandbox, false);
+    assert.equal(plan({ uid: 501, chrome: chrome(), env: { HOME: '/Users/me' }, home: '/tmp/p' }).env.HOME, '/Users/me', 'its own HOME is kept');
+  });
+  test('the Docker image creates the browser user and points CHROME_UID / CHROME_GID at it', () => {
+    const df = require('fs').readFileSync(require('path').join(__dirname, '..', 'Dockerfile'), 'utf8');
+    assert.match(df, /adduser -S -D -H -u 10001 -G chrome chrome/);
+    assert.match(df, /ENV CHROME_UID=10001/);
+    assert.match(df, /ENV CHROME_GID=10001/);
+  });
+});
+
+describe('7. memory watchdog thresholds', () => {
+  const memwatch = require('../src/engine/memwatch');
+  test('the soft limit is capped at 3 GB on a big container; the hard one stays proportional; env still wins', () => {
+    const old = { s: process.env.MEM_SOFT_MB, h: process.env.MEM_HARD_MB };
+    try {
+      delete process.env.MEM_SOFT_MB; delete process.env.MEM_HARD_MB;
+      const l = memwatch.limits();
+      assert.equal(l.soft, Math.min(Math.round(l.total * 0.5), 3072 * 1048576));
+      assert.equal(l.hard, Math.round(l.total * 0.68));
+      process.env.MEM_SOFT_MB = '5000';
+      assert.equal(memwatch.limits().soft, 5000 * 1048576);
+    } finally { for (const [k, v] of [['MEM_SOFT_MB', old.s], ['MEM_HARD_MB', old.h]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
+  });
+});
