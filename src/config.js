@@ -44,6 +44,18 @@ module.exports = {
   get demoArt() { return env.DEMO_ART === '1'; },
   get dbReadonly() { return env.PRISM_DB_READONLY === '1'; },
   get aggregateWorker() { return env.PRISM_AGGREGATE_WORKER !== '0'; },
+  /**
+   * SQLite memory per connection (src/db/index.js), in MB. cache_size is private heap per connection; mmap pages are the
+   * shared OS page cache but count in this process's RSS once touched. Main connection: SQLITE_CACHE_MB (default 64) and
+   * SQLITE_MMAP_MB (default 256). The read-only aggregate worker scans whole tables once a minute, so a big private cache
+   * only fills with pages it will not reuse: SQLITE_WORKER_CACHE_MB (default 16) and SQLITE_WORKER_MMAP_MB (default 0).
+   */
+  get sqliteMemory() {
+    const mb = (v, d) => { const n = Number(v); return v === undefined || v === '' || !Number.isFinite(n) || n < 0 ? d : Math.floor(n); };
+    return env.PRISM_DB_READONLY === '1'
+      ? { cacheMb: mb(env.SQLITE_WORKER_CACHE_MB, 16), mmapMb: mb(env.SQLITE_WORKER_MMAP_MB, 0) }
+      : { cacheMb: mb(env.SQLITE_CACHE_MB, 64), mmapMb: mb(env.SQLITE_MMAP_MB, 256) };
+  },
   // lib/blockwatch: keep a CPU profile around a loop block over 3 s (2 files at most, in <dataDir>/profiles).
   // On by default outside tests; PRISM_BLOCK_PROFILE=0 turns it off, =1 turns it on in tests.
   get blockProfile() { const v = env.PRISM_BLOCK_PROFILE; return v === undefined || v === '' ? env.NODE_ENV !== 'test' : v !== '0'; },
@@ -203,6 +215,7 @@ module.exports = {
     timeoutMs: int(env.PLAYWRIGHT_TIMEOUT_MS, 45000),                    // one navigation
     renderBudgetMs: int(env.PLAYWRIGHT_RENDER_BUDGET_MS, 80000),
     maxQueueWaitMs: int(env.PLAYWRIGHT_MAX_QUEUE_WAIT_MS, 40000),
+    idleMs: int(env.PLAYWRIGHT_IDLE_MS, 90000),          // close the launched Chromium after this long unused (it used to stay up for good)
   },
   // Chrome over plain CDP (lib/chrome.js): the stealth renderer. It speaks to a system Chrome / Chromium directly, with no
   // Playwright or driver in front of it, which is the shape anti-bot gates stopped flagging (see the module header).
@@ -214,7 +227,7 @@ module.exports = {
     headed: bool(env.CHROME_HEADED, false),              // needs a display; useful to watch a challenge
     timeoutMs: int(env.CHROME_TIMEOUT_MS, 45000),        // one navigation
     challengeWaitMs: int(env.CHROME_CHALLENGE_WAIT_MS, 15000), // how long a bot challenge gets to clear itself
-    idleMs: int(env.CHROME_IDLE_MS, 240000),             // close the browser after this long unused
+    idleMs: int(env.CHROME_IDLE_MS, 90000),              // close the browser after this long unused (was 4 min: renders come in bursts within one feed run)
   },
   // Jina Reader: a free third-party reader (lib/jina.js) that renders a page in its own browser. Last free tier before
   // the paid unblockers; capped by setting jinaDailyBudget.
