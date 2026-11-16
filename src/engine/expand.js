@@ -14,7 +14,7 @@
  *     robots.txt is read when each feed runs and, for the seed, before anything is fetched
  *   - login / cart / account / legal pages and files are not pages worth reading
  */
-const cheerio = require('cheerio');
+const markupGuard = require('../lib/markup-guard');
 const repo = require('../db/repo');
 const settingsStore = require('../settings');
 const events = require('./events');
@@ -146,7 +146,7 @@ async function run(seedUrl, { depth = 1, limit = 25, creatorId = null, trustSeed
       let r;
       try { r = await render.renderPages(url, { scrolls: cfg.browser4Scrolls, pages: 1, allowUrl: robotsAllows }); } catch (e) { result.notes.push(`${url}: ${e.message}`); continue; }
       result.visited.push(url);
-      const docs = r.pages.map((p) => ({ $: cheerio.load(p.html), url: p.url }));
+      const docs = r.pages.map((p) => ({ $: markupGuard.load(p.html), url: p.url }));
       const a = adoptLinks({ target: url, creator_id: creatorId }, docs, cfg, { limit: limit - result.created });
       result.created += a.created; result.urls.push(...a.urls);
       for (const k of Object.keys(result.skipped)) result.skipped[k] += a.skipped[k];

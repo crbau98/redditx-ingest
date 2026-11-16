@@ -12,7 +12,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const cheerio = require('cheerio');
+const markupGuard = require('../lib/markup-guard');
 const http = require('./http').forPlatform('telegram', 1500);
 const { toIso, clip } = require('./util');
 const { extractLinks } = require('../lib/links');
@@ -55,7 +55,7 @@ function mtForward(msg) {
 
 /** HTML of one preview page -> {messages, profile}. Pure, so it is easy to test. */
 function parsePage(html, channel) {
-  const $ = cheerio.load(html);
+  const $ = markupGuard.load(html);
   const messages = [];
   $('.tgme_widget_message[data-post]').each((_, el) => {
     const m = $(el);

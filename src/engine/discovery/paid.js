@@ -305,7 +305,7 @@ async function directoryHarvest({ queries = 3, pages = 5, budget, aborted = () =
   const out = { searched: 0, read: 0, leads: 0, candidates: 0, rejected: 0, failed: 0 };
   if (!websearch.configured()) return out;
   const http = require('../../sources/http').forPlatform('harvest', 1100);
-  const cheerio = require('cheerio');
+  const markupGuard = require('../../lib/markup-guard');
   const { robotsAllows } = require('../../sources/web');
   const seenPages = new Set(JSON.parse(repo.discoveryState.get('harvest.pages', '[]') || '[]'));
   let rotate = parseInt(repo.discoveryState.get('harvest.rotate', '0'), 10) || 0;
@@ -344,7 +344,7 @@ async function directoryHarvest({ queries = 3, pages = 5, budget, aborted = () =
       if (!(await robotsAllows(pageUrl))) continue;
       const html = await http.text(pageUrl, { maxBytes: 1_500_000, retries: 0, timeout: 12000, headers: { accept: 'text/html' } });
       out.read++;
-      const $ = cheerio.load(String(html));
+      const $ = markupGuard.load(String(html));
       $('script, style, noscript').remove();
       // Anchor hrefs count too: a listicle's creator links are often the only place the URL exists
       // (anchor text is just a name), and paid handles hide in query strings and paths.

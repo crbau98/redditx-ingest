@@ -130,7 +130,7 @@ async function crawlLinkHubs({ limit = 5 } = {}) {
   const settings = require('../settings').get();
   if (!settings.autoLinkProfiles) return { checked: 0, linked: 0, feeds: 0 };
   const http = require('../sources/http').forPlatform('linkhub', 800);
-  const cheerio = require('cheerio');
+  const markupGuard = require('../lib/markup-guard');
   const { extractLinks, isLinkHubUrl, parseProfile } = require('../lib/links');
   const repo = require('../db/repo');
   const registry = require('../sources');
@@ -149,7 +149,7 @@ async function crawlLinkHubs({ limit = 5 } = {}) {
       seen.add(url); checked++;
       try {
         const html = await http.text(url, { timeout: 9000 });
-        const $ = cheerio.load(html);
+        const $ = markupGuard.load(html);
         // hrefs + hydration JSON (__NEXT_DATA__, JSON-LD) — extractLinks already handles raw hrefs
         const hrefs = $('a[href]').map((_,a)=>$(a).attr('href')).get().join(' ');
         const scripts = $('script[type="application/json"], script[id="__NEXT_DATA__"], script[type="application/ld+json"]').map((_,e)=>$(e).html()).get().join(' ');

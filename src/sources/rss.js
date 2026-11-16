@@ -8,7 +8,6 @@
  * publishes a feed works, and feeds are *meant* to be machine-read so they do
  * not break the way HTML scraping does.
  */
-const cheerio = require('cheerio');
 const markupGuard = require('../lib/markup-guard');
 const http = require('./http').forPlatform('rss', 800);
 const net = require('../lib/net');
@@ -25,8 +24,9 @@ const kindOf = (url, mime) => {
 };
 
 function mediaFromHtml(html, base) {
-  if (!html || !markupGuard.parseable(html)) return [];
-  const $ = cheerio.load(`<div>${html}</div>`, null, false);
+  if (!html) return [];
+  const $ = markupGuard.tryLoadFragment(html);
+  if (!$) return [];
   const out = [];
   $('video').each((_, v) => {
     const poster = absUrl($(v).attr('poster'), base);
@@ -59,8 +59,9 @@ function mediaFromHtml(html, base) {
 
 /** Every outbound http(s) link in an HTML fragment (used to spot e.g. RedGIFs pages inside feed entries). */
 function linksFromHtml(html, base) {
-  if (!html || !markupGuard.parseable(html)) return [];
-  const $ = cheerio.load(`<div>${html}</div>`, null, false);
+  if (!html) return [];
+  const $ = markupGuard.tryLoadFragment(html);
+  if (!$) return [];
   const out = [];
   $('a[href]').each((_, a) => { const u = absUrl($(a).attr('href'), base); if (u && /^https?:/i.test(u)) out.push(u); });
   return [...new Set(out)];
@@ -91,8 +92,7 @@ function parseFeed(text, baseUrl) {
 
   // Bound the work before any tree is built: size (cut at the last whole entry), nesting depth, element count.
   const doc = trimmedToLimit(trimmed);
-  markupGuard.assertParseable(doc, 'xml');
-  const $ = cheerio.load(doc, { xmlMode: true });
+  const $ = markupGuard.load(doc, 'xml');
   const isAtom = $('feed').length > 0;
   const root = isAtom ? $('feed').first() : $('channel').first();
   const feed = {
@@ -321,7 +321,7 @@ async function load(url, validators = {}) {
 
 /** The page links to its feed (or sits at a conventional path): find and fetch it. Returns null when nothing is a feed. */
 async function discover(html, pageUrl) {
-  const $ = cheerio.load(html);
+  const $ = markupGuard.load(html);
   const found = [];
   $('link[rel~="alternate"]').each((_, l) => {
     const type = String($(l).attr('type') || '');

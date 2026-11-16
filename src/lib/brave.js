@@ -8,7 +8,7 @@
  * paid subscription pages and mirror sites alike are surfaced for ingestion,
  * and the admin's safety, takedown and male-only scope gates decide what publishes.
  */
-const cheerio = require('cheerio');
+const markupGuard = require('./markup-guard');
 const config = require('../config');
 const http = require('../sources/http').forPlatform('brave', 1100); // free plan: 1 request / second
 const ddgHttp = require('../sources/http').forPlatform('ddg', 900);
@@ -92,7 +92,7 @@ function unwrapDdgHref(rawHref) {
 function ddgUrls(html) {
   const text = String(html || '');
   if (!text) return [];
-  const $ = cheerio.load(text);
+  const $ = markupGuard.load(text);
   const out = [];
   const seen = new Set();
 
