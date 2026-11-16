@@ -229,12 +229,25 @@ router.get('/proxy', async (req, res) => {
   res.writeHead(status, headers);
 
   const cacheable = status === 200 && !hasRange && type.startsWith('image/') && Number(up.headers['content-length'] || 0) <= cache.MAX_FILE;
-  const chunks = []; let size = 0;
-  up.on('data', (c) => { if (cacheable) { size += c.length; if (size <= cache.MAX_FILE) chunks.push(c); } });
+  const chunks = []; let size = 0; let relayed = 0;
+  const cap = relayCapBytes();
+  up.on('data', (c) => {
+    relayed += c.length;
+    // One response never relays more than PROXY_MAX_MB (egress is billed): past it, both ends are cut.
+    if (cap && relayed > cap) { upReq.destroy(); res.destroy(); return; }
+    if (cacheable) { size += c.length; if (size <= cache.MAX_FILE) chunks.push(c); }
+  });
   up.on('end', () => { if (cacheable && size <= cache.MAX_FILE && size > 0) cache.put(t.url, Buffer.concat(chunks), type); });
   up.on('error', () => res.destroy());
   up.pipe(res);
 });
+
+/** Most bytes one proxied response may relay: env PROXY_MAX_MB (default 1024; 0 = no cap). Read per request. */
+function relayCapBytes() {
+  const v = process.env.PROXY_MAX_MB;
+  const mb = v === undefined || v === '' ? 1024 : Math.max(0, Number(v) || 0);
+  return mb * 1048576;
+}
 
 /** HLS: rewrite playlist URIs so every segment/variant is fetched through us. */
 const hlsHeaders = (host, origin) => ({ referer: refererFor(host) || `${origin}/`, accept: 'application/vnd.apple.mpegurl, */*' });
