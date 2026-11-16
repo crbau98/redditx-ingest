@@ -10,7 +10,7 @@ function safeEqual(a, b) {
 }
 
 // Brute-force guard: only *failed* attempts count against the budget.
-const failedAttempts = rateLimit({
+const failedAttempts = rateLimit({ keyGenerator: require('../lib/ipkey').keyGenerator,
   windowMs: 10 * 60 * 1000,
   max: 20,
   skipSuccessfulRequests: true,

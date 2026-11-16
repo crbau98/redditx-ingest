@@ -21,6 +21,7 @@ const webpush = require('../lib/webpush');
 
 const { httpUrl } = require('../lib/safeurl');
 const router = express.Router();
+const { ipKey } = require('../lib/ipkey');
 
 /* ------------------------------------------------------------ serialisation */
 function publicMedia(m, opts = {}) {
@@ -266,7 +267,7 @@ router.get('/meta', (req, res) => {
 
 router.post('/age/confirm', age.confirm);
 
-const reportLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 12, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many reports from this address, try again later' } });
+const reportLimiter = rateLimit({ keyGenerator: require('../lib/ipkey').keyGenerator, windowMs: 60 * 60 * 1000, max: 12, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many reports from this address, try again later' } });
 const REPORT_KINDS = new Set(['takedown', 'copyright', 'underage', 'nonconsensual', 'other']);
 const AUTO_HIDE_KINDS = new Set(['underage', 'nonconsensual']);
 
@@ -280,7 +281,7 @@ router.post('/report', reportLimiter, (req, res) => {
   const creator = creatorId ? repo.creators.get(String(creatorId)) : null;
   if (creatorId && !creator) return res.status(404).json({ error: 'Creator not found' });
 
-  const reporterHash = crypto.createHash('sha256').update(`${req.ip}|${new Date().toISOString().slice(0, 10)}`).digest('hex').slice(0, 24);
+  const reporterHash = crypto.createHash('sha256').update(`${ipKey(req.ip)}|${new Date().toISOString().slice(0, 10)}`).digest('hex').slice(0, 24);
   const id = repo.reports.create({ mediaId: media && media.id, creatorId: (creator && creator.id) || (media && media.creator_id), kind, reason, contact, reporterHash });
   // Safety reports act immediately; a human reviews afterwards.
   if (AUTO_HIDE_KINDS.has(kind)) {
@@ -391,9 +392,10 @@ const LIST_TTL_MS = 15 * 1000;
 const LIST_CACHE_MAX = 300;
 const listCache = new Map(); // key -> { at, value }
 const listCacheOn = () => !config.isTest || process.env.PRISM_LIST_CACHE === '1';
-function mediaList(query) {
-  const f = mediaFilters(query);
-  if (!f.cursor && f.page * f.limit > MAX_PUBLIC_OFFSET) return { items: [], total: null, page: f.page, limit: f.limit, nextCursor: null };
+function publicList(f) {
+  // Only a cursor that this list can actually follow lifts the cap. A cursor is ignored by `random` / `relevance` / a text search
+  // without a sort, and a malformed or other-sort token decodes to nothing: those requests page by OFFSET like any other.
+  if (!repo.media.validCursor(f) && f.page * f.limit > MAX_PUBLIC_OFFSET) return { items: [], total: null, page: f.page, limit: f.limit, nextCursor: null };
   const cacheable = listCacheOn() && f.sort !== 'random' && !f.ids;
   const key = cacheable ? JSON.stringify(f) : null;
   if (key) {
@@ -408,6 +410,7 @@ function mediaList(query) {
   }
   return value;
 }
+const mediaList = (query) => publicList(mediaFilters(query));
 
 router.get('/media', (req, res) => {
   const out = mediaList(req.query);
@@ -444,7 +447,7 @@ router.get('/media/:id/similar', (req, res) => {
   res.json({ basis: 'tags', items: repo.media.related(m.id, limit).map(briefMedia) });
 });
 
-const engagementLimiter = rateLimit({ windowMs: 60 * 1000, max: 90, standardHeaders: true, legacyHeaders: false, message: { error: 'Slow down' } });
+const engagementLimiter = rateLimit({ keyGenerator: require('../lib/ipkey').keyGenerator, windowMs: 60 * 1000, max: 90, standardHeaders: true, legacyHeaders: false, message: { error: 'Slow down' } });
 /**
  * One like and one view per address and item per day. The limiter alone allowed 90 requests a minute from one address, which was 45
  * likes and 45 views on a single item in under a minute. The memory is per process (a restart forgets it, which at worst lets a
@@ -454,7 +457,7 @@ const seenEngagement = new Map(); // `${kind}|${ip}|${id}` -> { at, state }
 const ENGAGEMENT_TTL_MS = 24 * 3600 * 1000;
 const ENGAGEMENT_MAX = 200000;
 function engagementOnce(req, kind, id, state = 1) {
-  const key = `${kind}|${req.ip}|${id}`;
+  const key = `${kind}|${ipKey(req.ip)}|${id}`;
   const now = Date.now();
   const hit = seenEngagement.get(key);
   if (hit && now - hit.at < ENGAGEMENT_TTL_MS) return hit;
@@ -476,7 +479,7 @@ router.post('/media/:id/broken', engagementLimiter, (req, res) => {
 });
 router.post('/media/:id/like', engagementLimiter, (req, res) => {
   const delta = req.body && req.body.delta === -1 ? -1 : 1;
-  const key = `like|${req.ip}|${req.params.id}`;
+  const key = `like|${ipKey(req.ip)}|${req.params.id}`;
   const mine = seenEngagement.get(key);
   const liked = !!mine && Date.now() - mine.at < ENGAGEMENT_TTL_MS && mine.state === 1;
   // a like counts once per address and day; an un-like only undoes a like this address made
@@ -516,7 +519,7 @@ function publicCreatorByRef(ref) {
   if (!c || c.status !== 'active' || c.scope === 'excluded') return null;
   return c;
 }
-const pullLimiter = rateLimit({ windowMs: 60_000, max: 6, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many deep searches from this address, try again in a minute' } });
+const pullLimiter = rateLimit({ keyGenerator: require('../lib/ipkey').keyGenerator, windowMs: 60_000, max: 6, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many deep searches from this address, try again in a minute' } });
 router.get('/creators/:id/pull', (req, res) => {
   const c = publicCreatorByRef(req.params.id);
   if (!c) return res.status(404).json({ error: 'Not found' });
@@ -561,8 +564,7 @@ function otherNames(c) {
 router.get('/creators/:id/media', (req, res) => {
   const c = repo.creators.get(req.params.id);
   if (!c || c.status !== 'active') return res.status(404).json({ error: 'Not found' });
-  const r = repo.media.list({ ...mediaFilters(req.query), creator: c.id });
-  res.json({ ...r, items: r.items.map(briefMedia) });
+  res.json(publicList({ ...mediaFilters(req.query), creator: c.id })); // same depth cap and short cache as /api/media
 });
 
 router.get('/suggest', (req, res) => res.json(suggestCached(typeof req.query.q === 'string' ? req.query.q : '', 6)));
@@ -641,7 +643,7 @@ router.get('/understand', asyncRoute(async (req, res) => {
 
 // Each AI reading is one paid API request (answers are cached, and lib/llm enforces a daily budget on top). Over the
 // limit, the rules' reading is answered instead: a search box never shows a 429.
-const aiLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 60, standardHeaders: false, legacyHeaders: false, handler: (req, res, next) => { req.aiLimited = true; next(); } });
+const aiLimiter = rateLimit({ keyGenerator: require('../lib/ipkey').keyGenerator, windowMs: 60 * 60 * 1000, max: 60, standardHeaders: false, legacyHeaders: false, handler: (req, res, next) => { req.aiLimited = true; next(); } });
 
 /**
  * The same, read by Claude (engine/ai.js) for a search the rules left words over in. Answers {ai: null} when Claude is
@@ -661,7 +663,7 @@ router.get('/understand/ai', aiLimiter, async (req, res, next) => { try {
  * One search box: Creators, Posts and Tags for the understood query (see src/engine/search.js). With ai=1, a search the
  * rules left words over in is read by Claude first, and its reading is used when it finds anything.
  */
-const aiSearchLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 60, standardHeaders: false, legacyHeaders: false, skip: (req) => req.query.ai !== '1', handler: (req, res, next) => { req.aiLimited = true; next(); } });
+const aiSearchLimiter = rateLimit({ keyGenerator: require('../lib/ipkey').keyGenerator, windowMs: 60 * 60 * 1000, max: 60, standardHeaders: false, legacyHeaders: false, skip: (req) => req.query.ai !== '1', handler: (req, res, next) => { req.aiLimited = true; next(); } });
 router.get('/search', aiSearchLimiter, async (req, res, next) => { try {
   const q = typeof req.query.q === 'string' ? req.query.q.slice(0, 200) : '';
   if (!q.trim()) return res.json({ understood: false, query: {}, relaxed: false, chips: [], corrections: [], creators: [], tags: [], posts: { items: [], total: 0, page: 0, limit: 0 }, ai: null });
@@ -712,8 +714,8 @@ router.get('/stream', (req, res) => events.subscribe('public', req, res));
 // Visitor Find-a-creator: same verified engine as Admin → Creators, behind the
 // age gate and tightly rate-limited. Writes go through lookup.follow(), which
 // re-applies every safety / scope / image gate. Actor is logged as visitor.
-const lookupLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many lookups from this address, try again later' } });
-const lookupFollowLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many follows from this address, try again later' } });
+const lookupLimiter = rateLimit({ keyGenerator: require('../lib/ipkey').keyGenerator, windowMs: 60 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many lookups from this address, try again later' } });
+const lookupFollowLimiter = rateLimit({ keyGenerator: require('../lib/ipkey').keyGenerator, windowMs: 60 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many follows from this address, try again later' } });
 
 router.post('/lookup', lookupLimiter, async (req, res) => {
   try {
@@ -766,6 +768,8 @@ module.exports.warmPrep = warmPrep;
 module.exports.publicCreator = publicCreator;
 module.exports.suggestCached = suggestCached;
 module.exports.mediaList = mediaList;
+module.exports.publicList = publicList;
+module.exports._engagementOnce = engagementOnce;
 module.exports._listCache = listCache;
 module.exports.MAX_PUBLIC_OFFSET = MAX_PUBLIC_OFFSET;
 module.exports.healthPayload = healthPayload;

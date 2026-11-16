@@ -27,11 +27,12 @@ function orderNames(handle, displayName) {
 }
 
 /**
- * A handle as it is stored: Unicode-normalised (NFC), without zero-width / bidi-control / soft-hyphen characters, trimmed.
+ * A handle as it is stored: Unicode-normalised (NFC), without the zero-width space (U+200B), word joiner (U+2060), BOM (U+FEFF) and
+ * the bidi controls, trimmed. ZWJ / ZWNJ / variation selectors stay: they are part of emoji sequences and of Persian and Indic words.
  * "Alice", "Alice " and "Alice\u200b" were three different rows; case is left alone (it is how the platform shows the name, and
  * lookups are case-insensitive), and two people who share a handle are never merged by this.
  */
-const INVISIBLE = /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180E\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0]/g;
+const INVISIBLE = /[\u200B\u2060\uFEFF\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
 function cleanHandle(h) {
   if (h === null || h === undefined) return h;
   return String(h).normalize('NFC').replace(INVISIBLE, '').trim();

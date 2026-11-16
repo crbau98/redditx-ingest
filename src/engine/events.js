@@ -25,7 +25,7 @@ const perIp = { public: new Map(), admin: new Map() };
 
 function subscribe(channel, req, res) {
   const cap = caps[channel];
-  const ip = String(req.ip || (req.socket && req.socket.remoteAddress) || 'unknown');
+  const ip = require('../lib/ipkey').ipKey(req.ip || (req.socket && req.socket.remoteAddress)); // an IPv6 client is one key per /64
   if (cap && (clients[channel].size >= cap.total || (perIp[channel].get(ip) || 0) >= cap.perIp)) {
     res.set('Retry-After', '30');
     res.status(429).json({ error: 'Too many open live connections' });
