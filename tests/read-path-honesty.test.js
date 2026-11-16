@@ -36,7 +36,7 @@ test('the daily ingest chart searches the new index with a full ISO start, never
   assert.ok(Array.isArray(repo.adminOverview().ingestDaily));
 });
 
-test('progress counts are cached for 60 s and recomputed after that', () => {
+test('progress counts are cached (face backlog 10 min, the others 60 s) and recomputed after that', () => {
   let now = 1_000_000;
   maintenance._progressCache.clear();
   maintenance._progressCache.setClock(() => now);
@@ -46,9 +46,11 @@ test('progress counts are cached for 60 s and recomputed after that', () => {
     const first = maintenance.faceSweepProgress().remaining;
     insert(2);
     now += 30_000;
-    assert.equal(maintenance.faceSweepProgress().remaining, first, 'within 60 s: the cached count');
+    assert.equal(maintenance.faceSweepProgress().remaining, first, 'within the TTL: the cached count');
     now += maintenance._progressCache.ttlMs;
-    assert.equal(maintenance.faceSweepProgress().remaining, first + 1, 'after 60 s: recomputed');
+    assert.equal(maintenance.faceSweepProgress().remaining, first, 'the face backlog is kept past 60 s');
+    now += maintenance._progressCache.faceTtlMs;
+    assert.equal(maintenance.faceSweepProgress().remaining, first + 1, 'after 10 min: recomputed');
     // a different cursor is a different question, never served from another cursor's answer
     const a = maintenance.hashSweepProgress();
     repo.settings.set('hash_sweep_seq', '999999999');
