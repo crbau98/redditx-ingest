@@ -43,7 +43,7 @@ export function createFeed({ query = {}, endpoint = '/api/media', fetchPage = nu
   root.append(masonry.el, sentinel);
 
   let page = 0;
-  let total = null;
+  let total = null; let totalCapped = false;
   let loading = false;
   let done = false;
   let destroyed = false;
@@ -107,8 +107,9 @@ export function createFeed({ query = {}, endpoint = '/api/media', fetchPage = nu
         pageItems = pageItems.filter((it) => it && inSlice.has(it.id));
       }
       if (ids) pageItems.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id)); // keep "most recently saved first"
-      if (ids) total = ids.length; else if (res.total !== null && res.total !== undefined) total = res.total;
-      if (onTotal && (pageIndex === 0 || ids)) onTotal(total);
+      if (ids) total = ids.length; else if (res.total !== null && res.total !== undefined) { total = res.total; totalCapped = !!res.totalCapped; }
+      // totalCapped: the server counted up to its cap, so the total is a lower bound (shown as "10,000+").
+      if (onTotal && (pageIndex === 0 || ids)) onTotal(total, !ids && totalCapped);
       // The first cursor-capable response decides the mode. A server without nextCursor keeps offset paging.
       if (!ids && cursorMode && !usingCursor && !('nextCursor' in res)) cursorMode = false;
       if (!ids && cursorMode) cursor = res.nextCursor || null;

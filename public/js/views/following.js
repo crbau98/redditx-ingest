@@ -70,9 +70,9 @@ export async function following(root, { query }) {
     const divider = h('div', { class: 'follow-divider', role: 'separator', hidden: true }, h('span', null, 'Earlier'));
     const fresh = createFeed({
       fetchPage: page('new'), query: { part: 'new', type, key }, pageSize: 24, empty: h('span'), quietEnd: true,
-      onTotal: (t) => {
+      onTotal: (t, capped) => {
         newHead.hidden = !t; divider.hidden = !t; caughtUp.hidden = !!t;
-        if (t) newHead.querySelector('.sub').textContent = `${fmt.int(t)} new post${t === 1 ? '' : 's'} · your last visit was ${fmt.ago(since)}`;
+        if (t) newHead.querySelector('.sub').textContent = `${fmt.int(t)}${capped ? '+' : ''} new post${t === 1 && !capped ? '' : 's'} · your last visit was ${fmt.ago(since)}`;
       },
     });
     feeds.push(fresh);

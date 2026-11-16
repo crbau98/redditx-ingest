@@ -59,7 +59,7 @@ export function attachSuggest(input, { id = 'suggest-box', extraRows = null } = 
         a.addEventListener('mousedown', (e) => { e.preventDefault(); hide(); input.blur(); navigate('/explore', { ...params, m: it.id }); });
         return a;
       })),
-      h('span', { class: 'sp-count' }, `${fmt.num(res.total)} ${res.total === 1 ? 'result' : 'results'}`));
+      h('span', { class: 'sp-count' }, `${fmt.num(res.total)}${res.totalCapped ? '+' : ''} ${res.total === 1 && !res.totalCapped ? 'result' : 'results'}`));
     preview.hidden = false;
     if (box.hidden && document.activeElement === input) {
       if (!box.parentElement && input.parentElement) input.parentElement.appendChild(box);

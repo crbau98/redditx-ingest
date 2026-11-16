@@ -235,18 +235,18 @@ export async function explore(root, { query }) {
       navigate('/explore', { ...f, ...r.patch, relaxed: r.label, from }, { replace: true });
       return;
     }
-    emptyHost.append(h('button', { class: 'btn primary', onclick: () => set(r.patch) }, icon('sparkle', 'sm'), `Try without ${r.label} — ${fmt.int(r.total)} ${r.total === 1 ? 'result' : 'results'}`));
+    emptyHost.append(h('button', { class: 'btn primary', onclick: () => set(r.patch) }, icon('sparkle', 'sm'), `Try without ${r.label} — ${fmt.int(r.total)}${r.capped ? '+' : ''} ${r.total === 1 && !r.capped ? 'result' : 'results'}`));
   }
 
   const makeFeed = () => createFeed(forYou ? {
     // Personal ranking from this device's taste; other filters narrow by type only.
     endpoint: '/api/recommend', hideSeen: prefs.hideSeen, why: (it) => tastes.why(it),
     query: { ...tastes.query({ exclude: viewHistory.list().slice(0, 100) }), type: f.type, seed: Math.floor(Math.random() * 1e6) },
-    onTotal: (t) => { count.textContent = tastes.ready() ? `Picked for you from ${fmt.int(t)} matches` : 'Trending — save or watch a few things and this becomes yours'; },
+    onTotal: (t, capped) => { count.textContent = tastes.ready() ? `Picked for you from ${fmt.int(t)}${capped ? '+' : ''} matches` : 'Trending — save or watch a few things and this becomes yours'; },
   } : {
     hideSeen: prefs.hideSeen,
     query: toApi(f),
-    onTotal: (t) => { count.textContent = `${fmt.int(t)} ${t === 1 ? 'result' : 'results'}`; if (t === 0) onEmpty(); },
+    onTotal: (t, capped) => { count.textContent = `${fmt.int(t)}${capped ? '+' : ''} ${t === 1 && !capped ? 'result' : 'results'}`; if (t === 0) onEmpty(); },
     empty: emptyHost,
   });
   let feed = makeFeed();

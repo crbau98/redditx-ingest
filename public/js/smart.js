@@ -83,7 +83,7 @@ export async function findRelaxation(f, toApi, opts = {}) {
     try {
       const r = await get('/api/media', { ...toApi({ ...f, ...acc }), limit: 1 });
       if (!alive()) return null;
-      if (r.total) return { patch: acc, label: dropped.join(', '), total: r.total };
+      if (r.total) return { patch: acc, label: dropped.join(', '), total: r.total, capped: !!r.totalCapped };
     } catch { return null; }
   }
   return null;
