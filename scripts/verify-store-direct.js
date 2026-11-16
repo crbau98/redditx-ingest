@@ -69,7 +69,9 @@ const cspOf = (h) => Object.fromEntries(String(h || '').split(';').map((d) => { 
 
     const home = await fetch(`${base}/`);
     const csp = cspOf(home.headers.get('content-security-policy'));
-    for (const d of ['img-src', 'media-src', 'connect-src']) check(`CSP ${d} names the bucket origin`, (csp[d] || []).includes(L.origin), L.origin);
+    const bucketPath = `${L.origin}/${L.pathname.split('/')[1]}/`; // path-style: the first path segment is the bucket
+    for (const d of ['img-src', 'media-src', 'connect-src']) check(`CSP ${d} names the bucket path`, (csp[d] || []).includes(bucketPath), bucketPath);
+    check('and no source allows the whole bucket host (other tenants\' buckets)', !Object.values(csp).some((v) => v.includes(L.origin) || v.includes(`${L.origin}/`)), L.origin);
     check('CSP has no wildcard', !JSON.stringify(csp).includes('*'));
   }
   const marked = await get(`${base}/api/proxy?url=${encodeURIComponent(storeUrl)}&mark=prism`);

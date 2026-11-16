@@ -111,6 +111,36 @@ describe('browser: stored media from the bucket', { skip: haveBrowser ? false : 
     assert.ok(r.presigned >= 3, 'the pictures came from the bucket');
   });
 
+  test('only OUR bucket is allowed: a direct load from another bucket on the same host is blocked by the CSP', async () => {
+    delete process.env.STORE_DIRECT;
+    const server = require('../src/app').createApp().listen(0);
+    await new Promise((r) => server.once('listening', r));
+    apps.push(server);
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const ctx = await browser.newContext({ serviceWorkers: 'block' });
+    await ctx.addCookies([{ name: 'prism_age', value: '1', url: base }]);
+    const page = await ctx.newPage();
+    const violations = []; page.on('console', (m) => { if (/Content Security Policy/i.test(m.text())) violations.push(m.text()); });
+    await page.goto(`${base}/#/explore`, { waitUntil: 'networkidle' });
+    const load = (src) => page.evaluate((u) => new Promise((resolve) => { const i = new Image(); i.onload = () => resolve('loaded'); i.onerror = () => resolve('blocked-or-failed'); i.src = u; }), src);
+    const signed = require('../src/lib/objectstore').directUrl(require('../src/lib/objectstore').urlFor(`b/${ids[0]}.png`)).url; // a real presigned URL of our bucket, loaded directly
+    const ours = await load(signed);
+    const before = violations.length;
+    const other = await load(`${s3.url}/another-tenant-bucket/x.png`);
+    // the same, but reached through a redirect from our own origin: Chromium's CSP checks only the host after a redirect
+    await page.route('**/__redir', (r) => r.fulfill({ status: 307, headers: { location: `${s3.url}/another-tenant-bucket/y.png` } }));
+    const viaRedirect = await load(`${base}/__redir`);
+    const afterRedirect = violations.length;
+    await page.waitForTimeout(200);
+    await ctx.close();
+    assert.equal(afterRedirect, before + 1, 'after a redirect Chromium compares the host only (CSP3), so the path rule protects direct loads; the redirect target is always our own signed URL');
+    assert.equal(viaRedirect, 'blocked-or-failed', 'it reached the mock, which refused the anonymous request');
+    assert.equal(violations.length - before, 1, `another bucket on the same host is refused by the CSP (${violations.slice(before).join(' | ').slice(0, 200)})`);
+    assert.match(violations[before], /img-src/);
+    assert.equal(other, 'blocked-or-failed');
+    assert.equal(before, 0, `our bucket's path is allowed by the CSP (ours: ${ours})`);
+  });
+
   test('STORE_DIRECT=0: the same pictures are relayed by the proxy, none are redirected', async () => {
     process.env.STORE_DIRECT = '0';
     try {

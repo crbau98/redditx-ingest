@@ -114,6 +114,18 @@ function directOrigin() {
 }
 
 /**
+ * The CSP source for the bucket: origin PLUS the bucket path (`https://host/bucket/`), so on a multi-tenant path-style endpoint
+ * only our bucket is allowed, not every tenant's. Null whenever directOrigin() is. (A browser applies the path to a direct
+ * load; after a redirect it checks the host only, a CSP rule that exists so redirects cannot be probed.)
+ */
+function directSource() {
+  const origin = directOrigin();
+  if (!origin) return null;
+  const base = new URL(config.store.endpoint);
+  return `${origin}${base.pathname.replace(/\/+$/, '')}/${sigv4.enc(config.store.bucket)}/`;
+}
+
+/**
  * A presigned GET URL for a store URL, or null when the file should go through the proxy: no direct origin, an invalid key, or an
  * object that still lives on the data volume (written before the bucket was set up: the bucket has no copy yet).
  * @returns {{url: string, maxAge: number}|null} maxAge: seconds the redirect to it may be cached
@@ -283,4 +295,4 @@ function* localObjects({ after = null } = {}) {
   yield* walk(root, '');
 }
 
-module.exports = { directOrigin, directUrl, kind, describe, put, putS3, headS3, hashS3, s3Ready, localObjects, has, remove, open, urlFor, keyOf, isStoreUrl, validKey, typeOfKey };
+module.exports = { directOrigin, directSource, directUrl, kind, describe, put, putS3, headS3, hashS3, s3Ready, localObjects, has, remove, open, urlFor, keyOf, isStoreUrl, validKey, typeOfKey };
