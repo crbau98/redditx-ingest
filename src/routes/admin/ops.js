@@ -20,6 +20,14 @@ router.post('/maintenance/purge-removed-residue', async (req, res) => {
   const limit = q.limit !== undefined && q.limit !== '' ? int(q.limit, 0, 1000000, 0) : Infinity;
   try { res.json(await require('../../engine/residue-purge').purgeResidue({ dryRun, limit })); } catch (e) { res.status(500).json({ error: e.message }); }
 });
+// Published rows with no picture (library-health publishedNoImage): restore a video poster where its URL pattern allows it,
+// else move the row to review with reason 'no-image' (reversible). ?dryRun=1 reports only (no network, no writes); ?limit=N.
+router.post('/maintenance/repair-no-image', async (req, res) => {
+  const q = { ...req.query, ...(req.body || {}) };
+  const dryRun = q.dryRun === true || q.dryRun === '1' || q.dryRun === 'true';
+  const limit = q.limit !== undefined && q.limit !== '' ? int(q.limit, 0, 1000000, 0) : Infinity;
+  try { res.json(await require('../../engine/noimage-repair').repair({ dryRun, limit })); } catch (e) { res.status(500).json({ error: e.message }); }
+});
 router.get('/library-health', async (req, res) => {
   try { res.json(await require('../../engine/library-health').report()); } catch (e) { res.status(500).json({ error: e.message }); }
 });
