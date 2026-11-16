@@ -199,7 +199,14 @@ function recordWebMatch({ creatorId, mediaId = null, pageUrl, imageUrl = null, t
 }
 
 /** List matches for a creator or across all creators (for Admin review). */
-function listWebMatches({ creatorId = null, status = 'confirmed', limit = 24 } = {}) {
+function listWebMatches(opts = {}) {
+  // Only http(s) page and image addresses leave the server (Crucible v4.21 gate, item 5): a match whose page is not one is dropped.
+  const { httpUrl } = require('./safeurl');
+  return listWebMatchesRaw(opts)
+    .map((r) => ({ ...r, page_url: httpUrl(r.page_url), image_url: httpUrl(r.image_url) }))
+    .filter((r) => r.page_url);
+}
+function listWebMatchesRaw({ creatorId = null, status = 'confirmed', limit = 24 } = {}) {
   const lim = Math.max(1, Math.min(100, Number(limit) || 24));
   if (creatorId) {
     return repo.db.prepare(`SELECT wm.*, c.handle AS creator_handle, c.display_name AS creator_name

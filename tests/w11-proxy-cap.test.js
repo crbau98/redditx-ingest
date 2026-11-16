@@ -34,3 +34,13 @@ test('under the cap the whole video is relayed; over it the relay is cut', async
   const got = await pull();
   assert.ok(got < SIZE, `cut short (got ${got})`);
 });
+
+test('a malformed PROXY_MAX_MB keeps the default cap instead of turning it off', () => {
+  const cap = require('../src/routes/proxy')._relayCapBytes;
+  const MB = 1048576;
+  for (const [v, want] of [[undefined, 1024 * MB], ['', 1024 * MB], ['1GB', 1024 * MB], ['-1', 1024 * MB], ['abc', 1024 * MB], ['0', 0], ['0.5', 0.5 * MB], [' 2 ', 2 * MB]]) {
+    if (v === undefined) delete process.env.PROXY_MAX_MB; else process.env.PROXY_MAX_MB = v;
+    assert.equal(cap(), want, `PROXY_MAX_MB=${JSON.stringify(v)}`);
+  }
+  delete process.env.PROXY_MAX_MB;
+});

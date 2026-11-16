@@ -30,3 +30,13 @@ test('stored javascript: links and source URLs are not served', () => {
     source_url: 'javascript:alert(3)', media_type: 'image', media_url: 'https://cdn.example/su1.jpg', hash: 'suh1' }, []);
   assert.equal(repo.media.get(mid).source_url, null);
 });
+
+test('web matches serve only http(s) page and image URLs; a javascript: page is dropped', () => {
+  const c = repo.creators.create({ handle: 'w11webmatch', displayName: 'WM', scope: 'in' });
+  const id = c.id || c;
+  const ins = repo.db.prepare('INSERT INTO creator_web_matches (creator_id,page_url,image_url,title,platform,match_kind,similarity,status) VALUES (?,?,?,?,?,?,?,?)');
+  ins.run(id, 'javascript:alert(document.cookie)', 'https://img.example/a.jpg', 't', 'web', 'same-image', 0.99, 'confirmed');
+  ins.run(id, 'https://page.example/ok', 'data:image/svg+xml;base64,AAAA', 't', 'web', 'same-image', 0.98, 'confirmed');
+  const rows = require('../src/lib/face-match').listWebMatches({ creatorId: id, status: 'confirmed' });
+  assert.deepEqual(rows.map((r) => [r.page_url, r.image_url]), [['https://page.example/ok', null]]);
+});

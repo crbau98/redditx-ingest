@@ -242,11 +242,19 @@ router.get('/proxy', async (req, res) => {
   up.pipe(res);
 });
 
-/** Most bytes one proxied response may relay: env PROXY_MAX_MB (default 1024; 0 = no cap). Read per request. */
+/**
+ * Most bytes one proxied response may relay: env PROXY_MAX_MB (default 1024; 0 = no cap). Read per request. A value that is
+ * not a plain non-negative number ('1GB', '-1', 'abc') keeps the default instead of turning the cap off.
+ */
+let warnedCap = false;
 function relayCapBytes() {
-  const v = process.env.PROXY_MAX_MB;
-  const mb = v === undefined || v === '' ? 1024 : Math.max(0, Number(v) || 0);
-  return mb * 1048576;
+  const v = String(process.env.PROXY_MAX_MB ?? '').trim();
+  if (v === '') return 1024 * 1048576;
+  if (!/^\d+(\.\d+)?$/.test(v)) {
+    if (!warnedCap) { warnedCap = true; console.error(`[proxy] PROXY_MAX_MB=${JSON.stringify(v)} is not a number of MB; using 1024`); }
+    return 1024 * 1048576;
+  }
+  return Math.round(Number(v) * 1048576);
 }
 
 /** HLS: rewrite playlist URIs so every segment/variant is fetched through us. */
@@ -297,5 +305,6 @@ router.get('/hls', async (req, res) => {
 });
 
 module.exports = router;
+module.exports._relayCapBytes = relayCapBytes;
 module.exports._hostAllowed = hostAllowed; // test hook
 module.exports._refererFor = refererFor; // test hook: the hotlink Referer rules
