@@ -32,7 +32,9 @@ maintenance.startupSweepIfNeeded();
 const { afterHealthy } = require('./src/lib/ready');
 afterHealthy(() => require('./src/routes/public').warmPrep()); // compile the hot SQL: a cold statement costs the first page load
 afterHealthy(() => require('./src/routes/public').warm()); // pre-build the big caches (topics, graph, home)
+afterHealthy(() => { try { require('./src/db/repo').takedowns.resume(); } catch (e) { console.error('[takedowns] resume:', e.message); } }); // a takedown sweep a restart interrupted continues from its stored cursor
 backup.start();
+require('./src/engine/checkpoint').start(); // WAL checkpoints on a worker thread: the serving connection never checkpoints inline
 discovery.start();
 popularity.start(); // the stored rank Home and Creators sort by
 health.start();
@@ -49,6 +51,7 @@ function shutdown(signal) {
   console.log(`\n[${signal}] shutting down…`);
   engine.shutdown();
   backup.stop();
+  require('./src/engine/checkpoint').stop();
   discovery.stop();
   popularity.stop();
   health.stop();

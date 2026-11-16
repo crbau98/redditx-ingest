@@ -120,7 +120,9 @@ const creators = {
   create({ handle, displayName, bio, avatarUrl, bannerUrl, scope = 'in', origin = 'ingest' }) {
     // A handle never has a space: a "Dante Colle" / "dantecolle.bsky.social" pair is stored the right way round.
     ({ handle, displayName } = require('../../lib/creator-names').orderNames(handle, displayName));
-    handle = require('../../lib/creator-names').cleanHandle(handle); // no trailing space or zero-width characters: they made "Alice" and "Alice\u200b" two rows
+    handle = require('../../lib/creator-names').cleanHandle(handle);
+    if (!handle) throw Object.assign(new Error('A creator needs a handle'), { status: 400 }); // empty, or only invisible characters
+    // (cleaning matters: a trailing space or a zero-width character made "Alice" and "Alice\u200b" two rows)
     const id = uuid();
     hosts.add(avatarUrl, bannerUrl);
     creatorQ.insert.run({

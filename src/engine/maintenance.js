@@ -560,7 +560,7 @@ async function faceSweep({ limit = 12, settings } = {}) {
   const res = { checked: 0, enrolled: 0, errors: 0, done: false };
   if (!s.faceMatch) return { ...res, off: true };
   if (!(await imagefilter.available())) return { ...res, unavailable: true };
-  try { res.backfill = faceBackfill().cleared; } catch { /* the backfill must never stop the sweep */ }
+  try { res.backfill = slice('faceSweep:backfill', () => faceBackfill()).cleared; } catch { /* the backfill must never stop the sweep */ }
   // Newest ingested first, in the order of v28's partial index: ORDER BY posted_at sorted every un-enrolled published
   // row into a temp B-tree each minute (34-83 s main-thread stalls on production).
   const rows = repo.db.prepare(`SELECT id, media_type, media_url, preview_url, thumbnail_url
@@ -581,7 +581,7 @@ async function faceSweep({ limit = 12, settings } = {}) {
     } catch { res.errors++; repo.db.prepare('UPDATE media SET face_at = ? WHERE id = ?').run(now, row.id); continue; }
     if (v.status === 'error' || v.status === 'unavailable') res.errors++;
     if (v.faceList && v.faceList.length) {
-      try { res.enrolled += faceMatch.saveMediaFaces(row.id, v.faceList); } catch { /* best effort */ }
+      try { res.enrolled += slice('faceSweep:saveFaces', () => faceMatch.saveMediaFaces(row.id, v.faceList)); } catch { /* best effort */ }
     }
     repo.db.prepare('UPDATE media SET face_at = ? WHERE id = ?').run(now, row.id);
   }

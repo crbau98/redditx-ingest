@@ -35,7 +35,9 @@ function orderNames(handle, displayName) {
 const INVISIBLE = /[\u200B\u2060\uFEFF\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
 function cleanHandle(h) {
   if (h === null || h === undefined) return h;
-  return String(h).normalize('NFC').replace(INVISIBLE, '').trim();
+  const out = String(h).normalize('NFC').replace(INVISIBLE, '').trim();
+  // nothing but joiners, variation selectors, marks and other format characters is not a name: it is empty
+  return /^[\p{Cf}\p{Mn}\p{Me}\p{Z}\p{Cc}\uFE00-\uFE0F]*$/u.test(out) ? '' : out;
 }
 
 module.exports = { cleanHandle, orderNames, looksLikeHandle, looksLikeName };

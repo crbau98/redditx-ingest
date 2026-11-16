@@ -24,10 +24,13 @@ const { cacheMb, mmapMb } = config.sqliteMemory;
 db.pragma(`cache_size = -${cacheMb * 1024}`);
 db.pragma(`mmap_size = ${mmapMb * 1024 * 1024}`);
 db.pragma('temp_store = MEMORY');
-// WAL tuning for a write-heavy ingest on a small box: checkpoint less often (fewer I/O pauses) and cap the
-// WAL at 256 MB so a long ingestion cannot grow it without bound (the nightly worker checkpoints it anyway).
+// WAL tuning for a write-heavy ingest on a small box. The serving connection NEVER checkpoints inline (wal_autocheckpoint = 0):
+// with the default rule the commit that crossed the page threshold copied up to 4000 pages (16 MB) to the data volume before it
+// returned, on the event loop, and a one-row UPDATE showed up as a 1.4 s block. engine/checkpoint.js runs the checkpoint on a worker
+// thread instead (PASSIVE: it never blocks a writer), and the nightly backup worker checkpoints as well. The WAL is capped at 256 MB
+// after a checkpoint so a long ingestion cannot grow it without bound. Tests and :memory: keep SQLite's own rule.
 if (!READONLY) {
-  db.pragma('wal_autocheckpoint = 4000');
+  db.pragma(config.isTest || config.dbPath === ':memory:' || process.env.PRISM_AUTOCHECKPOINT === '1' ? 'wal_autocheckpoint = 4000' : 'wal_autocheckpoint = 0');
   db.pragma('journal_size_limit = 268435456');
 }
 

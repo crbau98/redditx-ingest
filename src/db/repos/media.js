@@ -185,10 +185,33 @@ function paidShare(host) {
   return share;
 }
 const BROAD_PAID_SHARE = 0.1;
+/**
+ * A community or creator is "narrow" (an index lookup, then a sort of its few rows) until it holds a real share of the library: a big
+ * subreddit has 55k+ rows at 1M, and `community = ? ORDER BY score` read and sorted all of them (66-94 ms warm on a 1M-row test
+ * database, seconds on a cold volume: the 2.5 s MEDIA_SELECT block seen in production). Past these sizes the sort index is walked
+ * instead: a match turns up every few dozen rows, so one page touches about a thousand.
+ */
+const BROAD = { community: 3000, creator: 12000 }; // rows; mutable for tests (media._broad)
+const communityCache = new Map(); // lower(community) -> { n, at }
+function communityRows(name) {
+  const key = String(name).toLowerCase();
+  const hit = communityCache.get(key);
+  if (hit && Date.now() - hit.at < 60000) return hit.n;
+  const n = db.prepare("SELECT COUNT(*) AS n FROM media INDEXED BY ix_media_pub_comm WHERE community = ? COLLATE NOCASE AND publish_state = 'published' AND scope != 'excluded' AND community IS NOT NULL").get(name).n;
+  if (communityCache.size > 2000) communityCache.clear();
+  communityCache.set(key, { n, at: Date.now() });
+  return n;
+}
+function creatorRows(id) {
+  const r = db.prepare('SELECT media_count AS n FROM creators WHERE id = ?').get(id);
+  return r ? r.n : 0;
+}
 function sortIndexFor(f, sort, where) {
   const idx = SORT_INDEX[sort || 'recent'];
   if (!idx || !where.includes("m.publish_state = 'published'")) return null; // partial indexes cover published rows only
-  if (f.creator || (Array.isArray(f.ids) && f.ids.length) || f.community || f.minScore) return null;
+  if ((Array.isArray(f.ids) && f.ids.length) || f.minScore) return null;
+  if (f.creator && creatorRows(f.creator) < BROAD.creator) return null;
+  if (f.community && communityRows(f.community) < BROAD.community) return null;
   if (f.paidHost && paidShare(f.paidHost) < BROAD_PAID_SHARE) return null;
   const all = [...(f.tag ? [f.tag] : []), ...(Array.isArray(f.tagsAll) ? f.tagsAll : [])].map(cleanTag);
   if (all.length && Math.min(...all.map(tagRows)) < BROAD_TAG_MIN) return null;
@@ -275,6 +298,7 @@ function countIndexFor(f) {
 }
 
 const media = {
+  _broad: BROAD,
   /**
    * True when `f.cursor` is a token list(f) will actually follow: the effective sort supports cursors (not random / relevance /
    * a text match without a sort / explicit ids) and the token decodes for that sort.
@@ -297,6 +321,13 @@ const media = {
   hashedRows() { return db.prepare("SELECT id, phash, media_type, width, height FROM media WHERE phash IS NOT NULL AND (publish_state IN ('published','review') OR (publish_state = 'hidden' AND review_reason LIKE 'physique:%'))").all(); },
   /** One seq-ordered slice of hashedRows(), for the chunked first build (services/dedupe.loadChunked). */
   hashedChunk(after = 0, n = 5000) { return db.prepare("SELECT seq, id, phash, media_type, width, height FROM media NOT INDEXED WHERE phash IS NOT NULL AND seq > ? AND (publish_state IN ('published','review') OR (publish_state = 'hidden' AND review_reason LIKE 'physique:%')) ORDER BY seq LIMIT ?").all(after, n); },
+  /**
+   * The hashed, indexable rows with seq in (after, to]: a read bounded by a RANGE of the table, not by a number of matches. With
+   * hashedChunk's LIMIT, a region where few rows have a hash (unhashed Reddit rows, say) never filled the limit and one statement
+   * walked on through the whole stretch: 7.5 s on a 1.27M-row library, in a slice that was meant to be 30 ms.
+   */
+  hashedWindow(after, to) { return db.prepare("SELECT seq, id, phash, media_type, width, height FROM media NOT INDEXED WHERE seq > ? AND seq <= ? AND phash IS NOT NULL AND (publish_state IN ('published','review') OR (publish_state = 'hidden' AND review_reason LIKE 'physique:%'))").all(after, to); },
+  maxSeq() { return db.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM media').get().m; },
   hashInfo(id) { return db.prepare('SELECT phash, media_type, width, height, publish_state, review_reason FROM media WHERE id = ?').get(id); },
   /** Another place the SAME picture was posted. */
   addAltSource(mediaId, { platform, source_url, author = null, community = null, posted_at = null }) {

@@ -267,6 +267,12 @@ const save = () => db.prepare(`INSERT INTO media_embeddings (media_id, model, ve
     ON CONFLICT(media_id) DO UPDATE SET model = excluded.model, vec = excluded.vec, created_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`);
 const counters = { embedded: 0, failed: 0 };
 
+function storeOne(m, r, stmt) {
+  if (r.status !== 'ok' || !emb.unpack(r.vec)) { stmt.run(m.id, 'fail', null); return false; }
+  stmt.run(m.id, MODEL_ID, r.vec);
+  if (ix) addTo(ix, m.id, m.creator_id, m.post_key, r.vec);
+  return true;
+}
 /** Embed up to `limit` items that have no vector. @returns {Promise<{embedded, failed, unavailable?}>} */
 async function backfill(limit = PER_TICK) {
   const rows = pending(limit);
@@ -285,10 +291,10 @@ async function backfill(limit = PER_TICK) {
     const r = await imagefilter.embedUrl(url, { referer });
     if (bw) bw.work('embed');
     if (r.status === 'unavailable') { res.unavailable = r.reason; break; }
-    if (r.status !== 'ok' || !emb.unpack(r.vec)) { stmt.run(m.id, 'fail', null); res.failed++; continue; }
-    stmt.run(m.id, MODEL_ID, r.vec);
-    if (ix) addTo(ix, m.id, m.creator_id, m.post_key, r.vec);
-    res.embedded++;
+    // the synchronous work of one result under its own name (the awaits above are not ours): unpack, store, add to the index
+    let stored = false;
+    if (bw && bw.slice) bw.slice('embed:store', () => { stored = storeOne(m, r, stmt); }); else stored = storeOne(m, r, stmt);
+    if (stored) res.embedded++; else res.failed++;
   }
   counters.embedded += res.embedded; counters.failed += res.failed;
   return res;
