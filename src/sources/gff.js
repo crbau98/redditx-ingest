@@ -23,7 +23,7 @@
  * popular, most viewed, top rated) and registers their performers as feeds; the gayforfans.com
  * /performer directory (75 pages) is walked only when those lists find nobody new.
  */
-const cheerio = require('cheerio');
+const markupGuard = require('../lib/markup-guard');
 const http = require('./http').forPlatform('gff', 900);
 const { clip, toIso, isChallengeText } = require('./util');
 const { robotsAllows } = require('./web');
@@ -171,7 +171,7 @@ function durationOf(iso) {
 
 /** The VideoObject block of a video page: {name, contentUrl (HLS manifest), thumbnailUrl, uploadDate, duration, actor}. */
 function videoObject(html) {
-  const $ = cheerio.load(html);
+  const $ = markupGuard.load(html);
   let out = null;
   $('script[type="application/ld+json"]').each((_, el) => {
     if (out) return;
@@ -219,7 +219,7 @@ function watchCount(vo) {
 
 /** The performer page: display name, avatar, banner, and the video page links (newest first as listed). */
 function performerPage(html) {
-  const $ = cheerio.load(html);
+  const $ = markupGuard.load(html);
   // The <h1> is often "Christian Hogue - porn, OnlyFans & nude videos on JustTheGays": keep the name only.
   const rawName = ($('h1').first().text() || '').trim();
   const name = (rawName ? rawName.replace(/\s+-\s+porn.*$/i, '').replace(/\s+-\s+OnlyFans.*$/i, '').trim() : '') || null;
@@ -307,7 +307,7 @@ module.exports = {
         continue;
       }
       if (isChallengeText(String(html))) continue;
-      const $ = cheerio.load(String(html));
+      const $ = markupGuard.load(String(html));
       $('a[href*="/performer/"]').each((_, el) => {
         const href = $(el).attr('href') || '';
         const m = href.match(/\/performer\/([a-z0-9-]{3,})/i);
@@ -346,7 +346,7 @@ module.exports = {
           html = await http.text(`https://${site.host}${path}`, { maxBytes: 2_000_000, retries: 0, timeout, headers: pageHeaders() });
         } catch { continue; }
         if (isChallengeText(String(html))) continue;
-        const $ = cheerio.load(String(html));
+        const $ = markupGuard.load(String(html));
         $('a[href*="/performer/"]').each((_, el) => {
           if (out.length >= limit) return;
           const href = $(el).attr('href') || '';

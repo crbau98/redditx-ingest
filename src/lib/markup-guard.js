@@ -10,6 +10,8 @@
  * Failures are Errors whose message names a parse failure, so the engine classifies them as error_kind "parse" (a permanent
  * property of that URL's content, not an outage).
  */
+const cheerio = require('cheerio');
+
 const LIMITS = {
   html: { maxBytes: 2_000_000, maxDepth: 200, maxElements: 100_000 },
   xml: { maxBytes: 1_500_000, maxDepth: 100, maxElements: 120_000 },
@@ -88,4 +90,23 @@ function parseable(text, kind = 'fragment') {
   try { assertParseable(text, kind); return true; } catch (e) { if (e && e.markupGuard) return false; throw e; }
 }
 
-module.exports = { assertParseable, parseable, MarkupRefused, LIMITS, FEED_MAX_ENTRIES, FEED_PARSE_BUDGET_MS };
+/**
+ * The ONE way src/ builds a DOM: guard first (size, depth, element count), then cheerio.load. Throws MarkupRefused (error_kind
+ * "parse"). tests/markup-guard-static.test.js fails when any other file calls cheerio.load.
+ * @param {string} html
+ * @param {'html'|'xml'|'fragment'} kind html: a document; xml: a feed (xmlMode); fragment: a snippet loaded without html/body
+ */
+function load(html, kind = 'html') {
+  const text = String(html ?? '');
+  assertParseable(text, kind);
+  if (kind === 'xml') return cheerio.load(text, { xmlMode: true });
+  if (kind === 'fragment') return cheerio.load(`<div>${text}</div>`, null, false);
+  return cheerio.load(text);
+}
+
+/** load(..., 'fragment') that answers null instead of throwing when the snippet is refused (a per-entry description may be skipped). */
+function tryLoadFragment(html) {
+  try { return load(html, 'fragment'); } catch (e) { if (e && e.markupGuard) return null; throw e; }
+}
+
+module.exports = { load, tryLoadFragment, assertParseable, parseable, MarkupRefused, LIMITS, FEED_MAX_ENTRIES, FEED_PARSE_BUDGET_MS };

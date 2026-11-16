@@ -11,7 +11,7 @@
  *                    hydration JSON) for *profile links*; the engine turns them
  *                    into feeds for the same creator.
  */
-const cheerio = require('cheerio');
+const markupGuard = require('../lib/markup-guard');
 const http = require('./http').forPlatform('web', 1000);
 const { absUrl, clip, uniq, bestSrcset } = require('./util');
 const { extractLinks } = require('../lib/links');
@@ -259,8 +259,7 @@ function unwrapTrackingUrls(urls) {
 
 function extractPage(html, pageUrl0, opts = {}) {
   const rawHtml = String(html || '');
-  require('../lib/markup-guard').assertParseable(rawHtml, 'html'); // refuse before any tree is built (size, depth, element count)
-  const $ = cheerio.load(rawHtml);
+  const $ = markupGuard.load(rawHtml);
   const pageUrl = absUrl($('base[href]').first().attr('href'), pageUrl0) || pageUrl0;
 
   const optOut = checkHtmlOptOut(rawHtml, opts.headers || {}, opts.status || 200);

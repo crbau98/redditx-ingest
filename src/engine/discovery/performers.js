@@ -95,8 +95,8 @@ async function gffDiscovery({ pages = 2, perPage = 6, coomerLimit = 12, maxFollo
     try {
       ({ html, host } = await fetchPerformerDirectory(http, page));
     } catch (e) { events.log('WARN', `Discovery: gayforfans directory — ${e.message}`); break; }
-    const cheerio = require('cheerio');
-    const $ = cheerio.load(String(html));
+    const markupGuard = require('../../lib/markup-guard');
+    const $ = markupGuard.load(String(html));
     const seen = new Set();
     const links = [];
     $('a[href*="/performer/"]').each((_, el) => {

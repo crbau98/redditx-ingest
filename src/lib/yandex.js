@@ -14,7 +14,7 @@
  * A CAPTCHA page cools THIS provider down (its own cooldown and limiter key), never the other web-search providers, and the
  * reason is reported in status() exactly like Bing's.
  */
-const cheerio = require('cheerio');
+const markupGuard = require('./markup-guard');
 const config = require('../config');
 const http = require('../sources/http').forPlatform('yandex', 1500);
 const { looksLikeVideo, hostOf } = require('./mediaurl');
@@ -138,7 +138,7 @@ async function cbirSites(imageUrl, { count = 30 } = {}) {
   if (!m) return [];
   const sitesPath = m[1].replace(/&amp;/g, '&');
   const sitesHtml = await get(new URL(sitesPath, base()).toString());
-  const $ = cheerio.load(sitesHtml);
+  const $ = markupGuard.load(sitesHtml);
   const out = [];
   const seen = new Set();
   $('li.CbirSites-Item').each((_, el) => {

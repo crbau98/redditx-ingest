@@ -28,7 +28,7 @@ const cache = new Map();
 
 const strip = (s) => String(s || '').replace(/<[^>]+>/g, '').trim();
 
-const cheerio = require('cheerio');
+const markupGuard = require('./markup-guard');
 const ddgHttp = require('../sources/http').forPlatform('ddg', 1500);
 // Bing has its own limiter key: sharing DDG's meant a DuckDuckGo 429 penalty (30 s+) delayed Bing
 // too, and Bing's own spacing to be whatever DDG's was. Different hosts, different keys.
@@ -92,7 +92,7 @@ function anotherDoorOpen(self) {
 }
 
 function parseDdg(html) {
-  const $ = cheerio.load(html);
+  const $ = markupGuard.load(html);
   if ($('form#challenge-form, .anomaly-modal__modal').length) throw new Error('DuckDuckGo asked for a CAPTCHA');
   const out = [];
   $('.result').each((_, el) => {
@@ -107,7 +107,7 @@ function parseDdg(html) {
 
 /** Bing's HTML endpoint (keyless). Result links come back as `/ck/a?...&u=a1<base64url>`. */
 function parseBing(html) {
-  const $ = cheerio.load(html);
+  const $ = markupGuard.load(html);
   // A challenge page is a wall (the caller cools down); Bing's own "no results" block is an honest
   // empty answer (the caller falls through to the next tier) — they must not be confused, or one
   // empty query costs a 10-minute cooldown.
@@ -252,7 +252,7 @@ const PROVIDERS = {
         const html = await ddgHttp.text(url, {
           method: 'POST', body: ddgPostBody(q), timeout: 8000, retries: 0, headers: ddgPostHeaders(ddgOrigin(url)),
         });
-        const $ = cheerio.load(String(html));
+        const $ = markupGuard.load(String(html));
         if ($('form#challenge-form, .anomaly-modal__modal').length) throw new Error('DuckDuckGo lite asked for a CAPTCHA');
         const out = [];
         $('a.result-link').each((_, el) => {

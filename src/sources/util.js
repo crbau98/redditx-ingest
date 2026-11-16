@@ -1,5 +1,5 @@
 'use strict';
-const cheerio = require('cheerio');
+const markupGuard = require('../lib/markup-guard');
 const config = require('../config');
 
 /** Epoch seconds / epoch ms / ISO / RFC-822 -> ISO string (or null). */
@@ -28,8 +28,8 @@ function decodeHtml(s) {
 
 function htmlToText(html, max = 500) {
   if (!html) return '';
-  if (!require('../lib/markup-guard').parseable(html)) return String(html).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max); // too deep or large to parse: tags stripped, nothing built
-  const $ = cheerio.load(`<div>${html}</div>`, null, false);
+  const $ = markupGuard.tryLoadFragment(html);
+  if (!$) return String(html).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max); // too deep or large to parse: tags stripped, nothing built
   $('script,style').remove();
   $('br').replaceWith('\n');
   $('p').each((_, el) => { $(el).append('\n'); });
