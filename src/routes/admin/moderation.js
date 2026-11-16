@@ -123,12 +123,19 @@ router.get('/takedowns', (req, res) => {
 router.post('/takedowns', (req, res) => {
   try {
     const { kind, value, reason } = req.body || {};
-    const out = repo.takedowns.add({ kind, value, reason, actor: 'admin' });
+    // Answers at once: the takedown row, feed and creator blocks are in place and the first slices of the sweep have run (a small
+    // library is finished inside this request). The rest continues in the background: GET /takedowns/jobs/:jobId reports progress.
+    const out = repo.takedowns.start({ kind, value, reason, actor: 'admin' });
     events.admin('takedown', { id: out.takedown && out.takedown.id, kind: out.takedown && out.takedown.kind, value: out.takedown && out.takedown.value });
     res.status(201).json({ ok: true, ...out });
   } catch (e) {
     res.status(e.status || 400).json({ error: e.message });
   }
+});
+router.get('/takedowns/jobs', (req, res) => res.json({ jobs: repo.takedowns.jobs() }));
+router.get('/takedowns/jobs/:jobId', (req, res) => {
+  const j = repo.takedowns.job(req.params.jobId);
+  return j ? res.json(j) : res.status(404).json({ error: 'Takedown job not found' });
 });
 router.delete('/takedowns/:id', (req, res) => {
   const removed = repo.takedowns.remove(req.params.id, 'admin');

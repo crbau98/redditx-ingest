@@ -105,6 +105,8 @@ POST /maintenance/store-migrate
 POST /maintenance/store-migrate/stop
 POST /maintenance/recompute
 GET /takedowns
+GET /takedowns/jobs
+GET /takedowns/jobs/:jobId
 POST /takedowns
 DELETE /takedowns/:id
 GET /audit

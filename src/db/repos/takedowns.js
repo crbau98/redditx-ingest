@@ -4,6 +4,63 @@
 /** buildTakedowns: takedowns (opt-outs) and what applying one removes. Built by repo.js with the helpers it uses; repo.js re-exports the result, so callers are unchanged. */
 module.exports.buildTakedowns = function buildTakedowns({ db, clampInt, blocklist, purgeRemovedContent, purgeRemovedFor, rememberRemovedHashes, logAction, creatorQ, notifyBlocked, notifyState }) {
 const takedownLib = require('../../lib/takedowns');
+// ---- sweep jobs: a JSON record per takedown in `settings`, so a restart resumes from the stored cursor
+const jobKey = (id) => `takedown_job:${id}`;
+const OPEN_KEY = 'takedown_jobs_open';
+const setQ = db.prepare(`INSERT INTO settings (key, value, updated_at) VALUES (@key, @value, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`);
+const getQ = db.prepare('SELECT value FROM settings WHERE key = ?');
+const delQ = db.prepare('DELETE FROM settings WHERE key = ?');
+function openIds() { const r = getQ.get(OPEN_KEY); try { return r ? JSON.parse(r.value) : []; } catch { return []; } }
+function saveJob(job) {
+  setQ.run({ key: jobKey(job.id), value: JSON.stringify(job) });
+  const open = new Set(openIds());
+  if (job.state === 'done' || job.state === 'failed') open.delete(job.id); else open.add(job.id);
+  setQ.run({ key: OPEN_KEY, value: JSON.stringify([...open]) });
+}
+function closeJob(id) { setQ.run({ key: OPEN_KEY, value: JSON.stringify(openIds().filter((x) => x !== id)) }); }
+function loadJob(id) { const r = getQ.get(jobKey(id)); try { return r ? JSON.parse(r.value) : null; } catch { return null; } }
+/** What the API shows: counts so far, never the id lists. */
+function summary(job) {
+  const done = job.state === 'done';
+  return {
+    takedown: db.prepare('SELECT * FROM takedowns WHERE id = ?').get(job.takedownId) || null,
+    jobId: job.id, done, state: job.state,
+    purged: job.purged, purgedMedia: job.purged, scanned: job.scanned, cursor: job.cursor,
+    disabledFeeds: job.disabledFeeds, blockedCreators: job.blockedCreators,
+    startedAt: job.startedAt, finishedAt: job.finishedAt, error: job.error,
+  };
+}
+const MAX_MATCH_PER_SLICE = 25;
+const scanQ = db.prepare(`SELECT seq, id, creator_id, platform, author, title, description, source_url, media_url, preview_url, thumbnail_url, hash, source_key, phash
+  FROM media NOT INDEXED WHERE seq > ? AND publish_state != 'removed' ORDER BY seq LIMIT ?`);
+/**
+ * Slice sizing: aim each slice at ~15 ms. `pace.perRow` follows the SLOWEST recent cost per row (it decays slowly, not at once),
+ * because a cold stretch of the table is slow for a while: a fast slice is no proof that the next one will be.
+ */
+const newPace = () => ({ perRow: 0.02, n: 500 });
+function nextSize(pace, ms, rows) {
+  if (rows > 0) pace.perRow = Math.max(ms / rows, pace.perRow * 0.97);
+  pace.n = Math.max(100, Math.min(1500, Math.round(15 / Math.max(pace.perRow, 0.001))));
+  return pace.n;
+}
+const running = new Set();
+function runInBackground(id) {
+  if (running.has(id)) return;
+  running.add(id);
+  const pace = newPace();
+  const turn = () => {
+    let r;
+    try { r = takedowns.step(id, pace.n); } catch (e) {
+      const j = loadJob(id); if (j) { j.state = 'failed'; j.error = String(e.message || e).slice(0, 300); saveJob(j); }
+      running.delete(id); return;
+    }
+    nextSize(pace, r.ms, r.rows);
+    if (r.done) { running.delete(id); return; }
+    setTimeout(turn, 0).unref?.();
+  };
+  setTimeout(turn, 0).unref?.();
+}
 const takedowns = {
   all() {
     return db.prepare('SELECT * FROM takedowns ORDER BY id DESC').all();
@@ -27,24 +84,25 @@ const takedowns = {
   check(item, feed = null) {
     return takedownLib.checkItem(item, feed, takedowns.all());
   },
-  add({ kind, value, reason = null, actor = 'admin' } = {}) {
+  /**
+   * Phase 1 of a takedown, one short transaction: the takedown row (from this moment the ingest pipeline refuses everything it
+   * covers), the feeds it switches off, the creators it blocks, and a job record that remembers where the retroactive sweep is.
+   * The sweep over the stored media is NOT here: it runs in chunks (see `step`), so a takedown never holds the loop for the length of
+   * the library (about 5 s at 1.15M rows when it was one transaction).
+   */
+  begin({ kind, value, reason = null, actor = 'admin' } = {}) {
     const norm = takedownLib.normalize(kind, value);
     const why = reason ? String(reason).trim() : 'takedown';
-    let td = null;
-    let purgedMedia = 0;
-    let disabledFeeds = 0;
-    let blockedCreators = 0;
-    const removedPhashes = [];
-    const removedMediaIds = [];
-
+    let job = null;
     db.transaction(() => {
       db.prepare(`INSERT INTO takedowns (kind, value, reason) VALUES (?, ?, ?)
         ON CONFLICT(kind, value) DO UPDATE SET reason = COALESCE(excluded.reason, takedowns.reason)`)
         .run(norm.kind, norm.value, reason ? String(reason).trim() : null);
-      td = db.prepare('SELECT * FROM takedowns WHERE kind = ? AND value = ? COLLATE NOCASE').get(norm.kind, norm.value);
-
+      const td = db.prepare('SELECT * FROM takedowns WHERE kind = ? AND value = ? COLLATE NOCASE').get(norm.kind, norm.value);
       const blockedCreatorIds = new Set();
-      const affectedCreators = new Set();
+      let disabledFeeds = 0;
+      let blockedCreators = 0;
+      const affected = new Set();
 
       if (norm.kind === 'creator' || norm.kind === 'handle') {
         const hasPlat = norm.value.includes(':');
@@ -74,9 +132,7 @@ const takedowns = {
               }
             }
           }
-          if (match) {
-            blockedCreatorIds.add(c.id);
-          }
+          if (match) blockedCreatorIds.add(c.id);
         }
         // Check aliases and feeds for creator ownership
         if (!plat) {
@@ -108,13 +164,11 @@ const takedowns = {
             blocklist.add('creator', `${f.platform}:${String(f.target).toLowerCase()}`, why);
           }
           db.prepare("UPDATE creators SET status = 'blocked', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(cid);
-          try {
-            db.prepare('DELETE FROM media_faces WHERE media_id IN (SELECT id FROM media WHERE creator_id = ?)').run(cid);
-            db.prepare('DELETE FROM creator_web_matches WHERE creator_id = ?').run(cid);
-          } catch { /* ignore */ }
+          // (their pictures' face vectors go with each row in the sweep and in purgeRemovedFor; this is the creator-level table)
+          try { db.prepare('DELETE FROM creator_web_matches WHERE creator_id = ?').run(cid); } catch { /* ignore */ }
           blocklist.add('creator', cid, why);
           blockedCreators++;
-          affectedCreators.add(cid);
+          affected.add(cid);
         }
 
         db.prepare("UPDATE candidates SET status = 'rejected', reason = 'takedown' WHERE target = ? COLLATE NOCASE AND status = 'pending'").run(bare);
@@ -132,63 +186,133 @@ const takedowns = {
         }
       }
 
-      // Retroactively purge matching media items
-      // Streamed, not .all(): at 1M+ rows the full array cost about 1.4 GB (Crucible wave 11, item 7). Matches are collected
-      // first and written after the scan, since better-sqlite3 cannot write while an iterator is open.
-      const matched = [];
-      for (const m of db.prepare(`SELECT id, creator_id, platform, author, title, description,
-        source_url, media_url, preview_url, thumbnail_url, hash, source_key, phash
-        FROM media WHERE publish_state != 'removed'`).iterate()) {
-        const matchedByCreator = m.creator_id && blockedCreatorIds.has(m.creator_id);
-        const matchedByRule = matchedByCreator || takedownLib.checkItem({
-          creator_id: m.creator_id,
-          platform: m.platform,
-          author: m.author,
-          title: m.title,
-          text: m.description,
-          description: m.description,
-          source_url: m.source_url,
-          permalink: m.source_url,
-          media_url: m.media_url,
-          mediaUrl: m.media_url,
-          preview_url: m.preview_url,
-          previewUrl: m.preview_url,
-          thumbnail_url: m.thumbnail_url,
-          thumbnailUrl: m.thumbnail_url,
-        }, null, [td]);
-        if (!matchedByRule) continue;
-        matched.push({ id: m.id, creator_id: m.creator_id, hash: m.hash, source_key: m.source_key, phash: m.phash });
-      }
-      for (const m of matched) {
-        db.prepare("UPDATE media SET publish_state = 'removed', review_reason = 'takedown', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(m.id);
-        try {
-          db.prepare('DELETE FROM media_faces WHERE media_id = ?').run(m.id);
-          db.prepare('DELETE FROM creator_web_matches WHERE media_id = ?').run(m.id);
-        } catch { /* ignore */ }
-        if (m.hash) blocklist.add('hash', m.hash, why);
-        if (m.source_key) blocklist.add('source_key', m.source_key, why);
-        if (m.phash) {
-          db.prepare('INSERT OR IGNORE INTO phash_blocklist (phash, reason) VALUES (?, ?)').run(m.phash, why);
-          removedPhashes.push(m.phash);
-        }
-        if (m.creator_id) affectedCreators.add(m.creator_id);
-        removedMediaIds.push(m.id);
-        purgedMedia++;
-      }
-
-      // blocked creators' older removed rows: keep their hashes blocked, then clear the identifiers
-      for (const cid of blockedCreatorIds) { rememberRemovedHashes(cid, why); purgeRemovedFor(cid); }
-      purgeRemovedContent(removedMediaIds);
-      for (const cid of affectedCreators) {
-        creatorQ.stats.run({ id: cid });
-      }
+      job = {
+        id: `${td.id}-${Date.now().toString(36)}`, takedownId: td.id, kind: td.kind, value: td.value, why, actor,
+        state: 'scanning', cursor: 0, scanned: 0, purged: 0, disabledFeeds, blockedCreators,
+        blockedCreatorIds: [...blockedCreatorIds], affected: [...affected], finalizeAt: 0,
+        startedAt: new Date().toISOString(), finishedAt: null, error: null,
+      };
+      saveJob(job);
       logAction('takedown', String(td.id), 'add', why, actor);
     })();
+    return job;
+  },
 
+  /**
+   * One slice of the retroactive sweep, in its own transaction: the next `n` stored items after the job's cursor (a walk in `seq`
+   * order, so every item is seen once and one inserted meanwhile is seen too) are matched against the takedown. Each match is
+   * marked removed, its hashes and source key are blocklisted BEFORE its identifiers are cleared (purgeRemovedContent), and the
+   * cursor moves in the same transaction: a restart resumes exactly here. When the scan runs out, the creator-level clean-up runs
+   * (older removed rows keep their hashes blocked, then lose their identifiers; counters are recounted once per creator).
+   * @returns {{done: boolean, ms: number}}
+   */
+  step(jobId, n = 1000) {
+    const job = loadJob(jobId);
+    if (!job || job.state === 'done' || job.state === 'failed') return { done: true, ms: 0 };
+    const t0 = Date.now();
+    const td = takedowns.get(job.takedownId) || { id: job.takedownId, kind: job.kind, value: job.value };
+    const blockedIds = new Set(job.blockedCreatorIds);
+    const removedMediaIds = []; const removedPhashes = [];
+    const why = job.why;
+    let scannedNow = 0;
+    db.transaction(() => {
+      if (job.state === 'scanning') {
+        const rows = scanQ.all(job.cursor, n);
+        const matched = [];
+        let seen = 0;
+        for (const m of rows) {
+          seen++;
+          const byCreator = m.creator_id && blockedIds.has(m.creator_id);
+          const hit = byCreator || takedownLib.checkItem({
+            creator_id: m.creator_id, platform: m.platform, author: m.author, title: m.title, text: m.description, description: m.description,
+            source_url: m.source_url, permalink: m.source_url, media_url: m.media_url, mediaUrl: m.media_url,
+            preview_url: m.preview_url, previewUrl: m.preview_url, thumbnail_url: m.thumbnail_url, thumbnailUrl: m.thumbnail_url,
+          }, null, [td]);
+          if (hit) matched.push(m);
+          if (matched.length >= MAX_MATCH_PER_SLICE) break; // each match is a dozen writes: a slice stops after this many, whatever n is
+        }
+        const affected = new Set(job.affected);
+        for (const m of matched) {
+          db.prepare("UPDATE media SET publish_state = 'removed', review_reason = 'takedown', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(m.id);
+          try {
+            db.prepare('DELETE FROM media_faces WHERE media_id = ?').run(m.id);
+            db.prepare('DELETE FROM creator_web_matches WHERE media_id = ?').run(m.id);
+          } catch { /* ignore */ }
+          if (m.hash) blocklist.add('hash', m.hash, why);
+          if (m.source_key) blocklist.add('source_key', m.source_key, why);
+          if (m.phash) {
+            db.prepare('INSERT OR IGNORE INTO phash_blocklist (phash, reason) VALUES (?, ?)').run(m.phash, why);
+            removedPhashes.push(m.phash);
+          }
+          if (m.creator_id) affected.add(m.creator_id);
+          removedMediaIds.push(m.id);
+        }
+        purgeRemovedContent(removedMediaIds); // the hashes above are already blocklisted: now the identifiers go
+        job.purged += matched.length;
+        scannedNow = seen;
+        job.scanned += seen;
+        if (seen) job.cursor = rows[seen - 1].seq;
+        job.affected = [...affected];
+        if (seen === rows.length && rows.length < n) job.state = 'finalizing'; // only when the page ran out: a slice cut short by MAX_MATCH_PER_SLICE has rows left
+      } else {
+        // finalizing: one blocked creator, then one affected creator, per call
+        const cids = job.blockedCreatorIds;
+        if (job.finalizeAt < cids.length) {
+          const cid = cids[job.finalizeAt];
+          const left = db.prepare("SELECT seq, id, hash, phash FROM media WHERE creator_id = ? AND publish_state = 'removed' AND seq > ? AND hash NOT LIKE 'purged:%' ORDER BY seq LIMIT 100").all(cid, job.finalizeSeq || 0);
+          for (const m of left) {
+            if (m.hash) blocklist.add('hash', m.hash, why);
+            if (m.phash) db.prepare('INSERT OR IGNORE INTO phash_blocklist (phash, reason) VALUES (?, ?)').run(m.phash, why);
+          }
+          if (left.length) purgeRemovedContent(left.map((r) => r.id)); // the same creator again next call until none are left
+          if (left.length < 100) { job.finalizeAt++; job.finalizeSeq = 0; } else job.finalizeSeq = left[left.length - 1].seq;
+        } else {
+          const rest = job.affected.splice(0, 1); // a creator's recount reads all of its rows: one per slice
+          for (const cid of rest) creatorQ.stats.run({ id: cid });
+          if (!job.affected.length) { job.state = 'done'; job.finishedAt = new Date().toISOString(); }
+        }
+      }
+      saveJob(job);
+    })();
     for (const mid of removedMediaIds) notifyState(mid, 'removed');
     for (const ph of removedPhashes) notifyBlocked(ph);
+    return { done: job.state === 'done', ms: Date.now() - t0, rows: scannedNow };
+  },
 
-    return { takedown: td, purged: purgedMedia, purgedMedia, disabledFeeds, blockedCreators };
+  /** Drive a job to the end, synchronously. Small libraries and tests; the server uses start(). */
+  finishNow(jobId) {
+    for (let guard = 0; guard < 1e7; guard++) { if (takedowns.step(jobId, 5000).done) break; }
+    return loadJob(jobId);
+  },
+
+  /**
+   * What the admin route calls. Phase 1 runs now; then slices run for up to `budgetMs` (a small library is finished inside the
+   * request, with complete counts), and anything left continues in the background, a slice per timer turn, resuming after a restart.
+   */
+  start(args, { budgetMs = 25 } = {}) {
+    const job0 = takedowns.begin(args);
+    const t0 = Date.now();
+    let r = { done: false };
+    const pace = newPace();
+    while (!r.done && Date.now() - t0 < budgetMs) { r = takedowns.step(job0.id, pace.n); nextSize(pace, r.ms, r.rows); }
+    const job = loadJob(job0.id);
+    if (job.state !== 'done') runInBackground(job.id);
+    return summary(job);
+  },
+
+  /** Take up jobs a restart interrupted. Call once after boot. */
+  resume() {
+    const open = openIds();
+    for (const id of open) { const j = loadJob(id); if (j && j.state !== 'done' && j.state !== 'failed') runInBackground(id); else closeJob(id); }
+    return open.length;
+  },
+  job(id) { const j = loadJob(String(id)); return j ? summary(j) : null; },
+  jobs() { return openIds().map((id) => loadJob(id)).filter(Boolean).map(summary); },
+
+  /** Synchronous end-to-end takedown (the same phases, no yield): small libraries and tests. */
+  add(args = {}) {
+    const job = takedowns.finishNow(takedowns.begin(args).id);
+    return summary(job);
   },
   remove(id, actor = 'admin') {
     const row = takedowns.get(id);

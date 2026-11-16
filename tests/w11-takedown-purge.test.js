@@ -53,8 +53,8 @@ test('takedown by handle clears text, search, tags, stored bytes and cached imag
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM media_tags WHERE media_id = ?').get(kept).n, 1);
 });
 
-test('the takedown scan streams rows instead of loading the whole table', () => {
+test('the takedown scan walks the table in seq slices instead of loading it (or holding one transaction) whole', () => {
   const src = fs.readFileSync(require.resolve('../src/db/repos/takedowns.js'), 'utf8');
-  assert.match(src, /FROM media WHERE publish_state != 'removed'`\)\.iterate\(\)/);
-  assert.doesNotMatch(src, /FROM media WHERE publish_state != 'removed'`\)\.all\(\)/);
+  assert.match(src, /FROM media NOT INDEXED WHERE seq > \? AND publish_state != 'removed' ORDER BY seq LIMIT \?/);
+  assert.doesNotMatch(src, /FROM media WHERE publish_state != 'removed'`\)\.(all|iterate)\(\)/);
 });
