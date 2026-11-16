@@ -142,6 +142,9 @@ const DUPE_BACKOFF_DAYS = 2;
 // A backfill slice that read items but added none (history already stored) waits this many times the normal gap before the next slice (history already stored).
 const BACKFILL_DRY_GAP_FACTOR = 4;
 const BACKFILL_DRY_STOP = 6;
+const isAllDupes = (stats) => stats.fetched > 0 && stats.dupes === stats.fetched;
+/** The dry-slice count after a backfill slice: +1 for a slice of only stored items, unchanged for an empty one, 0 for anything else. */
+const nextBackfillDry = (prev, stats) => (isAllDupes(stats) ? prev + 1 : (stats.fetched === 0 ? prev : 0));
 const BFDONE_PLATFORMS = new Set(['redgifs', 'bluesky']); // their cursors close a backfill with bfDone
 function idleNextRun(feed, fetchedNow, now = Date.now(), addedNow) {
   if (!settingsStore.get().adaptiveScheduling) return null;
@@ -160,6 +163,13 @@ function idleNextRun(feed, fetchedNow, now = Date.now(), addedNow) {
 // Platforms whose feeds yield almost nothing for their run volume are polled no more often than this, whatever interval the feed
 // was created with (GFF: 134 adds in 3,729 runs a week; link-in-bio hubs: 0 in 605). Not disabled: a new item restores the feed's tempo.
 const PLATFORM_MIN_INTERVAL_MIN = { gff: 3 * 1440, linkinbio: 7 * 1440 };
+// The floor applies only while the feed is not producing: a run that added nothing AND no added item in the last 7 days. A feed
+// that adds items keeps its own interval and tempo.
+function floorApplies(feed, addedNow, now = Date.now()) {
+  if (!PLATFORM_MIN_INTERVAL_MIN[feed.platform]) return false;
+  if (addedNow > 0) return false;
+  return repo.runs.yieldSince(feed.id, new Date(now - 7 * 86400000).toISOString()).added === 0;
+}
 
 // Pace by the feed's own rhythm (coomer, redgifs): after a run that added nothing, the next run waits about half the median gap
 // between this feed's productive runs, never less than its base interval and never more than PACE_MAX_DAYS.
@@ -189,8 +199,8 @@ function paceNextRun(feed, addedNow, now = Date.now()) {
 }
 
 /** next_run_at after a run: jittered interval on success, exponential backoff on failure. */
-function computeNextRun(feed, failures, retryAfterMs = 0, factor = 1) {
-  const intervalMin = Math.max(feed.interval_min, PLATFORM_MIN_INTERVAL_MIN[feed.platform] || 0);
+function computeNextRun(feed, failures, retryAfterMs = 0, factor = 1, { floor = true } = {}) {
+  const intervalMin = floor ? Math.max(feed.interval_min, PLATFORM_MIN_INTERVAL_MIN[feed.platform] || 0) : feed.interval_min;
   const base = Math.min(Math.max(5, intervalMin) * 60000 * factor, Math.max(24 * 3600000, intervalMin * 60000));
   const jitter = 0.9 + Math.random() * 0.2;
   const delay = failures > 0 ? Math.min(base * 2 ** (failures - 1), 24 * 3600000) * jitter : base * jitter;
@@ -457,8 +467,11 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     if (Object.keys(stamp).length && (ctx.needProfile || prevCur.profiledAt || prevCur.profileTryAt)) cursorOut = { ...(cursorOut || prevCur), ...stamp };
     // A backfill that has read BACKFILL_DRY_STOP slices in a row without adding anything has reached history that is already
     // stored: it is closed (bfDone), not run on for ever. Any added item resets the count.
+    // Only a slice whose every fetched item was already stored counts as dry. A slice that fetched nothing says nothing (count kept);
+    // one with gate-rejected, blocked, filtered or added items resets the count: there is content in that history worth reading on.
+    const allDupes = isAllDupes(stats);
     if (BFDONE_PLATFORMS.has(feed.platform) && backfill.pending({ cursor: cursorOut }) && cursorOut && typeof cursorOut === 'object') {
-      const dry = stats.added > 0 ? 0 : (Number(prevCur.bfDry) || 0) + 1;
+      const dry = nextBackfillDry(Number(prevCur.bfDry) || 0, stats);
       cursorOut = dry >= BACKFILL_DRY_STOP ? { ...cursorOut, backfillPending: false, bfDone: true, bfDry: 0, bfStopped: 'dry' } : { ...cursorOut, bfDry: dry };
     }
     const more = backfill.pending({ cursor: cursorOut });
@@ -474,7 +487,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     }
     repo.feeds.finishRun(feed.id, {
       status, cursor: cursorOut, addedItems: stats.added, failures: 0,
-      nextRunAt: more && !ctx.aborted() ? new Date(Date.now() + cfg.backfillGapMin * 60000 * (stats.fetched > 0 && stats.added === 0 ? BACKFILL_DRY_GAP_FACTOR : 1)).toISOString() : (idleNextRun(feed, stats.fetched, Date.now(), stats.added) || paceNextRun(feed, stats.added) || computeNextRun(feed, 0, 0, tempo(feed, stats.added))),
+      nextRunAt: more && !ctx.aborted() ? new Date(Date.now() + cfg.backfillGapMin * 60000 * (allDupes ? BACKFILL_DRY_GAP_FACTOR : 1)).toISOString() : (idleNextRun(feed, stats.fetched, Date.now(), stats.added) || paceNextRun(feed, stats.added) || computeNextRun(feed, 0, 0, tempo(feed, stats.added), { floor: floorApplies(feed, stats.added) })),
       error: (result.notes && result.notes.length) ? `via ${result.via}: ${result.notes[0]}` : null,
     });
     breaker.success(feed.platform);
@@ -846,4 +859,4 @@ function shutdown() {
   state.timer = null; state.hotTimer = null; state.stopRequested = true;
 }
 
-module.exports = { paceNextRun, computeNextRun, BACKFILL_DRY_STOP, PLATFORM_MIN_INTERVAL_MIN, _nextWork: nextWork, slotsFor, runningOn, start, shutdown, tick, runFeed, enqueue, enqueuePlatforms, stopAll, pause, resume, status, seedDefaults, seedCuratedCreators, backfillCreatorStats, computeNextRun, tempo, idleNextRun, IDLE: { days: IDLE_DAYS, minRuns: IDLE_MIN_RUNS, backoffDays: IDLE_BACKOFF_DAYS }, adoptDiscoveredFeeds, _profileDue: profileDue, _state: state, _waysIn: { noteWaysIn, followWaysIn } };
+module.exports = { paceNextRun, computeNextRun, floorApplies, nextBackfillDry, BACKFILL_DRY_STOP, PLATFORM_MIN_INTERVAL_MIN, _nextWork: nextWork, slotsFor, runningOn, start, shutdown, tick, runFeed, enqueue, enqueuePlatforms, stopAll, pause, resume, status, seedDefaults, seedCuratedCreators, backfillCreatorStats, computeNextRun, tempo, idleNextRun, IDLE: { days: IDLE_DAYS, minRuns: IDLE_MIN_RUNS, backoffDays: IDLE_BACKOFF_DAYS }, adoptDiscoveredFeeds, _profileDue: profileDue, _state: state, _waysIn: { noteWaysIn, followWaysIn } };

@@ -42,7 +42,7 @@ function assertParseable(text, kind = 'html') {
   const s = String(text || '');
   if (s.length > lim.maxBytes) throw new MarkupRefused(`${Math.round(s.length / 1024)} KB is over the ${Math.round(lim.maxBytes / 1024)} KB limit`);
   const html = kind !== 'xml';
-  let depth = 0; let deepest = 0; let elements = 0; let i = 0; let lower = null; // lowercased once, only if a raw-text element appears
+  const stack = []; let deepest = 0; let elements = 0; let i = 0; let lower = null; // lowercased once, only if a raw-text element appears
   const n = s.length;
   while (i < n) {
     i = s.indexOf('<', i);
@@ -50,7 +50,8 @@ function assertParseable(text, kind = 'html') {
     const c1 = s.charCodeAt(i + 1);
     if (c1 === 33 /* ! */) { // comment, CDATA, doctype
       if (s.startsWith('<!--', i)) { const e = s.indexOf('-->', i + 4); i = e === -1 ? n : e + 3; continue; }
-      if (s.startsWith('<![CDATA[', i)) { const e = s.indexOf(']]>', i + 9); i = e === -1 ? n : e + 3; continue; }
+      // CDATA is real only in XML; an HTML parser reads "<![CDATA[" as a bogus comment that ends at the FIRST ">", so skipping to "]]>" there would hide tags from the scanner
+      if (!html && s.startsWith('<![CDATA[', i)) { const e = s.indexOf(']]>', i + 9); i = e === -1 ? n : e + 3; continue; }
       const e = s.indexOf('>', i + 2); i = e === -1 ? n : e + 1; continue;
     }
     if (c1 === 63 /* ? */) { const e = s.indexOf('>', i + 2); i = e === -1 ? n : e + 1; continue; }
@@ -63,16 +64,20 @@ function assertParseable(text, kind = 'html') {
     const gt = s.indexOf('>', j);
     if (gt === -1) break; // unterminated tag: the rest is text
     if (closing) {
-      if (!(html && (VOID.has(name) || IMPLIED.has(name)))) depth = Math.max(0, depth - 1);
+      // The parser pops up to the nearest OPEN element of that name and ignores an end tag that matches nothing, so the scanner
+      // does the same. (Popping on any end tag let "<div></b>" x N nest the real DOM while the scanner stayed at depth 0.)
+      if (!(html && (VOID.has(name) || IMPLIED.has(name)))) {
+        for (let k = stack.length - 1; k >= 0; k--) if (stack[k] === name) { stack.length = k; break; }
+      }
       i = gt + 1; continue;
     }
     elements++;
     if (elements > lim.maxElements) throw new MarkupRefused(`more than ${lim.maxElements} elements`);
     const selfClosed = s.charCodeAt(gt - 1) === 47;
     if (!selfClosed && !(html && (VOID.has(name) || IMPLIED.has(name)))) {
-      depth++;
-      if (depth > deepest) deepest = depth;
-      if (depth > lim.maxDepth) throw new MarkupRefused(`nesting deeper than ${lim.maxDepth}`);
+      stack.push(name);
+      if (stack.length > deepest) deepest = stack.length;
+      if (stack.length > lim.maxDepth) throw new MarkupRefused(`nesting deeper than ${lim.maxDepth}`);
     }
     i = gt + 1;
     if (html && RAW.has(name) && !selfClosed) { // raw text: a "<" inside a script is not markup
@@ -99,9 +104,13 @@ function parseable(text, kind = 'fragment') {
 function load(html, kind = 'html') {
   const text = String(html ?? '');
   assertParseable(text, kind);
-  if (kind === 'xml') return cheerio.load(text, { xmlMode: true });
   if (kind === 'fragment') return cheerio.load(`<div>${text}</div>`, null, false);
-  return cheerio.load(text);
+  const $ = kind === 'xml' ? cheerio.load(text, { xmlMode: true }) : cheerio.load(text);
+  // Belt and braces: the scanner models the parser; if the real tree is bigger than the limit allows, later passes over it are
+  // refused rather than walked (one selector pass, linear).
+  const built = $('*').length;
+  if (built > LIMITS[kind].maxElements * 1.2) throw new MarkupRefused(`the parsed tree has ${built} elements (limit ${LIMITS[kind].maxElements})`);
+  return $;
 }
 
 /** load(..., 'fragment') that answers null instead of throwing when the snippet is refused (a per-entry description may be skipped). */
