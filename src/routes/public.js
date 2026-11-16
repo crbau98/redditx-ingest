@@ -377,10 +377,36 @@ router.get('/discover', asyncRoute(cacheSnapshot(async () => await discoverView(
 router.get('/stats', asyncRoute(cacheSnapshot(async () => await snapshot('stats'))));
 router.get('/graph', asyncRoute(cacheSnapshot(async () => await graphView())));
 
-/** The public list, as the route answers it (also what scripts/bench-media-list.js times). */
+/**
+ * The public list, as the route answers it (also what scripts/bench-media-list.js times).
+ *
+ * Three guards, because one anonymous GET could hold the event loop for 2-8 s (page 100000 was a 12M-row OFFSET):
+ *   - depth: OFFSET paging is for the first MAX_PUBLIC_OFFSET rows only. Past that the answer is an empty page (the same shape,
+ *     no query); a client that wants to go deeper follows `nextCursor`, which is keyset paging and costs the same on every page.
+ *   - a short cache: identical requests within LIST_TTL_MS share one result (the query is synchronous, so there is nothing to
+ *     coalesce beyond that), so a popular filter or a crawler pays once. Not used for `random` (every seed is its own list) or in tests.
+ */
+const MAX_PUBLIC_OFFSET = 10000;
+const LIST_TTL_MS = 15 * 1000;
+const LIST_CACHE_MAX = 300;
+const listCache = new Map(); // key -> { at, value }
+const listCacheOn = () => !config.isTest || process.env.PRISM_LIST_CACHE === '1';
 function mediaList(query) {
-  const r = repo.media.list(mediaFilters(query));
-  return { ...r, items: r.items.map(briefMedia) };
+  const f = mediaFilters(query);
+  if (!f.cursor && f.page * f.limit > MAX_PUBLIC_OFFSET) return { items: [], total: null, page: f.page, limit: f.limit, nextCursor: null };
+  const cacheable = listCacheOn() && f.sort !== 'random' && !f.ids;
+  const key = cacheable ? JSON.stringify(f) : null;
+  if (key) {
+    const hit = listCache.get(key);
+    if (hit && Date.now() - hit.at < LIST_TTL_MS) return hit.value;
+  }
+  const r = repo.media.list(f);
+  const value = { ...r, items: r.items.map(briefMedia) };
+  if (key) {
+    listCache.set(key, { at: Date.now(), value });
+    if (listCache.size > LIST_CACHE_MAX) listCache.delete(listCache.keys().next().value);
+  }
+  return value;
 }
 
 router.get('/media', (req, res) => {
@@ -740,6 +766,8 @@ module.exports.warmPrep = warmPrep;
 module.exports.publicCreator = publicCreator;
 module.exports.suggestCached = suggestCached;
 module.exports.mediaList = mediaList;
+module.exports._listCache = listCache;
+module.exports.MAX_PUBLIC_OFFSET = MAX_PUBLIC_OFFSET;
 module.exports.healthPayload = healthPayload;
 module.exports._seenEngagement = seenEngagement;
 module.exports.suggestCache = suggestCache;

@@ -43,5 +43,6 @@ test('wrong keys on the stream still count against the guard, and lock it', asyn
   for (let i = 0; i < 25; i++) seen.add(await openAndLeave('wrong-key'));
   assert.ok(seen.has(401), 'wrong keys are refused');
   assert.ok(seen.has(429), 'and after 20 of them the guard answers 429');
-  assert.equal(await overview('test-key'), 429, 'the lock covers the whole admin API for this client, as before');
+  assert.equal(await overview('wrong-key'), 429, 'the lock covers the whole admin API for a client with a wrong key');
+  assert.equal(await overview('test-key'), 200, 'but the correct key is never refused (Wave 11 item 10)');
 });
