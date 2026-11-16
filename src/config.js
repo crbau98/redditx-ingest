@@ -227,6 +227,12 @@ module.exports = {
     headed: bool(env.CHROME_HEADED, false),              // needs a display; useful to watch a challenge
     timeoutMs: int(env.CHROME_TIMEOUT_MS, 45000),        // one navigation
     challengeWaitMs: int(env.CHROME_CHALLENGE_WAIT_MS, 15000), // how long a bot challenge gets to clear itself
+    // Never run the browser as root: when PRISM itself is root (the volume is root-owned), Chromium is started as this
+    // user (the Docker image creates uid/gid 10001). -1 = unset (a developer machine, already unprivileged).
+    uid: int(env.CHROME_UID, -1),
+    gid: int(env.CHROME_GID, -1),
+    // Chromium's own sandbox: auto = try it, fall back to --no-sandbox (logged) when the container has no user namespaces.
+    sandbox: ['auto', 'on', 'off'].includes(String(env.CHROME_SANDBOX || '').trim()) ? String(env.CHROME_SANDBOX).trim() : 'auto',
     idleMs: int(env.CHROME_IDLE_MS, 90000),              // close the browser after this long unused (was 4 min: renders come in bursts within one feed run)
   },
   // Jina Reader: a free third-party reader (lib/jina.js) that renders a page in its own browser. Last free tier before

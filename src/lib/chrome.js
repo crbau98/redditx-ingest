@@ -87,17 +87,59 @@ let launching = null;
 let idleTimer = null;
 let queue = Promise.resolve();
 
-function profileDir() {
-  const dir = path.join(config.dataDir, 'chrome-profile');
-  try { fs.mkdirSync(dir, { recursive: true }); } catch { /* read-only data dir: fall back to a temp profile */ }
-  return dir;
+/**
+ * How Chromium is started (pure, so it can be tested without a browser):
+ *   - as root only when there is no unprivileged user to drop to (config.chrome.uid); PRISM may be root, Chromium is not;
+ *   - with Chromium's sandbox unless that cannot work: a root browser cannot have it, `CHROME_SANDBOX=off` turns it off, and
+ *     in `auto` a launch that failed with it is retried without it (the container has no user namespaces);
+ *   - with a minimal environment: the renderer never inherits PRISM's API keys and tokens.
+ */
+function launchPlan({ uid = process.getuid ? process.getuid() : -1, chrome = config.chrome, env = process.env, home, sandboxFailed = false } = {}) {
+  const asUser = uid === 0 && chrome.uid > 0 ? { uid: chrome.uid, gid: chrome.gid > 0 ? chrome.gid : chrome.uid } : null;
+  const root = uid === 0 && !asUser;
+  const noSandbox = root || chrome.sandbox === 'off' || (chrome.sandbox === 'auto' && sandboxFailed);
+  // HOME: the browser user cannot read root's home, so it gets its (writable) profile dir; otherwise the real one (Chrome on
+  // macOS hangs on its first navigation with HOME pointed elsewhere).
+  const ownHome = asUser ? home : (env.HOME || home);
+  const childEnv = { PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin', HOME: ownHome, LANG: env.LANG || 'en_US.UTF-8', TZ: env.TZ || 'UTC' };
+  for (const k of ['DISPLAY', 'TMPDIR', 'FONTCONFIG_PATH']) if (env[k]) childEnv[k] = env[k];
+  if (asUser && home) { childEnv.XDG_CONFIG_HOME = path.join(home, '.config'); childEnv.XDG_CACHE_HOME = path.join(home, '.cache'); }
+  return { asUser, root, noSandbox, env: childEnv };
 }
+
+/** Hand a directory tree to the browser's user (root can; a no-op when it already owns it). */
+function chownTree(dir, uid, gid) {
+  try { if (fs.statSync(dir).uid === uid) return; } catch { return; }
+  fs.chownSync(dir, uid, gid);
+  for (const f of fs.readdirSync(dir, { recursive: true })) { try { fs.lchownSync(path.join(dir, f), uid, gid); } catch { /* vanished */ } }
+}
+
+let sandboxFailed = false; // auto mode: the sandbox could not start once, so this process launches without it
 
 async function launch() {
   const bin = executable();
   if (!bin) throw skip('Chrome is not installed on this host (set CHROME_PATH)');
-  const dir = fs.existsSync(path.join(config.dataDir, 'chrome-profile')) ? profileDir() : fs.mkdtempSync(path.join(os.tmpdir(), 'prism-chrome-'));
+  const saved = path.join(config.dataDir, 'chrome-profile');
+  const temp = !fs.existsSync(saved);
+  const dir = temp ? fs.mkdtempSync(path.join(os.tmpdir(), 'prism-chrome-')) : saved;
+  const plan = launchPlan({ home: dir, sandboxFailed });
+  if (plan.asUser) chownTree(dir, plan.asUser.uid, plan.asUser.gid);
+  try {
+    return await start(bin, dir, temp, plan);
+  } catch (e) {
+    if (plan.noSandbox || config.chrome.sandbox !== 'auto') { if (temp) rmProfile(dir); throw e; }
+    // No usable sandbox here (typically: no unprivileged user namespaces in the container). The strongest setup that
+    // still works: an unprivileged browser user, without the sandbox. Logged once.
+    sandboxFailed = true;
+    require('../engine/events').log('WARN', `Chrome: its sandbox cannot start on this host (${String(e.message).slice(0, 80)}); running it without the sandbox${plan.asUser ? ` as uid ${plan.asUser.uid}` : ''}`);
+    try { return await start(bin, dir, temp, launchPlan({ home: dir, sandboxFailed })); } catch (e2) { if (temp) rmProfile(dir); throw e2; }
+  }
+}
+const rmProfile = (dir) => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } };
+
+async function start(bin, dir, temp, plan) {
   const proxy = await guard.start();
+  try { fs.rmSync(path.join(dir, 'DevToolsActivePort'), { force: true }); } catch { /* none */ }
   const args = [
     `--remote-debugging-port=0`,
     `--user-data-dir=${dir}`,
@@ -107,11 +149,10 @@ async function launch() {
     '--disable-blink-features=AutomationControlled', '--disable-features=Translate,OptimizationHints,MediaRouter',
     '--mute-audio', '--hide-scrollbars', '--disable-gpu', '--window-size=1400,1600', 'about:blank',
   ];
-  // Chrome refuses to start as root with the sandbox on (the Docker image runs as root on purpose).
-  if (process.getuid && process.getuid() === 0) args.unshift('--no-sandbox');
+  if (plan.noSandbox) args.unshift('--no-sandbox');
   if (!config.chrome.headed) args.unshift('--headless=new');
-  const proc = spawn(bin, args, { stdio: 'ignore' });
-  proc.on('exit', () => { browser = null; });
+  const proc = spawn(bin, args, { stdio: 'ignore', env: plan.env, ...(plan.asUser || {}) });
+  proc.on('exit', () => { if (browser && browser.proc === proc) browser = null; });
   const portFile = path.join(dir, 'DevToolsActivePort');
   let port = 0;
   for (let i = 0; i < 120; i++) {
@@ -122,9 +163,9 @@ async function launch() {
     if (proc.exitCode !== null) break;
     await sleep(250);
   }
-  if (!port) { try { proc.kill(); } catch { /* gone */ } throw new Error('Chrome did not open its DevTools port'); }
+  if (!port) { try { proc.kill(); } catch { /* gone */ } throw new Error(proc.exitCode !== null ? `Chrome exited at start (code ${proc.exitCode})` : 'Chrome did not open its DevTools port'); }
   const version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
-  browser = { proc, port, version, proxy };
+  browser = { proc, port, version, proxy, dir, temp, sandbox: !plan.noSandbox, user: plan.asUser ? plan.asUser.uid : (process.getuid ? process.getuid() : null) };
   return browser;
 }
 
@@ -145,6 +186,8 @@ async function close() {
   if (!b) return;
   try { await fetch(`http://127.0.0.1:${b.port}/json/close/`); } catch { /* no target */ }
   try { b.proc.kill(); } catch { /* gone */ }
+  // A throwaway profile goes with its browser: one was left behind in the temp dir on every launch.
+  if (b.temp) { await new Promise((r) => { if (b.proc.exitCode !== null) r(); else { b.proc.once('exit', r); setTimeout(r, 3000).unref(); } }); rmProfile(b.dir); }
 }
 
 /* ------------------------------------------------------------------- one render */
@@ -289,9 +332,11 @@ async function status() {
     executable: executable(),
     headed: !!config.chrome.headed,
     running: !!(browser && browser.proc.exitCode === null),
+    sandbox: browser ? browser.sandbox : (sandboxFailed ? false : null),
+    user: browser ? browser.user : null,
     version: browser ? browser.version.Browser : null,
     challengeWaitMs: config.chrome.challengeWaitMs,
   };
 }
 
-module.exports = { available, enabled, renderPages, readPage, status, close, nextLink, _executable: executable };
+module.exports = { _launchPlan: launchPlan, available, enabled, renderPages, readPage, status, close, nextLink, _executable: executable };

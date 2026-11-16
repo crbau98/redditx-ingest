@@ -16,6 +16,12 @@ COPY . .
 
 # Runs as root on purpose: platform volumes (e.g. Railway) are mounted root-owned and SQLite must be able to write there.
 RUN mkdir -p /data
+# ...but the challenge browser does not: it renders pages that strangers control, so lib/chrome.js starts Chromium as this
+# unprivileged user (its profile is chowned to it) and keeps Chromium's sandbox on when the host allows user namespaces
+# (CHROME_SANDBOX=auto falls back to --no-sandbox, logged, when it does not).
+RUN addgroup -S -g 10001 chrome && adduser -S -D -H -u 10001 -G chrome chrome
+ENV CHROME_UID=10001
+ENV CHROME_GID=10001
 
 ENV NODE_ENV=production
 ENV DB_PATH=/data/prism.db
