@@ -323,21 +323,34 @@ async function matchCreator(creator, { budget = 40, aborted = () => false, servi
   return out;
 }
 
-/** Creators whose pictures exist and who have not been matched recently (newest first). */
+/**
+ * Creators whose pictures exist and who have not been matched recently. The candidates come from the maintained
+ * creators.media_count (no per-creator COUNT over media: two correlated counts per active creator blocked prod's event loop
+ * for 12.7 s on 2026-11-16); each candidate is then checked for at least two hashed, published pictures with a bounded
+ * lookup, in priority order, until `limit` are found.
+ */
 function pickCreators(limit) {
   const stale = new Date(Date.now() - STALE_DAYS * 86400000).toISOString();
-  return db.prepare(`SELECT c.id FROM creators c
-    WHERE c.status = 'active' AND c.scope IN ('in','uncertain')
-      AND (SELECT COUNT(*) FROM media m WHERE m.creator_id = c.id AND m.phash IS NOT NULL AND m.publish_state = 'published') >= 2
+  const want = Math.max(1, limit);
+  const candidates = db.prepare(`SELECT c.id FROM creators c
+    WHERE c.status = 'active' AND c.scope IN ('in','uncertain') AND c.media_count >= 2
       AND COALESCE((SELECT updated_at FROM discovery_state WHERE key = 'imgmatch.' || c.id), '') < ?
-    GROUP BY c.id
     ORDER BY
       CASE WHEN EXISTS (SELECT 1 FROM onlyfans_leads l WHERE l.creator_id = c.id AND l.status = 'claimed') THEN 0
            WHEN c.links IS NOT NULL AND c.links != '[]' AND c.links != '' THEN 1
            WHEN c.origin != 'ingest' THEN 2 ELSE 3 END,
-      (SELECT COUNT(*) FROM media m WHERE m.creator_id = c.id AND m.phash IS NOT NULL AND m.publish_state = 'published') DESC
-    LIMIT ?`).all(stale, limit)
-    .map((r) => repo.creators.get(r.id)).filter(Boolean);
+      c.media_count DESC
+    LIMIT ?`).all(stale, want * 10);
+  const hashed = db.prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM media m
+    WHERE m.creator_id = ? AND m.phash IS NOT NULL AND m.publish_state = 'published' LIMIT 2)`);
+  const out = [];
+  for (const r of candidates) {
+    if (out.length >= want) break;
+    if (hashed.get(r.id).n < 2) continue;
+    const c = repo.creators.get(r.id);
+    if (c) out.push(c);
+  }
+  return out;
 }
 
 /**
