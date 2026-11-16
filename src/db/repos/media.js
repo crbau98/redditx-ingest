@@ -218,6 +218,32 @@ cachedCount.rows = function cachedRows(sql, args = []) {
   countCache.set(key, { n, at: Date.now(), v });
   return n;
 };
+/**
+ * A total that is exact up to `cap` and a lower bound beyond it, for filters that have no index-only count path (a tag, "this year",
+ * a text match ...). The exact COUNT(*) of such a filter reads most of a million-row table: 0.5-0.85 s of blocked event loop on the
+ * first request of every new combination, and the result cache key changed on every call anyway (the "since" cutoff carried
+ * milliseconds). This stops reading at cap + 1 matches.
+ * @returns {{n: number, capped: boolean}}
+ */
+const COUNT_CAP = 10000;
+const COUNT_REUSE_MS = 2 * 60 * 1000;
+const boundedCache = new Map();
+// "since" cutoffs carry milliseconds ("2025-11-16T16:20:31.482Z"): they would make every call a new cache key. The key sees the minute.
+const ISO_MS = /^(\d{4}-\d\d-\d\dT\d\d:\d\d):\d\d\.\d{3}Z$/;
+const keyArg = (a) => (typeof a === 'string' && ISO_MS.test(a) ? a.replace(ISO_MS, '$1') : a);
+function boundedCount(sql, args, cap = COUNT_CAP) {
+  const key = `${sql}|${JSON.stringify(args.map(keyArg))}|${cap}`;
+  const v = writeVersion();
+  const hit = boundedCache.get(key);
+  // A total past the cap cannot be moved by a few writes: it is reused for COUNT_REUSE_MS whatever was written. An exact one follows
+  // the write counter (a new item shows in the total at once), like cachedCount.
+  if (hit && ((hit.v.capped && Date.now() - hit.at < COUNT_REUSE_MS) || (hit.w === v && Date.now() - hit.at < 60000))) return hit.v;
+  const n = db.prepare(sql).get(...args, cap + 1).n;
+  const out = { n: Math.min(n, cap), capped: n > cap };
+  if (boundedCache.size > 500) boundedCache.clear();
+  boundedCache.set(key, { at: Date.now(), v: out, w: v });
+  return out;
+}
 const relatedCache = new Map(); // tags|mode|limit -> { lib, value } (valid while the library snapshot is the same object)
 
 /** Listeners told when a picture's publish state changes (the perceptual-duplicate index keeps itself current this way). */
@@ -462,13 +488,37 @@ const media = {
       : `FROM media m${forced ? ` INDEXED BY ${forced}` : ''} LEFT JOIN creators c ON c.id = m.creator_id WHERE ${whereSql}`;
     // Count with an IN-subquery, never the FTS join: with the join SQLite may drive the loop from
     // media and re-run the MATCH once per row (minutes on a large library instead of milliseconds).
-    const total = (f.noCount || useCursor) ? null : (join
-      ? cachedCount(`SELECT COUNT(*) AS n FROM media m WHERE m.seq IN (SELECT rowid FROM media_fts WHERE media_fts MATCH ?) AND ${whereSql}`, [...joinParams, ...params])
-      : cachedCount(`SELECT COUNT(*) AS n FROM media m${countIndexFor(f) ? ` INDEXED BY ${countIndexFor(f)}` : ''} WHERE ${whereSql}`, params));
+    // Index-only totals stay exact. Anything else is exact up to COUNT_CAP and then a lower bound (`totalCapped`), except for the
+    // admin's own lists, which need the true number.
+    let total = null; let totalCapped = false;
+    if (!(f.noCount || useCursor)) {
+      const fast = !join && countIndexFor(f);
+      const publicList = !f.admin && (f.state === undefined || f.state === 'published');
+      if (fast) total = cachedCount(`SELECT COUNT(*) AS n FROM media m INDEXED BY ${fast} WHERE ${whereSql}`, params);
+      else if (!publicList) {
+        total = join
+          ? cachedCount(`SELECT COUNT(*) AS n FROM media m WHERE m.seq IN (SELECT rowid FROM media_fts WHERE media_fts MATCH ?) AND ${whereSql}`, [...joinParams, ...params])
+          : cachedCount(`SELECT COUNT(*) AS n FROM media m WHERE ${whereSql}`, params);
+      } else {
+        const cap = Number.isFinite(f.countCap) ? f.countCap : COUNT_CAP;
+        let r;
+        if (join) r = boundedCount(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM media m WHERE m.seq IN (SELECT rowid FROM media_fts WHERE media_fts MATCH ?) AND ${whereSql} LIMIT ?)`, [...joinParams, ...params], cap);
+        else {
+          // a tag filter drives the count from the tag's own index (its rows, then one lookup each) instead of scanning the
+          // library for rows that happen to carry the tag
+          const tags = [...(f.tag ? [f.tag] : []), ...(Array.isArray(f.tagsAll) ? f.tagsAll : [])].map(cleanTag);
+          if (tags.length) {
+            const t0 = tags.reduce((a, b) => (tagRows(b) < tagRows(a) ? b : a));
+            r = boundedCount(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM (SELECT mt.media_id AS id FROM media_tags mt JOIN tags t ON t.id = mt.tag_id WHERE t.name = ?) x CROSS JOIN media m ON m.id = x.id WHERE ${whereSql} LIMIT ?)`, [t0, ...params], cap);
+          } else r = boundedCount(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM media m WHERE ${whereSql} LIMIT ?)`, params, cap);
+        }
+        total = r.n; totalCapped = r.capped;
+      }
+    }
     const rows = db.prepare(`SELECT m.*, c.handle AS creator_handle, c.display_name AS creator_name, c.avatar_url AS creator_avatar, c.links AS creator_links ${base}
       ORDER BY ${order} LIMIT ? OFFSET ?`).all(...joinParams, ...params, ...orderParams, limit, page * limit);
     const nextCursor = cursorSort && rows.length === limit ? encodeMediaCursor(cursorSort, rows[rows.length - 1]) : null;
-    return { items: rows.map(serializeMedia), total, page, limit, nextCursor };
+    return { items: rows.map(serializeMedia), total, ...(totalCapped ? { totalCapped: true } : {}), page, limit, nextCursor };
   },
 
   /**
