@@ -44,22 +44,48 @@ function nextSize(pace, ms, rows) {
   pace.n = Math.max(100, Math.min(1500, Math.round(15 / Math.max(pace.perRow, 0.001))));
   return pace.n;
 }
-const running = new Set();
+/**
+ * The background runner. One chain of timer turns per job; the entry in `running` is removed in every way the chain can end, and an
+ * entry whose chain has not turned for STALE_MS is taken over by resume() (a chain killed by anything unforeseen must not make the job
+ * unresumable for the life of the process).
+ * A busy or locked database (another connection holds the write lock: SQLITE_BUSY after busy_timeout) is not a failure of the job: the
+ * slice rolled back whole, nothing was written, so the same slice is tried again after a growing pause. Any other error fails the job
+ * (recorded when the database lets us; if it does not, the next turn tries again).
+ */
+const STALE_MS = 2 * 60 * 1000;
+const BUSY_PAUSE_MS = [250, 500, 1000, 2000, 5000, 10000, 30000];
+const running = new Map(); // job id -> { at: last time the chain turned }
+const isBusy = (e) => !!e && (e.code === 'SQLITE_BUSY' || e.code === 'SQLITE_LOCKED' || /database (table )?is locked|SQLITE_BUSY/i.test(String(e.message || '')));
 function runInBackground(id) {
-  if (running.has(id)) return;
-  running.add(id);
+  const cur = running.get(id);
+  if (cur && Date.now() - cur.at < STALE_MS) return;
+  const me = { at: Date.now() };
+  running.set(id, me); // replaces a stale chain's entry: that chain stops at its next turn (it sees it is no longer the owner)
   const pace = newPace();
-  const turn = () => {
-    let r;
-    try { r = takedowns.step(id, pace.n); } catch (e) {
-      const j = loadJob(id); if (j) { j.state = 'failed'; j.error = String(e.message || e).slice(0, 300); saveJob(j); }
-      running.delete(id); return;
+  let busyTries = 0; let errors = 0;
+  const finish = () => { if (running.get(id) === me) running.delete(id); };
+  const later = (ms) => { const t = setTimeout(turn, ms); if (t.unref) t.unref(); };
+  function turn() {
+    if (running.get(id) !== me) return;
+    me.at = Date.now();
+    try {
+      const r = takedowns.step(id, pace.n);
+      busyTries = 0; errors = 0;
+      nextSize(pace, r.ms, r.rows);
+      if (r.done) return finish();
+      return later(0);
+    } catch (e) {
+      if (isBusy(e)) { busyTries++; return later(BUSY_PAUSE_MS[Math.min(busyTries - 1, BUSY_PAUSE_MS.length - 1)]); }
+      errors++;
+      if (errors < 3) return later(1000); // a one-off: the slice rolled back whole
+      try {
+        const j = loadJob(id);
+        if (j) { j.state = 'failed'; j.error = String(e.message || e).slice(0, 300); saveJob(j); }
+        return finish();
+      } catch { return later(5000); } // the record could not be written (locked?): try again, the job stays open meanwhile
     }
-    nextSize(pace, r.ms, r.rows);
-    if (r.done) { running.delete(id); return; }
-    setTimeout(turn, 0).unref?.();
-  };
-  setTimeout(turn, 0).unref?.();
+  }
+  later(0);
 }
 const takedowns = {
   all() {
@@ -294,7 +320,8 @@ const takedowns = {
     const t0 = Date.now();
     let r = { done: false };
     const pace = newPace();
-    while (!r.done && Date.now() - t0 < budgetMs) { r = takedowns.step(job0.id, pace.n); nextSize(pace, r.ms, r.rows); }
+    try { while (!r.done && Date.now() - t0 < budgetMs) { r = takedowns.step(job0.id, pace.n); nextSize(pace, r.ms, r.rows); } }
+    catch (e) { if (!isBusy(e)) throw e; } // a locked database: the background runner retries the slice
     const job = loadJob(job0.id);
     if (job.state !== 'done') runInBackground(job.id);
     return summary(job);
@@ -306,6 +333,7 @@ const takedowns = {
     for (const id of open) { const j = loadJob(id); if (j && j.state !== 'done' && j.state !== 'failed') runInBackground(id); else closeJob(id); }
     return open.length;
   },
+  _running: running,
   job(id) { const j = loadJob(String(id)); return j ? summary(j) : null; },
   jobs() { return openIds().map((id) => loadJob(id)).filter(Boolean).map(summary); },
 

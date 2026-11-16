@@ -239,11 +239,12 @@ function healthPayload({ detail }) {
   if (!disk.known) warnings.push('disk size unknown: the volume watchdog cannot protect the data volume');
   else if (disk.level === 'paused') warnings.push(`data volume ${disk.usedPct}% full: ingestion is paused`);
   else if (disk.level === 'warn') warnings.push(`data volume ${disk.usedPct}% full`);
+  if (detail) { try { warnings.push(...require('../engine/checkpoint').status().warnings); } catch { /* checkpoint module not loaded in some tests */ } }
   const publicBlock = block ? { ms: block.ms, gcMs: block.gcMs, at: block.at } : null;
   return {
     code: dbOk ? 200 : 503,
     // Still HTTP 200 while the database answers (the platform's health check must not restart a working site over a warning).
-    body: { status: dbOk && disk.known ? 'ok' : 'degraded', warnings, version: config.version, uptime: Math.round(process.uptime()), db: dbOk, disk, memMb: { rss: mb(mem.rss), heap: mb(mem.heapUsed), heapTotal: mb(mem.heapTotal), external: mb(mem.external), arrayBuffers: mb(mem.arrayBuffers) }, loop, block: detail ? block : publicBlock, gc, ...(detail ? { profiles: blockwatch.profiles() } : {}), timestamp: new Date().toISOString() },
+    body: { status: dbOk && disk.known ? 'ok' : 'degraded', warnings, version: config.version, uptime: Math.round(process.uptime()), db: dbOk, disk, memMb: { rss: mb(mem.rss), heap: mb(mem.heapUsed), heapTotal: mb(mem.heapTotal), external: mb(mem.external), arrayBuffers: mb(mem.arrayBuffers) }, loop, block: detail ? block : publicBlock, gc, ...(detail ? { profiles: blockwatch.profiles(), wal: (() => { try { const { warnings: _w, ...w } = require('../engine/checkpoint').status(); return w; } catch { return null; } })() } : {}), timestamp: new Date().toISOString() },
   };
 }
 router.get('/health', (req, res) => {

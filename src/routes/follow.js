@@ -19,7 +19,7 @@ router.use('/follow', age.requireAge);
 
 const MAX_FOLLOWS = 500;
 const MAX_FEED_ROWS = 10000; // the deepest offset the feed answers (see /api/media)
-const COUNT_CAP = 1000; // per creator, for the 'new' / 'earlier' parts
+const BUDGET = { rows: 200000, scan: 60000 }; // rows one request may read for the page itself / may look through for 'new' and 'earlier', shared by the followed creators (mutable for tests)
 const NEW_CAP = 99; // "99+" is all a badge needs, and capping keeps each count cheap (100 means "more than 99")
 const UUID = /^[0-9a-f-]{36}$/i;
 const iso = (v) => (typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null);
@@ -70,21 +70,31 @@ router.post('/follow/feed', (req, res) => {
   // test database, and the list comes from the request body, so anyone could send 500 of the biggest ids. Now: each creator's newest
   // `need` rows come from the (creator, state, posted_at) index in order (no sort, no scan past the page), the newest `need` overall
   // are picked in memory, and only the page's rows are read in full. Pages deeper than MAX_FEED_ROWS answer empty, as /api/media does.
-  const need = (page + 1) * limit;
-  if (need - limit >= MAX_FEED_ROWS) return res.json({ items: [], total: null, page, limit });
   const ids = [...follows.keys()];
   const creators = repo.db.prepare(`SELECT id, media_count, video_count FROM creators WHERE id IN (${ids.map(() => '?').join(',')}) AND status = 'active' AND scope != 'excluded'`).all(...ids);
+  // A request reads at most about BUDGET.rows + BUDGET.scan rows however many creators it names (500 creators x 10,000 rows was the
+  // worst case): a page is only answered while (page + 1) * limit fits in each creator's share of BUDGET.rows, and the 'new' /
+  // 'earlier' filters (which cannot use an index) look through each creator's newest `scan` rows only.
+  const share = Math.max(limit, Math.floor(BUDGET.rows / Math.max(creators.length, 1)));
+  const depth = Math.min(MAX_FEED_ROWS, share);
+  const need = (page + 1) * limit;
+  if (need - limit >= depth) return res.json({ items: [], total: null, page, limit });
   const type = b.type === 'image' || b.type === 'video' ? b.type : null;
-  const sql = `SELECT m.seq, m.id, m.posted_at FROM media m WHERE m.creator_id = ? AND ${VISIBLE}${type ? ' AND m.media_type = ?' : ''}${split ? (b.part === 'new' ? ' AND m.ingested_at > ?' : ' AND m.ingested_at <= ?') : ''}
-    ORDER BY m.posted_at DESC, m.seq DESC LIMIT ?`;
-  const stmt = repo.db.prepare(sql);
-  const cap = repo.db.prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM media m WHERE m.creator_id = ? AND ${VISIBLE}${type ? ' AND m.media_type = ?' : ''}${split ? (b.part === 'new' ? ' AND m.ingested_at > ?' : ' AND m.ingested_at <= ?') : ''} LIMIT ${COUNT_CAP + 1})`);
+  const scan = split || type ? Math.max(need, Math.floor(BUDGET.scan / Math.max(creators.length, 1))) : need;
+  const filters = `${type ? ' AND media_type = ?' : ''}${split ? (b.part === 'new' ? ' AND ingested_at > ?' : ' AND ingested_at <= ?') : ''}`;
+  // INDEXED BY: with gathered statistics the planner prefers ix_media_state and a temp sort of the whole library's published rows
+  // (0.5 s per creator, 120 s for 200 follows). The per-creator index is already in the order the feed wants.
+  const inner = `SELECT m.seq, m.id, m.posted_at, m.media_type, m.ingested_at FROM media m INDEXED BY ix_media_creator_pub WHERE m.creator_id = ? AND ${VISIBLE} ORDER BY m.posted_at DESC, m.seq DESC LIMIT ?`;
+  const stmt = repo.db.prepare(filters ? `SELECT seq, id, posted_at FROM (${inner}) WHERE 1 = 1${filters} LIMIT ?` : `SELECT seq, id, posted_at FROM (${inner})`);
+  const counter = repo.db.prepare(`SELECT COUNT(*) AS n FROM (${inner}) WHERE 1 = 1${filters}`);
   const picked = []; let total = 0; let capped = false;
   for (const c of creators) {
-    const args = [c.id]; if (type) args.push(type); if (split) args.push(follows.get(c.id));
-    picked.push(...stmt.all(...args, Math.min(need, Math.max(c.media_count, 0) || need)));
+    const args = [c.id, filters ? scan : Math.min(need, Math.max(c.media_count, 0) || need)];
+    if (type) args.push(type); if (split) args.push(follows.get(c.id));
+    picked.push(...stmt.all(...args, ...(filters ? [need] : [])));
     if (!split) total += type === 'video' ? c.video_count : type === 'image' ? Math.max(c.media_count - c.video_count, 0) : c.media_count; // the maintained counters: exact, no scan
-    else if (page === 0 || !b.nocount) { const n = cap.get(...args).n; if (n > COUNT_CAP) capped = true; total += Math.min(n, COUNT_CAP); }
+    else if (page === 0 || !b.nocount) { total += counter.get(c.id, scan, ...args.slice(2)).n; if (c.media_count > scan) capped = true; }
+    else if (c.media_count > scan) capped = true;
   }
   picked.sort((x, y) => (x.posted_at < y.posted_at ? 1 : x.posted_at > y.posted_at ? -1 : y.seq - x.seq));
   const pageIds = picked.slice(page * limit, page * limit + limit).map((r) => r.id);
@@ -98,3 +108,4 @@ router.post('/follow/feed', (req, res) => {
 });
 
 module.exports = router;
+module.exports._budget = BUDGET;
