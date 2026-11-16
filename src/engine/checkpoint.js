@@ -4,12 +4,15 @@
  *
  * The serving connection has wal_autocheckpoint = 0 (src/db/index.js), so nothing on the event loop ever copies WAL pages into the
  * database file. This timer watches the WAL's size and, past THRESHOLD, asks a worker thread (backup-worker, task 'checkpoint') for a
- * PASSIVE checkpoint on its own connection: it copies what no reader still needs, never blocks the writer, and the next commit
- * after a full checkpoint restarts the WAL from the top (journal_size_limit then trims the file).
+ * PASSIVE checkpoint on its own connection: it copies what no reader still needs, never waits for anyone and never blocks the writer.
  *
- * A PASSIVE checkpoint cannot restart the log while writes keep arriving, so past RESTART_BYTES the pass is a RESTART (the writer waits
- * only for the tail PASSIVE left). One checkpoint at a time. If the WAL keeps growing past WARN_BYTES (a reader holds an old snapshot, or the worker keeps failing)
- * it says so once an hour in the admin log: the WAL is the thing that fills the disk.
+ * PASSIVE cannot restart the log while writes keep arriving, so a WAL under sustained writes grows. Past RESTART_BYTES a RESTART is
+ * tried as well, but only ever as a try: the worker runs it with busy_timeout = 0, so when a reader holds a snapshot (the usual reason the
+ * WAL is big) or a writer is mid-commit it returns `busy` at once, the writer lock is never held while waiting, and the next try waits
+ * longer (RESTART_BACKOFF_MS, doubling to an hour). A RESTART that does run waits for nobody; it copies only the tail PASSIVE left.
+ *
+ * Nothing escalates silently: the WAL size, the last successful checkpoint and the last busy RESTART are in `status()`, and
+ * GET /api/admin/health turns them into warnings (the patrol reads those). The admin log gets at most one line an hour.
  */
 const fs = require('fs');
 const path = require('path');
@@ -19,17 +22,20 @@ const events = require('./events');
 
 const CHECK_MS = 15 * 1000;
 const THRESHOLD = Number(process.env.WAL_CHECKPOINT_MB || 24) * 1048576; // about 6000 pages
-const RESTART_BYTES = Number(process.env.WAL_RESTART_MB || 1024) * 1048576; // emergency only: sustained writes can keep a PASSIVE checkpoint from catching up, but a RESTART makes writers wait (about a second under a saturating write load)
-const WARN_BYTES = 768 * 1048576;
+const RESTART_BYTES = Number(process.env.WAL_RESTART_MB || 1024) * 1048576;
+const WARN_BYTES = Number(process.env.WAL_WARN_MB || 768) * 1048576;
+const STALE_OK_MS = 10 * 60 * 1000; // a WAL over THRESHOLD with no successful checkpoint for this long is reported
+const RESTART_BACKOFF_MS = [60 * 1000, 5 * 60 * 1000, 15 * 60 * 1000, 60 * 60 * 1000];
 const WORKER_TIMEOUT_MS = 5 * 60 * 1000;
 
 let timer = null; let inflight = null; let lastWarn = 0;
-const stats = { runs: 0, failures: 0, lastAt: null, lastMs: 0, lastWalMb: 0 };
+let restartBusyCount = 0; let restartNotBefore = 0;
+const stats = { runs: 0, failures: 0, lastAt: null, lastOkAt: null, lastMs: 0, lastWalMb: 0, lastRestartAt: null, lastRestartBusyAt: null, restartBusy: 0 };
 
 const walFile = () => `${config.dbPath}-wal`;
 function walBytes() { try { return fs.statSync(walFile()).size; } catch { return 0; } }
 
-/** Run one PASSIVE checkpoint on the worker. Resolves with the worker's counters; never rejects. */
+/** Run one checkpoint on the worker. Resolves with the worker's counters; never rejects. */
 function run({ mode = 'PASSIVE' } = {}) {
   if (inflight) return inflight;
   const t0 = Date.now();
@@ -43,8 +49,19 @@ function run({ mode = 'PASSIVE' } = {}) {
     w.on('error', (e) => finish({ ok: false, error: e.message }));
     w.on('exit', () => finish({ ok: false, error: 'exited' }));
   }).then((r) => {
-    stats.runs++; stats.lastAt = new Date().toISOString(); stats.lastMs = Date.now() - t0;
-    if (!r.ok) { stats.failures++; events.log('WARN', `WAL checkpoint failed: ${r.error}`); }
+    const now = new Date().toISOString();
+    stats.runs++; stats.lastAt = now; stats.lastMs = Date.now() - t0;
+    if (!r.ok) {
+      stats.failures++;
+      if (Date.now() - lastWarn > 3600 * 1000) { lastWarn = Date.now(); events.log('WARN', `WAL checkpoint failed: ${r.error}`); }
+    } else if (r.mode === 'RESTART' || r.mode === 'TRUNCATE') {
+      stats.lastRestartAt = now;
+      if (r.busy) { // a reader or writer was in the way: nothing was waited for, nothing was held; retry later, less often
+        stats.restartBusy++; stats.lastRestartBusyAt = now;
+        restartNotBefore = Date.now() + RESTART_BACKOFF_MS[Math.min(restartBusyCount, RESTART_BACKOFF_MS.length - 1)];
+        restartBusyCount++;
+      } else { restartBusyCount = 0; restartNotBefore = 0; stats.lastOkAt = now; }
+    } else stats.lastOkAt = now;
     inflight = null;
     return r;
   });
@@ -55,8 +72,20 @@ function tick() {
   const bytes = walBytes();
   stats.lastWalMb = Math.round(bytes / 1048576);
   if (bytes >= WARN_BYTES && Date.now() - lastWarn > 3600 * 1000) { lastWarn = Date.now(); events.log('WARN', `WAL is ${stats.lastWalMb} MB: checkpoints are not catching up (a long read transaction?)`); }
-  // Past RESTART_BYTES the next pass is a RESTART: PASSIVE has already copied most of it, so the writer waits only for the tail.
-  if (bytes >= THRESHOLD && !inflight) run({ mode: bytes >= RESTART_BYTES ? 'RESTART' : 'PASSIVE' });
+  if (bytes < THRESHOLD || inflight) return;
+  // PASSIVE is the normal path; a RESTART is only ever a try, and only once the previous busy one has had its back-off
+  run({ mode: bytes >= RESTART_BYTES && Date.now() >= restartNotBefore ? 'RESTART' : 'PASSIVE' });
+}
+
+/** What the admin health endpoint shows, and the warnings the patrol reads. */
+function status() {
+  const bytes = walBytes();
+  const mb = Math.round(bytes / 1048576);
+  const warnings = [];
+  const okAge = stats.lastOkAt ? Date.now() - Date.parse(stats.lastOkAt) : Infinity;
+  if (bytes >= WARN_BYTES) warnings.push(`WAL is ${mb} MB (last successful checkpoint ${stats.lastOkAt || 'never since boot'}${stats.lastRestartBusyAt ? `; a RESTART found a reader at ${stats.lastRestartBusyAt}` : ''}): checkpoints are not catching up, a long read transaction or a failing worker`);
+  else if (bytes >= THRESHOLD && okAge > STALE_OK_MS && timer && (stats.lastOkAt || process.uptime() * 1000 > STALE_OK_MS)) warnings.push(`WAL is ${mb} MB and no checkpoint has succeeded for ${okAge === Infinity ? 'this whole run' : `${Math.round(okAge / 60000)} min`}`);
+  return { walMb: mb, thresholdMb: Math.round(THRESHOLD / 1048576), restartAtMb: Math.round(RESTART_BYTES / 1048576), running: !!inflight, restartRetryAt: restartNotBefore ? new Date(restartNotBefore).toISOString() : null, ...stats, warnings };
 }
 
 function start() {
@@ -65,5 +94,7 @@ function start() {
   timer.unref();
 }
 function stop() { if (timer) clearInterval(timer); timer = null; }
+/** Test seam: forget back-off state. */
+function _reset() { restartBusyCount = 0; restartNotBefore = 0; lastWarn = 0; Object.assign(stats, { runs: 0, failures: 0, lastAt: null, lastOkAt: null, lastRestartAt: null, lastRestartBusyAt: null, restartBusy: 0 }); }
 
-module.exports = { start, stop, run, tick, walBytes, stats, THRESHOLD, RESTART_BYTES };
+module.exports = { start, stop, run, tick, walBytes, stats, status, THRESHOLD, RESTART_BYTES, _reset };

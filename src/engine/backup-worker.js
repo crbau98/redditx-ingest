@@ -53,10 +53,12 @@ async function main() {
     db.pragma('journal_mode = WAL');
     if (workerData.task === 'checkpoint') {
       db.pragma('wal_autocheckpoint = 0');
-      // PASSIVE copies what no reader needs and never blocks a writer; the WAL file only restarts from the top when a checkpoint
-      // catches up completely, which sustained writes can prevent. RESTART (asked for only when the WAL is already large, and
-      // after PASSIVE has copied most of it, so what is left to copy is the tail) waits for that and makes the next write restart the log.
-      const mode = workerData.mode === 'RESTART' ? 'RESTART' : 'PASSIVE';
+      // PASSIVE copies what no reader needs and never waits for anyone. RESTART / TRUNCATE also wait for every reader to leave the old
+      // part of the log, and while they wait they hold the writer lock: with this connection's busy_timeout of 10 s a reader holding
+      // a snapshot froze the serving thread's writes for the whole wait (5.4 s stalls, one SQLITE_BUSY). They therefore run with NO
+      // busy timeout: when a reader or a writer is in the way they return `busy` at once and the caller retries later.
+      const mode = ['RESTART', 'TRUNCATE'].includes(workerData.mode) ? workerData.mode : 'PASSIVE';
+      if (mode !== 'PASSIVE') { db.pragma('wal_checkpoint(PASSIVE)'); db.pragma('busy_timeout = 0'); } // copy what can be copied first: RESTART then has only the tail to copy under the writer lock
       const r = db.pragma(`wal_checkpoint(${mode})`)[0] || {};
       db.close();
       db = null;
