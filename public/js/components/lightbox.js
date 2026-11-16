@@ -1,4 +1,5 @@
-import { h, icon, proxied, fmt, avatar, toast, copyText, openModal, paintCover, armPoster } from '../dom.js';
+import { isDirectSrc, viaProxy } from '../direct-media.js';
+import { h, icon, proxied, fmt, avatar, toast, copyText, openModal, paintCover, armPoster, probeImage } from '../dom.js';
 import { get, post, reportBroken } from '../api.js';
 import { favorites, follows, prefs, history as viewHistory, tastes, collections, platformLabel, platformColor, bus } from '../store.js';
 import { parse, href, setParam } from '../router.js';
@@ -14,6 +15,15 @@ import { tileImage, stillChain } from '../images.js';
 
 let S = null; // the single active lightbox session
 const viewed = new Set();
+/** Warm the next picture's preview (the first thing the viewer shows for it), never its full file: most items are passed over. */
+function warmNext(n) {
+  if (!n || n.media_type !== 'image') return;
+  const c = navigator.connection || {};
+  if (c.saveData || /(^|-)2g$|^3g$/.test(c.effectiveType || '')) return;
+  const still = n.preview_url || n.thumbnail_url || n.media_url;
+  probeImage(proxied(still), null, null);
+}
+const FULL_DWELL_MS = 700; // the full-size file is fetched only after the viewer has stayed this long, or on zoom
 const warmed = new Set(); // full-size image URLs this viewer has finished loading (instant when shown)
 const relCache = new Map(); // media id -> related items already given to the strip
 const relWait = new Map(); // media id -> in-flight sequence list (limit 24), shared with the strip
@@ -61,7 +71,7 @@ async function openById(id) {
     paintTop();
     paintStrip();
     const n = S.items[1];
-    if (n && n.media_type === 'image') { const pre = new Image(); pre.onload = () => warmed.add(n.media_url); pre.src = proxied(n.media_url); }
+    if (n && n.media_type === 'image') { warmNext(n); }
   } catch (e) {
     toast(e.status === 404 ? 'That item is no longer available' : e.message, 'err');
     if (S && S.openSeq === seq) destroy();
@@ -97,8 +107,16 @@ function start(items, loadMore) {
   render();
 }
 
+/** Drop a full-size load that has not started yet, or is still downloading, for the item being left. */
+function cancelFull() {
+  if (!S) return;
+  clearTimeout(S.fullTimer); S.fullTimer = 0; S.fullNow = null;
+  if (S.fullImg) { S.fullImg.onload = null; S.fullImg.onerror = null; S.fullImg.src = ''; S.fullImg = null; }
+}
+
 function destroy() {
   if (!S) return;
+  cancelFull();
   document.removeEventListener('keydown', onKey);
   clearSlide();
   S.offFav && S.offFav(); S.offFollow && S.offFollow(); S.offColl && S.offColl();
@@ -143,6 +161,7 @@ function show(i, { push = false } = {}) {
   const it = S.items[i];
   if (!it) return;
   S.index = i;
+  cancelFull();
   const target = parse();
   if (target.query.get('m') !== it.id) setParam('m', it.id, { replace: !push });
   paintTop(); paintStage(it); paintInfo(); paintStrip();
@@ -153,7 +172,7 @@ function show(i, { push = false } = {}) {
   // keep the feed ahead of the viewer, and warm the next image
   if (S.loadMore && i >= S.items.length - 5) S.loadMore().then((items) => { if (S && items && items.length > S.items.length) S.items = items; });
   const n = S.items[i + 1];
-  if (n && n.media_type === 'image') { const pre = new Image(); pre.onload = () => warmed.add(n.media_url); pre.src = proxied(n.media_url); }
+  if (n && n.media_type === 'image') { warmNext(n); }
   if (!viewed.has(it.id)) { viewed.add(it.id); post(`/api/media/${it.id}/view`).catch(() => {}); }
   viewHistory.add(it.id);
   tastes.record(it, 1);
@@ -167,7 +186,8 @@ function downloadLink(it) {
   const ext = (String(it.media_url).split('?')[0].match(/\.([a-z0-9]{2,4})$/i) || [])[1] || (it.media_type === 'video' ? 'mp4' : 'jpg');
   const name = `${(it.creator_handle || it.author || 'prism').replace(/[^a-z0-9_-]+/gi, '')}-${it.id.slice(0, 8)}.${ext}`;
   // Images download with the PRISM mark (the marked copy is made on the server, once). Videos download as before.
-  const src = proxied(it.media_url);
+  // The download always goes through the server (the watermark is made there), never straight from the CDN.
+  const src = isDirectSrc(proxied(it.media_url)) ? viaProxy(it.media_url) : proxied(it.media_url);
   const href = it.media_type !== 'video' && src.startsWith('/api/proxy?') ? `${src}&mark=prism` : src;
   return h('a', { class: 'btn icon', href, download: name, 'aria-label': 'Download', title: 'Download', rel: 'noopener' }, icon('download'));
 }
@@ -424,11 +444,21 @@ function paintStage(it) {
     const img = h('img', { alt: it.title || '', draggable: 'false', src: proxied(first) });
     S.stage.replaceChildren(...keep, img);
     playFlip(img);
+    const loadFull = () => {
+      if (!S || !img.isConnected) return;
+      S.fullNow = null;
+      const full = new Image();
+      S.fullImg = full;
+      let retried = false;
+      full.onload = () => { warmed.add(it.media_url); if (img.isConnected) img.src = full.src; };
+      full.onerror = () => { if (!retried && isDirectSrc(full.src)) { retried = true; full.src = viaProxy(it.media_url); } };
+      full.src = proxied(it.media_url);
+    };
     const startFull = () => {
       if (!preview || preview === it.media_url) return;
-      const full = new Image();
-      full.onload = () => { warmed.add(it.media_url); if (img.isConnected) img.src = full.src; };
-      full.src = proxied(it.media_url);
+      cancelFull();
+      S.fullNow = loadFull;
+      S.fullTimer = setTimeout(loadFull, FULL_DWELL_MS);
     };
     if (!ready) {
       if (first !== sharp) {
@@ -438,7 +468,7 @@ function paintStage(it) {
         mid.src = proxied(sharp);
       } else startFull();
     }
-    S.zoom = makeZoomable(img, S.stage, { onSingleClick: () => {
+    S.zoom = makeZoomable(img, S.stage, { onChange: (sc) => { if (sc > 1 && S && S.fullNow) S.fullNow(); }, onSingleClick: () => {
       // touch: tap toggles the controls (pinch zooms); a tap on a zoomed image still zooms back out
       if (S && S.lastPointer !== 'mouse' && !(S.zoom && S.zoom.scale > 1)) {
         if (performance.now() - (S.dragEnd || 0) > 600) toggleChrome(); // a click synthesized after a swipe is not a tap
@@ -447,8 +477,15 @@ function paintStage(it) {
       return true;
     } });
     img.addEventListener('dblclick', () => { if (img.classList.contains('zoomed')) return; toggleFav(it, true); });
+    let stepped = false;
     img.addEventListener('error', () => {
-      if (it.media_url && img.src !== proxied(it.media_url)) { img.src = proxied(it.media_url); return; }
+      const full = proxied(it.media_url);
+      const now = img.getAttribute('src');
+      if (!stepped && it.media_url && now !== full && now !== viaProxy(it.media_url)) {
+        stepped = true; delete img.dataset.directFb;
+        img.src = full;
+        return;
+      }
       reportBroken(it.id);
       S.stage.replaceChildren(...keep, h('div', { class: 'lb-loading' }, 'This image is no longer available at its source.'));
     });

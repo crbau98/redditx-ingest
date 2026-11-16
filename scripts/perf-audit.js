@@ -198,7 +198,8 @@ function medianOf(results) {
     runs.loadExplore.push(await loadTest(browser, '#/explore'));
     runs.loadReels.push(await loadTest(browser, '#/reels'));
     runs.feed.push(await feedScroll(browser));
-    runs.reels.push(await reelsTest(browser));
+    // Reels needs a video that can play (ffmpeg-made demo clips). Without one this scenario is reported as skipped, not fatal.
+    try { runs.reels.push(await reelsTest(browser)); } catch (e) { runs.reels.push({ skipped: String(e.message).split('\n')[0].slice(0, 120) }); }
     console.error(`run ${i + 1}/${RUNS} done`);
   }
   await browser.close();

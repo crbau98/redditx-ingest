@@ -1,6 +1,9 @@
 // Tiny DOM toolkit. Content is only ever inserted as text nodes or attributes —
 // there is no innerHTML anywhere, so scraped titles/bios cannot inject markup.
 
+import { mediaSrc, isDirectSrc, viaProxy, probeImage } from './direct-media.js';
+export { probeImage };
+
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 // The native replaceChildren/append turn `null`/`undefined`/`false` into the literal text
@@ -94,11 +97,36 @@ export const fmt = {
   ms: (ms) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`),
 };
 
-/** Remote media always goes through the same-origin proxy. Local paths pass through. */
+/**
+ * The URL to load remote media from. Hosts the server lists as direct (see direct-media.js) load straight from their CDN;
+ * everything else, and everything when the list is empty, goes through the same-origin proxy. Local paths pass through.
+ * A direct URL that fails is retried once through the proxy (retryViaProxy below, probeImage, attachVideo).
+ */
 export function proxied(url) {
-  if (!url) return '';           // no URL: no request (an empty /api/proxy?url= is a 404)
-  if (url.startsWith('/') || url.startsWith('data:') || url.startsWith('blob:')) return url;
-  return `/api/proxy?url=${encodeURIComponent(url)}`;
+  return mediaSrc(url); // '' for no URL: no request (an empty /api/proxy?url= is a 404)
+}
+
+
+/**
+ * Safety net for <img> and <source> elements: a direct load that errors is retried once through the proxy, so a host
+ * that starts refusing hotlinks only costs a fallback, never a broken tile. <video> elements are handled where their
+ * source is set (components/video.js) because a failed video must not be reported broken before the proxy has had a go.
+ */
+export function installDirectFallback() {
+  if (typeof document === 'undefined' || installDirectFallback.done) return;
+  installDirectFallback.done = true;
+  document.addEventListener('error', (e) => {
+    const el = e.target;
+    if (!el || !el.tagName || (el.tagName !== 'IMG' && el.tagName !== 'SOURCE')) return;
+    const cur = el.getAttribute('src');
+    if (!cur || el.dataset.directFb || !isDirectSrc(cur)) return;
+    el.dataset.directFb = '1';
+    el.setAttribute('src', viaProxy(cur));
+    // The element's own error handlers (a tile that steps to its next picture, an avatar that falls to initials, the viewer
+    // that reports a broken item) see only a failure that the proxy could not fix either.
+    e.stopImmediatePropagation();
+    if (el.tagName === 'SOURCE' && el.parentElement && typeof el.parentElement.load === 'function') el.parentElement.load();
+  }, true);
 }
 
 /** Paint a cover image, stepping to the next URL when one 404s. A CSS background never fires an error on its own. */
@@ -110,10 +138,10 @@ export function paintCover(el, urls) {
     if (!url) { el.style.removeProperty('background-image'); return; }
     const src = proxied(url);
     el.style.backgroundImage = `url("${src}")`;
-    if (i >= chain.length - 1) return;
-    const probe = new Image();
-    probe.onerror = () => paint(i + 1);
-    probe.src = src;
+    const last = i >= chain.length - 1;
+    if (last && !isDirectSrc(src)) return;
+    // a direct picture is always probed (even the last one) so a refusal falls back to the proxy
+    probeImage(src, () => { if (!last) paint(i + 1); }, (alt) => { if (el.isConnected) el.style.backgroundImage = `url("${alt}")`; });
   };
   if (chain.length) paint(0);
 }
@@ -125,14 +153,14 @@ export function armPoster(video, urls) {
   if (!video || !chain.length) return;
   video.poster = proxied(chain[0]);
   const step = (i) => {
-    if (i >= chain.length - 1) return;
-    const probe = new Image();
-    probe.onerror = () => {
-      if (!video.isConnected) return;
+    const src = proxied(chain[i]);
+    const last = i >= chain.length - 1;
+    if (last && !isDirectSrc(src)) return;
+    probeImage(src, () => {
+      if (last || !video.isConnected) return;
       video.poster = proxied(chain[i + 1]);
       step(i + 1);
-    };
-    probe.src = proxied(chain[i]);
+    }, (alt) => { if (video.isConnected) video.poster = alt; });
   };
   step(0);
 }
@@ -160,7 +188,12 @@ export function avatar(entity, size = 40) {
     // image that is never near the viewport never loads — the card kept showing its initials.
     const img = h('img', { src: proxied(url), alt: '', loading: 'eager', decoding: 'async', fetchpriority: size >= 60 ? 'high' : 'auto' });
     img.addEventListener('load', () => { el.textContent = ''; el.appendChild(img); }, { once: true });
-    img.addEventListener('error', () => { /* keep the initials */ }, { once: true });
+    // This image is detached until it loads, so the document-level fallback never sees its errors: a refused direct
+    // load is retried once through the proxy here; if that fails too, the initials stay.
+    img.addEventListener('error', () => {
+      const cur = img.getAttribute('src');
+      if (isDirectSrc(cur) && !img.dataset.directFb) { img.dataset.directFb = '1'; img.src = viaProxy(cur); }
+    });
   }
   return el;
 }

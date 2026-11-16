@@ -1,4 +1,5 @@
-import { h, icon, $, toast, fmt, openModal } from './dom.js';
+import { h, icon, $, toast, fmt, openModal, installDirectFallback } from './dom.js';
+import { configureDirectMedia } from './direct-media.js';
 import { get, post, onAgeRequired, streamPublic, ApiError, clearApiCache, prefetch } from './api.js';
 import { parse, href, navigate, matchRoute, routeKey } from './router.js';
 import { prefs, favorites, follows, platforms, bus, visits } from './store.js';
@@ -308,6 +309,9 @@ async function boot() {
   prefs.theme = prefs.theme; // re-apply (handles "auto")
   let meta;
   try { meta = await get('/api/meta'); } catch { meta = { ageGate: { enforce: false, verified: true }, platforms: [] }; }
+  // Which CDN hosts load directly (the server's list, the same one its CSP allows). Absent or empty: all through the proxy.
+  configureDirectMedia(meta.directMedia);
+  installDirectFallback();
   for (const pl of meta.platforms || []) platforms.map[pl.platform] = pl;
   setAiSearch(!!(meta.ai && meta.ai.search));
   if (meta.ageGate && meta.ageGate.enforce && !meta.ageGate.verified) {

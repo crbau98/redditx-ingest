@@ -9,6 +9,8 @@
  * card in a rail is already painted when it slides in). One shared observer; no layout reads.
  */
 
+import { probeImage, isDirectSrc } from './direct-media.js';
+
 const MARGIN = '300px 500px'; // top/bottom, left/right
 let observer;
 
@@ -18,10 +20,11 @@ function paint(el) {
   el._lazyBg = null;
   if (!url) return;
   el.style.backgroundImage = `url("${url}")`;
-  if (!fallback || fallback === url) return;
-  const probe = new Image();
-  probe.onerror = () => { if (el.isConnected) el.style.backgroundImage = `url("${fallback}")`; };
-  probe.src = url;
+  const hasFallback = !!fallback && fallback !== url;
+  if (!hasFallback && !isDirectSrc(url)) return;
+  // a direct picture is probed so a refusal retries through the proxy; then the next candidate, if there is one
+  probeImage(url, () => { if (hasFallback && el.isConnected) el.style.backgroundImage = `url("${fallback}")`; },
+    (alt) => { if (el.isConnected) el.style.backgroundImage = `url("${alt}")`; });
 }
 
 /** @returns the element, so it can be used inline: `lazyBackground(h('div'), url, eager, fallback)` */

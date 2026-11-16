@@ -2,6 +2,7 @@
 // prefers-reduced-motion and only runs on devices where it makes sense.
 
 import { spring } from './transitions.js';
+import { isDirectSrc } from '../direct-media.js';
 
 const reduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -128,10 +129,11 @@ export function haptic(type = 'light') {
 /* ------------------------------------------------------- colour from an image
  * The most characterful colour of an image: a 24×24 sample, weighted toward saturated
  * mid-tones, then nudged into a range that reads well as an accent in both themes.
- * Works because every remote image is served same-origin through the proxy. */
+ * Works on same-origin pictures (the proxy, local paths); a direct CDN picture is cross-origin and is skipped. */
 const colourCache = new Map();
 export function dominantColor(src) {
-  if (!src) return Promise.resolve(null);
+  // A picture loaded straight from its CDN is cross-origin: its pixels cannot be read, so skip it (no wasted download).
+  if (!src || isDirectSrc(src)) return Promise.resolve(null);
   if (colourCache.has(src)) return colourCache.get(src);
   const p = new Promise((resolve) => {
     const img = new Image();
@@ -170,7 +172,7 @@ const ambientCache = new Map();
 let scratchSmall = null;
 let scratchOut = null;
 export function ambientBackdrop(src, { brightness = 0.42, saturate = 1.3 } = {}) {
-  if (!src) return Promise.resolve(null);
+  if (!src || isDirectSrc(src)) return Promise.resolve(null); // cross-origin direct picture: no pixel access
   const key = `${src}|${brightness}|${saturate}`;
   if (ambientCache.has(key)) return ambientCache.get(key);
   const p = (async () => {

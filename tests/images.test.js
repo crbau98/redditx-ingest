@@ -100,8 +100,8 @@ describe('thumbnail or preview for a grid card (images.js)', () => {
     assert.match(reels, /const poster = tileImage\(it\)/);
     assert.match(reels, /armPoster\(v, stillChain\(s\.it\)\)/);
     assert.match(reels, /const first = s\.it\.thumb_url && s\.it\.thumb_url !== sharp \? s\.it\.thumb_url : sharp/);
-    assert.match(reels, /mid\.onerror = startFull/);
-    assert.match(reels, /current !== proxied\(sharp\)/);
+    assert.match(reels, /s\.loadFull = \(\) => \{/, 'the full file loads after the slide has been on screen a moment, not beside the preview');
+    assert.match(reels, /const is = \(u\) => cur === proxied\(u\) \|\| cur === viaProxy\(u\)/);
     const suggest = fs.readFileSync(path.join(JS, 'components', 'suggest.js'), 'utf8');
     assert.match(suggest, /const chain = stillChain\(it\)/);
     assert.match(suggest, /items\.slice\(0, 6\)/);
@@ -115,7 +115,7 @@ describe('thumbnail or preview for a grid card (images.js)', () => {
     const moderation = fs.readFileSync(path.join(JS, 'views', 'admin', 'moderation.js'), 'utf8');
     assert.equal((moderation.match(/paintCover\(img, stillChain\(m\)\)/g) || []).length, 2);
     const dom = fs.readFileSync(path.join(JS, 'dom.js'), 'utf8');
-    assert.match(dom, /probe\.onerror = \(\) => paint\(i \+ 1\)/);
+    assert.match(dom, /probeImage\(src, \(\) => \{ if \(!last\) paint\(i \+ 1\); \}/, 'the next candidate is tried when one fails');
     assert.match(dom, /video\.poster = proxied\(chain\[i \+ 1\]\)/);
     const reports = fs.readFileSync(path.join(JS, 'views', 'admin', 'reports.js'), 'utf8');
     assert.match(reports, /paintCover\(cover, stillChain\(x\)/);
@@ -127,7 +127,6 @@ describe('thumbnail or preview for a grid card (images.js)', () => {
     const lb = fs.readFileSync(path.join(JS, 'components', 'lightbox.js'), 'utf8');
     assert.match(lb, /const first = ready \? it\.media_url : it\.thumb_url && it\.thumb_url !== sharp \? it\.thumb_url : sharp;/);
     assert.match(lb, /const ready = warmed\.has\(it\.media_url\);/, 'a full file already loaded (the preloaded next item, the one just left) is shown at once');
-    assert.match(lb, /pre\.onload = \(\) => warmed\.add\(n\.media_url\);/);
     assert.match(lb, /mid\.onload = \(\) => \{ if \(img\.isConnected\) img\.src = mid\.src; startFull\(\); \};/, 'the full file starts after the preview, not beside it');
     assert.match(lb, /mid\.onerror = startFull;/, 'a failed preview still gets the full file');
   });
