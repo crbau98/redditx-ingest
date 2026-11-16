@@ -84,16 +84,19 @@ router.post('/follow/feed', (req, res) => {
   const filters = `${type ? ' AND media_type = ?' : ''}${split ? (b.part === 'new' ? ' AND ingested_at > ?' : ' AND ingested_at <= ?') : ''}`;
   // INDEXED BY: with gathered statistics the planner prefers ix_media_state and a temp sort of the whole library's published rows
   // (0.5 s per creator, 120 s for 200 follows). The per-creator index is already in the order the feed wants.
-  const inner = `SELECT m.seq, m.id, m.posted_at, m.media_type, m.ingested_at FROM media m INDEXED BY ix_media_creator_pub WHERE m.creator_id = ? AND ${VISIBLE} ORDER BY m.posted_at DESC, m.seq DESC LIMIT ?`;
+  // 'earlier' (ingested at or before the follow time): a post is not ingested before it was posted, so the index walk seeks straight to
+  // posted_at <= since and never reads the creator's newer rows (they used up the scan budget: 14+ follows answered an empty page).
+  const earlier = split && b.part === 'earlier';
+  const inner = `SELECT m.seq, m.id, m.posted_at, m.media_type, m.ingested_at FROM media m INDEXED BY ix_media_creator_pub WHERE m.creator_id = ? AND ${VISIBLE}${earlier ? ' AND m.posted_at <= ?' : ''} ORDER BY m.posted_at DESC, m.seq DESC LIMIT ?`;
   const stmt = repo.db.prepare(filters ? `SELECT seq, id, posted_at FROM (${inner}) WHERE 1 = 1${filters} LIMIT ?` : `SELECT seq, id, posted_at FROM (${inner})`);
   const counter = repo.db.prepare(`SELECT COUNT(*) AS n FROM (${inner}) WHERE 1 = 1${filters}`);
   const picked = []; let total = 0; let capped = false;
   for (const c of creators) {
-    const args = [c.id, filters ? scan : Math.min(need, Math.max(c.media_count, 0) || need)];
+    const args = [c.id, ...(earlier ? [follows.get(c.id)] : []), filters ? scan : Math.min(need, Math.max(c.media_count, 0) || need)];
     if (type) args.push(type); if (split) args.push(follows.get(c.id));
     picked.push(...stmt.all(...args, ...(filters ? [need] : [])));
     if (!split) total += type === 'video' ? c.video_count : type === 'image' ? Math.max(c.media_count - c.video_count, 0) : c.media_count; // the maintained counters: exact, no scan
-    else if (page === 0 || !b.nocount) { total += counter.get(c.id, scan, ...args.slice(2)).n; if (c.media_count > scan) capped = true; }
+    else if (page === 0 || !b.nocount) { const n = counter.get(...args).n; total += n; if (n >= scan || (!earlier && c.media_count > scan)) capped = true; }
     else if (c.media_count > scan) capped = true;
   }
   picked.sort((x, y) => (x.posted_at < y.posted_at ? 1 : x.posted_at > y.posted_at ? -1 : y.seq - x.seq));
