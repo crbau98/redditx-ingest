@@ -12,8 +12,10 @@
  *   i.redd.it          200/200  images              cdn.bsky.app     200/200  images and avatars
  *   i.imgur.com        200/200  images              pbs.twimg.com    200/200  images (CORP cross-origin)
  *   img.coomer.st      200/200  icons, banners      media.redgifs.com 200/403 (blocks a foreign Referer, serves none): video OK
- * Not listed, because they could not be verified from here: preview.redd.it (403 to every request tried),
- * video.twimg.com, n1-n4.coomer.st, v.redd.it, gfycat, anything on gff.network or phncdn.com (those need a Referer).
+ *   preview.redd.it, cf.preview.redd.it  200 with no Referer: 14 of 14 live URLs from prod's own data, in curl and in Chromium as
+ *                      <img referrerpolicy=no-referrer> (re-probed 2026-11-16; the first probe's 403 came from Reddit's listing API).
+ *                      A missing or badly signed URL answers 403 with an HTML body, so a failed load still fires onerror.
+ * Not listed, because they could not be verified from here: video.twimg.com, n1-n4.coomer.st, v.redd.it, gfycat, anything on gff.network or phncdn.com (those need a Referer).
  *
  * `video: true` hosts may also serve <video> and <source> files. Everything else is images only.
  *
@@ -21,6 +23,8 @@
  */
 const HOSTS = [
   { host: 'i.redd.it' },
+  { host: 'preview.redd.it' },
+  { host: 'cf.preview.redd.it' },
   { host: 'i.imgur.com' },
   { host: 'cdn.bsky.app' },
   { host: 'pbs.twimg.com' },

@@ -13,7 +13,7 @@ const path = require('path');
 const { prepareEnv } = require('./helpers/mock');
 
 const loadClient = () => import('../public/js/direct-media.js');
-const HOSTS = ['i.redd.it', 'i.imgur.com', 'cdn.bsky.app', 'pbs.twimg.com', 'img.coomer.st', 'media.redgifs.com'];
+const HOSTS = ['i.redd.it', 'preview.redd.it', 'cf.preview.redd.it', 'i.imgur.com', 'cdn.bsky.app', 'pbs.twimg.com', 'img.coomer.st', 'media.redgifs.com'];
 const CFG = { enabled: true, images: HOSTS, video: ['media.redgifs.com'] };
 const PROXY = (u) => `/api/proxy?url=${encodeURIComponent(u)}`;
 
@@ -23,7 +23,10 @@ describe('client helper', () => {
     M.configureDirectMedia(CFG);
     assert.equal(M.mediaSrc('https://i.redd.it/a.jpg'), 'https://i.redd.it/a.jpg');
     assert.equal(M.mediaSrc('https://cdn.bsky.app/img/avatar/plain/did:plc:x/y@jpeg'), 'https://cdn.bsky.app/img/avatar/plain/did:plc:x/y@jpeg');
-    assert.equal(M.mediaSrc('https://preview.redd.it/a.jpg?width=640'), PROXY('https://preview.redd.it/a.jpg?width=640'), 'not probed, so proxied');
+    assert.equal(M.mediaSrc('https://preview.redd.it/a.jpg?width=640&s=1'), 'https://preview.redd.it/a.jpg?width=640&s=1', 'probed: serves with no Referer');
+    assert.equal(M.mediaSrc('https://cf.preview.redd.it/a.jpg?width=640'), 'https://cf.preview.redd.it/a.jpg?width=640');
+    assert.equal(M.mediaSrc('https://v.redd.it/abc/DASH_480.mp4'), PROXY('https://v.redd.it/abc/DASH_480.mp4'), 'not probed (no sample), so proxied');
+    assert.equal(M.mediaSrc('https://external-preview.redd.it/a.jpg'), PROXY('https://external-preview.redd.it/a.jpg'), 'a sibling host is not the listed host');
     assert.equal(M.mediaSrc('https://cdn.gff.network/a.jpg'), PROXY('https://cdn.gff.network/a.jpg'), 'needs a Referer');
     assert.equal(M.mediaSrc('https://example.com/a.jpg'), PROXY('https://example.com/a.jpg'));
     assert.equal(M.mediaSrc('https://i.redd.it.evil.com/a.jpg'), PROXY('https://i.redd.it.evil.com/a.jpg'), 'a lookalike host is not the listed host');

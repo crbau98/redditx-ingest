@@ -36,8 +36,8 @@ describe('browser: direct loads and the proxy fallback', { skip: haveBrowser ? f
     const dir = prepareEnv({ DEMO_ART: '1', AGE_GATE_ENFORCE: 'false' });
     execFileSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'seed-demo.js')], { env: { ...process.env, DB_PATH: path.join(dir, 'test.db') }, stdio: 'ignore' });
     repo = require('../src/db/repo');
-    // every picture lives on an external host: i.redd.it and cdn.bsky.app (direct), preview.redd.it (not probed: proxied)
-    repo.db.exec("UPDATE media SET media_url = 'https://i.redd.it/' || id || '.jpg', preview_url = CASE WHEN rowid % 2 = 0 THEN 'https://cdn.bsky.app/img/feed_thumbnail/plain/' || id || '@jpeg' ELSE 'https://preview.redd.it/' || id || '.jpg' END, thumbnail_url = NULL, thumb_url = NULL WHERE media_type = 'image'");
+    // every picture lives on an external host: i.redd.it and cdn.bsky.app (direct), external-preview.redditmedia.com (not listed: proxied)
+    repo.db.exec("UPDATE media SET media_url = 'https://i.redd.it/' || id || '.jpg', preview_url = CASE WHEN rowid % 2 = 0 THEN 'https://cdn.bsky.app/img/feed_thumbnail/plain/' || id || '@jpeg' ELSE 'https://external-preview.redditmedia.com/' || id || '.jpg' END, thumbnail_url = NULL, thumb_url = NULL WHERE media_type = 'image'");
     // creator avatars are plain <img> elements on a direct host: the case the global fallback listener exists for
     repo.db.exec("UPDATE creators SET avatar_url = 'https://i.redd.it/av-' || id || '.jpg'");
     engine = require('../src/engine/engine');
@@ -63,7 +63,7 @@ describe('browser: direct loads and the proxy fallback', { skip: haveBrowser ? f
     });
     await page.route('**/api/proxy**', (r) => {
       const u = decodeURIComponent(new URL(r.request().url()).searchParams.get('url') || '');
-      if (/i\.redd\.it|cdn\.bsky\.app/.test(u)) seen.proxyRedd++; else if (/preview\.redd\.it/.test(u)) seen.proxyPreview++;
+      if (/i\.redd\.it|cdn\.bsky\.app/.test(u)) seen.proxyRedd++; else if (/external-preview\.redditmedia\.com/.test(u)) seen.proxyPreview++;
       return r.fulfill({ status: 200, contentType: 'image/png', body: PNG });
     });
     await page.goto(`${base}/#/explore`, { waitUntil: 'networkidle' });
@@ -92,7 +92,7 @@ describe('browser: direct loads and the proxy fallback', { skip: haveBrowser ? f
   test('a direct picture loads from its CDN: grid pictures from the unprobed host use the proxy, the full file does not', async () => {
     const r = await run({ directStatus: 200 });
     assert.ok(r.direct >= 1, `the full file came straight from i.redd.it (${JSON.stringify(r)})`);
-    assert.ok(r.proxyPreview >= 1, 'preview.redd.it was not probed, so it still uses the proxy');
+    assert.ok(r.proxyPreview >= 1, 'a host that is not listed still uses the proxy');
     assert.equal(r.proxyRedd, 0, 'nothing from i.redd.it went through the proxy');
     assert.ok(r.gridDirect >= 1, 'grid tiles on a probed host are <img> elements loading straight from the CDN');
     assert.equal(r.csp, 0, 'the CSP allowed every direct load');
