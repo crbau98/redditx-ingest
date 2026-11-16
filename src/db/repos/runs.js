@@ -4,6 +4,7 @@
 /** buildRuns: feed runs: start, finish, history, scoreboards and the watchdog. Built by repo.js; repo.js re-exports the result, so callers are unchanged. */
 module.exports.buildRuns = function buildRuns({ db, uuid, nowIso }) {
 /* ---------------------------------------------------------------------- runs */
+const PRUNE_SLICE = 500; // ~55 us a row here (indexes + cascade): ~30 ms a slice
 const runs = {
   start(feedId, trigger) {
     const id = uuid();
@@ -65,8 +66,21 @@ const runs = {
   recentAdded(feedId, n = 4) {
     return db.prepare("SELECT added FROM feed_runs WHERE feed_id = ? AND status IN ('ok','empty') ORDER BY started_at DESC LIMIT ?").all(feedId, n).map((r) => r.added || 0);
   },
-  prune(keepDays = 30) {
-    db.prepare('DELETE FROM feed_runs WHERE started_at < ?').run(new Date(Date.now() - keepDays * 86400000).toISOString());
+  /**
+   * Delete run history older than keepDays, in slices of PRUNE_SLICE rows with a yield between them. One DELETE for the whole
+   * backlog was a single synchronous statement (925 ms for 15 days of history on 1.5M synthetic runs, and it grows with the backlog,
+   * e.g. after the retention setting is lowered or the timer was off for a while). Returns the number deleted.
+   */
+  async prune(keepDays = 30, { slice = PRUNE_SLICE } = {}) {
+    const cutoff = new Date(Date.now() - keepDays * 86400000).toISOString();
+    const del = db.prepare('DELETE FROM feed_runs WHERE rowid IN (SELECT rowid FROM feed_runs WHERE started_at < ? LIMIT ?)');
+    let total = 0;
+    for (;;) {
+      const n = del.run(cutoff, slice).changes;
+      total += n;
+      if (n < slice) return total;
+      await new Promise((r) => setTimeout(r, 0));
+    }
   },
   /** Runs still 'running' after maxAgeMs are marked errors (engine watchdog, every tick). Uses ix_runs_running. */
   timeoutStale(maxAgeMs) {

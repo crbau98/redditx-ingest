@@ -127,6 +127,62 @@ function reapply(settings) {
 }
 
 /**
+ * `reapply` without holding the event loop. The synchronous version reads every published row for the heavy ones, then every creator
+ * with a measured picture, then hides them all in ONE transaction: a threshold change (or the boot re-apply after a recalibration) was
+ * a single main-thread stretch that grows with the library (1.06 s for the first read alone on 300k synthetic rows; a cold 1M-row
+ * table is a multi-second read before any write). This walks the table in seq windows (a rowid range: bounded reads), writes each
+ * window in its own short transaction, judges creators in batches, and yields to the loop between steps. Same decisions, same
+ * reasons, same order of effects; only the stretches are short. `reapply` stays for callers that need the result synchronously.
+ */
+async function reapplyAsync(settings, { window = 10000, batch = 200 } = {}) {
+  const on = enabled(settings); const thr = threshold(settings);
+  const res = { hidden: 0, restored: 0, creatorsHidden: 0, creatorsRestored: 0 };
+  const turn = () => new Promise((r) => setTimeout(r, 0)); // a timer, not setImmediate: requests that queued meanwhile run first
+  const top = repo.db.prepare('SELECT MAX(seq) AS m FROM media').get().m || 0;
+  const hideWin = repo.db.prepare("SELECT id, physique FROM media NOT INDEXED WHERE seq > ? AND seq <= ? AND publish_state = 'published' AND physique >= ?");
+  const creatorsWin = repo.db.prepare('SELECT DISTINCT creator_id AS id FROM media NOT INDEXED WHERE seq > ? AND seq <= ? AND creator_id IS NOT NULL AND physique IS NOT NULL');
+  const creators = new Set();
+  for (let from = 0; from < top; from += window) {
+    const to = from + window;
+    if (on) {
+      const rows = hideWin.all(from, to, thr);
+      for (let i = 0; i < rows.length; i += batch) {
+        repo.db.transaction(() => { for (const r of rows.slice(i, i + batch)) { repo.media.setState(r.id, 'hidden', `${REASON}${r.physique}`, { exact: true }); res.hidden++; } })();
+        await turn();
+      }
+    }
+    for (const r of creatorsWin.all(from, to)) creators.add(r.id);
+    await turn();
+  }
+  // (a row hidden for its WORDS is not a score decision: see reapply())
+  const toShow = repo.db.prepare(`SELECT id FROM media WHERE publish_state = 'hidden' AND review_reason LIKE '${REASON}%'
+    AND (? = 0 OR (review_reason NOT LIKE '${REASON}text:%' AND (physique IS NULL OR physique < ?)))`).all(on ? 1 : 0, thr);
+  for (let i = 0; i < toShow.length; i += batch) {
+    repo.db.transaction(() => { for (const r of toShow.slice(i, i + batch)) { repo.media.setState(r.id, 'published', null, { exact: true }); res.restored++; } })();
+    await turn();
+  }
+  for (const r of repo.db.prepare("SELECT target_id AS id FROM moderation_actions WHERE target_type = 'creator' AND action = 'physique-hide'").all()) creators.add(r.id);
+  let n = 0;
+  for (const id of creators) {
+    const v = reviewCreator(id, settings);
+    if (v === 'hidden') res.creatorsHidden++; else if (v === 'restored') res.creatorsRestored++;
+    if (++n % batch === 0) await turn();
+  }
+  if (!on) {
+    for (const f of repo.db.prepare(`SELECT f.id FROM feeds f WHERE f.enabled = 0 AND (SELECT action FROM moderation_actions a
+      WHERE a.target_type = 'feed' AND a.target_id = CAST(f.id AS TEXT) ORDER BY a.id DESC LIMIT 1) = 'physique-feed-off'`).all()) {
+      repo.feeds.update(f.id, { enabled: true });
+      repo.logAction('feed', f.id, 'physique-feed-on', 'body filter switched off', 'system');
+    }
+    repo.settings.set('physique_text_sweep_version', ''); // switching it back on re-reads the words
+  }
+  if (res.hidden || res.restored || res.creatorsHidden || res.creatorsRestored) {
+    events.log('OK', `Body filter re-applied: ${res.hidden} hidden, ${res.restored} shown again · creators: ${res.creatorsHidden} hidden, ${res.creatorsRestored} shown again`);
+  }
+  return res;
+}
+
+/**
  * A feed just created by any path (a linked profile, an import, a discovered account): one named in chub wording starts
  * paused, the same reversible way the word sweep pauses one. Pass `repo.feeds.upsert`'s result.
  */
@@ -301,4 +357,4 @@ function stats(settings) {
   return { enabled: enabled(settings), threshold: thr, creatorShare: settings ? settings.physiqueCreatorShare : null, measured: r.measured || 0, overThreshold: r.overThreshold || 0, hidden: r.hidden || 0, creatorsHidden: creators, histogram: buckets };
 }
 
-module.exports = { migrateDefaults, DEFAULT_THRESHOLD, DEFAULT_SHARE, live, screenFeed, publish, stateFor, reviewCreator, reapply, textSweep, stats, hideCreator, textCheck, enabled, threshold, REASON, MIN_MEASURED, APPROVED };
+module.exports = { migrateDefaults, DEFAULT_THRESHOLD, DEFAULT_SHARE, live, screenFeed, publish, stateFor, reviewCreator, reapply, reapplyAsync, textSweep, stats, hideCreator, textCheck, enabled, threshold, REASON, MIN_MEASURED, APPROVED };

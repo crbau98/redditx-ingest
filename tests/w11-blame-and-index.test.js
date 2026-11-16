@@ -178,3 +178,75 @@ describe('dedupe boot build', () => {
     dedupe._reset();
   });
 });
+
+describe('long jobs hold the loop in short slices', () => {
+  const repo = require('../src/db/repo');
+  const physique = require('../src/engine/physique');
+  test('runs.prune deletes the same rows as one DELETE, in slices, and yields between them', async () => {
+    const feed = repo.feeds.upsert({ platform: 'reddit', kind: 'user', target: 'w11prune', enabled: 1, origin: 'admin' }).feed;
+    const ins = repo.db.prepare("INSERT INTO feed_runs (id, feed_id, trigger, started_at, status) VALUES (?, ?, 'schedule', ?, 'ok')");
+    repo.db.transaction(() => {
+      for (let i = 0; i < 2500; i++) ins.run(`w11-old-${i}`, feed.id, new Date(Date.now() - 60 * 86400000 - i).toISOString());
+      for (let i = 0; i < 100; i++) ins.run(`w11-new-${i}`, feed.id, new Date(Date.now() - i * 1000).toISOString());
+    })();
+    let turns = 0;
+    const tick = setInterval(() => { turns++; }, 1);
+    const deleted = await repo.runs.prune(30, { slice: 400 });
+    clearInterval(tick);
+    assert.equal(deleted, 2500);
+    assert.equal(repo.db.prepare("SELECT COUNT(*) AS n FROM feed_runs WHERE id LIKE 'w11-new-%'").get().n, 100, 'recent history untouched');
+    assert.equal(repo.db.prepare("SELECT COUNT(*) AS n FROM feed_runs WHERE id LIKE 'w11-old-%'").get().n, 0);
+    assert.ok(turns >= 2, `timers ran between slices (${turns})`);
+    assert.equal(await repo.runs.prune(30), 0, 'nothing left: one cheap statement');
+  });
+
+  test('physique.reapplyAsync reaches exactly the same state as reapply, across many windows and batches', async () => {
+    const settingsOn = { physiqueFilter: true, physiqueThreshold: 45, physiqueCreatorShare: 30 };
+    const creators = [];
+    for (let c = 0; c < 6; c++) creators.push(repo.creators.create({ handle: `w11phys${c}`, origin: 'admin' }));
+    let k = 0;
+    const rows = [];
+    for (const c of creators) {
+      for (let j = 0; j < 12; j++) {
+        k++;
+        const score = c.handle.endsWith('0') || c.handle.endsWith('1') ? 80 : (j % 4 === 0 ? 70 : 10); // two creators mostly heavy
+        const id = repo.media.insert({ creator_id: c.id, platform: 'reddit', source_id: `w11p${k}`, source_key: `reddit:w11p${k}:0`, post_key: `reddit:w11p${k}`, media_type: 'image', media_url: `https://i.redd.it/w11p${k}.jpg`, hash: `w11ph${k}`, physique: score, posted_at: new Date().toISOString() }, []);
+        rows.push(id);
+      }
+    }
+    const snap = () => ({
+      media: rows.map((id) => { const m = repo.media.get(id); return [m.publish_state, m.review_reason]; }),
+      creators: creators.map((c) => repo.creators.get(c.id).status),
+    });
+    const reset = () => {
+      repo.db.prepare(`UPDATE media SET publish_state = 'published', review_reason = NULL WHERE id IN (${rows.map(() => '?').join(',')})`).run(...rows);
+      for (const c of creators) repo.creators.update(c.id, { status: 'active' });
+      repo.db.prepare("DELETE FROM moderation_actions WHERE target_type = 'creator' AND action IN ('physique-hide','physique-unhide')").run();
+    };
+    reset();
+    const resSync = physique.reapply(settingsOn); const afterSync = snap();
+    assert.ok(resSync.hidden > 0 && resSync.creatorsHidden > 0, 'the fixture exercises both item and creator hiding');
+    reset();
+    const resAsync = await physique.reapplyAsync(settingsOn, { window: 7, batch: 5 });
+    assert.deepEqual(snap(), afterSync);
+    assert.deepEqual(resAsync, resSync);
+    // and switching off restores identically
+    physique.reapply({ ...settingsOn, physiqueFilter: false }); const offSync = snap();
+    reset(); physique.reapply(settingsOn);
+    await physique.reapplyAsync({ ...settingsOn, physiqueFilter: false }, { window: 7, batch: 5 });
+    assert.deepEqual(snap(), offSync);
+  });
+
+  test('media-cache evict walk lets timers run while it stats a large directory', async () => {
+    const fs = require('fs'); const path = require('path'); const config = require('../src/config');
+    const cache = require('../src/lib/media-cache');
+    const dir = path.join(config.dataDir, 'cache', 'zz');
+    fs.mkdirSync(dir, { recursive: true });
+    for (let i = 0; i < 3000; i++) fs.writeFileSync(path.join(dir, `w11-${i}`), 'x');
+    let ticks = 0; const t = setInterval(() => { ticks++; }, 1);
+    await cache.evict({ force: true });
+    clearInterval(t);
+    assert.ok(ticks >= 2, `the loop kept turning during the walk (${ticks} ticks)`);
+    for (let i = 0; i < 3000; i++) fs.rmSync(path.join(dir, `w11-${i}`), { force: true });
+  });
+});

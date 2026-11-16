@@ -23,6 +23,8 @@ const JOB_FNS = {
   // Warm the home-feed total on the worker: the first COUNT on a cold volume reads the whole published index
   // (3-7 s on the 400k-row production library) and warmed the OS page cache for the main connection too.
   mediaTotal: () => repo.media.list({ sort: 'recent', limit: 1 }).total,
+  // the hourly creator rank (engine/popularity): three library-wide GROUP BY scans, then only the UPDATEs run on the main thread
+  popularity: () => require('../engine/popularity').rank(),
 };
 
 /** How long a computed value is served before a background refresh starts. */
@@ -37,6 +39,7 @@ const JOB_TTL_MS = {
   library: 60000,
   vocabulary: 60000,
   mediaTotal: 30000,
+  popularity: 60 * 60000,
 };
 
 module.exports = { JOB_FNS, JOB_TTL_MS };
