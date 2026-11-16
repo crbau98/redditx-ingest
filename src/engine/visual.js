@@ -299,7 +299,7 @@ function start() {
   if (timer || !PER_TICK) return;
   const blockwatch = require('../lib/blockwatch');
   timer = setInterval(async () => {
-    if (busy || gaveUp) return;
+    if (busy || gaveUp || !require('../lib/duty').modelSweepOpen()) return;
     blockwatch.work('embed');
     busy = true;
     try {

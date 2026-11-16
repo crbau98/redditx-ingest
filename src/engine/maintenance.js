@@ -533,7 +533,8 @@ function startImageSweep() {
     const s = settingsStore.get();
     // Face enrolment gets its own small newest-first pass even when the image sweep is off: it is
     // what makes creator matching useful on the existing library.
-    if (s.faceMatch && s.faceSweepPerMinute > 0) {
+    const modelOpen = require('../lib/duty').modelSweepOpen(Date.now(), s);
+    if (s.faceMatch && s.faceSweepPerMinute > 0 && modelOpen) {
       sweepBusy = true;
       try { await blockwatch.around('faceSweep', () => faceSweep({ limit: s.faceSweepPerMinute, settings: s })); } catch (e) { events.log('WARN', `Face sweep: ${e.message}`); } finally { sweepBusy = false; }
     }
@@ -557,7 +558,7 @@ function startImageSweep() {
       // Same bite as the image sweep (was 2×): a bigger hash pass hid many rows and recounted each
       // creator mid-tick. With deferred recounts the bite can grow again once p99 stays quiet.
       if (s.dedupe) await blockwatch.around('hashSweep', () => hashSweep({ limit: s.imageSweepPerTick, settings: s }));
-      if ((!s.imageFilter && !s.physiqueFilter) || sweepGaveUp) return;
+      if ((!s.imageFilter && !s.physiqueFilter) || sweepGaveUp || !modelOpen) return; // the hash pass above needs no model
       if (!(await imagefilter.available())) { sweepGaveUp = true; return; } // logged once by the filter itself
       // The body sweep reads faces in the same pass, so while it has work the face-only sweep would download and analyse the
       // same pictures a second time: let the body sweep go first and move the face sweep's cursor along with it.
