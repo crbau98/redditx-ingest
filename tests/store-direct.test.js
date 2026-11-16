@@ -159,6 +159,19 @@ describe('server: stored media goes straight to the bucket', () => {
     } finally { config.store.endpoint = saved.endpoint; config.internalHosts = saved.internal; config.isProd = saved.isProd; }
   });
 
+  test('the CSP source is the bucket path: host + (endpoint path) + bucket, with a trailing slash', () => {
+    const saved = { endpoint: config.store.endpoint, bucket: config.store.bucket, isProd: config.isProd };
+    try {
+      config.isProd = true;
+      Object.assign(config.store, { endpoint: 'https://acct.r2.cloudflarestorage.com', bucket: 'prism-media' });
+      assert.equal(store.directSource(), 'https://acct.r2.cloudflarestorage.com/prism-media/');
+      config.store.endpoint = 'https://s3.example.com/tenants/'; config.store.bucket = 'my bucket';
+      assert.equal(store.directSource(), 'https://s3.example.com/tenants/my%20bucket/', 'endpoint path kept, bucket encoded like the signed path');
+      config.store.endpoint = 'http://127.0.0.1:9000';
+      assert.equal(store.directSource(), null, 'null exactly when directOrigin() is');
+    } finally { Object.assign(config.store, { endpoint: saved.endpoint, bucket: saved.bucket }); config.isProd = saved.isProd; }
+  });
+
   test('redirects are counted by the egress counter as tiny responses', async () => {
     const app = await boot();
     try {
@@ -179,20 +192,23 @@ describe('server: stored media goes straight to the bucket', () => {
     const app = await boot();
     try {
       const c = await csp(app.url);
-      assert.ok(c['img-src'].includes(s3.url) && c['media-src'].includes(s3.url), 'img-src and media-src have the bucket');
-      assert.deepEqual(c['connect-src'], ["'self'", s3.url], 'and connect-src, for the service worker re-fetching a redirected picture');
-      assert.equal(c['img-src'].filter((x) => x === s3.url).length, 1);
+      const src = `${s3.url}/${BUCKET}/`;
+      assert.ok(c['img-src'].includes(src) && c['media-src'].includes(src), 'img-src and media-src have the bucket PATH, not the whole host');
+      assert.deepEqual(c['connect-src'], ["'self'", src], 'and connect-src, for the service worker re-fetching a redirected picture');
+      assert.equal(c['img-src'].filter((x) => x === src).length, 1);
+      assert.ok(!JSON.stringify(c).split(/[\s,"]/).includes(s3.url), 'the bare origin is not a source anywhere: another bucket on the same host stays blocked');
       assert.ok(!JSON.stringify(c).includes('*'), 'no wildcard');
       assert.deepEqual(c['script-src'], ["'self'"]);
       assert.equal((await (await fetch(`${app.url}/api/meta`)).json()).directMedia.store, config.storeHost);
       const dm = require('../src/lib/directmedia');
       assert.equal(dm.storeOrigin(), s3.url, 'one constant for the CSP and the redirect');
+      assert.equal(dm.storeSource(), `${s3.url}/${BUCKET}/`);
     } finally { await app.close(); }
     process.env.STORE_DIRECT = '0';
     const off = await boot();
     try {
       const c = await csp(off.url);
-      assert.ok(!c['img-src'].includes(s3.url) && !c['media-src'].includes(s3.url));
+      assert.ok(!c['img-src'].some((x) => x.startsWith(s3.url)) && !c['media-src'].some((x) => x.startsWith(s3.url)));
       assert.deepEqual(c['connect-src'], ["'self'"]);
       assert.equal((await (await fetch(`${off.url}/api/meta`)).json()).directMedia.store, false);
     } finally { delete process.env.STORE_DIRECT; await off.close(); }
@@ -205,7 +221,8 @@ describe('server: stored media goes straight to the bucket', () => {
       const ok = await run(app.url);
       assert.equal(ok.code, 0, ok.out);
       assert.match(ok.out, /PASS {2}the proxy answers with a redirect/);
-      assert.match(ok.out, /PASS {2}CSP img-src names the bucket origin/);
+      assert.match(ok.out, /PASS {2}CSP img-src names the bucket path/);
+      assert.match(ok.out, /PASS {2}and no source allows the whole bucket host/);
       assert.match(ok.out, /OK: stored media is served straight from the bucket/);
     } finally { await app.close(); }
     process.env.STORE_DIRECT = '0';
@@ -222,7 +239,7 @@ describe('server: stored media goes straight to the bucket', () => {
     const app = await boot();
     try {
       const c = await csp(app.url);
-      assert.deepEqual(c['img-src'], ["'self'", 'data:', 'blob:', s3.url], 'only the bucket');
+      assert.deepEqual(c['img-src'], ["'self'", 'data:', 'blob:', `${s3.url}/${BUCKET}/`], 'only the bucket');
       const meta = (await (await fetch(`${app.url}/api/meta`)).json()).directMedia;
       assert.deepEqual(meta, { enabled: false, images: [], video: [], store: config.storeHost });
       assert.equal((await noFollow(app.url + proxyPath('t/pic.png'))).status, 307);

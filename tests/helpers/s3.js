@@ -27,6 +27,7 @@ function s3Server() {
         if (Date.now() > date.getTime() + Number(q['X-Amz-Expires']) * 1000) return fail('ExpiredRequest');
         if (date.getTime() > Date.now() + 15 * 60 * 1000) return fail('RequestTimeTooSkewed');
       } else {
+        if (!req.headers.authorization || !req.headers['x-amz-date']) { log.push(`${req.method} ${u.pathname} anonymous`); res.writeHead(403, { 'content-type': 'application/xml' }); return res.end('<Error><Code>AccessDenied</Code></Error>'); } // no credentials at all
         const auth = String(req.headers.authorization || '');
         const signedHeaders = (/SignedHeaders=([^,]+)/.exec(auth) || [])[1] || '';
         const extra = {};

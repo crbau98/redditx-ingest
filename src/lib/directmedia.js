@@ -40,6 +40,8 @@ const enabled = () => String(process.env.DIRECT_MEDIA ?? '1').trim() !== '0';
  * independently of DIRECT_MEDIA.
  */
 const storeOrigin = () => require('./objectstore').directOrigin();
+/** The CSP form of it: origin + bucket path (see objectstore.directSource). */
+const storeSource = () => require('./objectstore').directSource();
 
 /**
  * What the client needs: hosts for pictures, the subset that may also serve video, and `store` (the reserved store host name
@@ -53,13 +55,13 @@ function clientConfig() {
 }
 
 /**
- * Exact origins for the CSP, never wildcards. The bucket origin is added to img-src and media-src (the redirect lands there) and
+ * Exact origins for the CSP, never wildcards. The bucket (origin + bucket path, so other tenants' buckets on the same host stay blocked) is added to img-src and media-src (the redirect lands there) and
  * to connect-src: with offline content on, the service worker re-fetches pictures itself and that fetch follows the redirect.
  */
 function cspSources() {
   const c = clientConfig();
-  const bucket = storeOrigin();
+  const bucket = storeSource();
   return { img: [...c.images.map((h) => `https://${h}`), ...(bucket ? [bucket] : [])], media: [...c.video.map((h) => `https://${h}`), ...(bucket ? [bucket] : [])], connect: bucket ? [bucket] : [] };
 }
 
-module.exports = { HOSTS, enabled, clientConfig, cspSources, storeOrigin };
+module.exports = { HOSTS, enabled, clientConfig, cspSources, storeOrigin, storeSource };
