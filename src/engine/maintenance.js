@@ -299,51 +299,138 @@ function borrowedPoster(row) {
   return !!(row.post_key && siblingPoster.get(row.post_key, row.id, row.preview_url));
 }
 
+/* ------------------------------------------------------------------ hash sweep + retry */
+// What could not be hashed is remembered on the row (schema v38): phash_tries / phash_at, and phash_error once it is given up
+// on. The main pass walks forward once; the retry pass (hashRetrySweep) works through the misses it left behind.
+const HASH_MAX_TRIES = 5;
+const HASH_RETRY_AFTER_MS = 6 * 3600 * 1000;
+const HASH_PAUSE_ON_429_MS = 15 * 60 * 1000;
+const GONE = /\bhttp (?:400|404|410)\b|not an image|not decodable/i;
+let hashPausedUntil = 0; // a 429 from a picture host pauses both passes, so the backlog never hammers it
+
+/** Every picture URL a row offers, in order. imageUrlOf takes only the first; an expired preview must not hide the original. */
+function pictureUrls(row) {
+  const cands = row.media_type === 'image'
+    ? [row.preview_url, row.thumbnail_url, row.media_url]
+    : [row.preview_url, row.thumbnail_url, imagefilter.deriveVideoPosterUrl(row.media_url || row.hls_url)];
+  return [...new Set(cands.filter((u) => typeof u === 'string' && /^https?:\/\//i.test(u) && !/\.(m3u8|mp4|webm|mov)(\?|#|$)/i.test(u)))];
+}
+
+/** Hash the first picture of a row that can be read. @returns {{phash}|{error, gone, limited}} */
+async function fetchHash(row) {
+  const urls = pictureUrls(row);
+  if (!urls.length) return { error: 'no picture url', gone: true, limited: false };
+  const reasons = []; let gone = true; let limited = false;
+  for (const url of urls) {
+    let referer; try { referer = `${new URL(url).origin}/`; } catch { /* none */ }
+    const v = await imagefilter.analyze(url, { referer, faces: false, hash: true });
+    if (v && v.phash) return { phash: v.phash };
+    const why = String((v && v.reason) || (v && v.status === 'ok' ? 'not decodable' : (v && v.status) || 'error'));
+    reasons.push(why);
+    if (/http 429/.test(why)) { limited = true; break; }
+    if (!GONE.test(why)) gone = false;
+  }
+  return { error: reasons.join('; ').slice(0, 200), gone: gone && !limited, limited };
+}
+
+const hashMiss = () => repo.db.prepare('UPDATE media SET phash_tries = ?, phash_at = ?, phash_error = ? WHERE id = ?');
+/** Record a failed attempt; give up (phash_error) on a gone picture or after HASH_MAX_TRIES. A 429 is not the picture's fault: not counted. */
+function recordMiss(row, r, now = Date.now()) {
+  const tries = (row.phash_tries || 0) + (r.limited ? 0 : 1);
+  const error = r.limited ? null : r.gone ? `gone: ${r.error}` : tries >= HASH_MAX_TRIES ? `gave up after ${tries} tries: ${r.error}` : null;
+  hashMiss().run(tries, new Date(now).toISOString(), error, row.id);
+  return error;
+}
+
+/** One row of either pass: hash it (or record why not), then the duplicate check. Returns 'limited' to stop the pass. */
+async function hashRow(row, ctx) {
+  const { s, res, byId, touched } = ctx;
+  if (borrowedPoster(row)) {
+    // a hash the OLD sweep took from the borrowed poster is wrong: drop it, from the database and from the dedupe index, so it cannot
+    // make an unrelated video with a similar poster look like a duplicate; and leave the retry queue for good
+    if (row.phash) { repo.media.setPhash(row.id, null); dedupe.forget(row.id); }
+    repo.db.prepare('UPDATE media SET phash_error = ? WHERE id = ?').run('skipped: borrowed poster', row.id);
+    return null;
+  }
+  let hash = row.phash;
+  if (!hash) {
+    const r = await fetchHash(row);
+    if (!r.phash) {
+      res.errors++;
+      if (recordMiss(row, r)) res.gaveUp = (res.gaveUp || 0) + 1;
+      if (r.limited) { hashPausedUntil = Date.now() + HASH_PAUSE_ON_429_MS; return 'limited'; }
+      return null;
+    }
+    hash = r.phash; repo.media.setPhash(row.id, hash); res.hashed++;
+  }
+  if (!s.dedupe) { dedupe.remember(row.id, hash, { mediaType: row.media_type, width: row.width, height: row.height }); return null; }
+  const hit = dedupe.check({ phash: hash, mediaType: row.media_type, width: row.width, height: row.height }, { distance: s.dedupeDistance, ignoreId: row.id }).dup;
+  const orig = hit && byId.get(hit.id);
+  if (orig && orig.seq < row.seq) {
+    repo.media.addAltSource(hit.id, { platform: row.platform, source_url: row.source_url, author: row.author, community: row.community, posted_at: row.posted_at });
+    // deferStats: collapsing dozens of dupes used to recount each creator on every hide and
+    // stall the loop for seconds. One recount per touched creator runs after the pass.
+    repo.media.setState(row.id, 'hidden', `duplicate of ${hit.id}`, { deferStats: true });
+    if (row.creator_id) touched.add(row.creator_id);
+    res.collapsed++;
+  } else dedupe.remember(row.id, hash, { mediaType: row.media_type, width: row.width, height: row.height });
+  return null;
+}
+
+const HASH_COLS = 'seq, id, creator_id, platform, post_key, source_url, author, community, posted_at, media_type, media_url, hls_url, preview_url, thumbnail_url, width, height, phash, phash_tries';
+
+async function hashPass(rows, s, res) {
+  const ctx = { s, res, byId: repo.db.prepare("SELECT seq FROM media WHERE id = ? AND publish_state IN ('published','review')"), touched: new Set() };
+  let last = null;
+  for (const row of rows) {
+    // setTimeout(0), not setImmediate: under a busy ingest the next Immediate can run before the
+    // event loop answers HTTP, and a 48-row hash pass was showing up as a multi-second hashSweep block.
+    await new Promise((res2) => setTimeout(res2, 0));
+    res.checked++;
+    if (await hashRow(row, ctx) === 'limited') { res.limited = true; break; }
+    last = row.seq;
+  }
+  for (const id of ctx.touched) {
+    await new Promise((res2) => setTimeout(res2, 0));
+    repo.creators.refreshStats(id);
+  }
+  return last;
+}
+
 async function hashSweep({ limit = 12, settings } = {}) {
   await dedupe.loadChunked().catch(() => {}); // a sweep that starts during the boot build would read a partial index
   const s = settings || settingsStore.get();
   const res = { checked: 0, hashed: 0, collapsed: 0, errors: 0, done: false };
-  let after = parseInt(repo.settings.get('hash_sweep_seq') || '0', 10) || 0;
-  const rows = repo.db.prepare(`SELECT seq, id, creator_id, platform, post_key, source_url, author, community, posted_at, media_type, media_url, preview_url, thumbnail_url, width, height, phash FROM media NOT INDEXED
+  if (Date.now() < hashPausedUntil) return { ...res, paused: true };
+  const after = parseInt(repo.settings.get('hash_sweep_seq') || '0', 10) || 0;
+  const rows = repo.db.prepare(`SELECT ${HASH_COLS} FROM media NOT INDEXED
     WHERE publish_state IN ('published','review') AND seq > ? ORDER BY seq LIMIT ?`).all(after, limit);
   if (!rows.length) { res.done = true; return res; }
-  const byId = repo.db.prepare("SELECT seq FROM media WHERE id = ? AND publish_state IN ('published','review')");
-  const touched = new Set(); // creators whose published set changed; recounted once at the end
-  for (const row of rows) {
-    after = row.seq; res.checked++;
-    // setTimeout(0), not setImmediate: under a busy ingest the next Immediate can run before the
-    // event loop answers HTTP, and a 48-row hash pass was showing up as a multi-second hashSweep block.
-    await new Promise((res2) => setTimeout(res2, 0));
-    if (borrowedPoster(row)) {
-      // a hash the OLD sweep took from the borrowed poster is wrong: drop it, from the database and from the dedupe index, so it cannot
-      // make an unrelated video with a similar poster look like a duplicate
-      if (row.phash) { repo.media.setPhash(row.id, null); dedupe.forget(row.id); }
-      continue;
-    }
-    let hash = row.phash;
-    if (!hash) {
-      const v = await imagefilter.checkItem({ mediaType: row.media_type, mediaUrl: row.media_url, previewUrl: row.preview_url, thumbnailUrl: row.thumbnail_url }, { faces: false, hash: true });
-      if (!v.phash) { if (v.status === 'error') res.errors++; continue; }
-      hash = v.phash; repo.media.setPhash(row.id, hash); res.hashed++;
-    }
-    if (!s.dedupe) { dedupe.remember(row.id, hash, { mediaType: row.media_type, width: row.width, height: row.height }); continue; }
-    const hit = dedupe.check({ phash: hash, mediaType: row.media_type, width: row.width, height: row.height }, { distance: s.dedupeDistance, ignoreId: row.id }).dup;
-    const orig = hit && byId.get(hit.id);
-    if (orig && orig.seq < row.seq) {
-      repo.media.addAltSource(hit.id, { platform: row.platform, source_url: row.source_url, author: row.author, community: row.community, posted_at: row.posted_at });
-      // deferStats: collapsing dozens of dupes used to recount each creator on every hide and
-      // stall the loop for seconds. One recount per touched creator runs after the pass.
-      repo.media.setState(row.id, 'hidden', `duplicate of ${hit.id}`, { deferStats: true });
-      if (row.creator_id) touched.add(row.creator_id);
-      res.collapsed++;
-    } else dedupe.remember(row.id, hash, { mediaType: row.media_type, width: row.width, height: row.height });
-  }
-  for (const id of touched) {
-    await new Promise((res2) => setTimeout(res2, 0));
-    repo.creators.refreshStats(id);
-  }
-  repo.settings.set('hash_sweep_seq', String(after));
+  const last = await hashPass(rows, s, res);
+  if (last !== null) repo.settings.set('hash_sweep_seq', String(last)); // a 429 stops before the row it hit: that row is read again next time
   if (res.collapsed || res.hashed) events.log('OK', `Hash sweep: ${res.hashed} hashed, ${res.collapsed} duplicate(s) collapsed (of ${res.checked} checked)`);
+  return res;
+}
+
+/**
+ * The misses the main pass left behind (rows below its cursor, still without a hash, not given up on, last tried more than
+ * HASH_RETRY_AFTER_MS ago), oldest first, `limit` a call, on the partial index ix_media_phash_todo. Its own cursor wraps
+ * to the start when it reaches the main pass, so every miss comes round again until it is hashed or given up on.
+ */
+async function hashRetrySweep({ limit = 20, settings, now = Date.now() } = {}) {
+  const s = settings || settingsStore.get();
+  const res = { checked: 0, hashed: 0, collapsed: 0, errors: 0, gaveUp: 0, wrapped: false };
+  if (!limit || Date.now() < hashPausedUntil) return { ...res, paused: Date.now() < hashPausedUntil };
+  await dedupe.loadChunked().catch(() => {});
+  const ceiling = parseInt(repo.settings.get('hash_sweep_seq') || '0', 10) || 0;
+  const from = parseInt(repo.settings.get('hash_retry_seq') || '0', 10) || 0;
+  const rows = repo.db.prepare(`SELECT ${HASH_COLS} FROM media INDEXED BY ix_media_phash_todo
+    WHERE phash IS NULL AND phash_error IS NULL AND publish_state IN ('published','review') AND seq > ? AND seq <= ?
+      AND (phash_at IS NULL OR phash_at < ?) ORDER BY seq LIMIT ?`).all(from, ceiling, new Date(now - HASH_RETRY_AFTER_MS).toISOString(), limit);
+  if (!rows.length) { if (from) repo.settings.set('hash_retry_seq', '0'); res.wrapped = !!from; return res; }
+  const last = await hashPass(rows, s, res);
+  if (last !== null) repo.settings.set('hash_retry_seq', String(last));
+  if (res.hashed || res.gaveUp) events.log('OK', `Hash retry: ${res.hashed} hashed, ${res.gaveUp} given up (of ${res.checked})`);
   return res;
 }
 
@@ -566,6 +653,7 @@ function startImageSweep() {
       // Same bite as the image sweep (was 2×): a bigger hash pass hid many rows and recounted each
       // creator mid-tick. With deferred recounts the bite can grow again once p99 stays quiet.
       if (s.dedupe) await blockwatch.around('hashSweep', () => hashSweep({ limit: s.imageSweepPerTick, settings: s }));
+      if (s.dedupe && s.hashRetryPerMinute > 0) await blockwatch.around('hashRetry', () => hashRetrySweep({ limit: s.hashRetryPerMinute, settings: s }));
       if ((!s.imageFilter && !s.physiqueFilter) || sweepGaveUp || !modelOpen) return; // the hash pass above needs no model
       if (!(await imagefilter.available())) { sweepGaveUp = true; return; } // logged once by the filter itself
       // The body sweep reads faces in the same pass, so while it has work the face-only sweep would download and analyse the
@@ -619,4 +707,4 @@ function startupSweepIfNeeded() {
   }, 1500).unref();
 }
 
-module.exports = { _progressCache: { clear: () => progressCache.clear(), setClock: (fn) => { progressClock = fn || (() => Date.now()); }, ttlMs: PROGRESS_TTL_MS, faceTtlMs: FACE_PROGRESS_TTL_MS }, clearBorrowedPosterHashes, repairSharedPosterCollapse, retireDeadFeeds, sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, faceSweep, faceSweepProgress, faceBackfill, physiqueSweep, physiqueSweepProgress, leanBiasSweep, leanBiasProgress, clearLeanBias, hashSweep, hashSweepProgress, startImageSweep, stopImageSweep };
+module.exports = { _progressCache: { clear: () => progressCache.clear(), setClock: (fn) => { progressClock = fn || (() => Date.now()); }, ttlMs: PROGRESS_TTL_MS, faceTtlMs: FACE_PROGRESS_TTL_MS }, clearBorrowedPosterHashes, repairSharedPosterCollapse, retireDeadFeeds, sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, faceSweep, faceSweepProgress, faceBackfill, physiqueSweep, physiqueSweepProgress, leanBiasSweep, leanBiasProgress, clearLeanBias, hashSweep, hashRetrySweep, hashSweepProgress, _hash: { pictureUrls, fetchHash, recordMiss, MAX_TRIES: HASH_MAX_TRIES, RETRY_AFTER_MS: HASH_RETRY_AFTER_MS, unpause: () => { hashPausedUntil = 0; } }, startImageSweep, stopImageSweep };

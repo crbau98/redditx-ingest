@@ -33,6 +33,7 @@ GET /ai
 POST /ai/plan
 POST /ai/triage
 POST /maintenance/purge-removed-residue
+POST /maintenance/repair-no-image
 GET /library-health
 GET /feeds/idle
 GET /feeds/yield

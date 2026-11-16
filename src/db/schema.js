@@ -1077,6 +1077,22 @@ function v37(db) {
 }
 v37.ddlOnly = true;
 
+/**
+ * v38: the hash sweep remembers what it could not hash. Its cursor only moves forward, so a picture whose download failed once
+ * (a 429 from i.redd.it, a timeout, an expired preview) was passed and never tried again: dedupe could not see it. Now:
+ *   phash_tries  attempts so far;  phash_at  the last one;  phash_error  set only when it is given up on, with the reason
+ * (a gone picture, nothing to read, a borrowed poster, or too many failed attempts), so library-health can tell
+ * "unhashable" from "pending". The retry pass reads the partial index of rows still owed a hash.
+ */
+function v38(db) {
+  const cols = db.prepare('PRAGMA table_info(media)').all().map((c) => c.name);
+  if (!cols.includes('phash_tries')) db.exec('ALTER TABLE media ADD COLUMN phash_tries INTEGER NOT NULL DEFAULT 0');
+  if (!cols.includes('phash_at')) db.exec('ALTER TABLE media ADD COLUMN phash_at TEXT');
+  if (!cols.includes('phash_error')) db.exec('ALTER TABLE media ADD COLUMN phash_error TEXT');
+  db.exec("CREATE INDEX IF NOT EXISTS ix_media_phash_todo ON media(seq) WHERE phash IS NULL AND phash_error IS NULL AND publish_state IN ('published','review')");
+}
+v38.ddlOnly = true;
+
 function v35(db) {
   const { orderNames } = require('../lib/creator-names');
   const rows = db.prepare("SELECT id, handle, display_name FROM creators WHERE handle LIKE '% %'").all();
@@ -1089,7 +1105,7 @@ function v35(db) {
   if (n && process.env.NODE_ENV !== 'test') console.log(`[migrate] v35: ${n} creator(s) had handle and display name swapped; fixed`);
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31, v32, v33, v34, v35, v36, v37];
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31, v32, v33, v34, v35, v36, v37, v38];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });
