@@ -14,6 +14,8 @@ router.get('/creators', (req, res) => {
 
 // Creators that share a handle (read-only list) and the admin's "different people" verdict for one pair. Merging uses
 // POST /creators/merge with the keepId the list names (the row with more posts). Nothing here merges on its own.
+// One-off cleanup of handles stored before create() sanitised them (trailing space / zero-width characters): text only, never a merge.
+router.post('/creators/normalize-handles', (req, res) => res.json(repo.creators.normalizeHandles({ dryRun: req.query.dryRun === '1' || req.body?.dryRun === true })));
 router.get('/creators/same-handle', (req, res) => res.json(identity.sameHandleGroups({ limit: int(req.query.limit, 1, 1000, 200) })));
 router.post('/creators/same-handle/dismiss', (req, res) => {
   const { aId, bId } = req.body || {};

@@ -119,6 +119,7 @@ const creators = {
   create({ handle, displayName, bio, avatarUrl, bannerUrl, scope = 'in', origin = 'ingest' }) {
     // A handle never has a space: a "Dante Colle" / "dantecolle.bsky.social" pair is stored the right way round.
     ({ handle, displayName } = require('../../lib/creator-names').orderNames(handle, displayName));
+    handle = require('../../lib/creator-names').cleanHandle(handle); // no trailing space or zero-width characters: they made "Alice" and "Alice\u200b" two rows
     const id = uuid();
     hosts.add(avatarUrl, bannerUrl);
     creatorQ.insert.run({
@@ -134,6 +135,7 @@ const creators = {
     for (const [col, key] of Object.entries(allowed)) {
       const v = patch[key] !== undefined ? patch[key] : patch[col];
       if (v === undefined) continue;
+      if (col === 'handle') { const h = require('../../lib/creator-names').cleanHandle(v); if (!h) continue; params[col] = h; sets.push('handle = @handle'); continue; }
       if (col === 'scope' && !['in', 'uncertain', 'excluded'].includes(v)) continue;
       if (col === 'status' && !['active', 'hidden', 'blocked'].includes(v)) continue;
       sets.push(`${col} = @${col}`); params[col] = col === 'verified' ? (v ? 1 : 0) : v;
@@ -284,10 +286,41 @@ const creators = {
           signal = COALESCE(excluded.signal, signal), evidence_url = COALESCE(excluded.evidence_url, evidence_url)
         WHERE creator_aliases.source = 'bio' AND excluded.source != 'bio'`).run(keepId, mergeId); // a confirmed name beats one only a bio claimed
       creators.enrich(keepId, { displayName: gone.display_name, bio: gone.bio, avatarUrl: gone.avatar_url, bannerUrl: gone.banner_url, links: JSON.parse(gone.links || '[]') });
+      // Push subscriptions follow creators by id: the merged-away id would keep matching nothing (a follower silently stops
+      // hearing about this person). Point them at the kept row, once.
+      for (const row of db.prepare('SELECT id, creator_ids FROM push_subscriptions WHERE creator_ids LIKE ?').all(`%${mergeId}%`)) {
+        let ids; try { ids = JSON.parse(row.creator_ids || '[]'); } catch { ids = []; }
+        if (!Array.isArray(ids) || !ids.includes(mergeId)) continue;
+        const next = [...new Set(ids.map((x) => (x === mergeId ? keepId : x)))];
+        db.prepare('UPDATE push_subscriptions SET creator_ids = ? WHERE id = ?').run(JSON.stringify(next), row.id);
+      }
       db.prepare('DELETE FROM creators WHERE id = ?').run(mergeId);
       creatorQ.stats.run({ id: keepId });
     })();
     return creators.get(keepId);
+  },
+
+  /**
+   * Clean the stored handles of rows made before create() did it (trailing space, zero-width characters, NFC), so the same-handle
+   * list can see "Alice" / "Alice " / "Alice\u200b" as one group. It only rewrites the text: nothing is merged (two creators with
+   * one handle stay a decision for the admin: /api/admin/creators/same-handle), and a row whose cleaned handle is empty is left alone.
+   * @returns {{changed: number, examples: Array<{id: string, from: string, to: string}>}}
+   */
+  normalizeHandles({ dryRun = false, limit = 100000 } = {}) {
+    const { cleanHandle } = require('../../lib/creator-names');
+    const out = { changed: 0, examples: [] };
+    const upd = db.prepare("UPDATE creators SET handle = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?");
+    const rows = db.prepare('SELECT id, handle FROM creators ORDER BY rowid LIMIT ?').all(limit);
+    const todo = rows.filter((r) => { const h = cleanHandle(r.handle); return h && h !== r.handle; });
+    db.transaction(() => {
+      for (const r of todo) {
+        const to = cleanHandle(r.handle);
+        if (out.examples.length < 20) out.examples.push({ id: r.id, from: r.handle, to });
+        if (!dryRun) upd.run(to, r.id);
+        out.changed++;
+      }
+    })();
+    return out;
   },
 
   /** Block a creator: hide everything they have, record it so it never returns. */

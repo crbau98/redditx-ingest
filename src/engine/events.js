@@ -18,7 +18,20 @@ function write(res, msg) {
   try { res.write(`data: ${JSON.stringify(msg)}\n\n`); return true; } catch { return false; }
 }
 
+// Open-stream caps. Each public stream holds a socket and a timer for as long as the page is open, and the stream is outside the API
+// rate limiter (it never ends), so without a cap one address could open thousands.
+const caps = { public: { perIp: Number(process.env.SSE_PER_IP) || 6, total: Number(process.env.SSE_TOTAL) || 800 }, admin: { perIp: 20, total: 60 } };
+const perIp = { public: new Map(), admin: new Map() };
+
 function subscribe(channel, req, res) {
+  const cap = caps[channel];
+  const ip = String(req.ip || (req.socket && req.socket.remoteAddress) || 'unknown');
+  if (cap && (clients[channel].size >= cap.total || (perIp[channel].get(ip) || 0) >= cap.perIp)) {
+    res.set('Retry-After', '30');
+    res.status(429).json({ error: 'Too many open live connections' });
+    return res;
+  }
+  if (cap) perIp[channel].set(ip, (perIp[channel].get(ip) || 0) + 1);
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache, no-transform',
@@ -30,7 +43,11 @@ function subscribe(channel, req, res) {
   clients[channel].add(res);
   const ping = setInterval(() => { if (!res.write(': ping\n\n')) { /* backpressure: drop silently */ } }, 25000);
   ping.unref();
-  req.on('close', () => { clearInterval(ping); clients[channel].delete(res); });
+  let counted = !!cap;
+  req.on('close', () => {
+    clearInterval(ping); clients[channel].delete(res);
+    if (counted) { counted = false; const n = (perIp[channel].get(ip) || 1) - 1; if (n > 0) perIp[channel].set(ip, n); else perIp[channel].delete(ip); }
+  });
   return res;
 }
 
@@ -65,4 +82,5 @@ const getProblems = (n = 100) => problems.slice(-n);
 const clearLogs = () => { logs.length = 0; problems.length = 0; };
 const counts = () => ({ public: clients.public.size, admin: clients.admin.size });
 
-module.exports = { subscribe, broadcast, log, newItems, admin, getLogs, getProblems, clearLogs, counts };
+module.exports = {
+  _streamCaps: caps, _streamCount: (channel, ip) => perIp[channel].get(ip) || 0, subscribe, broadcast, log, newItems, admin, getLogs, getProblems, clearLogs, counts };

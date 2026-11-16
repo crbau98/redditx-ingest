@@ -9,10 +9,11 @@ const { registerModeration } = require('./admin/moderation');
 const { registerOps } = require('./admin/ops');
 
 const router = express.Router();
-// The brute-force guard counts every request that does not finish with a success. The live event stream never finishes (it ends when
-// the page is left), so each visit to a screen that listens to it used up one of the 20 attempts: 21 page changes in ten minutes locked
-// the owner out. A stream that already carries the right key has nothing to guess, so it skips the guard; a wrong key still counts.
-router.use((req, res, next) => (req.path === '/stream' && adminKeyValid(req) ? next() : adminRateLimit(req, res, next)), adminCredentialAuth);
+// The brute-force guard counts every request that does not finish with a success. A request that already carries the RIGHT key has
+// nothing to guess, so it never touches the guard: not the live event stream (which never finishes: 21 page changes used to lock the
+// owner out) and not the owner's own requests after somebody else, behind the same address, burned the budget with wrong keys
+// (the lockout used to refuse the correct key too). A wrong or missing key still counts and is still refused.
+router.use((req, res, next) => (adminKeyValid(req) ? next() : adminRateLimit(req, res, next)), adminCredentialAuth);
 
 const int = repo.clampInt;
 const page = (req, max = 200) => ({ page: int(req.query.page, 0, 100000, 0), limit: int(req.query.limit, 1, max, 50) });

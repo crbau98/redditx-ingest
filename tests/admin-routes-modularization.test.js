@@ -51,8 +51,10 @@ GET /creators/:id
 POST /creators
 PATCH /creators/:id
 POST /creators/merge
+POST /creators/normalize-handles
 POST /creators/:id/block
 POST /creators/:id/restore
+GET /health
 GET /profiles
 GET /profiles/:name
 GET /identities
@@ -134,7 +136,7 @@ test('admin.js is the thin assembler', () => {
   const src = fs.readFileSync(ADMIN, 'utf8');
   const lines = src.split('\n').filter((line, i, all) => !(i === all.length - 1 && line === '')).length;
   assert.ok(lines < 120, `admin.js is ${lines} lines`);
-  assert.match(src, /req\.path === '\/stream' && adminKeyValid\(req\)/);
+  assert.match(src, /adminKeyValid\(req\) \? next\(\) : adminRateLimit\(req, res, next\)/); // a request with the right key never touches the guard
   assert.match(src, /adminCredentialAuth/);
   assert.match(src, /registerEngine\(router, helpers\)/);
   assert.match(src, /registerFeeds\(router, helpers\)/);
