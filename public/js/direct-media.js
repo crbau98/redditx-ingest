@@ -32,7 +32,7 @@ export function directAllowed(url) {
   if (!images.size || typeof url !== 'string' || !url.startsWith('https://')) return false;
   let u;
   try { u = new URL(url); } catch { return false; }
-  if (u.username || u.password) return false;
+  if (u.username || u.password || u.port) return false; // default port only: the CSP source has no port, so :8443 would be blocked
   const host = u.hostname.toLowerCase();
   if (!images.has(host)) return false;
   const path = u.pathname + u.search;
