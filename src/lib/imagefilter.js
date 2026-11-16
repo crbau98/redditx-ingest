@@ -15,7 +15,6 @@
  * with the text gates only. Inference is serialised (the wasm backend is single-threaded) and results are
  * cached per URL.
  */
-const os = require('os');
 const path = require('path');
 const { Worker } = require('worker_threads');
 const net = require('./net');
@@ -34,7 +33,7 @@ let initError = null;
 let analyzer = null;   // test hook: async (url) => result
 let embedder = null;   // test hook: async (url) => {status, vec}
 const cache = new Map();
-const counters = { recycled: 0, analyzed: 0, female: 0, errors: 0, cached: 0, totalMs: 0, hashed: 0, measured: 0, heavy: 0 };
+const counters = { idleReleases: 0, recycled: 0, analyzed: 0, female: 0, errors: 0, cached: 0, totalMs: 0, hashed: 0, measured: 0, heavy: 0 };
 
 /* ------------------------------------------------------------------ the model */
 /**
@@ -126,10 +125,33 @@ let inProcess = null; // { detect } when running the model in this thread
 function workerCount() {
   const env = process.env.IMAGE_WORKERS;
   if (env !== undefined && env !== '') return Math.max(0, parseInt(env, 10) || 0);
-  // Each worker holds its own copy of the models (~450 MB once warm), so memory caps the pool too: one worker per 3 GB.
-  // On the 4 GB server two workers plus the app ran it out of memory (the kernel killed PRISM twice on 2026-10-14).
-  const byMemory = Math.floor(os.totalmem() / (3 * 1024 ** 3));
-  return Math.max(1, Math.min(3, os.cpus().length - 1, byMemory));
+  // One worker by default. Each worker holds its own copy of the models (~450 MB once warm), and the work is background
+  // (ingest checks, slow sweeps): a second copy bought throughput nobody waits for. The old default was up to 3, sized from
+  // os.totalmem(), which in a container is the HOST's memory, not the container's limit. IMAGE_WORKERS=2 or 3 restores it.
+  return 1;
+}
+
+/* ------------------------------------------------------------- idle release */
+// A quiet server should not hold the models: after IMAGE_WORKER_IDLE_MIN minutes with no picture read (default 5,
+// 0 = keep them), the workers are stopped and their memory returned; the next picture starts them again (a few seconds).
+const IDLE_MS = Math.max(0, Number(process.env.IMAGE_WORKER_IDLE_MIN ?? 5)) * 60000;
+let lastUsed = Date.now();
+let idleTimer = null;
+const touch = () => { lastUsed = Date.now(); };
+function idleCheck(now = Date.now(), ms = IDLE_MS) {
+  if (!ms) return false;
+  if (!(pool || inProcess) || active > 0 || (pool && pool.pending.size) || now - lastUsed < ms) return false;
+  const p = pool;
+  pool = null; inProcess = null; initPromise = null;
+  if (p) p.shutdown().catch(() => {});
+  counters.idleReleases++;
+  events.log('INFO', `Image filter idle for ${Math.round((now - lastUsed) / 60000)} min: workers stopped (they start again on the next picture)`);
+  return true;
+}
+function armIdle() {
+  if (idleTimer || !IDLE_MS) return;
+  idleTimer = setInterval(() => idleCheck(), 30000);
+  idleTimer.unref();
 }
 
 function init() {
@@ -137,6 +159,7 @@ function init() {
   if (!initPromise) {
     initPromise = (async () => {
       const n = workerCount();
+      touch(); armIdle();
       if (n > 0) {
         try {
           pool = new Pool(n);
@@ -157,7 +180,7 @@ function init() {
 }
 
 /** @returns {Promise<{faces: object[], body: object|null}>} */
-const detectFaces = (buffer, opts) => (pool ? pool.detect(buffer, opts) : inProcess.detect(buffer, opts));
+const detectFaces = (buffer, opts) => { touch(); return pool ? pool.detect(buffer, opts) : inProcess.detect(buffer, opts); };
 
 /* ----------------------------------------------------------------- analysis */
 /** Faces (and, with `body`, the build) and/or perceptual hash of picture bytes already in memory. */
@@ -231,6 +254,7 @@ async function embedUrlNow(url, { referer, timeout = 12000 } = {}) {
     if (got.status >= 400) throw new Error(`http ${got.status}`);
     if (/^(text|application\/json)/i.test(got.contentType)) throw new Error(`not an image (${got.contentType.split(';')[0]})`);
   } catch (e) { return { status: 'error', reason: String(e.message || e).slice(0, 160) }; }
+  touch();
   try { return { status: 'ok', vec: pool ? await pool.embed(got.buffer) : await inProcess.embed(got.buffer) }; }
   catch (e) { return { status: 'error', reason: String(e.message || e).slice(0, 160) }; }
 }
@@ -336,13 +360,13 @@ async function available() {
 
 function status() {
   return {
-    ready: !!pool || !!inProcess || !!analyzer, failed: initError ? initError.message : null, workers: pool ? pool.workers.length : 0, ...counters,
+    ready: !!pool || !!inProcess || !!analyzer, idleReleaseMin: IDLE_MS / 60000, failed: initError ? initError.message : null, workers: pool ? pool.workers.length : 0, ...counters,
     avgMs: counters.analyzed ? Math.round(counters.totalMs / counters.analyzed) : 0,
   };
 }
 
 /** Stop the worker threads (tests and graceful shutdown). */
-async function shutdown() { if (pool) { await pool.shutdown(); pool = null; } initPromise = null; }
+async function shutdown() { if (idleTimer) { clearInterval(idleTimer); idleTimer = null; } if (pool) { await pool.shutdown(); pool = null; } initPromise = null; }
 
 /** Swap the image workers for fresh ones (the memory watchdog calls this when the server runs high). */
 function recycle() { if (pool) pool.recycleAll(); }
@@ -353,4 +377,4 @@ function _setAnalyzer(fn) { analyzer = fn; }
 function _setEmbedder(fn) { embedder = fn; }
 function _reset() { cache.clear(); analyzer = null; embedder = null; }
 
-module.exports = { analyze, judge, checkItem, gate, imageUrlOf, deriveVideoPosterUrl, embedUrl, available, status, readBuffer, init, shutdown, recycle, noteHeavy, _setAnalyzer, _setEmbedder, _reset };
+module.exports = { _idleCheck: idleCheck, _workerCount: workerCount, analyze, judge, checkItem, gate, imageUrlOf, deriveVideoPosterUrl, embedUrl, available, status, readBuffer, init, shutdown, recycle, noteHeavy, _setAnalyzer, _setEmbedder, _reset };

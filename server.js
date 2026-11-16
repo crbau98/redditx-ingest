@@ -61,6 +61,7 @@ function shutdown(signal) {
   require('./src/engine/memwatch').stop();
   require('./src/lib/diskguard').stop();
   require('./src/lib/imagefilter').shutdown().catch(() => {});
+  try { require('./src/lib/egress').save(); } catch { /* best effort */ }
   const code = signal === 'memory' ? 1 : 0; // a memory restart is not a clean stop: Docker brings PRISM straight back
   server.close(() => process.exit(code));
   setTimeout(() => process.exit(code), 8000).unref();

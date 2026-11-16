@@ -18,8 +18,11 @@ if (!READONLY) {
 }
 db.pragma('foreign_keys = ON');
 db.pragma('busy_timeout = 5000');
-db.pragma('cache_size = -131072'); // 128 MB page cache (was 32 MB: cold searches paid for disk reads)
-db.pragma('mmap_size = 1073741824');
+// Memory per connection, tunable with SQLITE_CACHE_MB / SQLITE_MMAP_MB (main) and SQLITE_WORKER_* (read-only worker): see config.
+// Was 128 MB cache + 1 GB mmap on EVERY connection, the aggregate worker included.
+const { cacheMb, mmapMb } = config.sqliteMemory;
+db.pragma(`cache_size = -${cacheMb * 1024}`);
+db.pragma(`mmap_size = ${mmapMb * 1024 * 1024}`);
 db.pragma('temp_store = MEMORY');
 // WAL tuning for a write-heavy ingest on a small box: checkpoint less often (fewer I/O pauses) and cap the
 // WAL at 256 MB so a long ingestion cannot grow it without bound (the nightly worker checkpoints it anyway).
