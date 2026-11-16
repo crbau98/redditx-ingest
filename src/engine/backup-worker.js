@@ -5,6 +5,9 @@
  *   task 'backup' (default) nightly copy + planner optimize + WAL checkpoint. `VACUUM INTO` rewrites
  *                     the whole database in one C call and was starving a 700k-row box; SQLite's online
  *                     backup API copies pages incrementally with a page-per-second throttle instead.
+ *   task 'checkpoint'  a PASSIVE WAL checkpoint on this thread (engine/checkpoint.js). The serving connection no longer checkpoints
+ *                     inline: a commit that crossed wal_autocheckpoint copied up to 4000 pages to the data volume before returning
+ *                     (a single-row UPDATE showed 1.4 s as a loop block in production).
  *   task 'hot'     the trending-score refresh, every ten minutes: thousands of row updates that used to
  *                     run on the main thread and showed up as multi-second loop stalls.
  */
@@ -48,6 +51,18 @@ async function main() {
     db = new Database(workerData.dbPath);
     db.pragma('busy_timeout = 10000');
     db.pragma('journal_mode = WAL');
+    if (workerData.task === 'checkpoint') {
+      db.pragma('wal_autocheckpoint = 0');
+      // PASSIVE copies what no reader needs and never blocks a writer; the WAL file only restarts from the top when a checkpoint
+      // catches up completely, which sustained writes can prevent. RESTART (asked for only when the WAL is already large, and
+      // after PASSIVE has copied most of it, so what is left to copy is the tail) waits for that and makes the next write restart the log.
+      const mode = workerData.mode === 'RESTART' ? 'RESTART' : 'PASSIVE';
+      const r = db.pragma(`wal_checkpoint(${mode})`)[0] || {};
+      db.close();
+      db = null;
+      parentPort.postMessage({ ok: true, mode, busy: r.busy, log: r.log, checkpointed: r.checkpointed });
+      return;
+    }
     if (workerData.task === 'hot') {
       // Checkpoints belong to the nightly backup. A hot pass that dirties thousands of pages must not
       // checkpoint mid-scan on this connection while other writers are waiting.

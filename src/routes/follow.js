@@ -18,6 +18,8 @@ const router = express.Router();
 router.use('/follow', age.requireAge);
 
 const MAX_FOLLOWS = 500;
+const MAX_FEED_ROWS = 10000; // the deepest offset the feed answers (see /api/media)
+const COUNT_CAP = 1000; // per creator, for the 'new' / 'earlier' parts
 const NEW_CAP = 99; // "99+" is all a badge needs, and capping keeps each count cheap (100 means "more than 99")
 const UUID = /^[0-9a-f-]{36}$/i;
 const iso = (v) => (typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null);
@@ -64,17 +66,35 @@ router.post('/follow/feed', (req, res) => {
     if (f && typeof f.id === 'string' && UUID.test(f.id)) follows.set(f.id, iso(f.since) || '1970-01-01T00:00:00.000Z');
   }
   if (!follows.size) return res.json({ items: [], total: 0, page, limit });
-  const params = [];
-  for (const [id, since] of follows) params.push(id, since);
-  const where = [VISIBLE, "c.status = 'active'", "c.scope != 'excluded'"];
-  if (b.type === 'image' || b.type === 'video') { where.push('m.media_type = ?'); params.push(b.type); }
-  if (split) where.push(b.part === 'new' ? 'm.ingested_at > f.since' : 'm.ingested_at <= f.since');
-  const withF = `WITH f(id, since) AS (VALUES ${Array(follows.size).fill('(?, ?)').join(', ')})`;
-  const from = `FROM f JOIN media m ON m.creator_id = f.id JOIN creators c ON c.id = m.creator_id WHERE ${where.join(' AND ')}`;
-  const total = page === 0 || !b.nocount ? repo.db.prepare(`${withF} SELECT COUNT(*) AS n ${from}`).get(...params).n : null;
-  const rows = repo.db.prepare(`${withF} SELECT m.*, c.handle AS creator_handle, c.display_name AS creator_name, c.avatar_url AS creator_avatar ${from}
-    ORDER BY m.posted_at DESC, m.seq DESC LIMIT ? OFFSET ?`).all(...params, limit, page * limit);
-  res.json({ items: rows.map((r) => publicMedia(repo.serializeMedia(r), { brief: true })), total, page, limit });
+  // The old query joined every followed creator to ALL of their media and sorted the lot: 130-210 ms for 20-100 big creators on a 1M-row
+  // test database, and the list comes from the request body, so anyone could send 500 of the biggest ids. Now: each creator's newest
+  // `need` rows come from the (creator, state, posted_at) index in order (no sort, no scan past the page), the newest `need` overall
+  // are picked in memory, and only the page's rows are read in full. Pages deeper than MAX_FEED_ROWS answer empty, as /api/media does.
+  const need = (page + 1) * limit;
+  if (need - limit >= MAX_FEED_ROWS) return res.json({ items: [], total: null, page, limit });
+  const ids = [...follows.keys()];
+  const creators = repo.db.prepare(`SELECT id, media_count, video_count FROM creators WHERE id IN (${ids.map(() => '?').join(',')}) AND status = 'active' AND scope != 'excluded'`).all(...ids);
+  const type = b.type === 'image' || b.type === 'video' ? b.type : null;
+  const sql = `SELECT m.seq, m.id, m.posted_at FROM media m WHERE m.creator_id = ? AND ${VISIBLE}${type ? ' AND m.media_type = ?' : ''}${split ? (b.part === 'new' ? ' AND m.ingested_at > ?' : ' AND m.ingested_at <= ?') : ''}
+    ORDER BY m.posted_at DESC, m.seq DESC LIMIT ?`;
+  const stmt = repo.db.prepare(sql);
+  const cap = repo.db.prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM media m WHERE m.creator_id = ? AND ${VISIBLE}${type ? ' AND m.media_type = ?' : ''}${split ? (b.part === 'new' ? ' AND m.ingested_at > ?' : ' AND m.ingested_at <= ?') : ''} LIMIT ${COUNT_CAP + 1})`);
+  const picked = []; let total = 0; let capped = false;
+  for (const c of creators) {
+    const args = [c.id]; if (type) args.push(type); if (split) args.push(follows.get(c.id));
+    picked.push(...stmt.all(...args, Math.min(need, Math.max(c.media_count, 0) || need)));
+    if (!split) total += type === 'video' ? c.video_count : type === 'image' ? Math.max(c.media_count - c.video_count, 0) : c.media_count; // the maintained counters: exact, no scan
+    else if (page === 0 || !b.nocount) { const n = cap.get(...args).n; if (n > COUNT_CAP) capped = true; total += Math.min(n, COUNT_CAP); }
+  }
+  picked.sort((x, y) => (x.posted_at < y.posted_at ? 1 : x.posted_at > y.posted_at ? -1 : y.seq - x.seq));
+  const pageIds = picked.slice(page * limit, page * limit + limit).map((r) => r.id);
+  const byId = new Map();
+  if (pageIds.length) {
+    for (const r of repo.db.prepare(`SELECT m.*, c.handle AS creator_handle, c.display_name AS creator_name, c.avatar_url AS creator_avatar FROM media m JOIN creators c ON c.id = m.creator_id WHERE m.id IN (${pageIds.map(() => '?').join(',')})`).all(...pageIds)) byId.set(r.id, r);
+  }
+  const items = pageIds.map((id) => byId.get(id)).filter(Boolean).map((r) => publicMedia(repo.serializeMedia(r), { brief: true }));
+  const showTotal = page === 0 || !b.nocount;
+  res.json({ items, total: showTotal ? total : null, ...(showTotal && capped ? { totalCapped: true } : {}), page, limit });
 });
 
 module.exports = router;
