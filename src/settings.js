@@ -47,7 +47,7 @@ const SCHEMA = {
   dedupeDistance: { type: 'int', default: 6, min: 0, max: 7, label: 'Duplicate sensitivity: bits of difference still counted as the same picture (0 = identical only, 7 = loosest)', group: 'safety' },
   imageSweep: { type: 'bool', default: true, label: 'Re-check the existing library (women in pictures, duplicate pictures) in the background', group: 'safety' },
   imageSweepPerTick: { type: 'int', default: 12, min: 0, max: 200, label: 'Items re-checked per minute by the image sweep', group: 'safety' },
-  hashRetryPerMinute: { type: 'int', default: 20, min: 0, max: 200, label: 'Duplicate check: pictures whose hash failed earlier, re-tried per minute (each up to 5 times, 6 h apart; a 429 from the host pauses it 15 min; 0 = off)', group: 'safety' },
+  hashRetryPerMinute: { type: 'int', default: 20, min: 0, max: 200, label: 'Duplicate check: pictures whose hash failed earlier, re-tried per minute (each up to 5 times, 6 h apart; a 429 rests that host 15 min, other hosts go on; 0 = off)', group: 'safety' },
   modelSweepOnMinutes: { type: 'int', default: 10, min: 1, max: 1440, label: 'Background picture model (face, body, image re-check, visual search backfill): minutes it runs in each cycle. New items are always checked; only the backlog sweeps wait', group: 'safety' },
   modelSweepOffMinutes: { type: 'int', default: 20, min: 0, max: 1440, label: 'Background picture model: minutes it rests in each cycle, so the model can be unloaded and its memory returned (0 = never rests)', group: 'safety' },
   // --- body filter (v4.14) ---
