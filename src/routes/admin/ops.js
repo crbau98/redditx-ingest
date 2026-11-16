@@ -10,21 +10,46 @@ const discovery = require('../../engine/discovery');
 const backup = require('../../engine/backup');
 const portability = require('../../services/portability');
 
+/**
+ * Is this maintenance call a dry run? Query and JSON body are read together and a "dry" answer anywhere wins: a body cannot
+ * turn a ?dryRun=1 call into a real one. Accepted spellings: dryRun / dryrun / dry_run / dry-run, with any of 1, true, yes,
+ * on (any case); `apply` takes the same values. `defaultDry`: what a call that names neither does.
+ */
+const TRUE = /^(?:1|true|yes|on)$/i;
+const FALSE = /^(?:0|false|no|off)$/i;
+function dryRunOf(req, { defaultDry }) {
+  const sources = [req.query || {}, req.body && typeof req.body === 'object' ? req.body : {}];
+  let dry = false; let wet = false; let named = false;
+  for (const src of sources) {
+    for (const [k, v] of Object.entries(src)) {
+      const key = k.toLowerCase().replace(/[-_]/g, '');
+      const val = String(v);
+      if (key === 'dryrun') { named = true; if (v === true || TRUE.test(val)) dry = true; else if (v === false || FALSE.test(val)) wet = true; }
+      if (key === 'apply') { named = true; if (v === true || TRUE.test(val)) wet = true; else if (v === false || FALSE.test(val)) dry = true; }
+    }
+  }
+  if (dry) return true;
+  if (wet) return false;
+  return named ? true : defaultDry; // an unreadable value is treated as dry
+}
+
 function registerOps(router, { int, page, bad }) {
 // Read-only library-health counts (engine/library-health.js): no writes, no repair; a windowed pass that keeps the loop free.
 // Clear face vectors and alt sources still left on media removed before the takedown purge covered them (690c331), through
 // the one purge (repo.purgeRemovedContent), in batches with yields. ?dryRun=1 only counts; ?limit=N caps one call.
+// API kept: a call naming nothing still purges (as before); any dry-run spelling, anywhere, is now honoured.
 router.post('/maintenance/purge-removed-residue', async (req, res) => {
   const q = { ...req.query, ...(req.body || {}) };
-  const dryRun = q.dryRun === true || q.dryRun === '1' || q.dryRun === 'true';
+  const dryRun = dryRunOf(req, { defaultDry: false });
   const limit = q.limit !== undefined && q.limit !== '' ? int(q.limit, 0, 1000000, 0) : Infinity;
   try { res.json(await require('../../engine/residue-purge').purgeResidue({ dryRun, limit })); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 // Published rows with no picture (library-health publishedNoImage): restore a video poster where its URL pattern allows it,
-// else move the row to review with reason 'no-image' (reversible). ?dryRun=1 reports only (no network, no writes); ?limit=N.
+// else move the row to review with reason 'no-image' (reversible). DRY BY DEFAULT: it only reports (no network, no writes)
+// unless the call says ?apply=1; ?limit=N caps one applied call.
 router.post('/maintenance/repair-no-image', async (req, res) => {
   const q = { ...req.query, ...(req.body || {}) };
-  const dryRun = q.dryRun === true || q.dryRun === '1' || q.dryRun === 'true';
+  const dryRun = dryRunOf(req, { defaultDry: true });
   const limit = q.limit !== undefined && q.limit !== '' ? int(q.limit, 0, 1000000, 0) : Infinity;
   try { res.json(await require('../../engine/noimage-repair').repair({ dryRun, limit })); } catch (e) { res.status(500).json({ error: e.message }); }
 });

@@ -305,8 +305,11 @@ function borrowedPoster(row) {
 const HASH_MAX_TRIES = 5;
 const HASH_RETRY_AFTER_MS = 6 * 3600 * 1000;
 const HASH_PAUSE_ON_429_MS = 15 * 60 * 1000;
-const GONE = /\bhttp (?:400|404|410)\b|not an image|not decodable/i;
-let hashPausedUntil = 0; // a 429 from a picture host pauses both passes, so the backlog never hammers it
+// Gone at once: only an answer that says the picture does not exist. A truncated download or a CDN's 200 HTML page ('not
+// decodable', 'not an image') is a retryable try like any other.
+const GONE = /\bhttp (?:400|404|410)\b/i;
+const hostPause = new Map(); // host -> until: a 429 rests THAT host 15 min; the other hosts' rows go on
+const hostPaused = (host, now = Date.now()) => { const t = hostPause.get(host); if (t && t > now) return true; if (t) hostPause.delete(host); return false; };
 
 /** Every picture URL a row offers, in order. imageUrlOf takes only the first; an expired preview must not hide the original. */
 function pictureUrls(row) {
@@ -316,25 +319,31 @@ function pictureUrls(row) {
   return [...new Set(cands.filter((u) => typeof u === 'string' && /^https?:\/\//i.test(u) && !/\.(m3u8|mp4|webm|mov)(\?|#|$)/i.test(u)))];
 }
 
-/** Hash the first picture of a row that can be read. @returns {{phash}|{error, gone, limited}} */
+/**
+ * Hash the first picture of a row that can be read. A URL on a resting host is not asked; a 429 rests its host.
+ * @returns {{phash}|{error, gone, limited, asked}} limited: a host refused or rests (not the picture's fault); asked: a request was made
+ */
 async function fetchHash(row) {
   const urls = pictureUrls(row);
-  if (!urls.length) return { error: 'no picture url', gone: true, limited: false };
-  const reasons = []; let gone = true; let limited = false;
+  if (!urls.length) return { error: 'no picture url', gone: true, limited: false, asked: false };
+  const reasons = []; let gone = true; let limited = false; let asked = false;
   for (const url of urls) {
+    const host = hostOf(url);
+    if (hostPaused(host)) { limited = true; gone = false; continue; }
     let referer; try { referer = `${new URL(url).origin}/`; } catch { /* none */ }
+    asked = true;
     const v = await imagefilter.analyze(url, { referer, faces: false, hash: true });
     if (v && v.phash) return { phash: v.phash };
     const why = String((v && v.reason) || (v && v.status === 'ok' ? 'not decodable' : (v && v.status) || 'error'));
     reasons.push(why);
-    if (/http 429/.test(why)) { limited = true; break; }
+    if (/http 429/.test(why)) { hostPause.set(host, Date.now() + HASH_PAUSE_ON_429_MS); limited = true; gone = false; continue; }
     if (!GONE.test(why)) gone = false;
   }
-  return { error: reasons.join('; ').slice(0, 200), gone: gone && !limited, limited };
+  return { error: reasons.join('; ').slice(0, 200) || 'host resting after a 429', gone: gone && !limited, limited, asked };
 }
 
 const hashMiss = () => repo.db.prepare('UPDATE media SET phash_tries = ?, phash_at = ?, phash_error = ? WHERE id = ?');
-/** Record a failed attempt; give up (phash_error) on a gone picture or after HASH_MAX_TRIES. A 429 is not the picture's fault: not counted. */
+/** Record a failed attempt; give up (phash_error) on a gone picture or after HASH_MAX_TRIES. A 429 is not the picture's fault: not counted (but phash_at is set, so the retry waits). */
 function recordMiss(row, r, now = Date.now()) {
   const tries = (row.phash_tries || 0) + (r.limited ? 0 : 1);
   const error = r.limited ? null : r.gone ? `gone: ${r.error}` : tries >= HASH_MAX_TRIES ? `gave up after ${tries} tries: ${r.error}` : null;
@@ -356,9 +365,11 @@ async function hashRow(row, ctx) {
   if (!hash) {
     const r = await fetchHash(row);
     if (!r.phash) {
+      // Only its host is resting, and nothing was asked: leave the row exactly as it is (the retry pass comes back to it).
+      if (r.limited && !r.asked) { res.resting = (res.resting || 0) + 1; return null; }
       res.errors++;
+      if (r.limited) res.limited = true;
       if (recordMiss(row, r)) res.gaveUp = (res.gaveUp || 0) + 1;
-      if (r.limited) { hashPausedUntil = Date.now() + HASH_PAUSE_ON_429_MS; return 'limited'; }
       return null;
     }
     hash = r.phash; repo.media.setPhash(row.id, hash); res.hashed++;
@@ -387,7 +398,7 @@ async function hashPass(rows, s, res) {
     // event loop answers HTTP, and a 48-row hash pass was showing up as a multi-second hashSweep block.
     await new Promise((res2) => setTimeout(res2, 0));
     res.checked++;
-    if (await hashRow(row, ctx) === 'limited') { res.limited = true; break; }
+    await hashRow(row, ctx);
     last = row.seq;
   }
   for (const id of ctx.touched) {
@@ -401,13 +412,12 @@ async function hashSweep({ limit = 12, settings } = {}) {
   await dedupe.loadChunked().catch(() => {}); // a sweep that starts during the boot build would read a partial index
   const s = settings || settingsStore.get();
   const res = { checked: 0, hashed: 0, collapsed: 0, errors: 0, done: false };
-  if (Date.now() < hashPausedUntil) return { ...res, paused: true };
   const after = parseInt(repo.settings.get('hash_sweep_seq') || '0', 10) || 0;
   const rows = repo.db.prepare(`SELECT ${HASH_COLS} FROM media NOT INDEXED
     WHERE publish_state IN ('published','review') AND seq > ? ORDER BY seq LIMIT ?`).all(after, limit);
   if (!rows.length) { res.done = true; return res; }
   const last = await hashPass(rows, s, res);
-  if (last !== null) repo.settings.set('hash_sweep_seq', String(last)); // a 429 stops before the row it hit: that row is read again next time
+  if (last !== null) repo.settings.set('hash_sweep_seq', String(last)); // a row its host refused stays owed: the retry pass reads it
   if (res.collapsed || res.hashed) events.log('OK', `Hash sweep: ${res.hashed} hashed, ${res.collapsed} duplicate(s) collapsed (of ${res.checked} checked)`);
   return res;
 }
@@ -420,7 +430,7 @@ async function hashSweep({ limit = 12, settings } = {}) {
 async function hashRetrySweep({ limit = 20, settings, now = Date.now() } = {}) {
   const s = settings || settingsStore.get();
   const res = { checked: 0, hashed: 0, collapsed: 0, errors: 0, gaveUp: 0, wrapped: false };
-  if (!limit || Date.now() < hashPausedUntil) return { ...res, paused: Date.now() < hashPausedUntil };
+  if (!limit) return res;
   await dedupe.loadChunked().catch(() => {});
   const ceiling = parseInt(repo.settings.get('hash_sweep_seq') || '0', 10) || 0;
   const from = parseInt(repo.settings.get('hash_retry_seq') || '0', 10) || 0;
@@ -707,4 +717,4 @@ function startupSweepIfNeeded() {
   }, 1500).unref();
 }
 
-module.exports = { _progressCache: { clear: () => progressCache.clear(), setClock: (fn) => { progressClock = fn || (() => Date.now()); }, ttlMs: PROGRESS_TTL_MS, faceTtlMs: FACE_PROGRESS_TTL_MS }, clearBorrowedPosterHashes, repairSharedPosterCollapse, retireDeadFeeds, sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, faceSweep, faceSweepProgress, faceBackfill, physiqueSweep, physiqueSweepProgress, leanBiasSweep, leanBiasProgress, clearLeanBias, hashSweep, hashRetrySweep, hashSweepProgress, _hash: { pictureUrls, fetchHash, recordMiss, MAX_TRIES: HASH_MAX_TRIES, RETRY_AFTER_MS: HASH_RETRY_AFTER_MS, unpause: () => { hashPausedUntil = 0; } }, startImageSweep, stopImageSweep };
+module.exports = { _progressCache: { clear: () => progressCache.clear(), setClock: (fn) => { progressClock = fn || (() => Date.now()); }, ttlMs: PROGRESS_TTL_MS, faceTtlMs: FACE_PROGRESS_TTL_MS }, clearBorrowedPosterHashes, repairSharedPosterCollapse, retireDeadFeeds, sweep, startupSweepIfNeeded, imageSweep, imageSweepProgress, faceSweep, faceSweepProgress, faceBackfill, physiqueSweep, physiqueSweepProgress, leanBiasSweep, leanBiasProgress, clearLeanBias, hashSweep, hashRetrySweep, hashSweepProgress, _hash: { pictureUrls, fetchHash, recordMiss, MAX_TRIES: HASH_MAX_TRIES, RETRY_AFTER_MS: HASH_RETRY_AFTER_MS, unpause: () => { hostPause.clear(); }, hostPaused }, startImageSweep, stopImageSweep };

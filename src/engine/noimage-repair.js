@@ -6,10 +6,12 @@
  *   poster   a video whose URL has a known poster pattern (RedGIFs -poster.jpg, YouTube i.ytimg, Bluesky thumbnail.jpg; the
  *            same lib/imagefilter.deriveVideoPosterUrl the pipeline uses). The poster is read first; only a picture that
  *            downloads and decodes is stored as preview_url (its hash too, so dedupe sees it).
+ *            A 429 or 5xx from the poster host stops the run (`stoppedOn`) and leaves the row; a timeout or other error skips
+ *            the row (`posterSkipped`); only a 404/410 or a picture that does not decode counts as "no poster".
  *   review   anything else: moved to the review queue with reason 'no-image'. Reversible: approving it in Review publishes it
  *            again; nothing is deleted.
  *
- * dryRun reports what would happen without any network or write. Finding the rows walks media by rowid in WINDOW ranges with
+ * The admin route is dry by default (?apply=1 to act). dryRun reports what would happen without any network or write. Finding the rows walks media by rowid in WINDOW ranges with
  * a timer yield between them (never a whole-table statement); the work runs in batches of BATCH rows with a yield after each.
  */
 const repo = require('../db/repo');
@@ -68,7 +70,11 @@ async function repair({ dryRun = false, limit = Infinity, batch = BATCH, window 
         if (r.poster) {
           let referer; try { referer = `${new URL(r.poster).origin}/`; } catch { /* none */ }
           const v = await imagefilter.analyze(r.poster, { referer, faces: false, hash: true });
-          if (v && v.status === 'ok' && v.phash) { setPoster.run(r.poster, v.phash, r.id); out.postered++; ok = true; } else out.posterFailed++;
+          const why = String((v && v.reason) || '');
+          if (v && v.status === 'ok' && v.phash) { setPoster.run(r.poster, v.phash, r.id); out.postered++; ok = true; }
+          else if (/http (?:429|5\d\d)\b/.test(why)) { out.stoppedOn = `${why} from ${new URL(r.poster).hostname}`; break; } // the host is struggling: stop, leave the row
+          else if (!(v && v.status === 'ok') && !/http (?:404|410)\b/.test(why)) { out.posterSkipped = (out.posterSkipped || 0) + 1; continue; } // timeout etc.: not proof there is no poster
+          else out.posterFailed++; // 404/410, or a picture that downloaded but does not decode: there is no poster
         }
         if (!ok) {
           const t0 = Date.now();
@@ -80,6 +86,7 @@ async function repair({ dryRun = false, limit = Infinity, batch = BATCH, window 
       }
       out.batches++;
       await tick();
+      if (out.stoppedOn) break;
     }
     for (const id of touched) { repo.creators.refreshStats(id); await tick(); }
     if (out.postered || out.reviewed) repo.logAction('maintenance', 'no-image', 'repair-no-image', `${out.postered} poster(s) restored, ${out.reviewed} moved to review (no-image)`, 'admin');
