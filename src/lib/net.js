@@ -25,10 +25,17 @@ const blocked = new net.BlockList();
   ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24],
   ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24],
   ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4],
+  ['192.88.99.0', 24], // 6to4 relay anycast (deprecated): never a real origin
 ].forEach(([a, p]) => blocked.addSubnet(a, p, 'ipv4'));
 [
   ['::', 128], ['::1', 128], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8],
   ['2001:db8::', 32], ['100::', 64],
+  ['::', 96],            // IPv4-compatible ::a.b.c.d (::127.0.0.1)
+  ['::ffff:0:0:0', 96],  // IPv4-translated ::ffff:0:a.b.c.d (SIIT), e.g. ::ffff:0:7f00:1
+  ['64:ff9b:1::', 48],   // local-use NAT64
+  ['2002::', 16],        // 6to4: the address embeds an IPv4 that may be private
+  ['2001::', 32],        // Teredo
+  ['fec0::', 10],        // deprecated site-local
 ].forEach(([a, p]) => blocked.addSubnet(a, p, 'ipv6'));
 
 /** Extract the embedded IPv4 from ::ffff:a.b.c.d / ::ffff:7f00:1 / 64:ff9b::/96 forms. */
@@ -57,7 +64,7 @@ function isPrivateIp(ip) {
 /** Hostname pre-check (literal IPs + obviously local names). */
 function isPrivateHost(hostname, { allowInternal = false } = {}) {
   if (config.allowPrivateHosts) return false;
-  let h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  let h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, ''); // "localhost." is localhost
   if (!h) return true;
   if (allowInternal && (isInternalHost(h) || isVouchedOnion(h))) return false; // only for explicit, first-hop callers (see open())
   if (h.endsWith('.onion')) return true; // Tor hidden services are reachable only through the one vouched route below
@@ -265,7 +272,7 @@ function decode(res, buf, url) {
  * Open a validated connection and hand back the raw response (not yet
  * consumed). Follows redirects itself so every hop is re-validated.
  */
-function open(url, { method: method0 = 'GET', headers = {}, timeout = 20000, maxRedirects = 5, body: body0, allowInternal = false } = {}) {
+function open(url, { method: method0 = 'GET', headers = {}, timeout = 20000, maxRedirects = 5, body: body0, allowInternal = false, allowHop = null } = {}) {
   return new Promise((resolve, reject) => {
     let hops = 0;
     let method = method0;
@@ -304,6 +311,9 @@ function open(url, { method: method0 = 'GET', headers = {}, timeout = 20000, max
           // uncaught exception and take the whole server down).
           let next;
           try { next = new URL(loc, parsed); } catch { return reject(new HttpError('Invalid redirect', { url: target })); }
+          // The caller's own rule for every hop after the first (the media proxy's host allow-list): a listed host that
+          // redirects somewhere unlisted must fail like a direct request to that host.
+          if (allowHop && !allowHop(next)) return reject(new HttpError('Redirect to a host that is not allowed', { url: String(next), code: 'EBLOCKED' }));
           const nextHdrs = { ...hdrs };
           // 301/302/303 after a POST are followed as GET without the body (browser/curl behaviour).
           if (method === 'POST' && [301, 302, 303].includes(res.statusCode)) {

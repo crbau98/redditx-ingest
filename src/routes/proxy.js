@@ -56,6 +56,14 @@ function refererFor(host) {
   return null;
 }
 
+/** The proxy's allow-list: PRISM's own store, known CDN suffixes, and hosts ingestion already accepted. */
+function hostAllowed(hostname) {
+  const host = String(hostname || '').toLowerCase().replace(/\.+$/, '');
+  return host === config.storeHost || KNOWN_SUFFIXES.some((d) => host === d || host.endsWith(`.${d}`)) || repo.hosts.has(host);
+}
+/** Every redirect hop is held to the same rules as the first URL (net.open's allowHop). */
+const hopAllowed = (u) => (u.protocol === 'http:' || u.protocol === 'https:') && !net.isPrivateHost(u.hostname) && hostAllowed(u.hostname);
+
 function parseTarget(req) {
   const raw = req.query.url;
   if (!raw || typeof raw !== 'string' || raw.length > 2048) return { error: [400, 'Missing or invalid url'] };
@@ -64,8 +72,7 @@ function parseTarget(req) {
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return { error: [400, 'Invalid protocol'] };
   if (net.isPrivateHost(u.hostname)) return { error: [403, 'Blocked host'] };
   const host = u.hostname.toLowerCase();
-  const known = host === config.storeHost || KNOWN_SUFFIXES.some((d) => host === d || host.endsWith(`.${d}`)) || repo.hosts.has(host);
-  if (!known) return { error: [403, 'Host not allowed'] };
+  if (!hostAllowed(host)) return { error: [403, 'Host not allowed'] };
   return { url: u.toString(), host, origin: u.origin, pathname: u.pathname };
 }
 
@@ -118,7 +125,7 @@ async function servePrismMarked(req, res, t) {
   }
   if (!source) {
     let up;
-    try { up = await net.open(t.url, { headers: proxyHeaders(t.url), timeout: 15000, maxRedirects: 4 }); }
+    try { up = await net.open(t.url, { headers: proxyHeaders(t.url), timeout: 15000, maxRedirects: 4, allowHop: hopAllowed }); }
     catch (e) { return sendError(res, e.code === 'EBLOCKED' ? [403, 'Blocked host'] : [502, 'Upstream unreachable']); }
     const type = String(up.res.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
     if (up.res.statusCode !== 200 || !type.startsWith('image/') || type === 'image/svg+xml') { up.res.resume(); return sendError(res, [415, 'Only images can be marked']); }
@@ -155,12 +162,12 @@ router.get('/proxy', async (req, res) => {
   let upstream;
   const isCoomerData = (t.host === 'coomer.st' || t.host.endsWith('.coomer.st')) && /^\/data\//i.test(t.pathname || '');
   try {
-    upstream = await net.open(t.url, { headers: proxyHeaders(t.url, hasRange ? { range: req.headers.range } : {}), timeout: isCoomerData ? 6000 : 15000, maxRedirects: 4 });
+    upstream = await net.open(t.url, { headers: proxyHeaders(t.url, hasRange ? { range: req.headers.range } : {}), timeout: isCoomerData ? 6000 : 15000, maxRedirects: 4, allowHop: hopAllowed });
   } catch (e) {
     const thumbFallback = e.code !== 'EBLOCKED' ? coomerThumbFallback(t) : null;
     if (thumbFallback) {
       try {
-        upstream = await net.open(thumbFallback, { headers: proxyHeaders(thumbFallback), timeout: 10000, maxRedirects: 3 });
+        upstream = await net.open(thumbFallback, { headers: proxyHeaders(thumbFallback), timeout: 10000, maxRedirects: 3, allowHop: hopAllowed });
       } catch (e2) {
         return sendError(res, e2.code === 'EBLOCKED' ? [403, 'Blocked host'] : [502, 'Upstream unreachable']);
       }
@@ -214,7 +221,7 @@ router.get('/hls', async (req, res) => {
   const t = parseTarget(req);
   if (t.error) return sendError(res, t.error);
   let r;
-  try { r = await net.request(t.url, { headers: hlsHeaders(t.host, t.origin), timeout: 15000, maxBytes: 1_500_000, retries: 1 }); }
+  try { r = await net.request(t.url, { headers: hlsHeaders(t.host, t.origin), timeout: 15000, maxBytes: 1_500_000, retries: 1, allowHop: hopAllowed }); }
   catch (e) { return sendError(res, e.code === 'EBLOCKED' ? [403, 'Blocked host'] : [502, 'Upstream unreachable']); }
   // A signed playlist (Pornhub's exp=/e=, xHamster's) that went stale since the page was rendered: ask the
   // source for a current one and read that, so a viewer never gets a dead master playlist.
@@ -222,7 +229,7 @@ router.get('/hls', async (req, res) => {
     const fresh = await playback.refresh(t.url);
     if (fresh && fresh !== t.url) {
       try {
-        const retry = await net.request(fresh, { headers: hlsHeaders(t.host, t.origin), timeout: 15000, maxBytes: 1_500_000, retries: 1 });
+        const retry = await net.request(fresh, { headers: hlsHeaders(t.host, t.origin), timeout: 15000, maxBytes: 1_500_000, retries: 1, allowHop: hopAllowed });
         if (retry.status < 400) r = retry;
       } catch { /* the dead link's own error stands */ }
     }
@@ -256,4 +263,5 @@ router.get('/hls', async (req, res) => {
 });
 
 module.exports = router;
+module.exports._hostAllowed = hostAllowed; // test hook
 module.exports._refererFor = refererFor; // test hook: the hotlink Referer rules
