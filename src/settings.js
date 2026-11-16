@@ -11,6 +11,7 @@ const SCHEMA = {
   tickSeconds: { type: 'int', default: 30, min: 5, max: 600, label: 'Scheduler tick (seconds)' },
   maxConcurrentFeeds: { type: 'int', default: 8, min: 1, max: 24, label: 'Feeds synced at once (all platforms together)' },
   platformSlots: { type: 'text', default: '', label: 'Feeds per platform at once, e.g. "coomer=2, bluesky=4, telegram=1" (empty = built-in defaults; a platform not listed gets 2)' },
+  redgifsBackfillRunsPerDay: { type: 'int', default: 300, min: 0, max: 100000, label: 'RedGIFs backfill runs per day (its history reads added about 0.1 item per run; live polling is never limited by this)' },
   backfillRunsPerDay: { type: 'int', default: 4000, min: 0, max: 100000, label: 'Backfill runs per platform per day (history reads never take the place of live polling)' },
   platformDailyMb: { type: 'text', default: 'telegram=5000', label: 'Cap of media downloaded into the store per platform per UTC day, in MB, e.g. "telegram=5000" (empty = no cap). Telegram files are copied into the bucket, so this is also the daily storage growth' },
   platformDailyRuns: { type: 'text', default: '', label: 'Optional cap of feed runs per platform per day, e.g. "x=300, telegram=600" (empty = no cap)' },

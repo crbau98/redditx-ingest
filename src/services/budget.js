@@ -44,6 +44,7 @@ function allow(platform, lane, cfg = settingsStore.get()) {
   const cap = parseCaps(cfg.platformDailyRuns)[platform];
   if (cap !== undefined && (b.runs[platform] || 0) >= cap) return false;
   if (lane === 2 && (b.backfill[platform] || 0) >= (cfg.backfillRunsPerDay || 0)) return false;
+  if (lane === 2 && platform === 'redgifs' && cfg.redgifsBackfillRunsPerDay !== undefined && (b.backfill[platform] || 0) >= cfg.redgifsBackfillRunsPerDay) return false;
   if (bytesLeft(platform, cfg) <= 0) return false; // the day's download budget is spent
   return true;
 }

@@ -15,6 +15,16 @@ router.get('/feeds/idle', (req, res) => {
   const p = page(req, 500);
   res.json({ days, minRuns: 5, page: p.page, limit: p.limit, ...repo.runs.idleFeeds(new Date(Date.now() - days * 86400000).toISOString(), { minRuns: 5, limit: p.limit, offset: p.page * p.limit }) });
 });
+// Read-only: per-feed runs, fetched and added over the last ?days (default 7), busiest first (?sort=runs|added|fetched, ?platform=).
+// One aggregate over the run history (ix_runs_started), bounded by ?limit (default 100, at most 500).
+router.get('/feeds/yield', (req, res) => {
+  const days = int(req.query.days, 1, 90, 7);
+  const p = page(req, 500);
+  const sort = ['runs', 'added', 'fetched'].includes(req.query.sort) ? req.query.sort : 'runs';
+  const platform = req.query.platform ? String(req.query.platform) : null;
+  const items = repo.runs.yieldByFeed(new Date(Date.now() - days * 86400000).toISOString(), { platform, limit: p.limit, offset: p.page * p.limit, sort });
+  res.json({ days, sort, platform, page: p.page, limit: p.limit, items });
+});
 router.get('/feeds/foreign', (req, res) => res.json(require('../../engine/deepsearch').foreignFeeds({ limit: req.query.limit, offset: req.query.offset })));
 router.get('/feeds', (req, res) => {
   const { platform, kind, status, q, creatorId, enabled } = req.query;
