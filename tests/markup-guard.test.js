@@ -101,3 +101,34 @@ test('the guard is one linear pass: a million "<" characters with no tag cost al
   const r2 = timed(() => guard.assertParseable(rep('<a ', 1_900_000), 'html')); // tags that never close
   assert.ok(r2.ms < 100, `${r2.ms} ms`);
 });
+
+// ---- Crucible v4.21.0 release gate: stray end tags and CDATA must not hide nesting from the scanner
+
+test('stray end tags: "<div></b>" x 90000 (791 KB) and x 222000 (2 MB) are refused in under 200 ms (was 91.8 s)', () => {
+  for (const n of [20000, 90000, 222000]) {
+    const r = timed(() => web.extractPage('<html><body>' + '<div></b>'.repeat(n), 'https://example.com/p', {}));
+    assert.ok(r.err && r.err.markupGuard, `${n} refused`);
+    assert.ok(r.ms < 200, `${n} took ${r.ms} ms`);
+  }
+});
+
+test('stray end tags in XML are refused too', () => {
+  for (const doc of ['<rss><channel>' + '<item></x>'.repeat(60000), '<rss><channel>' + '<a></b>'.repeat(200000)]) {
+    const r = timed(() => rss.parseFeed(doc, 'https://example.com/f'));
+    assert.ok(r.err && r.err.markupGuard && r.ms < 200, `${r.ms} ms`);
+  }
+});
+
+test('an end tag pops only up to its nearest matching open element and is ignored when nothing matches', () => {
+  assert.equal(guard.assertParseable('<div><span><b></div>', 'html').maxDepth, 3, 'closing div pops the span and b');
+  assert.equal(guard.assertParseable('<div></b><span></i></div>' + '<div></b>'.repeat(5), 'html').maxDepth, 5, 'stray </b> and </i> do not pop');
+  assert.equal(guard.assertParseable('<div></div>'.repeat(50000), 'html').maxDepth, 1, 'balanced markup stays shallow');
+  assert.equal(guard.assertParseable('<a><b></b></a>'.repeat(1000), 'html').maxDepth, 2);
+});
+
+test('HTML reads "<![CDATA[" as a bogus comment ending at the first ">": tags after it are still counted', () => {
+  const html = '<html><body>' + '<![CDATA[>' + '<div>'.repeat(5000);
+  const r = timed(() => web.extractPage(html, 'https://example.com/p', {}));
+  assert.ok(r.err && r.err.markupGuard && r.ms < 200, `${r.ms} ms`);
+  assert.equal(guard.assertParseable('<rss><channel><item><title><![CDATA[<div><div><div>]]></title></item></channel></rss>', 'xml').maxDepth, 4, 'real CDATA in XML is still skipped');
+});

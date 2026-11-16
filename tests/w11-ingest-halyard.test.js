@@ -92,18 +92,37 @@ test('RedGIFs backfill is capped per day by its own setting; live polling and ot
   assert.equal(budget.allow('bluesky', 2, cfg), true, 'another platform keeps the generic cap');
 });
 
-test('a RedGIFs backfill closes itself after BACKFILL_DRY_STOP slices that added nothing', async () => {
+test('backfill dry count: only slices of already-stored items count; rejected slices reset it; empty slices leave it', () => {
+  const dry = engine.nextBackfillDry;
+  assert.equal(dry(2, { fetched: 10, dupes: 10, added: 0, skipped: 0, blocked: 0 }), 3, 'all stored: counts');
+  assert.equal(dry(5, { fetched: 10, dupes: 4, added: 0, skipped: 6, blocked: 0 }), 0, 'gate-filtered items: history still has content, reset');
+  assert.equal(dry(5, { fetched: 10, dupes: 0, added: 0, skipped: 0, blocked: 10 }), 0, 'blocked items reset');
+  assert.equal(dry(5, { fetched: 10, dupes: 9, added: 1 }), 0, 'an added item resets');
+  assert.equal(dry(5, { fetched: 0, dupes: 0, added: 0 }), 5, 'an empty slice says nothing');
+});
+
+test('empty backfill slices never close a RedGIFs backfill (BACKFILL_DRY_STOP needs stored items, not silence)', async () => {
   const registry = require('../src/sources'); const real = registry.get;
   const rg = real('redgifs'); const realFetch = rg.fetch;
   let slice = 0;
   rg.fetch = async () => { slice++; return { items: [], via: 't', cursor: { bfPage: slice + 1 }, backfillPending: true }; };
   try {
     const f = mkFeed('redgifs', 'user', 'drystopper');
-    for (let i = 0; i < engine.BACKFILL_DRY_STOP; i++) await engine.runFeed(f.id, 'schedule');
+    for (let i = 0; i < engine.BACKFILL_DRY_STOP; i++) await engine.runFeed(f.id, 'schedule'); // exactly the count that used to close it
     const cur = JSON.parse(repo.feeds.get(f.id).cursor);
-    assert.equal(cur.bfDone, true); assert.equal(cur.backfillPending, false); assert.equal(cur.bfStopped, 'dry');
-    assert.equal(require('../src/engine/backfill').pending({ cursor: cur }), false);
+    assert.notEqual(cur.bfDone, true); assert.equal(cur.backfillPending, true); assert.ok(!cur.bfStopped);
   } finally { rg.fetch = realFetch; }
+});
+
+test('a productive GFF feed keeps its own interval; the floor applies only while nothing was added', () => {
+  const g = mkFeed('gff', 'user', 'https://justthegays.tv/performer/floor-prod', { interval: 360 });
+  assert.equal(engine.floorApplies(g, 10), false, 'this run added items');
+  assert.equal(engine.floorApplies(g, 0), true, 'no run and nothing added in a week: floor');
+  seed(g.id, [{ daysAgo: 2, fetched: 10, added: 10 }]);
+  assert.equal(engine.floorApplies(g, 0), false, 'items added in the last 7 days: no floor');
+  const d = Date.parse(engine.computeNextRun(g, 0, 0, 0.5, { floor: engine.floorApplies(g, 0) })) - Date.now();
+  assert.ok(d < 0.3 * DAY, `3 h-ish at tempo 0.5, not 36 h (${d / 3600000} h)`);
+  assert.equal(engine.floorApplies(mkFeed('web', 'page', 'https://floor.example/y'), 0), false, 'other platforms have no floor');
 });
 
 test('coomer pacing: slow poster waits half the median gap (clamped to base..2 days); fast poster stays at base', () => {
