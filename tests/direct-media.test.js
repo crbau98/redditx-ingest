@@ -27,6 +27,8 @@ describe('client helper', () => {
     assert.equal(M.mediaSrc('https://cdn.gff.network/a.jpg'), PROXY('https://cdn.gff.network/a.jpg'), 'needs a Referer');
     assert.equal(M.mediaSrc('https://example.com/a.jpg'), PROXY('https://example.com/a.jpg'));
     assert.equal(M.mediaSrc('https://i.redd.it.evil.com/a.jpg'), PROXY('https://i.redd.it.evil.com/a.jpg'), 'a lookalike host is not the listed host');
+    assert.equal(M.mediaSrc('https://i.redd.it:8443/a.jpg'), PROXY('https://i.redd.it:8443/a.jpg'), 'a non-default port is not what the CSP allows');
+    assert.equal(M.mediaSrc('https://i.redd.it:443/a.jpg'), 'https://i.redd.it/a.jpg'.replace('https://i.redd.it/','https://i.redd.it:443/'), 'an explicit default port is still the default port');
     assert.equal(M.mediaSrc('https://user:pw@i.redd.it/a.jpg'), PROXY('https://user:pw@i.redd.it/a.jpg'), 'no credentials in a direct URL');
   });
 
