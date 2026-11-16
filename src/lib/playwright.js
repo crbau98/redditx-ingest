@@ -77,6 +77,14 @@ function exclusive(fn) {
   chain = run.catch(() => {});
   return run;
 }
+// A launched Chromium is a few hundred MB of container memory: close it after config.playwright.idleMs without a render.
+let idleTimer = null;
+function touchIdle() {
+  if (idleTimer) clearTimeout(idleTimer);
+  if (!config.playwright.idleMs) return;
+  idleTimer = setTimeout(() => { close().catch(() => {}); }, config.playwright.idleMs);
+  if (idleTimer.unref) idleTimer.unref();
+}
 
 const CHALLENGE = `(() => {
   const t = (document.title || '').toLowerCase();
@@ -146,7 +154,7 @@ function renderPages(url, opts = {}) {
   const settleMs = Math.min(Math.max(opts.settleMs ?? 700, 100), 5000);
   const budgetMs = opts.budgetMs || config.playwright.renderBudgetMs;
   const queuedAt = Date.now();
-  return exclusive(async () => {
+  const run = exclusive(async () => {
     if (!enabled()) throw skip('Playwright rendering is not enabled (PLAYWRIGHT_ENABLED)');
     if (Date.now() - queuedAt > config.playwright.maxQueueWaitMs) throw skip('the browser is busy with another page');
     const first = await assertAllowed(url);
@@ -177,6 +185,7 @@ function renderPages(url, opts = {}) {
     });
     return { via: 'playwright', ...r };
   });
+  return run.finally(touchIdle);
 }
 
 /* ------------------------------------------------------------------ status */
@@ -199,4 +208,4 @@ async function close() {
   return exclusive(async () => { const b = browser; browser = null; if (b) await b.close().catch(() => {}); });
 }
 
-module.exports = { enabled, available, status, renderPages, close, CHALLENGE };
+module.exports = { _touchIdle: touchIdle, enabled, available, status, renderPages, close, CHALLENGE };
