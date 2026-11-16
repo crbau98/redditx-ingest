@@ -117,6 +117,8 @@ router.post('/ai/triage', async (req, res) => {
 /* --------------------------------------------------------- loop-block profiles */
 // CPU profiles lib/blockwatch saved around multi-second event-loop blocks (at most two). Open one in Chrome DevTools
 // (Performance) or speedscope to see the function that held the loop.
+// The full health payload (job and SQL behind a loop block, profile files): the public /api/health leaves those out.
+router.get('/health', (req, res) => { const { code, body } = require('../public').healthPayload({ detail: true }); res.status(code).json(body); });
 router.get('/profiles', (req, res) => res.json({ files: require('../../lib/blockwatch').profileFiles() }));
 router.get('/profiles/:name', (req, res) => {
   const file = require('../../lib/blockwatch').profilePath(req.params.name);

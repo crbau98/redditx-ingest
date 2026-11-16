@@ -10,6 +10,15 @@
  *   work(label)    one shared "current job" label (the sweeps and timers that run one at a time)
  *   enter(label)   a label for one of several jobs that overlap (feed runs, around()); returns leave()
  *
+ * Blame is MEASURED, not inferred. `enter()`/`around()` labels say which async jobs were pending, which is not who held the
+ * loop: a job that awaits stays "active" through every yield, so three overlapping jobs were all named for one block.
+ * Synchronous stretches are therefore timed where they run:
+ *   slice(label, fn)   run fn() and record how long it held the loop (a chunk of index adds, a JSON parse, ...)
+ *   instrumentDb(db)   time every better-sqlite3 call (run/get/all/iterate, exec, transaction, pragma); a call over
+ *                      SLICE_MIN_MS is recorded under its SQL text, so a block reads `sql: UPDATE media SET ...`
+ * A block names its culprit (`rec.culprit`, `rec.slices`) when the timed work in its window explains at least half of it; otherwise
+ * `rec.job` falls back to the pending labels and `culprit` is null (CPU in untimed JS, or GC: see gcMs and the profile).
+ *
  * Also recorded, to tell a slow function from the runtime:
  *   - garbage-collection pauses over GC_LOG_MS (PerformanceObserver 'gc'), and how much of each block was GC;
  *   - a CPU profile around any block over PROFILE_BLOCK_MS: a low-rate sampling profile runs in rolling
@@ -32,6 +41,64 @@ let seq = 0;
 // Jobs that finished inside the current sample window: a block is measured only at the next tick, so a job whose
 // last synchronous stretch IS the block has already left by then. It still owns that window.
 const leftThisWindow = [];
+
+// Timed synchronous work inside the current sample window: label -> { ms, n }. Cleared at every tick.
+const SLICE_MIN_MS = Number(process.env.PRISM_SLICE_MIN_MS) || 25;
+const SLICE_LABELS_MAX = 40;
+let windowSlices = new Map();
+
+function noteSlice(label, ms) {
+  if (ms < SLICE_MIN_MS) return;
+  const cur = windowSlices.get(label);
+  if (cur) { cur.ms += ms; cur.n++; } else if (windowSlices.size < SLICE_LABELS_MAX) windowSlices.set(label, { ms, n: 1 });
+}
+
+/** Run a synchronous stretch of work under a name, timing it. Returns the elapsed ms. Never swallows errors. */
+function slice(label, fn) {
+  const t = performance.now();
+  try { fn(); } finally { noteSlice(String(label || 'unknown'), performance.now() - t); }
+  return performance.now() - t;
+}
+
+const sqlLabel = (sql) => `sql: ${String(sql).replace(/\s+/g, ' ').trim().slice(0, 90)}`;
+const wrapped = new WeakSet();
+
+/**
+ * Time every synchronous better-sqlite3 call on `db` (the serving thread's connection). Idempotent. Cost: two clock reads per
+ * call; the statement wrapper is built once per db.prepare().
+ */
+function instrumentDb(db) {
+  if (!db || wrapped.has(db) || typeof db.prepare !== 'function') return false;
+  wrapped.add(db);
+  const timed = (label, fn, self, args) => {
+    const t = performance.now();
+    try { return fn.apply(self, args); } finally { noteSlice(label, performance.now() - t); }
+  };
+  const prepare = db.prepare;
+  db.prepare = function prepareTimed(sql) {
+    const st = prepare.call(this, sql);
+    const label = sqlLabel(sql);
+    for (const m of ['run', 'get', 'all']) {
+      const orig = st[m];
+      if (typeof orig === 'function') st[m] = function timedStatement(...a) { return timed(label, orig, this, a); };
+    }
+    return st; // iterate() is a generator: each step is short and it is rare here, so it is left alone
+  };
+  for (const m of ['exec', 'pragma']) {
+    const orig = db[m];
+    if (typeof orig === 'function') db[m] = function timedDb(sql, ...rest) { return timed(sqlLabel(`${m} ${sql}`), orig, this, [sql, ...rest]); };
+  }
+  const transaction = db.transaction;
+  db.transaction = function transactionTimed(fn) {
+    const t = transaction.call(this, fn);
+    const label = `transaction ${(fn && fn.name) || 'anonymous'}`;
+    const wrapT = (call) => function timedTxn(...a) { return timed(label, call, this, a); };
+    const out = wrapT(t);
+    for (const k of ['deferred', 'immediate', 'exclusive']) if (typeof t[k] === 'function') out[k] = wrapT(t[k]);
+    return out;
+  };
+  return true;
+}
 
 let worst = { ms: 0, job: null, at: null };
 const recent = []; // last few blocks, for the admin console
@@ -149,7 +216,7 @@ function stopProfiler() {
 }
 
 /* ---------------------------------------------------------------- the watch */
-function reset() { worst = { ms: 0, job: null, at: null }; recent.length = 0; gcWorst = { ms: 0, kind: null, at: null }; leftThisWindow.length = 0; }
+function reset() { windowSlices = new Map(); worst = { ms: 0, job: null, at: null }; recent.length = 0; gcWorst = { ms: 0, kind: null, at: null }; leftThisWindow.length = 0; }
 
 /**
  * Could this block have lasted PROFILE_BLOCK_MS? A measured length can be short by up to one sample interval (the tick's
@@ -163,9 +230,15 @@ function noteBlock(ms) {
   const gcMs = Math.round(gcSinceTick);
   gcSinceTick = 0;
   const jobs = labels();
+  const timed = [...windowSlices].map(([label, v]) => ({ label, ms: Math.round(v.ms), n: v.n })).sort((a, b) => b.ms - a.ms).slice(0, 5);
+  windowSlices = new Map();
   leftThisWindow.length = 0; // the window is over: jobs that left in it are forgotten
   if (ms < THRESHOLD_MS) return null;
-  const rec = { ms: Math.round(ms), job: jobs.length ? jobs.join(', ') : 'idle', jobs, gcMs, at: new Date().toISOString() };
+  // the culprit is the timed work that explains at least half of the block; the pending labels are only context
+  const top = timed[0];
+  const culprit = top && top.ms >= ms * 0.5 ? top : null;
+  const pending = jobs.length ? jobs.join(', ') : 'idle';
+  const rec = { ms: Math.round(ms), job: culprit ? `${culprit.label} (${culprit.ms} ms${culprit.n > 1 ? `, ${culprit.n} calls` : ''})` : pending, culprit: culprit ? culprit.label : null, slices: timed, pending, jobs, gcMs, at: new Date().toISOString() };
   if (ms > worst.ms) worst = rec;
   recent.push(rec);
   if (recent.length > 5) recent.shift();
@@ -208,12 +281,14 @@ function start() {
       lastTick = now;
       const ms = Math.max(hist.max / 1e6, late);
       hist.reset();
-      if (prev && ms >= THRESHOLD_MS) { extendBlock(prev, ms); prev = null; gcSinceTick = 0; leftThisWindow.length = 0; return; }
+      if (prev && ms >= THRESHOLD_MS) { extendBlock(prev, ms); prev = null; gcSinceTick = 0; leftThisWindow.length = 0; windowSlices = new Map(); return; }
       prev = noteBlock(ms);
     } catch { /* never let the watch itself stall the server */ }
   }, INTERVAL_MS);
   if (timer.unref) timer.unref();
   startProfiler();
+  // only a database this process already opened: the watch must never be the reason a connection is created
+  try { const m = require.cache[require.resolve('../db')]; if (m && m.exports && m.exports.db) instrumentDb(m.exports.db); } catch { /* no database in this process: the labels still work */ }
 }
 
 function stop() {
@@ -241,6 +316,6 @@ function profilePath(name) {
 }
 
 module.exports = {
-  work, enter, current, labels, around, start, stop, reset, lastBlock, blocks, lastGc, profiles, profileFiles, profilePath,
-  _noteBlock: noteBlock, _extendBlock: extendBlock, _noteGc: noteGc, _writeProfile: writeProfile, PROFILE_KEEP,
+  work, enter, slice, instrumentDb, current, labels, around, start, stop, reset, lastBlock, blocks, lastGc, profiles, profileFiles, profilePath,
+  _noteSlice: noteSlice, _noteBlock: noteBlock, _extendBlock: extendBlock, _noteGc: noteGc, _writeProfile: writeProfile, PROFILE_KEEP,
 };

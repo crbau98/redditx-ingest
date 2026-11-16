@@ -5,6 +5,7 @@
  * gallery working through all three. Videos are streamed, never cached.
  */
 const fs = require('fs');
+const fsp = fs.promises;
 const path = require('path');
 const crypto = require('crypto');
 const config = require('../config');
@@ -58,33 +59,50 @@ let approx = -1; // running byte estimate; unknown until the first full walk
 function scheduleEvict() {
   if (evictScheduled || Date.now() - lastEvict < 60000) return;
   evictScheduled = true;
-  setImmediate(() => { evictScheduled = false; evict(); });
+  setImmediate(() => { evictScheduled = false; evict().catch(() => {}); });
 }
+
+/**
+ * Trim the cache to 85% of its budget when the running estimate says it is over (or unknown, after a restart). The walk is
+ * asynchronous: readdir/stat of tens of thousands of files, one synchronous call each, held the event loop for the whole walk
+ * (a cold network volume turns each stat into a disk read: seconds to minutes with the loop stopped). Now every call is a thread-pool
+ * request, stats run 64 at a time, and the loop gets a turn between directories and between batches of unlinks.
+ * Returns a promise; a second call while a walk is running joins it.
+ */
+let walking = null;
 function evict({ force = false } = {}) {
-  try {
-    if (!force && Date.now() - lastEvict < 60000) return;
-    lastEvict = Date.now();
-    if (approx >= 0 && approx <= maxBytes) return; // cheap path: no directory walk
-    const files = [];
-    let total = 0;
-    for (const sub of fs.readdirSync(dir)) {
-      const subDir = path.join(dir, sub);
-      for (const f of fs.readdirSync(subDir)) {
-        if (f.endsWith('.json')) continue;
-        const st = fs.statSync(path.join(subDir, f));
-        files.push({ p: path.join(subDir, f), t: st.mtimeMs, s: st.size });
-        total += st.size;
-      }
+  if (walking) return walking;
+  if (!force && Date.now() - lastEvict < 60000) return Promise.resolve();
+  lastEvict = Date.now();
+  if (approx >= 0 && approx <= maxBytes) return Promise.resolve(); // cheap path: no directory walk
+  walking = walk().catch(() => { /* ignore */ }).finally(() => { walking = null; });
+  return walking;
+}
+const turn = () => new Promise((r) => setTimeout(r, 0));
+async function walk() {
+  const files = [];
+  let total = 0;
+  for (const sub of await fsp.readdir(dir)) {
+    const subDir = path.join(dir, sub);
+    let names;
+    try { names = (await fsp.readdir(subDir)).filter((f) => !f.endsWith('.json')); } catch { continue; }
+    for (let i = 0; i < names.length; i += 64) {
+      const part = names.slice(i, i + 64);
+      const sts = await Promise.all(part.map((f) => fsp.stat(path.join(subDir, f)).catch(() => null)));
+      sts.forEach((st, k) => { if (!st) return; files.push({ p: path.join(subDir, part[k]), t: st.mtimeMs, s: st.size }); total += st.size; });
     }
-    approx = total;
-    if (total <= maxBytes) return;
-    files.sort((a, b) => a.t - b.t);
-    for (const f of files) {
-      if (total <= maxBytes * 0.85) break;
-      try { fs.unlinkSync(f.p); fs.unlinkSync(`${f.p}.json`); approx -= f.s; } catch { /* ignore */ }
-      total -= f.s;
-    }
-  } catch { /* ignore */ }
+    await turn();
+  }
+  approx = total;
+  if (total <= maxBytes) return;
+  files.sort((a, b) => a.t - b.t);
+  let n = 0;
+  for (const f of files) {
+    if (total <= maxBytes * 0.85) break;
+    try { await fsp.unlink(f.p); await fsp.unlink(`${f.p}.json`); approx -= f.s; } catch { /* ignore */ }
+    total -= f.s;
+    if (++n % 200 === 0) await turn();
+  }
 }
 
 module.exports = { get, put, evict, MAX_FILE, get enabled() { return enabled; } };

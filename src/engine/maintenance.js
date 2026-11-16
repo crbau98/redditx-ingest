@@ -592,8 +592,8 @@ function startupSweepIfNeeded() {
       const s = settingsStore.get();
       const sig = `${physique.enabled(s) ? 1 : 0}|${physique.threshold(s)}`;
       if (String(repo.settings.get('physique_boot_reapply_sig') || '') !== sig) {
-        physique.reapply(s);
-        repo.settings.set('physique_boot_reapply_sig', sig);
+        // chunked: the synchronous pass was one main-thread stretch that grows with the library
+        physique.reapplyAsync(s).then(() => repo.settings.set('physique_boot_reapply_sig', sig)).catch((e) => events.log('WARN', `Body filter: ${e.message}`));
       }
     } catch (e) { events.log('WARN', `Body filter: ${e.message}`); }
     physique.textSweep(settingsStore.get()).catch((e) => events.log('WARN', `Body filter: ${e.message}`));

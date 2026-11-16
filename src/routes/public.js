@@ -209,7 +209,12 @@ async function vocabCached() {
 // Event-loop delay: when the server stalls (a long synchronous job), pages time out even though nothing crashed.
 const loopDelay = require('perf_hooks').monitorEventLoopDelay({ resolution: 50 });
 loopDelay.enable();
-router.get('/health', (req, res) => {
+/**
+ * The health payload. `detail: false` (the public route) leaves out what only an operator needs and an outsider should not read:
+ * the job and SQL text behind a loop block (feed ids, table and column names), CPU-profile file names. The admin route
+ * (GET /api/admin/health) returns everything.
+ */
+function healthPayload({ detail }) {
   let dbOk = true;
   try { repo.db.prepare('SELECT 1').get(); } catch { dbOk = false; }
   const mem = process.memoryUsage();
@@ -222,7 +227,7 @@ router.get('/health', (req, res) => {
   const gc = blockwatch.lastGc();
   blockwatch.reset(); // next reader sees the next window, not all-time history
   const warnings = [];
-  if (block && block.ms > 1000) warnings.push(`event loop blocked ${block.ms} ms during ${block.job}`);
+  if (block && block.ms > 1000) warnings.push(detail ? `event loop blocked ${block.ms} ms during ${block.job}` : `event loop blocked ${block.ms} ms`);
   if (loop.maxMs > 5000) warnings.push(`event loop stalled ${loop.maxMs} ms since the last health check`);
   else if (loop.maxMs > 1000) warnings.push(`event loop paused ${loop.maxMs} ms since the last health check`);
   try {
@@ -232,8 +237,16 @@ router.get('/health', (req, res) => {
   if (!disk.known) warnings.push('disk size unknown: the volume watchdog cannot protect the data volume');
   else if (disk.level === 'paused') warnings.push(`data volume ${disk.usedPct}% full: ingestion is paused`);
   else if (disk.level === 'warn') warnings.push(`data volume ${disk.usedPct}% full`);
-  // Still HTTP 200 while the database answers (the platform's health check must not restart a working site over a warning).
-  res.status(dbOk ? 200 : 503).json({ status: dbOk && disk.known ? 'ok' : 'degraded', warnings, version: config.version, uptime: Math.round(process.uptime()), db: dbOk, disk, memMb: { rss: mb(mem.rss), heap: mb(mem.heapUsed), heapTotal: mb(mem.heapTotal), external: mb(mem.external), arrayBuffers: mb(mem.arrayBuffers) }, loop, block, gc, profiles: blockwatch.profiles(), timestamp: new Date().toISOString() });
+  const publicBlock = block ? { ms: block.ms, gcMs: block.gcMs, at: block.at } : null;
+  return {
+    code: dbOk ? 200 : 503,
+    // Still HTTP 200 while the database answers (the platform's health check must not restart a working site over a warning).
+    body: { status: dbOk && disk.known ? 'ok' : 'degraded', warnings, version: config.version, uptime: Math.round(process.uptime()), db: dbOk, disk, memMb: { rss: mb(mem.rss), heap: mb(mem.heapUsed), heapTotal: mb(mem.heapTotal), external: mb(mem.external), arrayBuffers: mb(mem.arrayBuffers) }, loop, block: detail ? block : publicBlock, gc, ...(detail ? { profiles: blockwatch.profiles() } : {}), timestamp: new Date().toISOString() },
+  };
+}
+router.get('/health', (req, res) => {
+  const { code, body } = healthPayload({ detail: false });
+  res.status(code).json(body);
   // The platform's probe decides whether this deploy is good. Tell the boot sequence that the
   // server is up, so the cache warm-up does not start before the probe has been answered.
   require('../lib/ready').markHealthy();
@@ -361,11 +374,17 @@ router.get('/discover', asyncRoute(cacheSnapshot(async () => await discoverView(
 router.get('/stats', asyncRoute(cacheSnapshot(async () => await snapshot('stats'))));
 router.get('/graph', asyncRoute(cacheSnapshot(async () => await graphView())));
 
+/** The public list, as the route answers it (also what scripts/bench-media-list.js times). */
+function mediaList(query) {
+  const r = repo.media.list(mediaFilters(query));
+  return { ...r, items: r.items.map(briefMedia) };
+}
+
 router.get('/media', (req, res) => {
-  const r = repo.media.list(mediaFilters(req.query));
+  const out = mediaList(req.query);
   // Short cache: lists are cheap but the browser can reuse them while the user moves between views.
   res.set('Cache-Control', 'public, max-age=15, stale-while-revalidate=60');
-  res.json({ ...r, items: r.items.map(briefMedia) });
+  res.json(out);
 });
 
 router.get('/media/:id', (req, res) => {
@@ -397,7 +416,29 @@ router.get('/media/:id/similar', (req, res) => {
 });
 
 const engagementLimiter = rateLimit({ windowMs: 60 * 1000, max: 90, standardHeaders: true, legacyHeaders: false, message: { error: 'Slow down' } });
-router.post('/media/:id/view', engagementLimiter, (req, res) => { repo.media.bumpView(req.params.id); res.json({ ok: true }); });
+/**
+ * One like and one view per address and item per day. The limiter alone allowed 90 requests a minute from one address, which was 45
+ * likes and 45 views on a single item in under a minute. The memory is per process (a restart forgets it, which at worst lets a
+ * viewer count once more) and bounded: when it is full the oldest entries go first.
+ */
+const seenEngagement = new Map(); // `${kind}|${ip}|${id}` -> { at, state }
+const ENGAGEMENT_TTL_MS = 24 * 3600 * 1000;
+const ENGAGEMENT_MAX = 200000;
+function engagementOnce(req, kind, id, state = 1) {
+  const key = `${kind}|${req.ip}|${id}`;
+  const now = Date.now();
+  const hit = seenEngagement.get(key);
+  if (hit && now - hit.at < ENGAGEMENT_TTL_MS) return hit;
+  seenEngagement.delete(key); // an expired entry moves to the back when it is set again
+  seenEngagement.set(key, { at: now, state });
+  if (seenEngagement.size > ENGAGEMENT_MAX) for (const k of seenEngagement.keys()) { seenEngagement.delete(k); if (seenEngagement.size <= ENGAGEMENT_MAX * 0.9) break; }
+  return null;
+}
+router.post('/media/:id/view', engagementLimiter, (req, res) => {
+  if (engagementOnce(req, 'view', req.params.id)) return res.json({ ok: true, counted: false });
+  repo.media.bumpView(req.params.id);
+  res.json({ ok: true });
+});
 // A viewer's browser could not load this item: verify it at the source (never hides on its own).
 router.post('/media/:id/broken', engagementLimiter, (req, res) => {
   if (!/^[0-9a-f-]{36}$/i.test(req.params.id)) return res.status(400).json({ error: 'Bad id' });
@@ -406,6 +447,13 @@ router.post('/media/:id/broken', engagementLimiter, (req, res) => {
 });
 router.post('/media/:id/like', engagementLimiter, (req, res) => {
   const delta = req.body && req.body.delta === -1 ? -1 : 1;
+  const key = `like|${req.ip}|${req.params.id}`;
+  const mine = seenEngagement.get(key);
+  const liked = !!mine && Date.now() - mine.at < ENGAGEMENT_TTL_MS && mine.state === 1;
+  // a like counts once per address and day; an un-like only undoes a like this address made
+  if (delta === 1 && liked) return res.json({ ok: true, counted: false });
+  if (delta === -1 && !liked) return res.json({ ok: true, counted: false });
+  if (delta === 1) { seenEngagement.delete(key); engagementOnce(req, 'like', req.params.id, 1); } else seenEngagement.delete(key);
   repo.media.bumpLike(req.params.id, delta);
   res.json({ ok: true });
 });
@@ -688,4 +736,7 @@ module.exports._warmIndexes = warmIndexes; // test hook: the label wrapper every
 module.exports.warmPrep = warmPrep;
 module.exports.publicCreator = publicCreator;
 module.exports.suggestCached = suggestCached;
+module.exports.mediaList = mediaList;
+module.exports.healthPayload = healthPayload;
+module.exports._seenEngagement = seenEngagement;
 module.exports.suggestCache = suggestCache;

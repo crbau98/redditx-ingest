@@ -123,6 +123,13 @@ function compute(now = Date.now()) {
   return { scores, volumeP95, p95ByPlatform };
 }
 
+const WRITE_BATCH = 400;
+/** What the aggregate worker returns: the rank only (the component breakdown stays behind explain()). */
+function rank(now = Date.now()) {
+  const { scores, volumeP95 } = compute(now);
+  return { scores: scores.map((x) => ({ id: x.id, score: x.score })), volumeP95 };
+}
+
 let running = null;
 let lastRun = 0;
 let lastResult = null;
@@ -136,10 +143,16 @@ function recompute({ force = false } = {}) {
   if (!force && Date.now() - lastRun < 60 * 1000) return lastResult;
   running = (async () => {
     const started = Date.now();
-    const { scores, volumeP95 } = compute();
+    // The three library-wide aggregate scans run on the aggregate worker thread (lib/snapshots + lib/aggregate-jobs: inline in tests
+    // and for ':memory:'). On the serving thread this was one synchronous stretch (282 ms warm on 300k synthetic rows, ~1 s at 1M, and
+    // the whole cold read of the media table on a volume whose page cache had gone). Only the UPDATEs stay here, in short batches.
+    const { scores, volumeP95 } = await require('../lib/snapshots').refresh('popularity');
     const update = db.prepare(`UPDATE creators SET popularity = ?, popularity_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`);
     const write = db.transaction((list) => { for (const s of list) update.run(s.score, s.id); });
-    write(scores);
+    for (let i = 0; i < scores.length; i += WRITE_BATCH) {
+      write(scores.slice(i, i + WRITE_BATCH));
+      if (i + WRITE_BATCH < scores.length) await new Promise((r) => setTimeout(r, 0));
+    }
     lastRun = Date.now();
     lastResult = { updated: scores.length, ms: lastRun - started, volumeP95, at: new Date(lastRun).toISOString() };
     if (events && events.log) events.log('INFO', `Popularity: ranked ${scores.length} creators in ${lastResult.ms} ms`);
@@ -191,4 +204,4 @@ function start() {
 function stop() { if (timer) clearInterval(timer); timer = null; }
 
 let timer = null;
-module.exports = { recompute, compute, explain, status, start, stop, WEIGHTS, _reset() { lastRun = 0; lastResult = null; } };
+module.exports = { recompute, compute, rank, explain, status, start, stop, WEIGHTS, _reset() { lastRun = 0; lastResult = null; } };

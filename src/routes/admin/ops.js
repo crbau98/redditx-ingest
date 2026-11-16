@@ -38,7 +38,7 @@ router.get('/settings', (req, res) => {
   });
 });
 const PHYSIQUE_KEYS = ['physiqueFilter', 'physiqueThreshold', 'physiqueCreatorShare'];
-router.put('/settings', (req, res) => {
+router.put('/settings', async (req, res) => {
   const before = settingsStore.get();
   const values = settingsStore.update(req.body || {});
   // Audit the physique flips: a false→true or true→false here hid/shown 30k+ rows before, so it leaves a trail.
@@ -53,7 +53,9 @@ router.put('/settings', (req, res) => {
   if (values.leanPreference && !before.leanPreference) repo.settings.set('lean_bias_seq', '0');
   // The body filter hides, it never deletes: a new threshold (or switching it off) re-applies to the stored library at once.
   if (PHYSIQUE_KEYS.some((k) => values[k] !== before[k])) {
-    const applied = physique.reapply(values);
+    let applied;
+    try { applied = await physique.reapplyAsync(values); } // chunked: a threshold change must not hold the loop for the whole library
+    catch (e) { return res.status(500).json({ error: `settings saved, but re-applying the body filter failed: ${e.message}`, values }); }
     if (values.physiqueFilter && !before.physiqueFilter) physique.textSweep(values, { force: true }).catch((e) => events.log('WARN', `Body filter: ${e.message}`));
     return res.json({ values, physique: applied });
   }
