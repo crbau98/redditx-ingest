@@ -49,8 +49,8 @@ const runs = {
   /** Items added by a feed's last few finished runs, newest first (for adaptive scheduling). */
   /** Yield scoreboard: how many finished runs this feed had since `sinceIso`, and how many items they fetched. */
   yieldSince(feedId, sinceIso) {
-    const r = db.prepare("SELECT COUNT(*) AS runs, COALESCE(SUM(fetched), 0) AS fetched FROM feed_runs WHERE feed_id = ? AND started_at >= ? AND status != 'running'").get(feedId, sinceIso);
-    return { runs: r.runs, fetched: r.fetched };
+    const r = db.prepare("SELECT COUNT(*) AS runs, COALESCE(SUM(fetched), 0) AS fetched, COALESCE(SUM(added), 0) AS added FROM feed_runs WHERE feed_id = ? AND started_at >= ? AND status != 'running'").get(feedId, sinceIso);
+    return { runs: r.runs, fetched: r.fetched, added: r.added };
   },
   /** Admin: feeds whose runs since `sinceIso` (at least `minRuns` of them) fetched nothing at all. Read-only. */
   idleFeeds(sinceIso, { minRuns = 5, limit = 200, offset = 0 } = {}) {

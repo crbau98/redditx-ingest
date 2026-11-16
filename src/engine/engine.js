@@ -135,11 +135,24 @@ function tempo(feed, added) {
 const IDLE_DAYS = 7;
 const IDLE_MIN_RUNS = 5;
 const IDLE_BACKOFF_DAYS = 3;
-function idleNextRun(feed, fetchedNow, now = Date.now()) {
-  if (fetchedNow > 0 || !settingsStore.get().adaptiveScheduling) return null;
+// Duplicate-only backoff: a feed that keeps fetching items but has added none in IDLE_DAYS (every item already stored: a caught-up
+// web page, a creator whose posts all exist) is checked every DUPE_BACKOFF_DAYS. Shorter than the zero-fetch backoff because a page
+// that lists items can start adding at any run; the first added item puts it back on its normal pace.
+const DUPE_BACKOFF_DAYS = 2;
+// A backfill slice that read items but added none (history already stored) waits this many times the normal gap before the next slice (history already stored).
+const BACKFILL_DRY_GAP_FACTOR = 4;
+function idleNextRun(feed, fetchedNow, now = Date.now(), addedNow) {
+  if (!settingsStore.get().adaptiveScheduling) return null;
   const score = repo.runs.yieldSince(feed.id, new Date(now - IDLE_DAYS * 86400000).toISOString());
+  const jitter = 0.9 + Math.random() * 0.2;
+  if (fetchedNow > 0) {
+    // addedNow is undefined for callers that only ask about the zero-fetch case.
+    if (addedNow === undefined || addedNow > 0) return null;
+    if (score.runs < IDLE_MIN_RUNS || score.added > 0) return null;
+    return new Date(now + DUPE_BACKOFF_DAYS * 86400000 * jitter).toISOString();
+  }
   if (score.runs < IDLE_MIN_RUNS || score.fetched > 0) return null;
-  return new Date(now + IDLE_BACKOFF_DAYS * 86400000 * (0.9 + Math.random() * 0.2)).toISOString();
+  return new Date(now + IDLE_BACKOFF_DAYS * 86400000 * jitter).toISOString();
 }
 
 /** next_run_at after a run: jittered interval on success, exponential backoff on failure. */
@@ -421,7 +434,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     }
     repo.feeds.finishRun(feed.id, {
       status, cursor: cursorOut, addedItems: stats.added, failures: 0,
-      nextRunAt: more && !ctx.aborted() ? new Date(Date.now() + cfg.backfillGapMin * 60000).toISOString() : (idleNextRun(feed, stats.fetched) || computeNextRun(feed, 0, 0, tempo(feed, stats.added))),
+      nextRunAt: more && !ctx.aborted() ? new Date(Date.now() + cfg.backfillGapMin * 60000 * (stats.fetched > 0 && stats.added === 0 ? BACKFILL_DRY_GAP_FACTOR : 1)).toISOString() : (idleNextRun(feed, stats.fetched, Date.now(), stats.added) || computeNextRun(feed, 0, 0, tempo(feed, stats.added))),
       error: (result.notes && result.notes.length) ? `via ${result.via}: ${result.notes[0]}` : null,
     });
     breaker.success(feed.platform);
