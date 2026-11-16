@@ -22,8 +22,29 @@ const repo = require('../db/repo');
 const playback = require('../engine/playback');
 const { isChallengeText } = require('../sources/util');
 const { markImage } = require('../lib/watermark');
+const egress = require('../lib/egress');
 
 const router = express.Router();
+
+/**
+ * Egress counter (lib/egress): the bytes this response put on the wire (socket delta, headers included, as billed), by
+ * kind and cache result. Counting only; the response itself is untouched.
+ */
+router.use((req, res, next) => {
+  const sock = req.socket;
+  const start = sock ? sock.bytesWritten : 0;
+  let counted = false;
+  const count = () => {
+    if (counted || !sock) return;
+    counted = true;
+    const type = String(res.getHeader('content-type') || '').toLowerCase();
+    const kind = req.path === '/hls' || HLS_TYPES.test(type) ? 'hls' : type.startsWith('image/') ? 'image' : type.startsWith('video/') ? 'video' : 'other';
+    egress.record(kind, res.getHeader('x-cache') === 'HIT' ? 'hit' : 'miss', sock.bytesWritten - start);
+  };
+  res.on('finish', count);
+  res.on('close', count);
+  next();
+});
 
 const KNOWN_SUFFIXES = [
   'redd.it', 'redditmedia.com', 'imgur.com', 'redgifs.com', 'gfycat.com', 'twimg.com',
