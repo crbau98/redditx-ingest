@@ -1,5 +1,13 @@
 # UI changelog
 
+## 2026-11-16 — Less proxy traffic: pictures straight from their CDN, full-size files only when wanted
+
+- **Verified hosts load directly.** i.redd.it, i.imgur.com, cdn.bsky.app, pbs.twimg.com, img.coomer.st (pictures) and media.redgifs.com (pictures and video files) are fetched by the browser itself with no referrer, instead of streaming through `/api/proxy`. Hosts that need a Referer (gff.network, phncdn.com), HLS playlists, the object store, `preview.redd.it` (could not be probed) and downloads (watermark) stay on the proxy. The host list is one server constant; it drives the Content-Security-Policy and `/api/meta.directMedia`. `DIRECT_MEDIA=0` switches it off.
+- **A failed direct load retries once through the proxy** (pictures, avatars, tile backgrounds, posters, video), so a CDN that starts refusing hotlinks costs a fallback, not a broken tile.
+- **The viewer fetches the full-size file only after 700 ms on an item** (or at once on zoom), and warms the next item's preview, not its full file. Reels buffers the next clip with metadata only and loads a photo's full size once it has been on screen for a moment. Scripted phone session: modeled proxy bytes down 26–29%, full-size proxied loads 6 → 0.
+- **Fixed:** the viewer and Reels picture error handlers compared a resolved URL with a relative one, so a failed preview never fell back to the next size. Admin Sources: a long feed label no longer pushes the page sideways at 360 px.
+- Measured with `scripts/ui-audit.js` (84 phone screens, 0 overflow / tap / text / input findings) and the egress harness; byte figures are modeled from request counts.
+
 ## 2026-11-12 — Live deep search and a visible lookup
 
 - **Find more across the web is on every creator page.** Visitors see the button; an admin session still starts a forced sweep. A sweep already running (for example one a lookup started on Find) opens its banner by itself, with no click.

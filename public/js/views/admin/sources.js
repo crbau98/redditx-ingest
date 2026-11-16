@@ -36,7 +36,7 @@ const ago = (iso) => {
 function healthRow(f, why, reload) {
   return h('div', { class: 'row wrap', style: { gap: '8px', padding: '6px 0', borderTop: '1px solid var(--line, rgba(127,127,127,.15))' } },
     platBadge(f.platform),
-    h('a', { href: href('/admin/feeds', { platform: f.platform, q: f.target }), style: { fontWeight: 600 } }, f.label),
+    h('a', { href: href('/admin/feeds', { platform: f.platform, q: f.target }), style: { fontWeight: 600, minWidth: 0, overflowWrap: 'anywhere' } }, f.label),
     h('span', { class: 'muted', style: { fontSize: '12.5px' } }, why),
     h('span', { class: 'grow' }),
     h('button', { class: 'btn sm', type: 'button', title: 'Stop reading this feed (it can be switched back on under Feeds)', 'aria-label': `Pause ${f.label}`, onclick: async (e) => {
@@ -61,7 +61,7 @@ function healthPanel(r, reload) {
     section('Not adding anything', 'warn', r.dead, (f) => `${f.runs} runs in ${r.rules.deadDays} days, 0 added · ${f.why}`, 'Pausing these frees their slot for feeds that bring new posts.'),
     r.top.length ? h('details', null, h('summary', { style: { cursor: 'pointer', fontWeight: 600, padding: '6px 0' } }, 'Best feeds this week'),
       r.top.map((f) => h('div', { class: 'row wrap', style: { gap: '8px', padding: '4px 0' } }, platBadge(f.platform),
-        h('a', { href: href('/admin/feeds', { platform: f.platform, q: f.target }) }, f.label), h('span', { class: 'muted', style: { fontSize: '12.5px' } }, `${fmt.int(f.added)} added in ${f.runs} runs`)))) : null);
+        h('a', { href: href('/admin/feeds', { platform: f.platform, q: f.target }), style: { minWidth: 0, overflowWrap: 'anywhere' } }, f.label), h('span', { class: 'muted', style: { fontSize: '12.5px' } }, `${fmt.int(f.added)} added in ${f.runs} runs`)))) : null);
 }
 
 const dot = (ok) => h('span', { class: `dot ${ok ? 'good' : 'warn'}` });

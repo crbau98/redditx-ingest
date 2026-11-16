@@ -325,7 +325,7 @@ describe('Reels taste signals', () => {
   const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'public', 'js', 'views', 'reels.js'), 'utf8');
   test('dwell is settled when a slide stops being active, not when its buffer is torn down', () => {
     assert.match(src, /if \(slides\[active\]\) \{ settle\(slides\[active\]\);/);
-    assert.match(src, /function deactivate\(s\) \{\s*settle\(s, \{ teardown: true \}\)/, 'leaving Reels is not a skip');
+    assert.match(src, /function deactivate\(s\) \{\s*clearTimeout\(s\.fullTimer\);\s*settle\(s, \{ teardown: true \}\)/, 'leaving Reels is not a skip');
     assert.match(src, /document\.hidden && cur\.at\) \{ cur\.ms = dwell\(cur\)/, 'background time does not count');
     assert.doesNotMatch(src.match(/function activate\(s\) \{[\s\S]*?\n {2}\}/)[0], /tastes\.record/, 'no positive signal before the dwell is known');
   });

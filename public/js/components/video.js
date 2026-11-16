@@ -1,4 +1,5 @@
 import { proxied, loadScript } from '../dom.js';
+import { isDirectSrc, viaProxy } from '../direct-media.js';
 import { reportBroken } from '../api.js';
 import { prefs, playback, bus } from '../store.js';
 import { clampRate, stepRate, resumeAt } from '../playback-policy.js';
@@ -36,6 +37,23 @@ export function attachVideo(v, it) {
     v.dataset.sourceState = 'challenged';
     v.title = 'The source is showing a bot check, so this video cannot be streamed right now. Open it on the source site.';
   };
+  // The plain file. A direct one that fails is retried once through the proxy; only a failure there is reported.
+  const setMp4 = (url) => {
+    const src = proxied(url);
+    v.dataset.ownFallback = '1';
+    v.addEventListener('error', () => {
+      if (isDirectSrc(src) && !v.dataset.directFb) {
+        v.dataset.directFb = '1';
+        v.addEventListener('error', dead, { once: true });
+        v.src = viaProxy(src);
+        if (handle.autoplay) v.play().catch(() => {});
+        return;
+      }
+      dead();
+    }, { once: true });
+    v.src = src;
+    if (handle.autoplay && v.dataset.directFb) v.play().catch(() => {});
+  };
   const fallback = () => {
     if (handle.dead) return;
     if (!mp4) {
@@ -43,10 +61,9 @@ export function attachVideo(v, it) {
       fetch(`/api/hls?url=${encodeURIComponent(hls)}`).then((r) => (r.status === 503 ? challenged() : dead()), () => dead());
       return;
     }
-    v.addEventListener('error', dead, { once: true });
-    v.src = proxied(mp4); if (handle.autoplay) v.play().catch(() => {});
+    setMp4(mp4);
   };
-  if (!useHls) { v.addEventListener('error', dead, { once: true }); v.src = proxied(mp4); return handle; }
+  if (!useHls) { setMp4(mp4); return handle; }
   const src = `/api/hls?url=${encodeURIComponent(hls)}`;
   if (v.canPlayType('application/vnd.apple.mpegurl')) {
     v.src = src;

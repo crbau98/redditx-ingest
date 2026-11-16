@@ -245,6 +245,8 @@ router.get('/meta', (req, res) => {
     ageGate: { enforce: config.ageGateEnforce, verified: age.isVerified(req) },
     platforms: registry.list().filter((a) => !['web', 'linkinbio'].includes(a.platform)).map((a) => ({ platform: a.platform, label: a.label, color: a.color })),
     ai: { search: llm.configured() && settingsStore.get().aiSearch },
+    // Hosts the browser loads from directly (the same list the CSP allows); empty when DIRECT_MEDIA=0.
+    directMedia: require('../lib/directmedia').clientConfig(),
   });
 });
 

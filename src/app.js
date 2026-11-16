@@ -6,6 +6,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const config = require('./config');
+const directMedia = require('./lib/directmedia');
 
 require('./db'); // runs migrations
 
@@ -29,9 +30,10 @@ function createApp() {
         'script-src': ["'self'"],
         'style-src': ["'self'", "'unsafe-inline'"],
         'font-src': ["'self'", 'data:'],
-        // Every remote asset is served through our own proxy, so 'self' is enough.
-        'img-src': ["'self'", 'data:', 'blob:'],
-        'media-src': ["'self'", 'blob:'],
+        // Remote assets go through our own proxy, except the few hosts in lib/directmedia.js that were probed to serve
+        // without a Referer: exactly those origins are added here (and nothing else). DIRECT_MEDIA=0 removes them.
+        'img-src': ["'self'", 'data:', 'blob:', ...directMedia.cspSources().img],
+        'media-src': ["'self'", 'blob:', ...directMedia.cspSources().media],
         'connect-src': ["'self'"],
         'worker-src': ["'self'", 'blob:'],
         'object-src': ["'none'"],

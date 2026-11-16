@@ -1,4 +1,5 @@
 import { h, icon, proxied, fmt, avatar, toast, copyText, emptyState, openModal, armPoster } from '../dom.js';
+import { isDirectSrc, viaProxy } from '../direct-media.js';
 import { get, post, query as postQuery, reportBroken, prefetch, prefetchQuery } from '../api.js';
 import { navigate, href } from '../router.js';
 import { prefs, favorites, follows, history as viewHistory, tastes, collections, platformLabel, bus } from '../store.js';
@@ -207,22 +208,28 @@ export async function reels(root, { query }) {
       // Same order as the viewer: the cached 360px thumb, then the platform preview, then the full file.
       const first = s.it.thumb_url && s.it.thumb_url !== sharp ? s.it.thumb_url : sharp;
       const img = h('img', { alt: s.it.title || '', src: proxied(first), decoding: 'async', draggable: 'false' });
-      const startFull = () => {
-        if (!preview || preview === s.it.media_url) return;
+      // The full-size file loads only once this slide has been the one on screen for a moment (see activate): a neighbour
+      // that is mounted ahead of time, or a photo swiped past, never downloads it.
+      s.loadFull = () => {
+        s.loadFull = null;
+        if (!preview || preview === s.it.media_url || !img.isConnected) return;
         const full = new Image();
+        let retried = false;
         full.onload = () => { if (img.isConnected) img.src = full.src; };
+        full.onerror = () => { if (!retried && isDirectSrc(full.src)) { retried = true; full.src = viaProxy(s.it.media_url); } };
         full.src = proxied(s.it.media_url);
       };
       if (first !== sharp) {
         const mid = new Image();
-        mid.onload = () => { if (img.isConnected) img.src = mid.src; startFull(); };
-        mid.onerror = startFull;
+        mid.onload = () => { if (img.isConnected) img.src = mid.src; };
         mid.src = proxied(sharp);
-      } else startFull();
+      }
       img.addEventListener('error', () => {
-        const current = img.src;
-        if (sharp && current !== proxied(sharp)) { img.src = proxied(sharp); return; }
-        if (s.it.media_url && current !== proxied(s.it.media_url)) { img.src = proxied(s.it.media_url); return; }
+        // compare the attribute, not the resolved URL; a direct load that failed was already retried through the proxy
+        const cur = img.getAttribute('src');
+        const is = (u) => cur === proxied(u) || cur === viaProxy(u);
+        if (sharp && !is(sharp)) { delete img.dataset.directFb; img.src = proxied(sharp); return; }
+        if (s.it.media_url && !is(s.it.media_url)) { delete img.dataset.directFb; img.src = proxied(s.it.media_url); return; }
         reportBroken(s.it.id);
         s.stage.replaceChildren(h('div', { class: 'reel-gone' }, 'This item is no longer available at its source.'));
       });
@@ -253,10 +260,11 @@ export async function reels(root, { query }) {
     if (!viewed.has(s.it.id)) { viewed.add(s.it.id); post(`/api/media/${s.it.id}/view`).catch(() => {}); }
     viewHistory.add(s.it.id);
     s.at = performance.now(); s.ms = 0; // the taste signal waits for how long it held attention (settle)
-    if (!s.isVideo) return;
+    if (!s.isVideo) { clearTimeout(s.fullTimer); s.fullTimer = setTimeout(() => s.loadFull && s.loadFull(), 700); return; } // photo: full size after a dwell
     const v = s.stage.querySelector('video');
     if (!v) return;
     v.muted = prefs.muted;
+    v.preload = 'auto'; // now on screen: buffer normally
     if (s.watchOff) { s.watchOff(); s.watchOff = null; }
     if (!s.handle) s.handle = attachVideo(v, s.it);
     s.watchOff = bindWatch(v, s.it);
@@ -274,6 +282,7 @@ export async function reels(root, { query }) {
     if (sec < 1.2) { if (!teardown) tastes.skip(s.it); } else tastes.record(s.it, sec >= (s.isVideo ? 8 : 5) ? 2 : 1);
   }
   function deactivate(s) {
+    clearTimeout(s.fullTimer);
     settle(s, { teardown: true });
     if (!s.isVideo) return;
     if (s.watchOff) { s.watchOff(); s.watchOff = null; }
@@ -290,7 +299,7 @@ export async function reels(root, { query }) {
     mount(s);
     const v = s.stage.querySelector('video');
     if (!v || s.handle) return;
-    v.muted = true; v.preload = 'auto';
+    v.muted = true; v.preload = 'metadata'; // the neighbour needs its first frame, not the whole clip: most are swiped past
     s.handle = attachVideo(v, s.it);
     s.handle.demote();
   }
