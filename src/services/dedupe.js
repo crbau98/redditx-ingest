@@ -34,27 +34,40 @@ function load() {
 
 // One straight build of 900k rows holds the loop for ~119 s (its sync index adds). The boot warmer
 // takes this road instead: seq-ordered chunks with a yield between them, so health checks keep answering.
+// The chunk is sized by TIME, not by row count: a slice (one SQLite read of the next rows + their index adds) aims at
+// SLICE_TARGET_MS, so a cold volume or a sparse region of the table (rows without a hash are scanned and skipped) shrinks
+// the next read instead of holding the loop for however long 5000 rows took.
 const LOAD_CHUNK = 5000;
+const LOAD_CHUNK_MIN = 200;
+const SLICE_TARGET_MS = 30;
 let building = null; // one in-flight chunked build: later callers await it instead of racing a sync load()
 function loadChunked(opts) {
   if (building) return building.then(() => ({ chunks: 0, rows: 0, already: true }));
   building = loadChunkedOnce(opts);
   return building;
 }
-async function loadChunkedOnce({ chunk = LOAD_CHUNK } = {}) {
+async function loadChunkedOnce({ chunk = LOAD_CHUNK, targetMs = SLICE_TARGET_MS } = {}) {
   if (loaded) return { chunks: 0, rows: 0, already: true };
   loaded = true; // remember()/check() during the build land in the live part; the tail chunk catches them up
-  for (const h of repo.media.phashBlocked()) blocked.add(h, h); // the blocklist first: a re-upload of a removed picture is refused from the first second
-  let chunks = 0; let rows = 0; let after = 0;
+  const blockwatch = require('../lib/blockwatch');
+  blockwatch.slice('dedupe:blocklist', () => { for (const h of repo.media.phashBlocked()) blocked.add(h, h); }); // the blocklist first: a re-upload of a removed picture is refused from the first second
+  let chunks = 0; let rows = 0; let after = 0; let worstMs = 0;
+  let n = Math.min(chunk, 1000); // the first read is small: the volume may be cold
   for (;;) {
-    const batch = repo.media.hashedChunk(after, chunk);
-    for (const r of batch) live.add(r.id, r.phash, { type: r.media_type, aspect: aspectOf(r.width, r.height) });
+    let batch;
+    const ms = blockwatch.slice('dedupe:load', () => {
+      batch = repo.media.hashedChunk(after, n);
+      for (const r of batch) live.add(r.id, r.phash, { type: r.media_type, aspect: aspectOf(r.width, r.height) });
+    });
+    worstMs = Math.max(worstMs, ms);
     rows += batch.length; chunks++;
-    if (!batch.length || batch.length < chunk) break;
+    if (!batch.length || batch.length < n) break;
     after = batch[batch.length - 1].seq;
-    await new Promise((res) => setImmediate(res)); // the loop answers between chunks
+    // aim the next slice at targetMs, growing at most 2x per step (a quick slice is not proof the next region is as cheap)
+    n = Math.max(LOAD_CHUNK_MIN, Math.min(chunk, Math.round(n * Math.min(2, targetMs / Math.max(ms, 1)))));
+    await new Promise((res) => setTimeout(res, 0)); // a timer, not setImmediate: queued requests and health probes run first
   }
-  return { chunks, rows, already: false };
+  return { chunks, rows, already: false, worstSliceMs: Math.round(worstMs) };
 }
 
 const indexed = (r) => r.publish_state === 'published' || r.publish_state === 'review' || (r.publish_state === 'hidden' && String(r.review_reason || '').startsWith('physique:'));
@@ -100,8 +113,8 @@ function stats() { load(); return { indexed: live.size, blocked: blocked.size };
 function _reset() {
   loaded = false;
   building = null;
-  live.entries.clear(); live.buckets.clear();
-  blocked.entries.clear(); blocked.buckets.clear();
+  live.clear();
+  blocked.clear();
 }
 
 module.exports = { check, remember, forget, blockHash, stats, load, loadChunked, _reset };

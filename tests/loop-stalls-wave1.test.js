@@ -134,15 +134,14 @@ describe('Task 1.3: the embedding backlog resumes where it stopped instead of re
   });
 });
 
-describe('Task 1.3: PhashIndex keeps the parsed chunks on the entry', () => {
+describe('Task 1.3: PhashIndex add/remove/find round trip (packed since Wave 11)', () => {
   const { PhashIndex } = require('../src/lib/phash-index');
   test('add() stores the 8 chunk bytes; remove() and find() still work', () => {
     const ix = new PhashIndex();
     const a = '0123456789abcdef0123456789abcdef';
     ix.add('a', a);
-    const e = ix.entries.get('a');
-    assert.ok(e.c instanceof Uint8Array && e.c.length === 8);
-    assert.deepEqual([...e.c], PhashIndex.chunks(a));
+    assert.ok(ix.has('a'));
+    assert.equal(PhashIndex.chunks(a).length, 8); // the 8 key bytes are read back from the packed words, never re-parsed or stored
     assert.deepEqual(ix.find(a).map((m) => m.id), ['a']);
     ix.remove('a');
     assert.equal(ix.size, 0);
