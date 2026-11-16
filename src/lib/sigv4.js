@@ -46,4 +46,27 @@ function sign(o) {
   return { headers, signature, canonicalRequest, query };
 }
 
-module.exports = { sign, sha256hex, enc, amzDate, EMPTY_SHA256 };
+/**
+ * Query-string authentication (a presigned URL): the same signature, carried in the URL so a browser can fetch the object
+ * with a plain GET and no headers. Only `host` is signed, the payload is UNSIGNED-PAYLOAD, so a Range header or any other
+ * header the client adds does not change the signature.
+ * @param {{method?: string, host: string, path: string, query?: Record<string,string>, expires: number, region: string, service?: string,
+ *          accessKeyId: string, secretAccessKey: string, date?: Date}} o  `path` is already percent-encoded and starts with "/".
+ * @returns {{query: string, signature: string, canonicalRequest: string}} `query` is the full encoded query string, signature included
+ */
+function presign(o) {
+  const service = o.service || 's3';
+  const stamp = amzDate(o.date);
+  const day = stamp.slice(0, 8);
+  const scope = `${day}/${o.region}/${service}/aws4_request`;
+  const params = { ...(o.query || {}), 'X-Amz-Algorithm': 'AWS4-HMAC-SHA256', 'X-Amz-Credential': `${o.accessKeyId}/${scope}`, 'X-Amz-Date': stamp, 'X-Amz-Expires': String(o.expires), 'X-Amz-SignedHeaders': 'host' };
+  const query = Object.entries(params).map(([k, v]) => [enc(k), enc(String(v))]).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : 1))
+    .map(([k, v]) => `${k}=${v}`).join('&');
+  const canonicalRequest = [(o.method || 'GET').toUpperCase(), o.path, query, `host:${o.host}\n`, 'host', 'UNSIGNED-PAYLOAD'].join('\n');
+  const stringToSign = ['AWS4-HMAC-SHA256', stamp, scope, sha256hex(canonicalRequest)].join('\n');
+  const kDate = hmac(`AWS4${o.secretAccessKey}`, day);
+  const signature = crypto.createHmac('sha256', hmac(hmac(hmac(kDate, o.region), service), 'aws4_request')).update(stringToSign).digest('hex');
+  return { query: `${query}&X-Amz-Signature=${signature}`, signature, canonicalRequest };
+}
+
+module.exports = { sign, presign, sha256hex, enc, amzDate, EMPTY_SHA256 };

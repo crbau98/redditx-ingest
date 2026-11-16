@@ -101,6 +101,8 @@ describe('object store (S3 driver)', () => {
     assert.equal(store.keyOf('https://example.com/tg/1/2.jpg'), null);
   });
   test('the media proxy serves store URLs', async () => {
+    // this is the relay path (bytes through the proxy); in bucket mode the default is a redirect to the bucket, tested in store-direct.test.js
+    process.env.STORE_DIRECT = '0';
     await store.put('tg/3/p.jpg', Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(600, 3)]), 'image/jpeg');
     const express = require('express');
     const app = express(); app.use('/api', require('../src/routes/proxy'));
@@ -109,6 +111,7 @@ describe('object store (S3 driver)', () => {
     assert.equal(r.status, 200); assert.equal(r.headers.get('content-type'), 'image/jpeg');
     assert.equal((await r.arrayBuffer()).byteLength, 604);
     srv.closeAllConnections?.(); srv.close();
+    delete process.env.STORE_DIRECT;
   });
 });
 

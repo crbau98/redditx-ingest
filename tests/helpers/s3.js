@@ -16,14 +16,27 @@ function s3Server() {
     req.on('end', () => {
       const body = Buffer.concat(chunks);
       const u = new URL(req.url, 'http://x');
-      const auth = String(req.headers.authorization || '');
-      const signedHeaders = (/SignedHeaders=([^,]+)/.exec(auth) || [])[1] || '';
-      const extra = {};
-      for (const n of signedHeaders.split(';')) if (n !== 'host' && (!n.startsWith('x-amz-') || n.startsWith('x-amz-meta-'))) extra[n] = req.headers[n]; // x-amz-date / content-sha256 are passed explicitly below
-      const check = sigv4.sign({ method: req.method, host: req.headers.host, path: u.pathname, headers: { ...extra, 'x-amz-date': req.headers['x-amz-date'] }, payloadHash: req.headers['x-amz-content-sha256'],
-        region: 'auto', accessKeyId: ACCESS, secretAccessKey: SECRET, date: new Date(req.headers['x-amz-date'].replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/, '$1-$2-$3T$4:$5:$6Z')) });
-      log.push(`${req.method} ${u.pathname}`);
-      if (check.headers.authorization !== auth) { res.writeHead(403, { 'content-type': 'application/xml' }); return res.end('<Error><Code>SignatureDoesNotMatch</Code></Error>'); }
+      if (u.searchParams.has('X-Amz-Signature')) { // query-string auth (a presigned URL): verify the signature and the expiry like the real thing
+        const q = Object.fromEntries(u.searchParams); const given = q['X-Amz-Signature'];
+        const date = new Date(String(q['X-Amz-Date']).replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/, '$1-$2-$3T$4:$5:$6Z'));
+        const fail = (code) => { res.writeHead(403, { 'content-type': 'application/xml' }); return res.end(`<Error><Code>${code}</Code></Error>`); };
+        log.push(`${req.method} ${u.pathname} presigned`);
+        if (req.method !== 'GET' && req.method !== 'HEAD') return fail('AccessDenied');
+        const want = sigv4.presign({ method: req.method, host: req.headers.host, path: u.pathname, expires: Number(q['X-Amz-Expires']), region: 'auto', accessKeyId: ACCESS, secretAccessKey: SECRET, date });
+        if (want.signature !== given) return fail('SignatureDoesNotMatch');
+        if (Date.now() > date.getTime() + Number(q['X-Amz-Expires']) * 1000) return fail('ExpiredRequest');
+        if (date.getTime() > Date.now() + 15 * 60 * 1000) return fail('RequestTimeTooSkewed');
+      } else {
+        const auth = String(req.headers.authorization || '');
+        const signedHeaders = (/SignedHeaders=([^,]+)/.exec(auth) || [])[1] || '';
+        const extra = {};
+        for (const n of signedHeaders.split(';')) if (n !== 'host' && (!n.startsWith('x-amz-') || n.startsWith('x-amz-meta-'))) extra[n] = req.headers[n]; // x-amz-date / content-sha256 are passed explicitly below
+        const check = sigv4.sign({ method: req.method, host: req.headers.host, path: u.pathname, headers: { ...extra, 'x-amz-date': req.headers['x-amz-date'] }, payloadHash: req.headers['x-amz-content-sha256'],
+          region: 'auto', accessKeyId: ACCESS, secretAccessKey: SECRET, date: new Date(req.headers['x-amz-date'].replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/, '$1-$2-$3T$4:$5:$6Z')) });
+        log.push(`${req.method} ${u.pathname}`);
+        if (check.headers.authorization !== auth) { res.writeHead(403, { 'content-type': 'application/xml' }); return res.end('<Error><Code>SignatureDoesNotMatch</Code></Error>'); }
+
+      }
       const key = decodeURIComponent(u.pathname);
       if (!key.startsWith(`/${BUCKET}/`)) { res.writeHead(404); return res.end(); }
       if (req.method === 'PUT') { objects.set(key, { body, type: req.headers['content-type'], sha256: req.headers['x-amz-meta-sha256'] || null }); res.writeHead(200); return res.end(); }

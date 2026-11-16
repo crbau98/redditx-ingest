@@ -168,6 +168,16 @@ router.get('/proxy', async (req, res) => {
   if (t.error) return sendError(res, t.error);
   if (req.query.mark === 'prism') return servePrismMarked(req, res, t);
 
+  // Stored media in bucket mode: send the browser to the bucket (presigned, no egress through us). The watermarked download
+  // above never gets here; disk mode, files still on the volume and STORE_DIRECT=0 fall through to the relay below.
+  if (t.host === config.storeHost) {
+    const direct = require('../lib/objectstore').directUrl(t.url);
+    if (direct) {
+      res.status(307).set({ Location: direct.url, 'Cache-Control': `private, max-age=${direct.maxAge}`, 'Content-Length': '0' });
+      return res.end();
+    }
+  }
+
   const hasRange = !!req.headers.range;
   if (!hasRange) {
     const hit = cache.get(t.url);

@@ -1,5 +1,15 @@
 # UI changelog
 
+## 2026-11-16 — Stored media comes straight from the bucket; preview.redd.it loads direct
+
+- **Stored media (S3/R2 mode) is fetched from the bucket, not relayed.** `/api/proxy` answers a `media.prism.invalid` URL with a 307 to a presigned GET URL (SigV4 query auth, 1 h, `STORE_URL_TTL_S`). Range requests go to the bucket, so video seeks as before. The redirect is cached for a quarter of the signature life and a key keeps one URL per half hour, so the browser cache still works. Not redirected: the `?mark=prism` download, files still on the data volume, disk mode, endpoints only reachable from inside our network. `STORE_DIRECT=0` relays everything again. The CSP gets the bucket origin from one constant (img-src, media-src, and connect-src for the service worker's own fetch).
+- **Pixel readers (accent colour, ambient backdrop) skip stored pictures** while the redirect is on, because the bucket sends no CORS headers; they already skipped direct CDN pictures.
+- **`preview.redd.it` and `cf.preview.redd.it` load direct** (14 of 14 live URLs answered with no Referer).
+
+## 2026-11-16 — Direct media: the i.redd.it "not found" picture is a failure, not a picture
+
+- **Fixed (found on prod, v4.21.0):** for a deleted file `i.redd.it` answers status 404 with a 130×60 PNG body. A browser treats that as a loaded picture, so a direct tile showed Reddit's stub and never fell back or reported the item broken (through the proxy the same 404 was JSON, which did). A direct `i.redd.it` picture of exactly 130×60 is now handled as a failed load: retried once through the proxy, which restores the old behaviour. Covers `<img>` tiles and Reels/viewer pictures (document-level `load` listener), avatars (initials stay) and probes (tile backgrounds, posters). No other listed host answers a missing file with an image (probed).
+
 ## 2026-11-16 — Less proxy traffic: pictures straight from their CDN, full-size files only when wanted
 
 - **Verified hosts load directly.** i.redd.it, i.imgur.com, cdn.bsky.app, pbs.twimg.com, img.coomer.st (pictures) and media.redgifs.com (pictures and video files) are fetched by the browser itself with no referrer, instead of streaming through `/api/proxy`. Hosts that need a Referer (gff.network, phncdn.com), HLS playlists, the object store, `preview.redd.it` (could not be probed) and downloads (watermark) stay on the proxy. The host list is one server constant; it drives the Content-Security-Policy and `/api/meta.directMedia`. `DIRECT_MEDIA=0` switches it off.

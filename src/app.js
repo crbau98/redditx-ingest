@@ -34,7 +34,7 @@ function createApp() {
         // without a Referer: exactly those origins are added here (and nothing else). DIRECT_MEDIA=0 removes them.
         'img-src': ["'self'", 'data:', 'blob:', ...directMedia.cspSources().img],
         'media-src': ["'self'", 'blob:', ...directMedia.cspSources().media],
-        'connect-src': ["'self'"],
+        'connect-src': ["'self'", ...directMedia.cspSources().connect],
         'worker-src': ["'self'", 'blob:'],
         'object-src': ["'none'"],
         'base-uri': ["'self'"],

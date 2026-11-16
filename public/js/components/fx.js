@@ -2,7 +2,7 @@
 // prefers-reduced-motion and only runs on devices where it makes sense.
 
 import { spring } from './transitions.js';
-import { isDirectSrc } from '../direct-media.js';
+import { isCrossOriginSrc } from '../direct-media.js';
 
 const reduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -133,7 +133,7 @@ export function haptic(type = 'light') {
 const colourCache = new Map();
 export function dominantColor(src) {
   // A picture loaded straight from its CDN is cross-origin: its pixels cannot be read, so skip it (no wasted download).
-  if (!src || isDirectSrc(src)) return Promise.resolve(null);
+  if (!src || isCrossOriginSrc(src)) return Promise.resolve(null);
   if (colourCache.has(src)) return colourCache.get(src);
   const p = new Promise((resolve) => {
     const img = new Image();
@@ -172,7 +172,7 @@ const ambientCache = new Map();
 let scratchSmall = null;
 let scratchOut = null;
 export function ambientBackdrop(src, { brightness = 0.42, saturate = 1.3 } = {}) {
-  if (!src || isDirectSrc(src)) return Promise.resolve(null); // cross-origin direct picture: no pixel access
+  if (!src || isCrossOriginSrc(src)) return Promise.resolve(null); // cross-origin direct picture: no pixel access
   const key = `${src}|${brightness}|${saturate}`;
   if (ambientCache.has(key)) return ambientCache.get(key);
   const p = (async () => {
