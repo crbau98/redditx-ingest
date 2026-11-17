@@ -10,14 +10,13 @@
  */
 const repo = require('../db/repo');
 
-// 5,000 (was 20,000): the dry run took 20.6 s on production in windows of a few hundred ms each.
-const WINDOW = 5000;
+const { walkWindows } = require('../lib/windowed');
 const BATCH = 200;
 const hasTable = (name) => !!repo.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
 const tick = () => new Promise((res) => setTimeout(res, 0)); // a timer, so pending HTTP is answered between windows
 
 /** Every removed media id that still has a face or alt-source row. */
-async function findResidue({ window = WINDOW, stats = {} } = {}) {
+async function findResidue({ window = 0, stats = {} } = {}) {
   const db = repo.db;
   const ids = new Set();
   stats.maxChunkMs = stats.maxChunkMs || 0;
@@ -26,12 +25,10 @@ async function findResidue({ window = WINDOW, stats = {} } = {}) {
     const top = (db.prepare(`SELECT MAX(rowid) AS m FROM ${table}`).get() || {}).m || 0;
     const stmt = db.prepare(`SELECT DISTINCT t.media_id AS id FROM ${table} t JOIN media m ON m.id = t.media_id
       WHERE t.rowid > ? AND t.rowid <= ? AND m.publish_state = 'removed'`);
-    for (let from = 0; from < top; from += window) {
-      const t0 = Date.now();
-      for (const r of stmt.all(from, from + window)) ids.add(r.id);
-      stats.maxChunkMs = Math.max(stats.maxChunkMs, Date.now() - t0);
-      await tick();
-    }
+    // windows sized by measured time (lib/windowed): the dry run took 20.6 s on production, in chunks of hundreds of ms
+    await walkWindows({ top, stats, ...(window ? { firstSpan: window, minSpan: window, maxSpan: window } : {}), fn: (from, to) => {
+      for (const r of stmt.all(from, to)) ids.add(r.id);
+    } });
   }
   return [...ids];
 }
@@ -40,7 +37,7 @@ async function findResidue({ window = WINDOW, stats = {} } = {}) {
  * @param {{dryRun?: boolean, limit?: number, batch?: number, window?: number}} opts
  * @returns {Promise<{found: number, purged: number, remaining: number, dryRun: boolean, batches: number, ms: number}>}
  */
-async function purgeResidue({ dryRun = false, limit = Infinity, batch = BATCH, window = WINDOW } = {}) {
+async function purgeResidue({ dryRun = false, limit = Infinity, batch = BATCH, window = 0 } = {}) {
   const started = Date.now();
   const stats = {};
   const ids = await findResidue({ window, stats });

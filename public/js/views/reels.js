@@ -1,4 +1,4 @@
-import { h, icon, proxied, fmt, avatar, toast, copyText, emptyState, openModal, armPoster } from '../dom.js';
+import { h, icon, proxied, fmt, avatar, toast, copyText, emptyState, openModal, armPoster, firstFrameWhenNoPoster } from '../dom.js';
 import { isDirectSrc, viaProxy } from '../direct-media.js';
 import { get, post, query as postQuery, reportBroken, prefetch, prefetchQuery } from '../api.js';
 import { navigate, href } from '../router.js';
@@ -198,6 +198,7 @@ export async function reels(root, { query }) {
     if (s.isVideo) {
       const v = h('video', { playsinline: true, loop: true, preload: 'none', poster: s.poster ? proxied(s.poster) : null, 'aria-label': s.it.title || 'Video' });
       armPoster(v, stillChain(s.it));
+      firstFrameWhenNoPoster(v); // a video with no still: its own first frame, not a black slide
       v.muted = prefs.muted;
       for (const ev of ['playing', 'seeked', 'ratechange']) v.addEventListener(ev, () => syncProgress(s));
       for (const ev of ['pause', 'waiting']) v.addEventListener(ev, () => { if (s.prog) s.prog.pause(); });

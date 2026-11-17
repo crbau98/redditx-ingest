@@ -58,3 +58,16 @@ export function stillChain(item) {
 export function tileImage(item) {
   return stillChain(item)[0] || null;
 }
+
+/**
+ * A video with no still at all (no thumb, preview or thumbnail: no poster pattern exists for its source) shows its own first
+ * frame instead of a blank tile: the clip loaded with preload=metadata at #t=0.1 (a media fragment, so Safari paints that frame
+ * too). No canvas, so no CORS read of the pixels. HLS playlists cannot play in a bare <video> on most browsers: none.
+ * @returns {string|null} the src to give a muted, paused <video>, or null when the item has a still or cannot do this
+ */
+export function firstFrameSrc(item, proxy) {
+  if (!item || item.media_type !== 'video' || stillChain(item).length) return null;
+  const url = item.media_url;
+  if (!url || /\.m3u8(\?|#|$)/i.test(url)) return null;
+  return `${proxy(url)}#t=0.1`;
+}

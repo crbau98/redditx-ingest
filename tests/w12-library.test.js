@@ -144,7 +144,7 @@ describe('3. library-health tells pending from unhashable, and reports its longe
     assert.ok(h >= 1);
     assert.equal(pending + unhashable + h, r.redditPhashNull);
     assert.equal(typeof r.maxChunkMs, 'number');
-    assert.equal(r.window, 5000);
+    assert.ok(r.windows > 0, 'windows sized by time (w13)');
   });
   test('the residue purge reports its longest chunk too', async () => {
     const r = await require('../src/engine/residue-purge').purgeResidue({ dryRun: true });
@@ -166,30 +166,33 @@ describe('2. published rows with no picture', () => {
     const r = await repair.repair({ dryRun: true });
     assert.equal(r.dryRun, true);
     assert.ok(r.found >= 3);
-    assert.ok(r.posterCandidates >= 1 && r.wouldReview >= 2);
+    assert.ok(r.posterCandidates >= 1 && r.wouldReview >= 1 && r.videoNoPoster >= 1, JSON.stringify(r)); // w13: videos are never sent to review
     assert.equal(asked.length, 0, 'no network');
     assert.equal(row(gif).publish_state, 'published');
     assert.equal(row(unknown).publish_state, 'published');
     assert.equal(typeof r.maxChunkMs, 'number');
   });
 
-  test('the run restores a poster that reads, and sends the rest to review as no-image; the grid has no blanks left', async () => {
+  test('the run restores a poster that reads, sends the image with no picture to review, and keeps the video published', async () => {
     answer = (url) => (url.endsWith('-poster.jpg') ? { status: 'ok', phash: HEX(11) } : { status: 'error', reason: 'http 404' });
     const r = await repair.repair({ dryRun: false });
-    assert.ok(r.postered >= 1 && r.reviewed >= 2);
+    assert.ok(r.postered >= 1 && r.reviewed >= 1);
     assert.equal(row(gif).preview_url, 'https://media.redgifs.com/QuietBlank-poster.jpg');
     assert.equal(row(gif).publish_state, 'published');
-    for (const id of [unknown, pic]) { assert.equal(row(id).publish_state, 'review'); assert.equal(row(id).review_reason, 'no-image'); }
-    assert.equal((await require('../src/engine/library-health').report()).publishedNoImage, 0);
-    assert.equal((await repair.repair({ dryRun: true })).found, 0, 'running it again finds nothing');
+    assert.equal(row(pic).publish_state, 'review'); assert.equal(row(pic).review_reason, 'no-image');
+    assert.equal(row(unknown).publish_state, 'published', 'a video with no poster stays published (w13)');
+    const again = await repair.repair({ dryRun: true });
+    assert.equal(again.wouldReview, 0, 'no image left to send');
+    assert.equal(again.found, again.videoNoPoster, 'only kept videos remain');
   });
 
-  test('a poster that does not read sends the video to review instead', async () => {
+  test('a poster that does not read leaves the video published (counted as videoNoPoster)', async () => {
     const v = item({ platform: 'redgifs', media_type: 'video', media_url: 'https://media.redgifs.com/DeadPoster.mp4', preview_url: null });
     answer = () => ({ status: 'error', reason: 'http 404' });
     const r = await repair.repair({});
     assert.equal(r.posterFailed, 1);
-    assert.equal(row(v).publish_state, 'review');
+    assert.equal(row(v).publish_state, 'published');
+    assert.ok(r.videoNoPoster >= 1);
   });
 
   test('admin endpoint: POST /api/admin/maintenance/repair-no-image?dryRun=1', async () => {
@@ -206,8 +209,8 @@ describe('2. published rows with no picture', () => {
       });
       assert.equal(body.status, 200);
       assert.equal(body.json.dryRun, true);
-      assert.equal(body.json.found, 1);
-      assert.equal(body.json.wouldReview, 1);
+      assert.equal(body.json.wouldReview, 0, 'a video is not sent to review (w13)');
+      assert.ok(body.json.videoNoPoster >= 1);
     } finally { server.close(); }
   });
 });
@@ -229,7 +232,7 @@ describe('R1b. a struggling poster host stops the repair; only a real "no poster
     }
   });
 
-  test('a timeout skips the row (still published); a 404 or an undecodable poster sends it to review', async () => {
+  test('a timeout skips the row; a 404 or an undecodable poster is "no poster", and the video still stays published (w13)', async () => {
     clear();
     const slow = vid('SlowPoster'); const gone = vid('GonePoster'); const broken = vid('BrokenPoster');
     answer = (url) => (url.includes('Slow') ? { status: 'error', reason: 'timeout' } : url.includes('Gone') ? { status: 'error', reason: 'http 404' } : { status: 'ok', phash: null });
@@ -237,7 +240,8 @@ describe('R1b. a struggling poster host stops the repair; only a real "no poster
     assert.equal(r.posterSkipped, 1);
     assert.equal(r.posterFailed, 2);
     assert.equal(row(slow).publish_state, 'published');
-    for (const id of [gone, broken]) { assert.equal(row(id).publish_state, 'review'); assert.equal(row(id).review_reason, 'no-image'); }
+    for (const id of [gone, broken]) assert.equal(row(id).publish_state, 'published');
+    assert.equal(r.reviewed, 0);
   });
 });
 
@@ -256,7 +260,7 @@ describe('R1a. repair-no-image is dry unless ?apply=1; every dry spelling is hon
   };
   const fresh = () => {
     db.prepare("UPDATE media SET publish_state = 'hidden' WHERE publish_state = 'published' AND preview_url IS NULL AND COALESCE(thumbnail_url, thumb_url) IS NULL").run();
-    return item({ platform: 'x', media_type: 'video', media_url: `https://video.twimg.com/r1a-${n}.mp4`, preview_url: null });
+    return item({ media_url: '', preview_url: null }); // an image with no picture: the one kind of row the repair moves
   };
 
   test('no parameter, every dry spelling, and a body that says otherwise: nothing changes', async () => {

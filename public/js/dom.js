@@ -157,6 +157,14 @@ export function paintCover(el, urls) {
 }
 
 /** A `<video poster>` never reports a 404. Probe the stills and step the poster; this does not touch the video file. */
+/** A video with no poster still: once its metadata is in, step to 0.1 s so the paused element paints a frame (Safari shows black otherwise). */
+export function firstFrameWhenNoPoster(video) {
+  if (!video || video.poster) return;
+  video.addEventListener('loadedmetadata', () => {
+    if (!video.poster && video.paused && video.currentTime === 0) { try { video.currentTime = 0.1; } catch { /* not seekable yet */ } }
+  }, { once: true });
+}
+
 export function armPoster(video, urls) {
   const chain = [];
   for (const u of urls || []) if (u && !chain.includes(u)) chain.push(u);

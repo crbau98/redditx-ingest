@@ -1,5 +1,11 @@
 # UI changelog
 
+## 2026-11-17 — Videos with no thumbnail show their first frame, at the cost of a frame
+
+- **A published video with no still shows its own first frame** (grid, Reels, viewer). In the grid a tile near the screen loads its clip with `preload=metadata` at `#t=0.1`, copies the decoded frame onto a small canvas (`canvas.card-ff`, 360 px wide at most) and releases the `<video>`: that cancels the download and frees the decoder. At most 3 clips load at once; a tile far away gives its canvas back and mounts again when it returns; a clip that fails or takes over 8 s keeps the tinted placeholder and the Video pill. A browser that decodes no frame for a detached video gets the `<video>` mounted in the tile after 2 s instead. Drawing a cross-origin (bucket) video is allowed, reading it back is not, and nothing reads it.
+- **Measured** on 100 poster-less clips (1.9-2.3 MB WebM, local origin, 85 playable + 15 failing, Chromium): before this change a tile pulled 1.3 MB on average (up to 2.9 MB, about 7 range requests) and each tile kept a live `<video>` (31 at 360 px, 50 at 1280 px, never released); now 0.33 MB (0.5-0.7 MB at most, about 5 requests) and no `<video>` stays mounted. Browser resident memory after a long scroll was 4-8% lower (noisy; the grid also holds 60 pictures).
+- Reels and the viewer seek a poster-less video to 0.1 s once its metadata loads (unchanged).
+
 ## 2026-11-16 — Stored media comes straight from the bucket; preview.redd.it loads direct
 
 - **Stored media (S3/R2 mode) is fetched from the bucket, not relayed.** `/api/proxy` answers a `media.prism.invalid` URL with a 307 to a presigned GET URL (SigV4 query auth, 1 h, `STORE_URL_TTL_S`). Range requests go to the bucket, so video seeks as before. The redirect is cached for a quarter of the signature life and a key keeps one URL per half hour, so the browser cache still works. Not redirected: the `?mark=prism` download, files still on the data volume, disk mode, endpoints only reachable from inside our network. `STORE_DIRECT=0` relays everything again. The CSP gets the bucket PATH (`https://<endpoint-host>/<bucket>/`, so another tenant's bucket on a shared endpoint stays blocked) from one constant (img-src, media-src, and connect-src for the service worker's own fetch). A browser applies the path to direct loads only; after a redirect it compares the host.
