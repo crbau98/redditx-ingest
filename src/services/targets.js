@@ -68,7 +68,11 @@ function addSpec(spec, { creatorId = null, origin = 'admin', trusted, hint, body
   // about Bigggwild were filed on another creator). An admin's own choice stands.
   if (creatorId && origin !== 'admin' && require('../lib/aggregators').isAggregator(String(spec.target || ''))) {
     const c = repo.creators.get(creatorId);
-    if (c && !require('../lib/aggregators').urlNames(c, spec.target, require('../engine/identity').aliasesOf(creatorId).filter((a) => a.source !== 'bio').map((a) => a.alias))) creatorId = null;
+    // his names: confirmed aliases plus the paid pages he claimed (coverage searches by those, so a page named after his paid
+    // handle is his even when his PRISM handle differs)
+    const known = require('../engine/identity').aliasesOf(creatorId).filter((a) => a.source !== 'bio').map((a) => a.alias);
+    try { for (const r of repo.db.prepare("SELECT handle FROM onlyfans_leads WHERE creator_id = ? AND status != 'rejected'").all(creatorId)) known.push(r.handle); } catch { /* table not there yet */ }
+    if (c && !require('../lib/aggregators').urlNames(c, spec.target, known)) creatorId = null;
   }
 
   // Male-only: refuse accounts, communities and searches whose own name reads female / feminine.
