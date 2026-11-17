@@ -107,6 +107,7 @@ function noteImageStrike(item, feed) {
     // A creator explicitly added by admin/lookup or with >15 published posts is not auto-blocked by 3 face-model false positives.
     if (creator.origin === 'admin' || creator.media_count >= 15) return;
     repo.creators.block(creator.id, reason, 'system');
+    require('../lib/quarantine').recordEvidenceFeed(creator.id, feed);
     events.log('WARN', `Creator ${creator.handle} blocked: ${reason}`);
   } else repo.blocklist.add('creator', key, reason);
 }
@@ -131,6 +132,7 @@ function blockFemaleCreator(item, feed, rule) {
   else if (handle) creator = repo.creators.byAccount(feed.platform, handle);
   if (creator && creator.status === 'active') {
     repo.creators.block(creator.id, reason, 'system');
+    require('../lib/quarantine').recordEvidenceFeed(creator.id, feed);
     events.log('WARN', `Creator ${creator.handle} blocked: ${reason}`);
   } else if (key && !SKIP_AUTHORS.has(handle.toLowerCase())) {
     repo.blocklist.add('creator', key, reason);

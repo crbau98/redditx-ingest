@@ -55,7 +55,7 @@ test('the dry run shows exactly what the block did and what would be undone, and
   assert.equal(d.eligible, true, JSON.stringify(d.refusals));
   assert.equal(d.blockedBy.actor, 'system'); assert.equal(d.blockedBy.reason, REASON);
   assert.equal(d.plan.rowsToDelete, 5);
-  assert.deepEqual(d.plan.blocklist, { creatorEntry: 1, hashEntries: 5, phashEntries: 5, feedAccountEntries: 2, keptAccountEntries: [`web:https://leaks0.example/${s.h}`], anchorFound: true });
+  assert.deepEqual({ ...d.plan.blocklist, note: undefined }, { method: 'trace', creatorEntry: 1, hashEntries: 5, phashEntries: 5, feedAccountEntries: 2, keptAccountEntries: [`web:https://leaks0.example/${s.h}`], anchorFound: true, note: undefined });
   assert.equal(d.evidence.pinned, true); assert.equal(d.evidence.suspects[0].id, s.sus[0].id);
   assert.deepEqual(d.plan.feedsToReenable.map((f) => f.id).sort(), [s.own.id, s.older.id].sort());
   assert.equal(d.plan.feedsLeftOff.length, 1); assert.match(d.plan.feedsLeftOff[0].why, /suspect/);
@@ -133,7 +133,7 @@ test('a discovered creator IS recoverable when an automatic feed supplied the ev
   assert.equal(rec.dryRun(scenario({ origin: 'seed', suspects: 0 }).c.id).eligible, true);
 });
 
-test('image-filter blocks: evidence is the feed whose account collected the strikes; an automatic one = recover, his own = review', () => {
+test('image-filter blocks: evidence is the feed whose account collected the strikes; an automatic one = recover, his own = review', async () => {
   const mk = (strikeOrigin, origin) => {
     const s = scenario({ reason: 'image filter: 3 pictures with women', origin, suspects: 0, extra: ({ c }) => {
       const f = repo.feeds.upsert({ platform: 'bluesky', kind: 'user', target: `strk${++n}.bsky.social`, creatorId: c.id, origin: strikeOrigin, runNow: false }).feed;
@@ -150,7 +150,7 @@ test('image-filter blocks: evidence is the feed whose account collected the stri
   const own = mk('admin', 'seed'); const fOwn = s0.f;
   const dow = rec.dryRun(own.c.id);
   assert.equal(dow.eligible, true, 'admin/seed-followed: eligible'); assert.deepEqual(dow.evidence.suspects, []); assert.deepEqual(dow.evidence.ownFeedsWithEvidence.map((x) => x.id), [fOwn.id]);
-  const cands = Object.fromEntries(rec.candidates({}).items.map((x) => [x.creatorId, x]));
+  const cands = Object.fromEntries((await rec.candidates({})).items.map((x) => [x.creatorId, x]));
   assert.equal(cands[auto.c.id].recommendation, 'recover'); assert.equal(cands[auto.c.id].rule, 'image-filter');
   assert.equal(cands[own.c.id].recommendation, 'review');
   // apply on the automatic one leaves the strike-collecting feed off
@@ -171,14 +171,14 @@ test('rows removed for a takedown or safety reason, and feeds an admin or a swee
   assert.equal(repo.db.prepare("SELECT COUNT(*) AS n FROM media WHERE creator_id = ? AND review_reason = 'safety:minor'").get(s.c.id).n, 1, 'the safety-removed row stays');
 });
 
-test('candidates: every blocked creator with feeds, with rule, blocker, evidence feed and a recover / review / keep recommendation', () => {
+test('candidates: every blocked creator with feeds, with rule, blocker, evidence feed and a recover / review / keep recommendation', async () => {
   const falsy = scenario({ suspects: 1, origin: 'discovered' });          // system scope, automatic evidence: recover
   const seedOnly = scenario({ suspects: 0, origin: 'seed' });             // system scope, admin/seed only: review
   const genuine = scenario({ suspects: 0, origin: 'ingest' });            // system scope, nobody chose him, no automatic evidence: keep
   const adm = scenario({ actor: 'admin' });                                // an admin blocked him: keep
   const safe = scenario({ reason: 'safety:kid (profile)', origin: 'seed' }); // safety: keep, always
   const tkd = scenario({ origin: 'seed' }); repo.db.prepare("INSERT INTO takedowns (kind, value, reason) VALUES ('handle', ?, 'x')").run(tkd.h);
-  const r = rec.candidates({ limit: 5000 });
+  const r = await rec.candidates({ limit: 5000 });
   const by = Object.fromEntries(r.items.map((x) => [x.creatorId, x]));
   assert.equal(by[falsy.c.id].recommendation, 'recover'); assert.equal(by[falsy.c.id].rule, 'scope'); assert.equal(by[falsy.c.id].blockedBy, 'system');
   assert.equal(by[falsy.c.id].evidence.automaticFeeds[0].id, falsy.sus[0].id);

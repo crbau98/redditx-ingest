@@ -337,6 +337,10 @@ const creators = {
     const c = creatorQ.get.get(id);
     if (!c) return null;
     db.transaction(() => {
+      // Footprint: every blocklist row and phash row this block writes falls inside these id ranges (one synchronous transaction, no other
+      // writer between). Recorded as 'entries-trace' so block-recovery can undo exactly this block's entries, never a neighbour's.
+      const b0 = db.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM blocklist').get().m;
+      const p0 = db.prepare('SELECT COALESCE(MAX(rowid), 0) AS m FROM phash_blocklist').get().m;
       db.prepare("UPDATE creators SET status = 'blocked', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(id);
       db.prepare("UPDATE media SET publish_state = 'removed', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE creator_id = ? AND publish_state != 'removed'").run(id);
       rememberRemovedHashes(id, reason);
@@ -349,6 +353,11 @@ const creators = {
       blocklist.add('creator', id, reason);
       for (const f of creatorQ.feedsOf.all(id)) blocklist.add('creator', `${f.platform}:${String(f.target).toLowerCase()}`, reason);
       creatorQ.stats.run({ id });
+      try {
+        const b1 = db.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM blocklist').get().m;
+        const p1 = db.prepare('SELECT COALESCE(MAX(rowid), 0) AS m FROM phash_blocklist').get().m;
+        logAction('creator', id, 'entries-trace', JSON.stringify({ b: [b0, b1], p: [p0, p1] }), actor);
+      } catch { /* an audit table that cannot take it: recovery falls back to the conservative positional rule */ }
       logAction('creator', id, 'block', reason, actor);
     })();
     return creators.get(id);
