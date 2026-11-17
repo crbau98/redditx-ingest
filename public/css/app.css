@@ -200,7 +200,7 @@ main { padding: 24px var(--pad) 80px; max-width: 1720px; margin: 0 auto; min-hei
 .card {overflow: hidden;}
 .card:hover { transform: translateY(-3px);border-color: var(--line-strong); z-index: 2; }
 .card-media { display: block; position: relative; width: 100%; background: var(--surface-2); overflow: hidden; cursor: zoom-in; }
-.card-media img, .card-media video { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; object-fit: cover; transition: opacity var(--dur-slow), transform .6s var(--ease); }
+.card-media img, .card-media video, .card-media canvas.card-ff { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; object-fit: cover; transition: opacity var(--dur-slow), transform .6s var(--ease); }
 .card-media img.loading { opacity: 0; }
 .card-media .ph { position: absolute; inset: 0; z-index: 0;}
 .card-badges { position: absolute; z-index: 2; left: 10px; top: 10px; display: flex; gap: 6px; pointer-events: none; }

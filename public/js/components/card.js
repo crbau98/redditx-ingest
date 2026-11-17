@@ -73,16 +73,72 @@ const io = !canHover && 'IntersectionObserver' in window
   : null;
 
 /* ---- first frame for a video with no still -------------------------------
- * The clip itself, paused at #t=0.1 with preload=metadata, mounted only when the card nears the viewport (a few hundred KB
- * of range reads per tile, not the whole file). If it cannot load, the tinted placeholder and the Video pill stay. */
+ * The clip itself, loaded with preload=metadata at #t=0.1 near the viewport. As soon as that frame is decoded it is copied onto a
+ * small <canvas> and the <video> is released (src removed), which CANCELS the download and frees the decoder: a tile costs the
+ * bytes up to its first frame, not the clip (a plain paused <video> kept pulling the whole file, 2-5 MB per tile in a measured
+ * grid, and one live element per tile). Drawing a cross-origin video is allowed (only reading the pixels back is not, and
+ * nothing does), so stored media that redirects to the bucket works too.
+ * A browser that has the metadata but decodes no frame for a detached element (iOS Safari can be strict about this) gets the
+ * <video> mounted in the tile after FF_ADOPT_MS, as it was before: it paints the frame itself.
+ * At most FF_PARALLEL clips load at once. A tile far away drops its canvas and mounts again when it comes back. If a clip cannot
+ * load (or is too slow, FF_TIMEOUT_MS) the tinted placeholder and the Video pill stay. */
+const FF_PARALLEL = 3; const FF_TIMEOUT_MS = 8000; const FF_ADOPT_MS = 2000; const FF_MAX_W = 360;
+let ffLoading = 0; const ffQueue = [];
+function pumpFirstFrames() {
+  while (ffLoading < FF_PARALLEL && ffQueue.length) { const m = ffQueue.shift(); if (m._ffState === 'queued') loadFirstFrame(m); }
+}
 function mountFirstFrame(media) {
-  if (!media._ff || media.querySelector('video.card-ff')) return;
-  const v = h('video', { class: 'card-ff', muted: true, playsinline: true, preload: 'metadata', 'aria-hidden': 'true', tabindex: '-1' });
+  if (!media._ff || media._ffState) return;
+  media._ffState = 'queued'; ffQueue.push(media); pumpFirstFrames();
+}
+function loadFirstFrame(media) {
+  media._ffState = 'loading'; ffLoading++;
+  const v = h('video', { muted: true, playsinline: true, preload: 'metadata', 'aria-hidden': 'true', tabindex: '-1' });
   v.muted = true;
-  v.addEventListener('loadeddata', () => { const ph = media.querySelector('.ph'); if (ph) ph.classList.add('done'); }, { once: true });
-  v.addEventListener('error', () => v.remove(), { once: true });
+  let timer = 0; let adoptTimer = 0;
+  const finish = (state) => {
+    if (media._ffRelease !== release) return;
+    media._ffRelease = null; clearTimeout(timer); clearTimeout(adoptTimer); ffLoading--;
+    v.removeAttribute('src'); try { v.load(); } catch { /* detached */ }
+    media._ffState = state;
+    pumpFirstFrames();
+  };
+  const release = () => finish(null);
+  media._ffRelease = release;
+  const adopt = () => {
+    if (media._ffRelease !== release || !media.isConnected) return;
+    media._ffRelease = null; clearTimeout(timer); ffLoading--; media._ffState = 'done';
+    v.className = 'card-ff'; media._ffVideo = v; media.prepend(v);
+    v.addEventListener('loadeddata', () => { const ph = media.querySelector('.ph'); if (ph) ph.classList.add('done'); }, { once: true });
+    pumpFirstFrames();
+  };
+  v.addEventListener('loadedmetadata', () => { adoptTimer = setTimeout(adopt, FF_ADOPT_MS); }, { once: true });
+  v.addEventListener('loadeddata', () => {
+    if (media._ffRelease !== release) return; // adopted or released meanwhile
+    let ok = false;
+    try {
+      const w = v.videoWidth; const hh = v.videoHeight;
+      if (w && hh && media.isConnected) {
+        const k = Math.min(1, FF_MAX_W / w);
+        const c = h('canvas', { class: 'card-ff', width: Math.max(1, Math.round(w * k)), height: Math.max(1, Math.round(hh * k)), 'aria-hidden': 'true' });
+        c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+        media.prepend(c); ok = true;
+        const ph = media.querySelector('.ph'); if (ph) ph.classList.add('done');
+      }
+    } catch { /* cannot paint: the placeholder stays */ }
+    finish(ok ? 'done' : 'failed');
+  }, { once: true });
+  v.addEventListener('error', () => finish('failed'), { once: true });
+  timer = setTimeout(() => finish('failed'), FF_TIMEOUT_MS);
   v.src = media._ff;
-  media.prepend(v);
+}
+/** A tile that is far away (or removed) gives its canvas back and cancels a load in flight; scrolling back mounts it again. */
+function dropFirstFrame(media) {
+  if (!media._ff) return;
+  if (media._ffRelease) media._ffRelease();
+  const c = media.querySelector('canvas.card-ff'); if (c) { c.width = c.height = 0; c.remove(); }
+  const av = media._ffVideo; if (av) { media._ffVideo = null; av.removeAttribute('src'); try { av.load(); } catch { /* detached */ } av.remove(); }
+  media._ffState = null;
 }
 const firstFrameIo = 'IntersectionObserver' in window
   ? new IntersectionObserver((entries) => { for (const e of entries) if (e.isIntersecting) { firstFrameIo.unobserve(e.target); mountFirstFrame(e.target); } }, { rootMargin: '300px 0px' })
@@ -98,6 +154,7 @@ const reliefIo = 'IntersectionObserver' in window
       const media = e.target;
       if (!e.isIntersecting) {
         stopPreview(media);
+        if (media._ff && media._ffState) { dropFirstFrame(media); if (firstFrameIo) firstFrameIo.observe(media); } // comes back mounted when the tile does
         const img = media._img;
         if (img && media._loaded && !media._parked) {
           img.removeAttribute('src');
@@ -128,6 +185,7 @@ export function releaseCard(card) {
   stopPreview(media);
   if (io) io.unobserve(media);
   if (reliefIo) reliefIo.unobserve(media);
+  if (media._ff) { if (firstFrameIo) firstFrameIo.unobserve(media); dropFirstFrame(media); }
   // A picture still on its way is abandoned with its card (the visitor changed filter or page, or scrolled far past
   // it): dropping src/srcset cancels the request, so a superseded page does not keep taking bandwidth from the next one.
   const img = media._img;
@@ -180,7 +238,7 @@ export function mediaCard(item, { open, compact = false, why = null, eager = fal
   } else {
     ph.classList.add('done');
     media._ff = firstFrameSrc(item, proxied);
-    if (media._ff) { if (firstFrameIo) firstFrameIo.observe(media); else mountFirstFrame(media); }
+    if (media._ff) { if (reliefIo) reliefIo.observe(media); if (firstFrameIo) firstFrameIo.observe(media); else mountFirstFrame(media); }
   }
   if (progress > 0) media.appendChild(h('span', { class: 'resume-bar', style: { '--p': String(Math.min(0.96, progress)) }, 'aria-hidden': 'true' }));
   // On full cards the "why" chip rides in the caption over the image; compact cards keep it on the media.

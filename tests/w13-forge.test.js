@@ -52,12 +52,13 @@ describe('1. a video with no still shows its own first frame', () => {
     assert.equal(img.firstFrameSrc({ media_type: 'video', media_url: '' }, proxy), null);
   });
 
-  test('the grid card mounts it lazily (no canvas), hover previews ignore it; Reels and the viewer seek past a black frame', () => {
+  test('the grid card mounts it lazily, hover previews ignore it; Reels and the viewer seek past a black frame', () => {
     const card = fs.readFileSync(path.join(JS, 'components', 'card.js'), 'utf8');
     assert.match(card, /firstFrameSrc\(item, proxied\)/);
-    assert.match(card, /class: 'card-ff'[^\n]*preload: 'metadata'/);
+    assert.match(card, /h\('video', \{ muted: true, playsinline: true, preload: 'metadata'/, 'the clip loads metadata only');
+    assert.match(card, /class: 'card-ff'/, 'the painted frame is a canvas.card-ff (w13-velocity: the video is released once it has drawn)');
     assert.match(card, /new IntersectionObserver\([^\n]*mountFirstFrame/);
-    assert.doesNotMatch(card, /getContext\(|toDataURL\(/, 'no canvas read');
+    assert.doesNotMatch(card, /getImageData\(|toDataURL\(/, 'no pixel read: a bucket (cross-origin) frame can only be drawn');
     assert.equal((card.match(/querySelector\('video'\)/g) || []).length, 0, 'every hover-preview lookup skips the first-frame video');
     for (const f of [['views', 'reels.js'], ['components', 'lightbox.js']]) assert.match(fs.readFileSync(path.join(JS, ...f), 'utf8'), /firstFrameWhenNoPoster\(v\)/, f.join('/'));
     assert.match(fs.readFileSync(path.join(JS, 'dom.js'), 'utf8'), /export function firstFrameWhenNoPoster\(video\)[\s\S]{0,300}currentTime = 0\.1/);
