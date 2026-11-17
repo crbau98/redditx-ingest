@@ -19,10 +19,10 @@ const call = async (method, path, body) => { const res = await fetch(`${base}${p
 const hex = (k) => k.toString(16).padStart(32, '0');
 
 /** A creator with an admin feed, an older productive automatic feed, a just-attached automatic feed (the suspect) and `rows` published items. */
-function scenario({ rows = 5, suspects = 1, reason = REASON, actor = 'system', block = true, extra = null } = {}) {
+function scenario({ rows = 5, suspects = 1, reason = REASON, actor = 'system', block = true, extra = null, origin = 'admin' } = {}) {
   n++;
   const h = `recman${n}`;
-  const c = repo.creators.create({ handle: h, displayName: h, origin: 'admin' });
+  const c = repo.creators.create({ handle: h, displayName: h, origin });
   const mkFeed = (platform, kind, target, origin, items, createdAt) => {
     const f = repo.feeds.upsert({ platform, kind, target, creatorId: c.id, origin, runNow: false }).feed;
     repo.db.prepare('UPDATE feeds SET items_total = ?, origin = ?, enabled = 1, cursor = ? WHERE id = ?').run(items, origin, JSON.stringify({ newestAt: 'x', bfPage: 4 }), f.id);
@@ -44,6 +44,9 @@ function scenario({ rows = 5, suspects = 1, reason = REASON, actor = 'system', b
   return { c, h, own, older, sus, ids, hashes, phashes, keys };
 }
 const enabled = (id) => repo.feeds.get(id).enabled;
+let mediaN = 0;
+const pub = (cid, fid, platform = 'bluesky') => { mediaN++; return repo.media.insert({ creator_id: cid, feed_id: fid, platform, source_id: `pq${mediaN}`, source_key: `${platform}:pq${mediaN}:0`, hash: `pqh${mediaN}`, media_type: 'image', media_url: `https://cdn.example/pq${mediaN}.jpg`, title: 'x' }); };
+const stateOf = (id) => repo.media.get(id).publish_state;
 
 test('the dry run shows exactly what the block did and what would be undone, and changes nothing', () => {
   const s = scenario({ rows: 5, suspects: 1 });
@@ -101,15 +104,15 @@ test('several automatic feeds attached just before the block: none can be pinned
   for (const f of many.sus) { assert.equal(enabled(f.id), 0); assert.equal(repo.blocklist.has('creator', `web:${f.target.toLowerCase()}`), true); }
   const none = scenario({ suspects: 0 });
   const dn = rec.dryRun(none.c.id);
-  assert.equal(dn.eligible, true); assert.match(dn.evidence.note, /own profile or feed/);
+  assert.equal(dn.eligible, true); assert.match(dn.evidence.note, /no automatic feed supplied the evidence/);
 });
 
-test('REFUSED: a block by an admin, a block that is not a scope rule, a takedown, a report, media removed under a takedown, a creator that is not blocked', () => {
-  const refusedFor = (s) => { const d = rec.dryRun(s.c.id); assert.equal(d.eligible, false); const out = rec.apply(s.c.id); assert.equal(out.applied, false); assert.equal(repo.creators.get(s.c.id).status === 'blocked' || s.notBlocked, true); return d.refusals.join(' | '); };
+test('REFUSED: a block by an admin, a safety block, another reason, a takedown, a report, media removed under a takedown, a creator not blocked, and an unchosen creator whose evidence is his own', () => {
+  const refusedFor = (s) => { const d = rec.dryRun(s.c.id); assert.equal(d.eligible, false, JSON.stringify(d)); const out = rec.apply(s.c.id); assert.equal(out.applied, false); assert.equal(repo.creators.get(s.c.id).status, 'blocked'); return d.refusals.join(' | '); };
   assert.match(refusedFor(scenario({ actor: 'admin' })), /made by admin/);
-  assert.match(refusedFor(scenario({ reason: 'safety:kid (profile)' })), /not a scope rule/);
-  assert.match(refusedFor(scenario({ reason: 'image filter: 3 pictures with women' })), /not a scope rule/);
-  assert.match(refusedFor(scenario({ reason: 'report:spam' })), /not a scope rule/);
+  assert.match(refusedFor(scenario({ reason: 'safety:kid (profile)' })), /safety block is never recovered/);
+  assert.match(refusedFor(scenario({ reason: 'safety:minor (profile)', origin: 'seed' })), /safety block is never recovered/);
+  assert.match(refusedFor(scenario({ reason: 'report:spam' })), /not a scope or image-filter rule/);
   const td = scenario(); repo.db.prepare("INSERT INTO takedowns (kind, value, reason) VALUES ('handle', ?, 'x')").run(td.h);
   assert.match(refusedFor(td), /takedown/);
   const tc = scenario(); repo.db.prepare("INSERT INTO takedowns (kind, value, reason) VALUES ('creator', ?, 'x')").run(tc.c.id);
@@ -118,9 +121,40 @@ test('REFUSED: a block by an admin, a block that is not a scope rule, a takedown
   assert.match(refusedFor(rp), /report/);
   const tm = scenario({ extra: ({ ids }) => repo.db.prepare("UPDATE media SET review_reason = 'takedown: dmca' WHERE id = ?").run(ids[0]) });
   assert.match(refusedFor(tm), /takedown/);
+  const own = scenario({ origin: 'discovered', suspects: 0 });
+  assert.match(refusedFor(own), /not admin- or seed-followed and no automatic feed/);
   const live = scenario({ block: false }); const dl = rec.dryRun(live.c.id);
   assert.equal(dl.eligible, false); assert.match(dl.refusals.join(), /not blocked/);
   assert.equal(rec.apply(live.c.id).applied, false);
+});
+
+test('a discovered creator IS recoverable when an automatic feed supplied the evidence; an admin/seed one is recoverable either way', () => {
+  assert.equal(rec.dryRun(scenario({ origin: 'discovered', suspects: 1 }).c.id).eligible, true);
+  assert.equal(rec.dryRun(scenario({ origin: 'seed', suspects: 0 }).c.id).eligible, true);
+});
+
+test('image-filter blocks: evidence is the feed whose account collected the strikes; an automatic one = recover, his own = review', () => {
+  const mk = (strikeOrigin, origin) => {
+    const s = scenario({ reason: 'image filter: 3 pictures with women', origin, suspects: 0, extra: ({ c }) => {
+      const f = repo.feeds.upsert({ platform: 'bluesky', kind: 'user', target: `strk${++n}.bsky.social`, creatorId: c.id, origin: strikeOrigin, runNow: false }).feed;
+      repo.db.prepare('UPDATE feeds SET items_total = 5, created_at = ? WHERE id = ?').run('2026-01-03T00:00:00.000Z', f.id);
+      for (let i = 0; i < 3; i++) repo.logAction('account', `bluesky:strk${n}.bsky.social`, 'image-female', 'picture shows a woman', 'system');
+      s0.f = f;
+    } });
+    return s;
+  };
+  const s0 = {};
+  const auto = mk('discovered', 'seed'); const fAuto = s0.f;
+  const da = rec.dryRun(auto.c.id);
+  assert.equal(da.eligible, true); assert.equal(da.evidence.kind, 'strike account'); assert.deepEqual(da.evidence.suspects.map((x) => x.id), [fAuto.id]);
+  const own = mk('admin', 'seed'); const fOwn = s0.f;
+  const dow = rec.dryRun(own.c.id);
+  assert.equal(dow.eligible, true, 'admin/seed-followed: eligible'); assert.deepEqual(dow.evidence.suspects, []); assert.deepEqual(dow.evidence.ownFeedsWithEvidence.map((x) => x.id), [fOwn.id]);
+  const cands = Object.fromEntries(rec.candidates({}).items.map((x) => [x.creatorId, x]));
+  assert.equal(cands[auto.c.id].recommendation, 'recover'); assert.equal(cands[auto.c.id].rule, 'image-filter');
+  assert.equal(cands[own.c.id].recommendation, 'review');
+  // apply on the automatic one leaves the strike-collecting feed off
+  const out = rec.apply(auto.c.id); assert.equal(out.applied, true); assert.equal(enabled(fAuto.id), 0);
 });
 
 test('rows removed for a takedown or safety reason, and feeds an admin or a sweep switched off, are not brought back', () => {
@@ -137,21 +171,25 @@ test('rows removed for a takedown or safety reason, and feeds an admin or a swee
   assert.equal(repo.db.prepare("SELECT COUNT(*) AS n FROM media WHERE creator_id = ? AND review_reason = 'safety:minor'").get(s.c.id).n, 1, 'the safety-removed row stays');
 });
 
-test('candidates: system scope blocks only; an automatic feed attached just before the block marks the likely false ones', () => {
-  const falsy = scenario({ suspects: 1 }); const genuine = scenario({ suspects: 0 });
-  const adm = scenario({ actor: 'admin' }); const safe = scenario({ reason: 'safety:kid (profile)' });
-  const r = rec.candidates({ limit: 1000 });
+test('candidates: every blocked creator with feeds, with rule, blocker, evidence feed and a recover / review / keep recommendation', () => {
+  const falsy = scenario({ suspects: 1, origin: 'discovered' });          // system scope, automatic evidence: recover
+  const seedOnly = scenario({ suspects: 0, origin: 'seed' });             // system scope, admin/seed only: review
+  const genuine = scenario({ suspects: 0, origin: 'ingest' });            // system scope, nobody chose him, no automatic evidence: keep
+  const adm = scenario({ actor: 'admin' });                                // an admin blocked him: keep
+  const safe = scenario({ reason: 'safety:kid (profile)', origin: 'seed' }); // safety: keep, always
+  const tkd = scenario({ origin: 'seed' }); repo.db.prepare("INSERT INTO takedowns (kind, value, reason) VALUES ('handle', ?, 'x')").run(tkd.h);
+  const r = rec.candidates({ limit: 5000 });
   const by = Object.fromEntries(r.items.map((x) => [x.creatorId, x]));
-  assert.equal(by[falsy.c.id].likelyFalse, true); assert.equal(by[falsy.c.id].evidenceFrom, 'automatic feed'); assert.equal(by[falsy.c.id].suspects[0].id, falsy.sus[0].id);
-  assert.equal(by[genuine.c.id].likelyFalse, false); assert.equal(by[genuine.c.id].evidenceFrom, 'own profile or feed');
-  assert.ok(!by[adm.c.id] && !by[safe.c.id]);
-  assert.ok(r.likelyFalse >= 1);
-  assert.ok(r.items.findIndex((x) => x.creatorId === falsy.c.id) < r.items.findIndex((x) => x.creatorId === genuine.c.id), 'likely false first');
-  assert.equal(by[falsy.c.id].rowsRemovedByBlock, 5);
-  assert.equal(by[falsy.c.id].call, `GET /api/admin/creators/${falsy.c.id}/recover-block`);
-  const td = scenario(); repo.db.prepare("INSERT INTO takedowns (kind, value, reason) VALUES ('handle', ?, 'x')").run(td.h);
-  const rr = rec.candidates({ limit: 1000 }).items.find((x) => x.creatorId === td.c.id);
-  assert.equal(rr.recoverable, false); assert.equal(rr.call, null);
+  assert.equal(by[falsy.c.id].recommendation, 'recover'); assert.equal(by[falsy.c.id].rule, 'scope'); assert.equal(by[falsy.c.id].blockedBy, 'system');
+  assert.equal(by[falsy.c.id].evidence.automaticFeeds[0].id, falsy.sus[0].id);
+  assert.equal(by[seedOnly.c.id].recommendation, 'review');
+  for (const k of [genuine, adm, safe, tkd]) { assert.equal(by[k.c.id].recommendation, 'keep'); assert.equal(by[k.c.id].call, null); assert.ok(by[k.c.id].why); }
+  assert.equal(by[adm.c.id].rule, 'admin'); assert.equal(by[safe.c.id].rule, 'safety');
+  assert.equal(by[falsy.c.id].rowsRemovedByBlock, 5); assert.equal(by[falsy.c.id].call, `GET /api/admin/creators/${falsy.c.id}/recover-block`);
+  assert.ok(r.byRecommendation.recover >= 1 && r.byRecommendation.review >= 1 && r.byRecommendation.keep >= 4);
+  const idx = (k) => r.items.findIndex((x) => x.creatorId === k.c.id);
+  assert.ok(idx(falsy) < idx(seedOnly) && idx(seedOnly) < idx(genuine), 'recover, then review, then keep');
+  assert.ok(r.items.every((x) => x.feeds >= 1), 'only creators that have feeds');
 });
 
 test('admin routes: GET is a dry run, POST without apply is a dry run, POST ?apply=1 applies, a refused apply is 409; candidates; admin only', async () => {
@@ -170,4 +208,47 @@ test('admin routes: GET is a dry run, POST without apply is a dry run, POST ?app
   const cand = await call('GET', '/creators/recover-block/candidates');
   assert.equal(cand.status, 200); assert.ok(Array.isArray(cand.body.items));
   assert.equal((await fetch(`${base}/creators/recover-block/candidates`)).status, 401);
+});
+
+// ---- the real trigger: a profile read from a feed PRISM attached (thefap's page description says "leaked girls")
+test('applyProfile: the "profile" of an automatic web page feed can no longer block the creator; the feed is quarantined instead', () => {
+  const { applyProfile } = require('../src/engine/creators');
+  const settings = require('../src/settings').get();
+  const thefap = { displayName: 'BigggWild Nude Leaks (7 Photos) - TheFap', bio: 'The best social network with a lot of leaked girls from Onlyfans, Patreon and other nude content platforms with high quality and free', links: [] };
+  for (const origin of ['deep-search', 'discovered', 'linked', 'coverage', 'cbir']) {
+    const s = scenario({ rows: 0, suspects: 0, block: false });
+    const page = repo.feeds.upsert({ platform: 'web', kind: 'page', target: `https://de.thefap.net/feed/tf${++n}`, creatorId: s.c.id, origin, runNow: false }).feed;
+    const kept = pub(s.c.id, page.id, 'web');
+    const out = applyProfile(repo.feeds.get(page.id), thefap, settings);
+    assert.equal(out.blocked, false, `${origin}: not blocked`); assert.equal(out.quarantined, true);
+    assert.equal(repo.creators.get(s.c.id).status, 'active'); assert.equal(enabled(page.id), 0);
+    assert.equal(stateOf(kept), 'review', 'what the page published is held for review');
+    assert.notEqual(repo.creators.get(s.c.id).bio, thefap.bio, 'his profile is not overwritten by the page description');
+    assert.equal(repo.blocklist.has('creator', s.c.id), false);
+  }
+});
+
+test('applyProfile: a female profile read from HIS OWN feed (admin, seed, ingest) still blocks him; safety is unchanged', () => {
+  const { applyProfile } = require('../src/engine/creators');
+  const settings = require('../src/settings').get();
+  for (const origin of ['admin', 'seed', 'ingest']) {
+    const s = scenario({ rows: 0, suspects: 0, block: false });
+    const f = repo.feeds.upsert({ platform: 'bluesky', kind: 'user', target: `own${++n}.bsky.social`, creatorId: s.c.id, origin, runNow: false }).feed;
+    const out = applyProfile(repo.feeds.get(f.id), { displayName: 'Jess', bio: 'she/her. girl next door' }, settings);
+    assert.equal(out.blocked, true, origin); assert.equal(repo.creators.get(s.c.id).status, 'blocked');
+  }
+  const s2 = scenario({ rows: 0, suspects: 0, block: false });
+  const f2 = repo.feeds.upsert({ platform: 'web', kind: 'page', target: `https://x.example/s${++n}`, creatorId: s2.c.id, origin: 'deep-search', runNow: false }).feed;
+  const { checkText } = require('../src/lib/safety');
+  const word = ['teen', 'schoolboy', 'underage'].find((w) => checkText(`a ${w}`, '').level === 'block');
+  if (word) { applyProfile(repo.feeds.get(f2.id), { displayName: 'x', bio: `${word} content` }, settings); assert.equal(repo.creators.get(s2.c.id).status, 'blocked', 'a safety profile still blocks'); }
+});
+
+test('the whole story: a thefap feed attached by deep search no longer blocks; and a creator it blocked before can be recovered', () => {
+  // before the fix this block came from applyProfile; reproduce its record and recover him
+  const s = scenario({ suspects: 1 });
+  const d = rec.dryRun(s.c.id);
+  assert.equal(d.eligible, true); assert.equal(d.evidence.pinned, true);
+  assert.equal(rec.apply(s.c.id).applied, true);
+  assert.equal(repo.creators.get(s.c.id).status, 'active');
 });

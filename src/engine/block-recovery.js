@@ -8,7 +8,9 @@
  * source_key and post_key, so a re-ingest is refused), blocklisted the creator id and every feed account, and switched all feeds off.
  * POST /creators/:id/restore only sets status = active and repairs none of that.
  *
- * Refused unless ALL hold: the creator is blocked; the block was made by the SYSTEM; its reason starts with "scope"; no takedown covers
+ * Refused unless ALL hold: the creator is blocked; the block was made by the SYSTEM; its reason is a scope rule ("scope...") or the image
+ * filter ("image filter: N pictures with women"), NEVER a safety rule; the creator is admin- or seed-followed OR an automatic-origin feed supplied
+ * the evidence; no takedown covers
  * the creator (id, handle, paid-page handles, links, feed accounts) or any of his media; and no report exists for him or his media.
  * Female or safety evidence on his OWN profile or feed is not undone here: those are not "automatic" and need a human decision.
  *
@@ -28,7 +30,7 @@
  */
 const repo = require('../db/repo');
 const config = require('../config');
-const { AUTOMATIC_FEED_ORIGINS } = require('../lib/feed-origins');
+const { isAutomaticOrigin } = require('../lib/feed-origins');
 
 const SUSPECT_WINDOW_MS = 15 * 60 * 1000;
 const ROWS_BEFORE_MS = 60 * 1000;
@@ -47,13 +49,27 @@ function blockRecord(creatorId) {
 }
 
 /** Why this block must NOT be recovered here. Empty array = eligible. */
+function ruleOf(reason) {
+  const r = String(reason || '');
+  if (/^scope/i.test(r)) return 'scope';
+  if (/^image filter/i.test(r)) return 'image-filter';
+  if (/^safety/i.test(r)) return 'safety';
+  return 'other';
+}
+
 function refusals(creator, block) {
   const out = [];
   if (!creator) return ['creator not found'];
   if (creator.status !== 'blocked') out.push(`creator is ${creator.status}, not blocked`);
   if (!block) { out.push('no block record in the audit'); return out; }
   if (block.actor !== 'system') out.push(`the block was made by ${block.actor}, not the system`);
-  if (!/^scope/i.test(String(block.reason || ''))) out.push(`the block reason is not a scope rule (${String(block.reason || '').slice(0, 40)})`);
+  const rule = ruleOf(block.reason);
+  if (rule === 'safety') out.push('a safety block is never recovered here');
+  else if (rule === 'other') out.push(`the block reason is not a scope or image-filter rule (${String(block.reason || '').slice(0, 40)})`);
+  else {
+    const ev = evidenceOf(creator, block);
+    if (!['admin', 'seed'].includes(creator.origin) && !ev.automatic.length) out.push('he is not admin- or seed-followed and no automatic feed supplied the evidence: the evidence is probably his own, so a human must decide elsewhere');
+  }
   const db = repo.db;
   try {
     const takedowns = require('../lib/takedowns');
@@ -75,16 +91,38 @@ function refusals(creator, block) {
 /** Automatic-origin feeds attached in the 15 minutes before the block: where the evidence most likely came from. */
 function suspectsOf(creatorId, blockedAtMs) {
   return repo.db.prepare('SELECT id, platform, kind, target, origin, enabled, items_total, created_at FROM feeds WHERE creator_id = ?').all(creatorId)
-    .filter((f) => AUTOMATIC_FEED_ORIGINS.has(f.origin)).filter((f) => { const t = parseTime(f.created_at); return Number.isFinite(t) && t >= blockedAtMs - SUSPECT_WINDOW_MS && t <= blockedAtMs + 2000; });
+    .filter((f) => isAutomaticOrigin(f.origin)).filter((f) => { const t = parseTime(f.created_at); return Number.isFinite(t) && t >= blockedAtMs - SUSPECT_WINDOW_MS && t <= blockedAtMs + 2000; });
 }
 
-/** Rows that block removed: removed at the block time, not for a takedown or a safety reason. */
+/**
+ * Where the female evidence most likely came from.
+ *  - scope blocks: automatic-origin feeds attached in the 15 minutes before the block;
+ *  - image-filter blocks: feeds whose account is one that collected "picture shows a woman" strikes.
+ * `automatic` is the subset a person did not choose: those stay off and blocklisted; `own` is evidence on his own feeds.
+ */
+function evidenceOf(creator, block) {
+  const at = parseTime(block.created_at);
+  const rule = ruleOf(block.reason);
+  if (rule === 'image-filter') {
+    const strikes = new Set(repo.db.prepare("SELECT DISTINCT target_id FROM moderation_actions WHERE target_type = 'account' AND action = 'image-female'").all().map((r) => String(r.target_id).toLowerCase()));
+    const feeds = repo.db.prepare('SELECT id, platform, kind, target, origin, enabled, items_total, created_at FROM feeds WHERE creator_id = ?').all(creator.id)
+      .filter((f) => strikes.has(`${f.platform}:${String(require('./deepsearch').accountHandle(f.platform, f.target)).toLowerCase()}`));
+    return { kind: 'strike account', feeds, automatic: feeds.filter((f) => isAutomaticOrigin(f.origin)), own: feeds.filter((f) => !isAutomaticOrigin(f.origin)) };
+  }
+  const feeds = suspectsOf(creator.id, at);
+  return { kind: 'attached just before the block', feeds, automatic: feeds, own: [] };
+}
+
+/** Rows that block removed: removed at the block time, not for a takedown, a safety reason or an earlier female exclusion. */
 function rowsOfBlock(creatorId, blockedAtMs) {
   const rows = repo.db.prepare("SELECT id, review_reason FROM media WHERE creator_id = ? AND publish_state = 'removed' AND updated_at >= ? AND updated_at <= ?").all(creatorId, iso(blockedAtMs - ROWS_BEFORE_MS), iso(blockedAtMs + ROWS_AFTER_MS));
-  const keep = { takedown: 0, safety: 0 }; const ids = [];
+  const keep = { takedown: 0, safety: 0, femaleExclusion: 0 }; const ids = [];
   for (const r of rows) {
     const why = String(r.review_reason || '').toLowerCase();
-    if (why.includes('takedown')) keep.takedown++; else if (why.startsWith('safety')) keep.safety++; else ids.push(r.id);
+    if (why.includes('takedown')) keep.takedown++;
+    else if (why.startsWith('safety')) keep.safety++;
+    else if (/^(image|scope|female)/.test(why)) keep.femaleExclusion++;
+    else ids.push(r.id);
   }
   return { ids, keep };
 }
@@ -136,7 +174,7 @@ function feedPlan(creator, suspects) {
     else if (STAY_OFF.has((rev.lastFeedAction(f.id) || {}).action) && (rev.lastFeedAction(f.id) || {}).action !== 'creator-block-off') why = `last action: ${(rev.lastFeedAction(f.id) || {}).action}`;
     else if (require('../lib/deadhosts').deadReason(f.platform, f.target)) why = 'dead or wrong-platform host';
     else if (femaleCheck(f.target, f.label).level === 'hard' || checkText(f.target, f.label).level === 'block') why = 'name reads female or fails the safety gate';
-    else if (AUTOMATIC_FEED_ORIGINS.has(f.origin)) {
+    else if (isAutomaticOrigin(f.origin)) {
       if (!(Number(f.items_total) > 0)) why = 'automatic feed that never produced';
       else if (f.platform !== 'web' && f.platform !== 'rss' && !rev.accountIsCreator(f)) why = 'account name does not match creator';
     }
@@ -153,16 +191,21 @@ function plan(creatorId) {
   const out = { creatorId: creator && creator.id, name: creator && (creator.display_name || creator.handle), status: creator && creator.status, origin: creator && creator.origin, blockedBy: block, eligible: refused.length === 0, refusals: refused };
   if (!creator || !block) return out;
   const at = parseTime(block.created_at);
-  const suspects = suspectsOf(creator.id, at);
+  const ev = evidenceOf(creator, block);
+  const suspects = ev.automatic;
   const rows = rowsOfBlock(creator.id, at);
   const entries = blocklistRun(creator, block, suspects);
   const feeds = feedPlan(creator, suspects);
+  const what = ev.kind === 'strike account' ? 'automatic feed(s) whose account collected the image strikes' : 'automatic feed(s) attached in the 15 minutes before the block';
   out.evidence = {
+    kind: ev.kind,
     suspects: suspects.map((f) => ({ id: f.id, platform: f.platform, target: f.target, origin: f.origin, attachedAt: f.created_at })),
+    ownFeedsWithEvidence: ev.own.map((f) => ({ id: f.id, platform: f.platform, target: f.target, origin: f.origin })),
     pinned: suspects.length === 1,
-    note: suspects.length === 1 ? 'one automatic feed was attached in the 15 minutes before the block: it is the likely source and stays off and blocklisted'
-      : suspects.length > 1 ? 'several automatic feeds were attached in the 15 minutes before the block: all stay off and blocklisted; the culprit cannot be pinned down'
-        : 'no automatic feed was attached just before the block: the evidence probably came from his own profile or feed; a human must confirm this was a wrong block',
+    note: suspects.length === 1 ? `one ${what}: it is the likely source and stays off and blocklisted`
+      : suspects.length > 1 ? `several ${what}: all stay off and blocklisted; the culprit cannot be pinned down`
+        : ev.own.length ? 'the evidence comes from one of his OWN feeds: recovering him is a human decision (he is admin- or seed-followed)'
+          : 'no automatic feed supplied the evidence: the evidence probably came from his own profile; a human must confirm this was a wrong block',
   };
   out.plan = {
     rowsToDelete: rows.ids.length, rowsKept: rows.keep,
@@ -209,30 +252,43 @@ function apply(creatorId, { actor = 'admin' } = {}) {
 }
 
 /**
- * Library-wide, read-only: creators the SYSTEM blocked with a scope reason. `likelyFalse` = an automatic-origin feed was attached in the
- * 15 minutes before the block (the signature of a namesake or wrong match); otherwise the evidence probably came from his own profile
- * or feed, which is likely genuine: never recovered automatically. Nothing here applies anything.
+ * Library-wide, read-only: every blocked creator that has at least one feed, with the rule that blocked him, who blocked him, when, the
+ * evidence feed (if found) and a recommendation:
+ *   recover: the system blocked him on a scope or image-filter rule and an AUTOMATIC feed supplied the evidence (the signature of a
+ *            wrong match: a page or account PRISM attached on its own). Call the dry run, read it, then apply.
+ *   review:  the system blocked him on such a rule but only because he is admin- or seed-followed: the evidence is none or on his own
+ *            feed, so he may genuinely be a woman. A person decides.
+ *   keep:    a safety block, an admin block, any other reason, a takedown or report, or a creator nobody chose whose evidence is his own.
+ * Nothing here applies anything; there is no apply-all.
  */
-function candidates({ limit = 500 } = {}) {
+function candidates({ limit = 1000, withFeeds = true } = {}) {
   const rows = repo.db.prepare("SELECT id, handle, display_name, status, origin, links FROM creators WHERE status = 'blocked'").all();
   const out = [];
   for (const c of rows) {
+    const stats = repo.db.prepare('SELECT COUNT(*) AS feeds, COALESCE(SUM(items_total), 0) AS items FROM feeds WHERE creator_id = ?').get(c.id);
+    if (withFeeds && !stats.feeds) continue;
     const block = blockRecord(c.id);
-    if (!block || block.actor !== 'system' || !/^scope/i.test(String(block.reason || ''))) continue;
-    const at = parseTime(block.created_at);
-    const suspects = suspectsOf(c.id, at);
-    const removed = rowsOfBlock(c.id, at);
-    const stats = repo.db.prepare('SELECT COUNT(*) AS feeds, COALESCE(SUM(items_total), 0) AS items FROM feeds WHERE creator_id = ? AND COALESCE(items_total, 0) > 0').get(c.id);
     const refused = refusals(c, block).filter((r) => !/not blocked/.test(r));
+    const rule = block ? (block.actor !== 'system' ? 'admin' : ruleOf(block.reason)) : 'unknown';
+    const at = block ? parseTime(block.created_at) : NaN;
+    const ev = block && ['scope', 'image-filter'].includes(ruleOf(block.reason)) ? evidenceOf(c, block) : { kind: null, feeds: [], automatic: [], own: [] };
+    let recommendation = 'keep'; let why = refused[0] || '';
+    if (!refused.length) {
+      if (ev.automatic.length) { recommendation = 'recover'; why = `evidence came from ${ev.automatic.length} automatic feed(s): likely a wrong match`; }
+      else { recommendation = 'review'; why = 'admin- or seed-followed, but the evidence is none or on his own feed: he may genuinely be a woman'; }
+    }
+    const removed = block && Number.isFinite(at) ? rowsOfBlock(c.id, at) : { ids: [] };
     out.push({
-      creatorId: c.id, name: c.display_name || c.handle, origin: c.origin, blockedAt: block.created_at, reason: block.reason,
-      evidenceFrom: suspects.length ? 'automatic feed' : 'own profile or feed', likelyFalse: suspects.length > 0, suspects: suspects.map((f) => ({ id: f.id, platform: f.platform, target: f.target, origin: f.origin })),
-      rowsRemovedByBlock: removed.ids.length, productiveFeeds: stats.feeds, itemsEverIngested: stats.items, refusals: refused, recoverable: refused.length === 0,
-      call: refused.length === 0 ? `GET /api/admin/creators/${c.id}/recover-block` : null,
+      creatorId: c.id, name: c.display_name || c.handle, origin: c.origin, rule, blockedBy: block ? block.actor : null, reason: block ? block.reason : null, blockedAt: block ? block.created_at : null,
+      evidence: { kind: ev.kind, automaticFeeds: ev.automatic.map((f) => ({ id: f.id, platform: f.platform, target: f.target, origin: f.origin })), ownFeeds: ev.own.map((f) => ({ id: f.id, platform: f.platform, target: f.target, origin: f.origin })) },
+      rowsRemovedByBlock: removed.ids.length, feeds: stats.feeds, itemsEverIngested: stats.items, refusals: refused,
+      recommendation, why, call: recommendation === 'keep' ? null : `GET /api/admin/creators/${c.id}/recover-block`,
     });
   }
-  out.sort((a, b) => (b.likelyFalse - a.likelyFalse) || (b.itemsEverIngested - a.itemsEverIngested));
-  return { total: out.length, likelyFalse: out.filter((x) => x.likelyFalse).length, items: out.slice(0, Math.max(1, Math.min(2000, Number(limit) || 500))) };
+  const order = { recover: 0, review: 1, keep: 2 };
+  out.sort((a, b) => (order[a.recommendation] - order[b.recommendation]) || (b.itemsEverIngested - a.itemsEverIngested));
+  const count = (k) => out.reduce((m, x) => { m[x[k]] = (m[x[k]] || 0) + 1; return m; }, {});
+  return { total: out.length, byRecommendation: count('recommendation'), byRule: count('rule'), byOrigin: count('origin'), items: out.slice(0, Math.max(1, Math.min(5000, Number(limit) || 1000))) };
 }
 
-module.exports = { plan, dryRun, apply, candidates, refusals, suspectsOf, rowsOfBlock, blocklistRun };
+module.exports = { plan, dryRun, apply, candidates, refusals, evidenceOf, ruleOf, suspectsOf, rowsOfBlock, blocklistRun };

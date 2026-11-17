@@ -10,6 +10,7 @@ const events = require('./events');
 const { checkText } = require('../lib/safety');
 const { femaleCheck } = require('../lib/scope');
 const paid = require('../lib/paid');
+const { isAutomaticOrigin } = require('../lib/feed-origins');
 
 const LINKABLE_KINDS = new Set(['user', 'feed', 'page']);
 const MAX_LINKED_FEEDS_PER_CREATOR = 10;
@@ -30,6 +31,14 @@ function applyProfile(feed, profile, settings) {
 
   // PRISM follows men only: a female / feminine / trans-feminine profile ends the relationship too.
   const gender = femaleCheck(creator.handle, profile.displayName, profile.bio);
+  // The profile of a feed PRISM attached on its own (deep search, coverage, a bio link) describes THAT account or PAGE, not him: a
+  // web page's "profile" is its title and meta description (thefap: "leaked girls from Onlyfans ...", which blocked 36 of the 43
+  // creators that had one of its pages, Bigggwild and Christian Hogue among them). Quarantine the feed; leave the creator and
+  // his profile alone. Only a profile read from his OWN feed (admin, seed, ingest) can block him.
+  if (gender.level === 'hard' && isAutomaticOrigin(feed.origin)) {
+    require('../lib/quarantine').quarantineFeed(feed, `scope: ${gender.rule} (profile of a feed PRISM attached)`);
+    return { ...out, quarantined: true };
+  }
   if (gender.level === 'hard') {
     repo.creators.block(creator.id, `scope:${gender.rule} (profile)`, 'system');
     events.log('WARN', `Creator ${creator.handle} blocked by the male-only scope (profile: ${gender.rule})`);
