@@ -15,6 +15,7 @@ const DOMAINS = [
   'bestonlyfans.com', 'topfansites.com', 'fansly-top.com', 'onlyfansranking.com', 'gaysdream.com', 'gayonlyfans.com', 'besties.com',
   // leak indexes and image boards
   'fapello.com', 'fapello.su', 'leakimedia.com', 'thothub.to', 'thothub.tv', 'nudostar.com', 'nudostar.tv', 'fapopedia.net', 'fapodrop.com', 'erothots.co',
+  'thefap.net', 'thefap.com', 'thefap.org', // the page whose title and description ("leaked girls from Onlyfans") blocked 36 of 43 creators
   'simpcity.su', 'simpcity.cr', 'socialmediagirls.com', 'influencersgonewild.com', 'leakedmodels.com', 'onlyleaks.org', 'fapelo.com', 'fapeza.com', 'nudogram.com',
   // forums and tube search pages
   'lpsg.com', 'eporner.com', 'spankbang.com', 'sxyprn.com', 'boyfriendtv.com',

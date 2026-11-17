@@ -55,6 +55,12 @@ function applyProfile(feed, profile, settings) {
     return { ...out, blocked: true };
   }
 
+  // A NEUTRAL page: a feed PRISM attached on its own, pointing at an aggregator site (thefap, fapello, a ranking). Its "profile" is the
+  // page's title and meta description ("Bigggwild - Free OnlyFans Leaks Hub"), not his bio: it never becomes his display name, bio or an
+  // alias, and it never feeds the body filter. Only his own links go on (ownLinks below). The safety and scope checks above still ran.
+  const pageUrl = feed && /^https?:\/\//i.test(String(feed.target || '')) ? feed.target : null;
+  const neutral = !!pageUrl && isAutomaticOrigin(feed.origin) && require('../lib/aggregators').isAggregator(pageUrl);
+  if (neutral) profile = { links: profile.links || [], avatarUrl: profile.avatarUrl, bannerUrl: profile.bannerUrl };
   repo.creators.enrich(creator.id, { displayName: profile.displayName, bio: profile.bio, avatarUrl: profile.avatarUrl, bannerUrl: profile.bannerUrl });
 
   // Body filter: a refreshed profile that now reads chub / gainer / dad bod hides the creator (reversible, see engine/physique).
