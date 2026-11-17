@@ -41,6 +41,10 @@ function ensureTable() {
 
 /* ------------------------------------------------------------------ index */
 let ix = null;
+const INLINE = !!require('../config').isTest || require('../config').dbPath === ':memory:';
+const slice = (label, fn) => { let out; const bw = require('../lib/blockwatch'); if (bw && bw.slice) bw.slice(label, () => { out = fn(); }); else out = fn(); return out; };
+const turn = () => new Promise((r) => setTimeout(r, 0)); // a timer, not setImmediate: queued requests and health probes run first
+const SLICE_MS = 25;
 function emptyIndex(cap = 1024) {
   return { n: 0, cap, ids: [], creators: [], posts: [], row: new Map(), q: new Int8Array(cap * DIM), scale: new Float32Array(cap), mean: null, meanN: 0, done: 0, dm: null, nc: null, mm: 0, dirty: true };
 }
@@ -62,12 +66,16 @@ function addTo(x, id, creatorId, postKey, vec) {
  * Library mean and the per-item constants for centred cosine: dm_i = a_i·m, nc_i = |a_i - m|². The mean is recomputed only
  * once the index has grown by a twentieth since; rows added in between get their constants against the current mean.
  */
-function finish(x) {
+function finish(x, { allowFull = true } = {}) {
   if (!x.dirty) return;
   // A full re-mean costs one pass over every vector: at library scale that is seconds of sync work.
   // 25% growth between full passes (was 5%) keeps the incremental path (constants against the
   // current mean) doing nearly all the work; a recommender does not need a fresher mean than that.
-  const full = !x.mean || x.n > x.meanN * 1.25 + 50;
+  // On the request path (allowFull false) a due re-mean is handed to refreshAsync() and the new rows get constants against the
+  // current mean meanwhile: the full pass is never synchronous on a large index.
+  const due = !x.mean || x.n > x.meanN * 1.25 + 50;
+  const full = due && (allowFull || !x.mean);
+  if (due && !full) refreshAsync(x);
   if (full) {
     const mean = new Float64Array(DIM);
     for (let i = 0; i < x.n; i++) { const s = x.scale[i]; const o = i * DIM; for (let j = 0; j < DIM; j++) mean[j] += s * x.q[o + j]; }
@@ -87,15 +95,21 @@ function finish(x) {
   }
   x.done = x.n; x.dirty = false;
 }
+/**
+ * The index for a request. In production it is never built here: before the boot build (warmIndex) has finished this kicks it off
+ * and returns null, and the caller answers from tags instead. A synchronous build was a whole pass over every vector on the request
+ * path, the first 'More like this' after a deploy paid it, and so did the event loop. Tests and :memory: build inline.
+ */
 function index() {
   ensureTable();
   if (!ix) {
+    if (!INLINE) { warmIndex().catch((e) => events.log('WARN', `Visual index: ${e.message}`)); return null; }
     const x = emptyIndex();
     for (const r of db.prepare(`SELECT e.media_id, e.vec, m.creator_id, m.post_key FROM media_embeddings e JOIN media m ON m.id = e.media_id
         WHERE e.model = ? AND m.publish_state = 'published' ORDER BY m.seq`).iterate(MODEL_ID)) addTo(x, r.media_id, r.creator_id, r.post_key, r.vec);
     ix = x;
   }
-  finish(ix);
+  finish(ix, { allowFull: INLINE });
   return ix;
 }
 
@@ -132,6 +146,7 @@ const cache = new Map();
  */
 function similar(id, limit = 12) {
   const x = index();
+  if (!x) return null; // still building: tag-based related posts answer
   const r = x.row.get(id);
   if (r === undefined || x.n < MIN_INDEX) return null;
   const key = `${id}|${limit}|${x.n}`;
@@ -165,10 +180,17 @@ function similar(id, limit = 12) {
  */
 const PROFILE_MS = 10 * 60000; const MIN_PICS = 3;
 let profiles = null;
+let profilesBuilding = null;
+/** The profiles for index `x`: the current set, or the stale one (or null) while a fresh set is built in slices in the background. */
 function creatorProfiles(x) {
-  if (profiles && profiles.ix === x && Date.now() - profiles.at < PROFILE_MS) return profiles;
-  const sums = new Map(); const counts = new Map();
-  for (let i = 0; i < x.n; i++) {
+  const fresh = profiles && profiles.ix === x && Date.now() - profiles.at < PROFILE_MS;
+  if (fresh) return profiles;
+  if (INLINE) { profiles = buildProfilesSync(x); return profiles; }
+  if (!profilesBuilding) profilesBuilding = buildProfiles(x).then((p) => { profiles = p; }).catch((e) => events.log('WARN', `Visual profiles: ${e.message}`)).finally(() => { profilesBuilding = null; });
+  return profiles && profiles.ix === x ? profiles : null;
+}
+function addProfileRows(x, sums, counts, from, to) {
+  for (let i = from; i < to; i++) {
     const c = x.creators[i];
     if (!c) continue;
     let s = sums.get(c);
@@ -177,6 +199,8 @@ function creatorProfiles(x) {
     for (let j = 0; j < DIM; j++) s[j] += sc * x.q[o + j] - x.mean[j];
     counts.set(c, counts.get(c) + 1);
   }
+}
+function normaliseProfiles(sums, counts) {
   const vecs = new Map();
   for (const [c, s] of sums) {
     if (counts.get(c) < MIN_PICS) continue;
@@ -185,8 +209,25 @@ function creatorProfiles(x) {
     for (let j = 0; j < DIM; j++) s[j] /= n;
     vecs.set(c, s);
   }
-  profiles = { ix: x, at: Date.now(), vecs };
-  return profiles;
+  return vecs;
+}
+function buildProfilesSync(x) {
+  const sums = new Map(); const counts = new Map();
+  addProfileRows(x, sums, counts, 0, x.n);
+  return { ix: x, at: Date.now(), vecs: normaliseProfiles(sums, counts) };
+}
+/** The same pass in time-sized row slices with a turn of the loop between them. Rows are only ever appended, so 0..n stays valid. */
+async function buildProfiles(x) {
+  const sums = new Map(); const counts = new Map();
+  const n = x.n; const mean = x.mean; let rows = 2000;
+  for (let i = 0; i < n;) {
+    const to = Math.min(n, i + rows);
+    const t = Date.now();
+    slice('visual:profiles', () => addProfileRows({ ...x, mean }, sums, counts, i, to));
+    rows = sized(rows, Date.now() - t, to - i); i = to;
+    await turn();
+  }
+  return { ix: x, at: Date.now(), vecs: slice('visual:profiles', () => normaliseProfiles(sums, counts)) };
 }
 
 /**
@@ -195,8 +236,10 @@ function creatorProfiles(x) {
  */
 function similarCreators(id, k = 24) {
   const x = index();
-  if (x.n < MIN_INDEX) return null;
-  const { vecs } = creatorProfiles(x);
+  if (!x || x.n < MIN_INDEX) return null;
+  const p = creatorProfiles(x);
+  if (!p) return null; // the profiles are being built in the background: the posting-style answer stands in
+  const { vecs } = p;
   const me = vecs.get(id);
   if (!me) return null;
   const out = [];
@@ -331,30 +374,107 @@ function status() {
  * request 477 ms, second 42 ms. Revisit moving this to the aggregate worker only if production passes ~150k rows
  * AND the chunked build still shows up in blockwatch.
  */
-// One statement reads at most this many rowids of media. The old single query sorted every published row (with its
+// One statement reads at most this many rowids of media (the cap; each read is sized by time below it). The old single query sorted every published row (with its
 // vector) in a temporary B-tree before returning the first one: one synchronous step of minutes on a large library.
 const WARM_WINDOW = 20000;
 
-async function warmIndex() {
-  ensureTable();
-  if (!ix) {
-    const x = emptyIndex();
-    // media walked by rowid (NOT INDEXED, outer loop), each row's vector looked up by its key: no sort, and the
-    // event loop gets a turn between windows.
-    const stmt = db.prepare(`SELECT e.media_id, e.vec, m.creator_id, m.post_key FROM media m NOT INDEXED CROSS JOIN media_embeddings e
-        WHERE m.seq > ? AND m.seq <= ? AND e.media_id = m.id AND e.model = ? AND m.publish_state = 'published' ORDER BY m.seq`);
-    const top = (db.prepare('SELECT MAX(seq) AS m FROM media').get() || {}).m || 0;
-    for (let from = 0; from < top; from += WARM_WINDOW) {
-      for (const r of stmt.iterate(from, from + WARM_WINDOW, MODEL_ID)) addTo(x, r.media_id, r.creator_id, r.post_key, r.vec);
-      await new Promise((res) => setImmediate(res)); // let requests (and the health check) through
+/** Next slice size (rows) from the last one's time, aiming at SLICE_MS: grows at most 2x, shrinks at once. */
+function sized(rows, ms, done) {
+  if (!done) return rows;
+  return Math.max(200, Math.min(200000, Math.round(Math.min(rows * 2, done * SLICE_MS / Math.max(ms, 1)))));
+}
+
+/**
+ * The full re-mean of `x` and its per-row constants, in row slices with a turn of the loop between them, installed in one step at
+ * the end (requests keep using the old mean and constants until then). Rows appended meanwhile get their constants on the next
+ * finish(), against the new mean. One at a time.
+ */
+let refreshing = null;
+function refreshAsync(x) {
+  if (refreshing) return refreshing;
+  refreshing = (async () => {
+    const n = x.n;
+    const mean = new Float64Array(DIM);
+    let rows = 2000;
+    for (let i = 0; i < n;) {
+      const to = Math.min(n, i + rows); const t = Date.now();
+      slice('visual:mean', () => { for (let k = i; k < to; k++) { const sc = x.scale[k]; const o = k * DIM; for (let j = 0; j < DIM; j++) mean[j] += sc * x.q[o + j]; } });
+      rows = sized(rows, Date.now() - t, to - i); i = to;
+      await turn();
     }
-    ix = x;
-  }
-  finish(ix);
-  return ix ? ix.n : 0;
+    for (let j = 0; j < DIM; j++) mean[j] /= Math.max(1, n);
+    let mm = 0; for (let j = 0; j < DIM; j++) mm += mean[j] * mean[j];
+    const dm = new Float32Array(Math.max(x.cap, n)); const nc = new Float32Array(Math.max(x.cap, n));
+    rows = 2000;
+    for (let i = 0; i < n;) {
+      const to = Math.min(n, i + rows); const t = Date.now();
+      slice('visual:centre', () => {
+        for (let k = i; k < to; k++) {
+          const sc = x.scale[k]; const o = k * DIM; let d = 0; let aa = 0;
+          for (let j = 0; j < DIM; j++) { const a = sc * x.q[o + j]; d += a * mean[j]; aa += a * a; }
+          dm[k] = d; nc[k] = Math.max(1e-9, aa - 2 * d + mm);
+        }
+      });
+      rows = sized(rows, Date.now() - t, to - i); i = to;
+      await turn();
+    }
+    // install in one step; rows n..x.n (added while this ran) are done by the next finish(), incrementally
+    if (dm.length < x.cap) { const d2 = new Float32Array(x.cap); d2.set(dm); const n2 = new Float32Array(x.cap); n2.set(nc); Object.assign(x, { dm: d2, nc: n2 }); }
+    else Object.assign(x, { dm, nc });
+    Object.assign(x, { mean, mm, meanN: n, done: n, dirty: x.n > n });
+    cache.clear();
+    return x;
+  })().finally(() => { refreshing = null; });
+  return refreshing;
+}
+
+/**
+ * Build the in-memory index once, at boot (called from the warm-up after the first health answer), so the first "More like this"
+ * visitor does not pay the cold build. Every step is a time-sized slice with a turn of the loop between them, named for blockwatch:
+ *   visual:load    a range of media rows (by seq) joined to their vectors, appended to a preallocated index (no doubling copies)
+ *   visual:mean    the library mean, a slice of rows at a time
+ *   visual:centre  the per-row constants for centred cosine, a slice of rows at a time
+ * The finished index is installed in one step; until then index() returns null and callers answer from tags. The old build
+ * ran the mean and constants (two passes over every vector) in one synchronous finish() at the end: 2-4.8 s blocks after deploys
+ * on prod, with no timed culprit, while warm:visualIndex was pending.
+ */
+let building = null;
+function warmIndex() {
+  if (ix && !ix.dirty) return Promise.resolve(ix.n);
+  if (building) return building;
+  building = (async () => {
+    ensureTable();
+    if (!ix) {
+      const expect = slice('visual:load', () => db.prepare('SELECT COUNT(*) AS n FROM media_embeddings WHERE model = ?').get(MODEL_ID).n);
+      const x = emptyIndex(Math.max(1024, Math.ceil(expect * 1.05)));
+      const stmt = db.prepare(`SELECT e.media_id, e.vec, m.creator_id, m.post_key FROM media m NOT INDEXED CROSS JOIN media_embeddings e
+          WHERE m.seq > ? AND m.seq <= ? AND e.media_id = m.id AND e.model = ? AND m.publish_state = 'published' ORDER BY m.seq`);
+      let top = (db.prepare('SELECT MAX(seq) AS m FROM media').get() || {}).m || 0;
+      let span = 1000; let perSeq = 0;
+      for (let from = 0; ;) {
+        const to = Math.min(from + span, top);
+        const t = Date.now();
+        slice('visual:load', () => { for (const r of stmt.iterate(from, to, MODEL_ID)) addTo(x, r.media_id, r.creator_id, r.post_key, r.vec); });
+        const ms = Date.now() - t;
+        perSeq = Math.max(ms / Math.max(to - from, 1), perSeq * 0.97); // follows the slowest recent stretch: a cold region stays small
+        from = to;
+        if (from >= top) { top = (db.prepare('SELECT MAX(seq) AS m FROM media').get() || {}).m || 0; if (from >= top) break; }
+        span = Math.max(200, Math.min(WARM_WINDOW, Math.round(SLICE_MS / Math.max(perSeq, 0.0005))));
+        await turn();
+      }
+      if (x.n) await refreshAsync(x);
+      else finish(x);
+      ix = x;
+    } else if (ix.dirty) {
+      await refreshAsync(ix);
+    }
+    finish(ix, { allowFull: false }); // rows the backfill added meanwhile: incremental
+    return ix.n;
+  })().finally(() => { building = null; });
+  return building;
 }
 
 /** Tests: forget the in-memory index and cached answers. */
-function _reset() { ix = null; profiles = null; cache.clear(); resetScan(); }
+function _reset() { ix = null; profiles = null; building = null; refreshing = null; profilesBuilding = null; cache.clear(); resetScan(); }
 
-module.exports = { _WINDOW_SQL: WINDOW_SQL, _resetScan: resetScan, _scanStats: () => ({ ...scanStats }), similar, similarCreators, backfill, start, stop, status, ensureTable, warmIndex, _reset, _nearest: nearest, _index: index, _pending: pending, _MODEL_ID: MODEL_ID };
+module.exports = { _refreshAsync: refreshAsync, _finish: finish, _WINDOW_SQL: WINDOW_SQL, _resetScan: resetScan, _scanStats: () => ({ ...scanStats }), similar, similarCreators, backfill, start, stop, status, ensureTable, warmIndex, _reset, _nearest: nearest, _index: index, _pending: pending, _MODEL_ID: MODEL_ID };
