@@ -1093,6 +1093,17 @@ function v38(db) {
 }
 v38.ddlOnly = true;
 
+/**
+ * v39: `media.fallback_url`, the full-resolution rendition to show when `media_url` cannot be read. Reddit's unsigned i.redd.it
+ * original can answer 404 (a 1 KB stub) while the signed preview.redd.it source of the same picture serves fine. The adapter stores
+ * that source here, the viewer may fall back to it, and link health does not call the item "gone at source" while it loads.
+ */
+function v39(db) {
+  const cols = db.prepare('PRAGMA table_info(media)').all().map((c) => c.name);
+  if (!cols.includes('fallback_url')) db.exec('ALTER TABLE media ADD COLUMN fallback_url TEXT');
+}
+v39.ddlOnly = true;
+
 function v35(db) {
   const { orderNames } = require('../lib/creator-names');
   const rows = db.prepare("SELECT id, handle, display_name FROM creators WHERE handle LIKE '% %'").all();
@@ -1105,7 +1116,7 @@ function v35(db) {
   if (n && process.env.NODE_ENV !== 'test') console.log(`[migrate] v35: ${n} creator(s) had handle and display name swapped; fixed`);
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31, v32, v33, v34, v35, v36, v37, v38];
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31, v32, v33, v34, v35, v36, v37, v38, v39];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });

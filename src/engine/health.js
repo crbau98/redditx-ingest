@@ -27,7 +27,7 @@ const q = {
     VALUES (@media_id, @reports, @last_report, @checked_at, @verdict, @http_status, @gone_streak)
     ON CONFLICT(media_id) DO UPDATE SET reports = @reports, last_report = @last_report, checked_at = @checked_at,
       verdict = @verdict, http_status = @http_status, gone_streak = @gone_streak`),
-  media: repo.db.prepare('SELECT id, media_url, preview_url, media_type, hls_url, publish_state FROM media WHERE id = ?'),
+  media: repo.db.prepare('SELECT id, media_url, preview_url, fallback_url, media_type, hls_url, publish_state FROM media WHERE id = ?'),
   stats: repo.db.prepare(`SELECT COUNT(*) AS checked, SUM(verdict = 'gone') AS gone, SUM(reports) AS reports,
     SUM(CASE WHEN verdict = 'gone' AND checked_at >= ? THEN 1 ELSE 0 END) AS gone7d FROM media_health`),
 };
@@ -138,7 +138,16 @@ async function check(id, { probe = probeMedia } = {}) {
     q.upsert.run({ ...prev, checked_at: now(), verdict: 'unknown', http_status: null });
     return { verdict: 'unknown', skipped: true };
   }
-  const { verdict, status } = classify(await probe(target.url, m.media_type, target.opts));
+  let { verdict, status } = classify(await probe(target.url, m.media_type, target.opts));
+  // The original can be gone while the same picture still loads from its fallback rendition (Reddit: i.redd.it answers 404 with a 1 KB
+  // stub, the signed preview source serves it). A picture that can still be shown is not "gone at source".
+  if (verdict === 'gone' && m.media_type !== 'video') {
+    for (const alt of [m.fallback_url, m.preview_url]) {
+      if (!isHttp(alt) || alt === m.media_url || alt === target.url) continue;
+      const r = classify(await probe(alt, m.media_type, target.opts));
+      if (r.verdict === 'ok') { verdict = 'ok'; status = r.status; break; }
+    }
+  }
   let streak = prev.gone_streak;
   if (verdict === 'gone') {
     // only a verdict at least an hour after the previous "gone" confirms it

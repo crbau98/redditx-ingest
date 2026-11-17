@@ -160,8 +160,10 @@ async function coverCreator(creator, { dryRun = false, probe = defaultProbe, abo
 async function rotate({ limit = 4, probe = defaultProbe, aborted = () => false } = {}) {
   if (!settingsStore.get().coverageEnabled) return { started: 0, creators: [], skipped: 'off in Settings' };
   const now = Date.now();
+  const viewed = require('./viewed').recentIds();
   const rows = repo.db.prepare(`SELECT id, handle, display_name, media_count, popularity FROM creators WHERE status = 'active'
-    ORDER BY COALESCE(popularity, 0) DESC, media_count DESC LIMIT 800`).all();
+    ORDER BY COALESCE(popularity, 0) DESC, media_count DESC LIMIT 800`).all()
+    .map((r, i) => ({ ...r, i, seen: viewed.has(r.id) })).sort((a, b) => (b.seen - a.seen) || (a.i - b.i)); // viewed first, then popularity order
   const results = [];
   for (const c of rows) {
     if (results.length >= limit || aborted()) break;

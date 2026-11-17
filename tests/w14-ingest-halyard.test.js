@@ -260,3 +260,50 @@ test('admin coverage routes: status, dry run for one creator, admin only', async
   const dry = await call('POST', '/coverage/run', { creatorId: c.id, dryRun: true });
   assert.equal(dry.probed, 0); assert.match(dry.handles[0], /covroutehandle.*paid page/);
 });
+
+// ------------------------------------------------------------------ viewed creators are filled in first (order only)
+test('a viewed creator\'s due feed goes ahead of a more overdue one nobody looked at; an old view does not count', () => {
+  const viewed = require('../src/engine/viewed');
+  const a = creator(`viewa${++n}`); const b = creator(`viewb${n}`);
+  const late = feed(a.id, 'redgifs', 'user', `vlate${n}`, { items: 3 });   // very overdue, nobody views the creator
+  const fresh = feed(b.id, 'redgifs', 'user', `vfresh${n}`, { items: 3 }); // barely overdue, creator viewed
+  const iso = (ms) => new Date(Date.now() - ms).toISOString();
+  repo.db.prepare('UPDATE feeds SET next_run_at = ? WHERE id = ?').run(iso(40 * 3600000), late.id);
+  repo.db.prepare('UPDATE feeds SET next_run_at = ? WHERE id = ?').run(iso(60000), fresh.id);
+  const order = () => repo.feeds.due(500, [], ['redgifs']).map((f) => f.id).filter((id) => id === late.id || id === fresh.id);
+  assert.deepEqual(order(), [late.id, fresh.id], 'before any view: lateness decides');
+  viewed.touch(b.id);
+  assert.ok(viewed.recentIds().has(b.id));
+  assert.deepEqual(order(), [fresh.id, late.id], 'the viewed creator goes first');
+  repo.db.prepare("UPDATE discovery_state SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now','-9 days') WHERE key = ?").run(`viewed.${b.id}`);
+  assert.deepEqual(order(), [late.id, fresh.id], 'a view older than 7 days is forgotten');
+});
+
+test('a view is stamped at most once per ten minutes, and the public profile route records it', async () => {
+  const viewed = require('../src/engine/viewed');
+  const c = creator(`viewthr${++n}`);
+  viewed.touch(c.id);
+  const first = repo.discoveryState.touchedAt(`viewed.${c.id}`);
+  repo.db.prepare("UPDATE discovery_state SET updated_at = '2026-01-01T00:00:00.000Z' WHERE key = ?").run(`viewed.${c.id}`);
+  repo.db.prepare("UPDATE discovery_state SET updated_at = ? WHERE key = ?").run(new Date(Date.now() - 60000).toISOString(), `viewed.${c.id}`);
+  const stamp = repo.discoveryState.touchedAt(`viewed.${c.id}`);
+  viewed.touch(c.id);
+  assert.equal(repo.discoveryState.touchedAt(`viewed.${c.id}`), stamp, 'within ten minutes: no new write');
+  assert.ok(first);
+  const d = creator(`viewroute${++n}`);
+  const res = await fetch(`${base.replace('/api/admin', '/api')}/creators/${d.id}`);
+  assert.ok([200, 404, 403].includes(res.status));
+  assert.equal(viewed.recentIds().has(d.id), res.status === 200, 'an active, visible creator is stamped');
+});
+
+test('coverage looks at viewed creators before more popular ones nobody opened', async () => {
+  repo.db.prepare("UPDATE creators SET status = 'hidden' WHERE status = 'active'").run();
+  const pop = creator(`vcpop${++n}`); const seen = creator(`vcseen${n}`);
+  lead(pop.id, `vcpophandle${n}x`); lead(seen.id, `vcseenhandle${n}x`);
+  repo.db.prepare('UPDATE creators SET popularity = 95 WHERE id = ?').run(pop.id);
+  repo.db.prepare('UPDATE creators SET popularity = 5 WHERE id = ?').run(seen.id);
+  require('../src/engine/viewed').touch(seen.id);
+  repo.discoveryState.set('coverage.day', JSON.stringify({ day: new Date().toISOString().slice(0, 10), probes: {}, created: 0 }));
+  const r = await coverage.rotate({ limit: 1, probe: fakeProbe(() => false) });
+  assert.deepEqual(r.creators.map((c) => c.id), [seen.id]);
+});
