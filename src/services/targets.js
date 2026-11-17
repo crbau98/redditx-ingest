@@ -84,13 +84,15 @@ function addSpec(spec, { creatorId = null, origin = 'admin', trusted, hint, body
     if (body.heavy) return { status: 'invalid', reason: `Body filter (${body.rule.replace(/^physique:/, '')}): switch it off in Settings to add this` };
   }
 
+  // The safety gate reads the target whether or not a creator was supplied: attaching to an existing creator must not skip it.
+  if (checkText(spec.target, spec.label).level === 'block') return { status: 'invalid', reason: 'Rejected by the safety gate' };
+
   let creator = creatorId ? repo.creators.get(creatorId) : null;
   if (spec.kind === 'user' || (spec.kind === 'channel' && spec.platform === 'youtube')) {
     const owner = repo.creators.byAccount(spec.platform, spec.target);
     if (owner && creator && owner.id !== creator.id) return { status: 'conflict', creator: owner, spec, reason: `Already belongs to ${owner.display_name || owner.handle}` };
     if (owner) creator = owner;
     if (!creator) {
-      if (checkText(spec.target, spec.label).level === 'block') return { status: 'invalid', reason: 'Rejected by the safety gate' };
       const { handle, displayName } = cleanCreatorNames(spec);
       // The same man often has two pages on one platform ("reno-gold-c2gav" and "reno-gold-71").
       // When his name already belongs to a creator, the new page belongs to him too — otherwise
