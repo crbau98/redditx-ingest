@@ -659,6 +659,14 @@ function startImageSweep() {
         try { deepsearch.rotate({ limit: s.deepPullPerHour }); } catch (e) { events.log('WARN', `Deep-pull rotation: ${e.message}`); }
       }
     }
+    // Coverage: look for each popular creator's known handle on the platforms PRISM reads (hourly, bounded by per-platform daily caps).
+    if (s.coverageEnabled && s.coveragePerHour > 0) {
+      const lastCover = parseInt(repo.settings.get('coverage_rotate_at') || '0', 10) || 0;
+      if (Date.now() - lastCover > 60 * 60 * 1000) {
+        repo.settings.set('coverage_rotate_at', String(Date.now()));
+        blockwatch.around('coverage', () => require('./coverage').rotate({ limit: s.coveragePerHour })).catch((e) => events.log('WARN', `Coverage rotation: ${e.message}`));
+      }
+    }
     if (!s.imageSweep || !s.imageSweepPerTick) return;
     sweepBusy = true;
     try {

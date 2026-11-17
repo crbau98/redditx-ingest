@@ -33,6 +33,17 @@ router.post('/feeds/revive', (req, res) => {
   const b = req.body || {};
   res.json(require('../../engine/feed-revive').reviveFeeds({ apply: b.apply === true, limit: b.limit, creatorId: b.creatorId || null }));
 });
+// Coverage: GET shows today's budget; POST { creatorId, dryRun } runs one creator now (dryRun lists the handles it would probe, spends nothing).
+router.get('/coverage', (req, res) => res.json(require('../../engine/coverage').status()));
+router.post('/coverage/run', async (req, res) => {
+  const b = req.body || {}; const cov = require('../../engine/coverage');
+  if (b.creatorId) {
+    const c = repo.db.prepare("SELECT id, handle, display_name FROM creators WHERE id = ? AND status = 'active'").get(String(b.creatorId));
+    if (!c) return bad(res, 'Active creator not found', 404);
+    return res.json(await cov.coverCreator(c, { dryRun: b.dryRun === true }));
+  }
+  res.json(await cov.rotate({ limit: int(b.limit, 1, 20, 4) }));
+});
 router.get('/feeds/foreign', (req, res) => res.json(require('../../engine/deepsearch').foreignFeeds({ limit: req.query.limit, offset: req.query.offset })));
 router.get('/feeds', (req, res) => {
   const { platform, kind, status, q, creatorId, enabled } = req.query;

@@ -38,6 +38,8 @@ GET /library-health
 GET /feeds/idle
 GET /feeds/yield
 GET /feeds/revive
+GET /coverage
+POST /coverage/run
 POST /feeds/revive
 GET /feeds/foreign
 GET /feeds

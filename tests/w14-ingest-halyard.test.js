@@ -135,3 +135,128 @@ test('chronic failures do not switch off a productive feed on an active creator;
     assert.equal(enabledOf(barren.id), 0, 'a feed with no yield is still ended by the chronic rule');
   } finally { registry.get = real; }
 });
+
+// ------------------------------------------------------------------ coverage: probe the platforms for a creator's known handle
+const coverage = require('../src/engine/coverage');
+const settingsStore = require('../src/settings');
+const lead = (cid, handle, status = 'claimed') => repo.db.prepare("INSERT INTO onlyfans_leads (service, handle, creator_id, status, origin) VALUES ('OnlyFans', ?, ?, ?, 'seed')").run(handle, cid, status);
+const alias = (cid, a, source) => repo.db.prepare('INSERT INTO creator_aliases (creator_id, norm, alias, kind, source) VALUES (?, ?, ?, ?, ?)').run(cid, a.toLowerCase().replace(/[^a-z0-9]/g, ''), a, 'handle', source);
+/** A stand-in for the platforms: `exists(spec)` decides; `profile` is what the account's own page says. */
+const fakeProbe = (exists, profile = () => ({})) => { const asked = []; const fn = async (spec) => { asked.push(spec); return exists(spec) ? { exists: true, items: 5, profile: profile(spec) } : { exists: false }; }; fn.asked = asked; return fn; };
+
+test('confidentHandles: paid page, productive feed (even disabled) and confirmed alias; not a bio claim, a barren feed, a page feed or a generic word', () => {
+  const c = creator(`covmain${++n}`);
+  lead(c.id, `paidhandle${n}`);
+  feed(c.id, 'tiktok', 'user', `tiktokacct${n}`, { items: 10, enabled: 0 });
+  alias(c.id, `confirmed${n}x`, 'profile'); alias(c.id, `biograb${n}x`, 'bio');
+  feed(c.id, 'x', 'user', `barrenacct${n}`, { items: 0 });
+  feed(c.id, 'web', 'page', `https://pagefeed${n}.example/x`, { items: 9 });
+  const h = coverage.confidentHandles(repo.creators.get(c.id));
+  assert.equal(h.length, 2, 'at most two handles per pass');
+  assert.deepEqual(h.map((x) => x.reason), ['paid page', 'productive feed']);
+  const all = repo.db.prepare("SELECT 1"); void all;
+  assert.ok(!h.some((x) => /biograb|barren|pagefeed/.test(x.handle)));
+  assert.equal(coverage.confidentHandles(creator(`nohandles${++n}`)).length, 0 + coverage.confidentHandles({ id: 'x' }).length);
+});
+
+test('coverage finds his account where it exists and reads as him; follows it as an enabled feed on that creator', async () => {
+  const c = creator(`covfind${++n}`); const hd = `covfindpaid${n}`;
+  lead(c.id, hd);
+  const probe = fakeProbe((s) => (s.platform === 'redgifs' && s.target === hd) || (s.platform === 'web' && /fapello/.test(s.target)), (s) => ({ displayName: `${hd} official`, bio: 'gym' }));
+  const out = await coverage.coverCreator(repo.creators.get(c.id), { probe });
+  const got = out.created.map((x) => x.platform).sort();
+  assert.deepEqual(got, ['redgifs', 'web']);
+  for (const x of out.created) { const f = repo.feeds.get(x.id); assert.equal(f.enabled, 1); assert.equal(f.creator_id, c.id); assert.equal(f.origin, 'coverage'); }
+  assert.ok(out.probed >= 6, `probed ${out.probed} platforms`);
+});
+
+test('coverage never probes X, Telegram or TikTok, and never re-probes a platform he is already on', async () => {
+  const c = creator(`covskip${++n}`); const hd = `covskippaid${n}`;
+  lead(c.id, hd); feed(c.id, 'redgifs', 'user', `existing${n}`, { items: 3 });
+  const probe = fakeProbe(() => false);
+  await coverage.coverCreator(repo.creators.get(c.id), { probe });
+  const platforms = new Set(probe.asked.map((s) => s.platform));
+  for (const p of ['x', 'telegram', 'tiktok']) assert.ok(!platforms.has(p), `${p} probed`);
+  assert.ok(!platforms.has('redgifs'), 'already has a redgifs feed');
+  assert.ok(platforms.has('coomer') && platforms.has('reddit') && platforms.has('bluesky'));
+});
+
+test('a namesake is not followed: the account exists but nothing says it is him', async () => {
+  const c = creator(`Real Man ${++n}`); const hd = `shorty${n}`; // short handle, not his name
+  lead(c.id, hd);
+  const probe = fakeProbe((s) => s.platform === 'reddit', () => ({ displayName: 'Someone Else', bio: 'I like trains' }));
+  const out = await coverage.coverCreator(repo.creators.get(c.id), { probe });
+  assert.equal(out.created.length, 0);
+  assert.ok(out.skipped['exists but not provably him'] >= 1, JSON.stringify(out.skipped));
+});
+
+test('a distinctive (9+ character) handle is accepted without a profile; a short one needs a profile that links to or names him', async () => {
+  const c = creator(`longhandle${++n}x`);
+  lead(c.id, `longhandle${n}x`);
+  const out = await coverage.coverCreator(repo.creators.get(c.id), { probe: fakeProbe((s) => s.platform === 'bluesky') });
+  assert.deepEqual(out.created.map((x) => x.platform), ['bluesky']);
+  assert.equal(out.created[0].why, 'distinctive handle');
+  const d = creator(`linker${++n}`); lead(d.id, `shrt${n}`);
+  const out2 = await coverage.coverCreator(repo.creators.get(d.id), { probe: fakeProbe((s) => s.platform === 'tumblr', () => ({ links: [{ target: `https://linktr.ee/linker${n}` }] })) });
+  assert.deepEqual(out2.created.map((x) => x.why), ['profile links to his accounts']);
+});
+
+test('an account that belongs to another creator is a conflict, not a second owner', async () => {
+  const owner = creator(`owner${++n}`); const c = creator(`covconf${n}`); const hd = `covconfpaid${n}x`;
+  feed(owner.id, 'redgifs', 'user', hd, { items: 4 });
+  lead(c.id, hd);
+  const out = await coverage.coverCreator(repo.creators.get(c.id), { probe: fakeProbe((s) => s.platform === 'redgifs') });
+  assert.equal(out.created.length, 0);
+  assert.equal(repo.feeds.find('redgifs', 'user', hd).creator_id, owner.id);
+});
+
+test('the per-platform daily cap stops probing; dry run spends nothing', async () => {
+  const before = settingsStore.get().coveragePerPlatformPerDay;
+  try {
+    settingsStore.update({ coveragePerPlatformPerDay: 1 });
+    repo.discoveryState.set('coverage.day', JSON.stringify({ day: new Date().toISOString().slice(0, 10), probes: {}, created: 0 }));
+    const a = creator(`capa${++n}`); lead(a.id, `capahandle${n}x`);
+    const b = creator(`capb${n}`); lead(b.id, `capbhandle${n}x`);
+    const probe = fakeProbe(() => false);
+    await coverage.coverCreator(repo.creators.get(a.id), { probe });
+    const afterA = probe.asked.length;
+    await coverage.coverCreator(repo.creators.get(b.id), { probe });
+    const reddit = probe.asked.filter((s) => s.platform === 'reddit').length;
+    assert.equal(reddit, 1, 'one reddit probe in total with a cap of 1');
+    assert.ok(afterA >= 5 && probe.asked.length === afterA, 'the second creator found every platform at its cap');
+    assert.equal(coverage.status().perPlatformCap, 1);
+    const dry = fakeProbe(() => true);
+    const c = creator(`capdry${++n}`); lead(c.id, `capdryhandle${n}x`);
+    const out = await coverage.coverCreator(repo.creators.get(c.id), { probe: dry, dryRun: true });
+    assert.equal(dry.asked.length, 0); assert.equal(out.probed, 0); assert.ok(out.handles.length);
+  } finally { settingsStore.update({ coveragePerPlatformPerDay: before }); }
+});
+
+test('rotate: most popular first, bounded by limit, a creator is not revisited inside the cooldown, creators with no handle cost nothing', async () => {
+  repo.db.prepare("UPDATE creators SET status = 'hidden' WHERE status = 'active'").run(); // only this test's creators are in play
+  const low = creator(`rotlow${++n}`); const high = creator(`rothigh${n}`); const none = creator(`rotnone${n}`); const mid = creator(`rotmid${n}`);
+  lead(low.id, `rotlowhandle${n}x`); lead(high.id, `rothighhandle${n}x`); lead(mid.id, `rotmidhandle${n}x`);
+  repo.db.prepare('UPDATE creators SET popularity = ? WHERE id = ?').run(10, low.id);
+  repo.db.prepare('UPDATE creators SET popularity = ? WHERE id = ?').run(90, high.id);
+  repo.db.prepare('UPDATE creators SET popularity = ? WHERE id = ?').run(50, mid.id);
+  repo.db.prepare('UPDATE creators SET popularity = ? WHERE id = ?').run(99, none.id);
+  repo.discoveryState.set('coverage.day', JSON.stringify({ day: new Date().toISOString().slice(0, 10), probes: {}, created: 0 }));
+  const probe = fakeProbe(() => false);
+  const r1 = await coverage.rotate({ limit: 2, probe });
+  assert.deepEqual(r1.creators.map((c) => c.id), [high.id, mid.id], 'popularity order, the handle-less creator skipped');
+  const r2 = await coverage.rotate({ limit: 2, probe });
+  assert.deepEqual(r2.creators.map((c) => c.id), [low.id], 'high and mid are in their cooldown');
+  const r3 = await coverage.rotate({ limit: 5, probe });
+  assert.equal(r3.started, 0);
+  settingsStore.update({ coverageEnabled: false });
+  try { assert.equal((await coverage.rotate({ limit: 5, probe })).skipped, 'off in Settings'); } finally { settingsStore.update({ coverageEnabled: true }); }
+});
+
+test('admin coverage routes: status, dry run for one creator, admin only', async () => {
+  const c = creator(`covroute${++n}`); lead(c.id, `covroutehandle${n}x`);
+  assert.equal((await fetch(`${base}/coverage`)).status, 401);
+  const st = await call('GET', '/coverage');
+  assert.equal(st.enabled, true); assert.ok(st.platforms.includes('coomer')); assert.ok(!st.platforms.includes('x'));
+  const dry = await call('POST', '/coverage/run', { creatorId: c.id, dryRun: true });
+  assert.equal(dry.probed, 0); assert.match(dry.handles[0], /covroutehandle.*paid page/);
+});
