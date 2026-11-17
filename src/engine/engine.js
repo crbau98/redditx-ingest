@@ -525,7 +525,8 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
       repo.feeds.update(feed.id, { enabled: false });
       repo.feeds.finishRun(feed.id, { status: 'error', error: `${e.status === 404 || e.status === 410 ? `Not found (${e.status})` : 'Target broken'} — disabled after ${failures} tries`, failures, nextRunAt: null });
       events.log('WARN', `${tag} disabled: ${e.status === 404 || e.status === 410 ? 'target no longer exists' : e.message}`);
-    } else if (failures >= 5 && !cls.transient) {
+    } else if (failures >= 5 && !cls.transient && !require('./feed-revive').producedOnActiveCreator(feed)) {
+      // (A feed that has produced items on an active creator is not ended by a run of non-permanent errors: it keeps backing off, up to a day.)
       // Only errors that say something about the feed itself end it (it answers, but never with anything readable). A rate limit,
       // a 403/challenge, a timeout, a dropped connection or a 5xx can pass: those keep backing off (up to a day) and stay visible
       // as failing in the source-health report; the auto-retire sweep pauses the app's own feeds that never recover.

@@ -25,6 +25,14 @@ router.get('/feeds/yield', (req, res) => {
   const items = repo.runs.yieldByFeed(new Date(Date.now() - days * 86400000).toISOString(), { platform, limit: p.limit, offset: p.page * p.limit, sort });
   res.json({ days, sort, platform, page: p.page, limit: p.limit, items });
 });
+// Feeds that were switched off by a side effect (a creator block, a sweep) and left off: productive, on an ACTIVE creator, and nothing
+// says the feed itself should stay off. GET only reports (dry run); POST { apply: true, limit } switches them back on, staggered over
+// six hours, and logs each one. Admin-disabled, body-filtered, taken-down, dead-host, broken and seed feeds are never revived.
+router.get('/feeds/revive', (req, res) => res.json(require('../../engine/feed-revive').reviveFeeds({ apply: false })));
+router.post('/feeds/revive', (req, res) => {
+  const b = req.body || {};
+  res.json(require('../../engine/feed-revive').reviveFeeds({ apply: b.apply === true, limit: b.limit, creatorId: b.creatorId || null }));
+});
 router.get('/feeds/foreign', (req, res) => res.json(require('../../engine/deepsearch').foreignFeeds({ limit: req.query.limit, offset: req.query.offset })));
 router.get('/feeds', (req, res) => {
   const { platform, kind, status, q, creatorId, enabled } = req.query;

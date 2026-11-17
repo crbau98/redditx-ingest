@@ -37,6 +37,8 @@ POST /maintenance/repair-no-image
 GET /library-health
 GET /feeds/idle
 GET /feeds/yield
+GET /feeds/revive
+POST /feeds/revive
 GET /feeds/foreign
 GET /feeds
 POST /feeds

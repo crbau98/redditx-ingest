@@ -431,6 +431,7 @@ const media = {
       countCache.clear(); // a creator filter's totals changed
       logAction('feed', feed.id, 'reassign-media', `${out.moved} item(s) of ${feed.platform}:${String(feed.target).slice(0, 80)} from ${out.from.join(', ') || 'none'} to ${to || 'no creator'}`, actor);
     }
+    if (to) require('../../engine/feed-revive').reviveFor({ feedId: feed.id }); // a feed switched off by its old creator's block comes back on the new one
     return { moved: out.moved, from: out.from, to };
   },
 

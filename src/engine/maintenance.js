@@ -71,9 +71,11 @@ async function sweep({ probe = false, limit = 1_000_000 } = {}) {
   // pattern-matched: "Service Unavailable" is a 503 outage and "...1404.xml" a file name, and a rate limit, a challenge, a timeout
   // or a dropped connection can pass, so those feeds keep backing off instead of being switched off for good.
   const { classify } = require('./errorclass');
-  for (const f of repo.db.prepare("SELECT id, platform, kind, target, label, consecutive_failures, last_error FROM feeds WHERE enabled = 1 AND consecutive_failures >= 3").all()) {
+  const { producedOnActiveCreator } = require('./feed-revive');
+  for (const f of repo.db.prepare("SELECT id, platform, kind, target, label, consecutive_failures, last_error, items_total, creator_id FROM feeds WHERE enabled = 1 AND consecutive_failures >= 3").all()) {
     const c = classify(f.last_error || '');
-    const isBroken = (c.permanent && f.consecutive_failures >= 3) || (f.consecutive_failures >= 5 && !c.transient);
+    // a feed that produced items on an active creator is only ended when its target is gone for good (404, suspended), not for chronic errors
+    const isBroken = (c.permanent && f.consecutive_failures >= 3) || (f.consecutive_failures >= 5 && !c.transient && !producedOnActiveCreator(f));
     if (isBroken) {
       repo.feeds.update(f.id, { enabled: false });
       repo.logAction('feed', f.id, 'sweep-disable', `${c.kind}, ${f.consecutive_failures} failures`, 'system'); // what the health report lists as switched off by the engine
