@@ -65,6 +65,8 @@ GET /creators/hidden/unhide
 POST /creators/hidden/unhide
 GET /creators/hidden/report
 GET /identity/snapshots
+GET /creators/physique-feeds/restore
+POST /creators/physique-feeds/restore
 POST /identity/unmerge/:snapshotId
 POST /creators/normalize-handles
 POST /creators/:id/block

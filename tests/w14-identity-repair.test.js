@@ -352,3 +352,44 @@ describe('v4.23.0 prod follow-ups', () => {
     assert.equal(repo.creators.get(red).links.length, 1);
   });
 });
+
+describe('body-filter undo after later non-status actions', () => {
+  const physique = require('../src/engine/physique');
+  const hideBy = (handle) => {
+    const c = repo.creators.create({ handle, origin: 'admin' });
+    const f = feed(c.id, 'reddit', 'user', handle, 'admin');
+    physique.hideCreator(repo.creators.get(c.id), 'body filter: test');
+    return { id: c.id, feedId: f.id };
+  };
+  test('unhideCreator undoes its own hide although a deep search (or a repair) logged an action after it; the paused feed comes back on', async () => {
+    const { id, feedId } = hideBy('physlater');
+    assert.equal(repo.feeds.get(feedId).enabled, 0);
+    repo.logAction('creator', id, 'deep-search', 'x:physlater', 'discovery');
+    repo.logAction('creator', id, 'identity-prune-links', 'x', 'identity-repair');
+    const dry = await repair.unhide();
+    assert.ok(dry.items.some((i) => i.id === id && i.last === 'physique-hide'));
+    const done = await repair.unhide({ apply: true });
+    assert.ok(done.unhidden >= 1);
+    assert.equal(repo.creators.get(id).status, 'active');
+    assert.equal(repo.feeds.get(feedId).enabled, 1);
+    assert.equal(physique.lastStatusAction(id).action, 'physique-unhide');
+  });
+  test('restorePausedFeeds: a creator restored by hand gets the feeds the body filter paused back (dry run first); a feed decided since stays off', () => {
+    const a = hideBy('physbyhand');
+    const b = hideBy('physbyhand2'); const fb2 = feed(b.id, 'x', 'user', 'physbyhand2x', 'admin');
+    physique.hideCreator(repo.creators.get(b.id), 'again'); // not hidden twice: the creator is already hidden
+    repo.creators.update(a.id, { status: 'active' }); repo.creators.update(b.id, { status: 'active' });
+    repo.logAction('feed', b.feedId, 'disable', 'admin kept it off', 'admin');
+    const dry = physique.restorePausedFeeds({ handles: ['physbyhand', 'physbyhand2'] });
+    const st = (cid, fid) => dry.items.find((i) => i.id === cid).feeds.find((f) => f.id === fid).state;
+    assert.equal(st(a.id, a.feedId), 'restore');
+    assert.match(st(b.id, b.feedId), /^left off: disable/);
+    assert.equal(repo.feeds.get(a.feedId).enabled, 0, 'dry run');
+    const r = physique.restorePausedFeeds({ handles: ['physbyhand', 'physbyhand2'], apply: true });
+    assert.equal(r.enabled, 1);
+    assert.equal(repo.feeds.get(a.feedId).enabled, 1); assert.equal(repo.feeds.get(b.feedId).enabled, 0);
+    assert.ok(db.prepare("SELECT 1 FROM moderation_actions WHERE target_id = ? AND action = 'physique-feed-on'").get(String(a.feedId)));
+    assert.equal(physique.restorePausedFeeds({ handles: ['physbyhand'] }).feeds, 0, 'idempotent');
+    void fb2;
+  });
+});
