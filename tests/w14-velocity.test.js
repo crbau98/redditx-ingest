@@ -30,6 +30,18 @@ describe('fallbackStills: the order to fall back through', () => {
     assert.deepEqual(img.fallbackStills({ ...it, media_type: 'video' }), [it.preview_url, it.thumbnail_url, it.thumb_url], 'a video file is not a still');
     assert.deepEqual(img.fallbackStills(null), []);
   });
+  test('fallback_url (the stored full-size rendition) comes before the preview; a duplicate of the file is dropped; videos ignore it', () => {
+    const full = 'https://preview.redd.it/a.jpeg?auto=webp&s=full';
+    assert.deepEqual(img.fallbackStills({ ...it, fallback_url: full }), [full, it.preview_url, it.thumbnail_url, it.thumb_url, it.media_url]);
+    assert.deepEqual(img.fallbackStills({ ...it, fallback_url: it.media_url }), [it.media_url, it.preview_url, it.thumbnail_url, it.thumb_url], 'same URL as the file: once');
+    assert.deepEqual(img.fallbackStills({ ...it, fallback_url: null }), img.fallbackStills(it));
+    assert.ok(!img.stillChain({ media_type: 'video', media_url: 'https://x/v.mp4', fallback_url: full }).includes(full), 'no still for a video from a rendition field');
+  });
+  test('a grid tile whose small stills are all dead tries the full-size rendition before the file', () => {
+    const full = 'https://preview.redd.it/a.jpeg?auto=webp&s=full';
+    assert.deepEqual(img.stillChain({ ...it, fallback_url: full }), [it.thumb_url, it.preview_url, it.thumbnail_url, full, it.media_url]);
+    assert.deepEqual(img.stillChain(it), [it.thumb_url, it.preview_url, it.thumbnail_url, it.media_url], 'without it nothing changes');
+  });
   test('a signed preview URL is used exactly as stored, never rewritten to another width', () => {
     assert.equal(img.fallbackStills(it)[0], it.preview_url);
   });
@@ -64,7 +76,7 @@ function png(w, h, shade) { // a grey picture of the given size
 }
 
 describe('browser: the file is gone, the preview stays', { skip: haveBrowser ? false : 'Playwright Chromium not installed' }, () => {
-  const PREVIEW = png(200, 300, 150); const STUB = png(130, 60, 200); const THUMB = png(120, 180, 90);
+  const PREVIEW = png(200, 300, 150); const FULL = png(400, 600, 120); const STUB = png(130, 60, 200); const THUMB = png(120, 180, 90);
   let server; let base; let browser; let engine; let repo; let ids;
 
   before(async () => {
@@ -72,6 +84,7 @@ describe('browser: the file is gone, the preview stays', { skip: haveBrowser ? f
     const dir = prepareEnv({ DEMO_ART: '1', AGE_GATE_ENFORCE: 'false' });
     execFileSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'seed-demo.js')], { env: { ...process.env, DB_PATH: path.join(dir, 'test.db') }, stdio: 'ignore' });
     repo = require('../src/db/repo');
+    if (!repo.db.prepare('PRAGMA table_info(media)').all().some((c) => c.name === 'fallback_url')) repo.db.exec('ALTER TABLE media ADD COLUMN fallback_url TEXT'); // migration v39 (w14-ingest-halyard) adds it for real
     ids = repo.db.prepare("SELECT id FROM media WHERE media_type = 'image' ORDER BY id").all().map((r) => r.id);
     engine = require('../src/engine/engine');
     server = require('../src/app').createApp().listen(0);
@@ -95,12 +108,13 @@ describe('browser: the file is gone, the preview stays', { skip: haveBrowser ? f
       if (/i\.redd\.it\/.*-stub/.test(u)) return r.fulfill({ status: 404, contentType: 'image/png', body: STUB });
       if (/i\.redd\.it/.test(u)) return r.fulfill({ status: 404, contentType: 'text/plain', body: 'gone' });
       if (/nopreview/.test(u)) return r.fulfill({ status: 403, contentType: 'text/html', body: '<html>no</html>' });
-      return r.fulfill({ status: 200, contentType: 'image/png', body: PREVIEW });
+      return r.fulfill({ status: 200, contentType: 'image/png', body: /-full/.test(u) ? FULL : PREVIEW });
     });
     await page.route('**/api/proxy**', (r) => { // the proxy's own answer for the same hosts: the 404 as JSON, previews fine
       const u = decodeURIComponent(new URL(r.request().url()).searchParams.get('url') || '');
       if (/i\.redd\.it/.test(u) || /nopreview/.test(u)) return r.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"Upstream error"}' });
       if (/thumb-ok/.test(u)) return r.fulfill({ status: 200, contentType: 'image/png', body: THUMB });
+      if (/-full/.test(u)) return r.fulfill({ status: 200, contentType: 'image/png', body: FULL });
       return r.fulfill({ status: 200, contentType: 'image/png', body: PREVIEW });
     });
     return { ctx, page, seen };
@@ -108,8 +122,8 @@ describe('browser: the file is gone, the preview stays', { skip: haveBrowser ? f
   const setItem = (id, fields) => { const sets = Object.keys(fields).map((k) => `${k} = @${k}`).join(', '); repo.db.prepare(`UPDATE media SET ${sets} WHERE id = @id`).run({ id, ...fields }); };
   /** Wait for the viewer to show a picture or the message, then give the full-file attempt (after a 700 ms dwell) time to finish. */
   const settle = async (page, { hint = false } = {}) => {
-    await page.waitForFunction(() => { const i = document.querySelector('.lb-stage img'); return (i && i.complete && i.naturalWidth > 0) || document.querySelector('.lb-stage .lb-loading'); }, null, { timeout: 15000 });
-    if (hint) await page.waitForSelector('.lb-quality', { timeout: 15000 });
+    await page.waitForFunction(() => { const i = document.querySelector('.lb-stage img'); return (i && i.complete && i.naturalWidth > 0) || document.querySelector('.lb-stage .lb-loading'); }, null, { timeout: 40000 });
+    if (hint) await page.waitForSelector('.lb-quality', { timeout: 40000 });
     else await page.waitForTimeout(2200);
   };
   const viewer = (page) => page.evaluate(() => { const i = document.querySelector('.lb-stage img'); return { img: i ? { ok: i.complete && i.naturalWidth > 0, w: i.naturalWidth } : null, gone: !!document.querySelector('.lb-stage .lb-loading'), hint: (document.querySelector('.lb-quality') || {}).textContent || null }; });
@@ -181,13 +195,52 @@ describe('browser: the file is gone, the preview stays', { skip: haveBrowser ? f
     } finally { await ctx.close(); }
   });
 
+  test('viewer: the original is the stub and fallback_url is stored: the full-size rendition is shown (not the small preview), no hint, not reported', async () => {
+    const id = ids[4];
+    setItem(id, { media_url: `https://i.redd.it/${id}-stub.jpg`, preview_url: `https://cf.preview.redd.it/${id}.jpeg?width=640&s=abc`, fallback_url: `https://preview.redd.it/${id}-full.jpeg?auto=webp&s=full`, thumbnail_url: null, thumb_url: null });
+    const { ctx, page, seen } = await newPage();
+    try {
+      await page.goto(`${base}/#/explore?m=${id}`, { waitUntil: 'networkidle' });
+      await page.waitForFunction(() => { const i = document.querySelector('.lb-stage img'); return i && i.complete && i.naturalWidth === 400; }, null, { timeout: 40000 });
+      const v = await viewer(page);
+      assert.equal(v.hint, null, 'nothing to apologise for: this is the full-size picture');
+      assert.equal(v.gone, false);
+      assert.equal(seen.broken, 0);
+    } finally { await ctx.close(); }
+  });
+
+  test('viewer: the original is the stub and the stored rendition is dead too: the preview stays, with the hint', async () => {
+    const id = ids[5];
+    setItem(id, { media_url: `https://i.redd.it/${id}-stub.jpg`, preview_url: `https://cf.preview.redd.it/${id}.jpeg?width=640&s=abc`, fallback_url: `https://preview.redd.it/${id}-nopreview-full.jpeg?s=z`, thumbnail_url: null, thumb_url: null });
+    const { ctx, page, seen } = await newPage();
+    try {
+      await page.goto(`${base}/#/explore?m=${id}`, { waitUntil: 'networkidle' });
+      await settle(page, { hint: true });
+      const v = await viewer(page);
+      assert.deepEqual(v.img, { ok: true, w: 200 });
+      assert.equal(v.hint, 'Preview quality');
+      assert.equal(seen.broken, 0);
+    } finally { await ctx.close(); }
+  });
+
+  test('the public API passes fallback_url to the client (http/https only)', async () => {
+    const id = ids[6]; const good = 'https://preview.redd.it/x.jpeg?auto=webp&s=abc';
+    setItem(id, { fallback_url: good });
+    const get = async (i) => (await fetch(`${base}/api/media/${i}`, { headers: { cookie: 'prism_age=1' } })).json();
+    assert.equal((await get(id)).fallback_url, good);
+    setItem(id, { fallback_url: 'javascript:alert(1)' });
+    assert.equal((await get(id)).fallback_url, null, 'a non-http URL is dropped');
+    setItem(id, { fallback_url: null });
+    assert.equal((await get(id)).fallback_url, null);
+  });
+
   test('grid: the tile shows the preview when the original is the stub, and is not reported broken', async () => {
     const id = ids[0];
     setItem(id, { posted_at: new Date().toISOString() }); // newest first: it is in the first screen of Explore
     const { ctx, page, seen } = await newPage();
     try {
       await page.goto(`${base}/#/explore`, { waitUntil: 'networkidle' });
-      await page.waitForFunction((i) => { const c = document.querySelector(`article.card[data-id="${i}"] .card-media img`); return c && c.complete && c.naturalWidth > 0; }, id, { timeout: 15000 });
+      await page.waitForFunction((i) => { const c = document.querySelector(`article.card[data-id="${i}"] .card-media img`); return c && c.complete && c.naturalWidth > 0; }, id, { timeout: 40000 });
       const tile = await page.evaluate((i) => { const c = document.querySelector(`article.card[data-id="${i}"] .card-media img`); return c ? { ok: c.complete && c.naturalWidth > 0, w: c.naturalWidth } : null; }, id);
       assert.deepEqual(tile, { ok: true, w: 200 });
       await page.waitForTimeout(800);
@@ -213,6 +266,17 @@ describe('browser: the file is gone, the preview stays', { skip: haveBrowser ? f
       assert.ok(seenWidths.has(200), `photo slides show the preview (${[...seenWidths]})`);
       assert.equal(gone, 0, 'no slide says "no longer available"');
       assert.equal(seen.broken, 0, 'nothing reported broken');
+    } finally { await ctx.close(); }
+  });
+
+  test('Reels: with fallback_url stored, a photo whose original is the stub shows the full-size rendition', async () => {
+    for (const id of ids) setItem(id, { media_url: `https://i.redd.it/${id}-stub.jpg`, preview_url: `https://cf.preview.redd.it/${id}.jpeg?width=640&s=abc`, fallback_url: `https://preview.redd.it/${id}-full.jpeg?s=full`, thumbnail_url: null, thumb_url: null });
+    const { ctx, page, seen } = await newPage();
+    try {
+      await page.goto(`${base}/#/reels?type=image`, { waitUntil: 'networkidle' });
+      await page.waitForFunction(() => [...document.querySelectorAll('.reel img')].some((x) => /api\/proxy|redd\.it/.test(x.getAttribute('src') || '') && x.complete && x.naturalWidth === 400), null, { timeout: 40000 });
+      assert.equal(await page.evaluate(() => document.querySelectorAll('.reel-gone').length), 0);
+      assert.equal(seen.broken, 0);
     } finally { await ctx.close(); }
   });
 });

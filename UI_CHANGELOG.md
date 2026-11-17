@@ -4,7 +4,7 @@
 
 - **Fixed (from a user report on a Reddit post):** when the full-size file failed, the viewer replaced the working preview with "This image is no longer available at its source." (Reels likewise). The original may answer 404 with the host's "not found" stub picture (`i.redd.it`: 1 KB PNG) while its `cf.preview.redd.it` preview loads fine. The full file is now an upgrade over the stills, never a replacement: when it fails (error, 404, or the stub) the viewer and Reels keep the best still (preview, then the platform thumbnail, then our thumbnail), and "no longer available" appears only when every candidate failed (the post is then reported once, as before). The grid already walked every still; it is covered by a test now.
 - **A small "Preview quality" chip** (top-left of the viewer stage) says the original is no longer available and this is the best copy left. Shown only then.
-- A signed preview URL (Reddit's `s=` is tied to its width) is used exactly as stored; no width is rewritten. A larger preview needs the adapter to store it (Halyard).
+- **`fallback_url` (the stored full-resolution rendition; Reddit's signed preview source, added by the adapter) comes first.** The public API now passes it through (http/https only). When the original fails, the viewer and Reels show that full-size rendition instead of the small preview (no hint then); if it is dead too, the preview stays with the hint. It also leads the fallback order and is tried by a grid tile before the file. A signed URL is used exactly as stored; no width is rewritten.
 
 ## 2026-11-17 — Videos with no thumbnail show their first frame, at the cost of a frame
 

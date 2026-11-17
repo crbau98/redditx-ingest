@@ -32,6 +32,7 @@ function publicMedia(m, opts = {}) {
     ...(brief ? {} : { description: m.description }),
     media_type: m.media_type,
     media_url: m.media_url, preview_url: m.preview_url, thumbnail_url: m.thumbnail_url,
+    fallback_url: httpUrl(m.fallback_url) || null, // the full-resolution rendition to show when media_url cannot be read (Reddit's signed preview source)
     thumb_url: m.thumb_url || null, tint: m.tint || null,
     hls_url: m.hls_url, has_audio: m.has_audio, width: m.width, height: m.height, duration: m.duration,
     platform: m.platform, community: m.community, author: m.author, source_url: httpUrl(m.source_url),

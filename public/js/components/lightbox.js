@@ -450,16 +450,23 @@ function paintStage(it) {
     // when it fails (error, 404, the host's "not found" stub) the preview stays on screen with a quality hint, and
     // "no longer available" is shown only when every candidate has failed.
     const order = fallbackStills(it); const failed = new Set();
+    const hint = () => {
+      if (img.isConnected && img.complete && img.naturalWidth > 0 && !S.stage.querySelector('.lb-quality')) {
+        S.stage.append(h('div', { class: 'lb-quality', role: 'status', title: 'The original file is no longer available at its source; this is the best copy that is.' }, 'Preview quality'));
+      }
+    };
+    const show = (src) => { if (img.isConnected) { img.src = src; S.stage.querySelector('.lb-quality')?.remove(); } };
     const loadFull = () => {
       if (!S || !img.isConnected) return;
       S.fullNow = null;
       S.fullImg = loadImage(it.media_url,
-        (src) => { warmed.add(it.media_url); if (img.isConnected) { img.src = src; S.stage.querySelector('.lb-quality')?.remove(); } },
+        (src) => { warmed.add(it.media_url); show(src); },
         () => {
           failed.add(it.media_url);
-          if (img.isConnected && img.complete && img.naturalWidth > 0 && !S.stage.querySelector('.lb-quality')) {
-            S.stage.append(h('div', { class: 'lb-quality', role: 'status', title: 'The original file is no longer available at its source; this is the best copy that is.' }, 'Preview quality'));
-          }
+          // the original is gone: the stored full-size rendition (Reddit's preview source) is the next best thing, then the preview that is already showing
+          if (it.fallback_url && it.fallback_url !== it.media_url && !failed.has(it.fallback_url) && S) {
+            S.fullImg = loadImage(it.fallback_url, (src) => show(src), () => { failed.add(it.fallback_url); hint(); });
+          } else hint();
         });
     };
     const startFull = () => {

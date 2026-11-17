@@ -217,7 +217,11 @@ export async function reels(root, { query }) {
       s.loadFull = () => {
         s.loadFull = null;
         if (!preview || preview === s.it.media_url || !img.isConnected) return;
-        loadImage(s.it.media_url, (src) => { if (img.isConnected) img.src = src; }, () => { failed.add(s.it.media_url); });
+        const show = (src) => { if (img.isConnected) img.src = src; };
+        loadImage(s.it.media_url, show, () => {
+          failed.add(s.it.media_url);
+          if (s.it.fallback_url && s.it.fallback_url !== s.it.media_url) loadImage(s.it.fallback_url, show, () => { failed.add(s.it.fallback_url); }); // the stored full-size rendition
+        });
       };
       if (first !== sharp) {
         const mid = new Image();
