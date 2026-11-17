@@ -23,6 +23,14 @@ function applyProfile(feed, profile, settings) {
 
   // A bio that says the person is under 18 ends the relationship, immediately.
   const safety = checkText(profile.displayName, profile.bio);
+  // Under-18 wording in the profile of a feed PRISM attached on its own: quarantine that feed and put the creator on a safety HOLD
+  // (hidden, feeds paused, review entry, nothing removed or blocklisted for him). His own feed (admin, seed, ingest) still blocks him.
+  if (safety.level === 'block' && isAutomaticOrigin(feed.origin)) {
+    const q = require('../lib/quarantine');
+    q.quarantineFeed(feed, `safety:${safety.rule} (profile of a feed PRISM attached)`);
+    q.safetyHold(repo.creators.get(creator.id), feed, `safety:${safety.rule}`);
+    return { ...out, quarantined: true, held: true };
+  }
   if (safety.level === 'block') {
     repo.creators.block(creator.id, `safety:${safety.rule} (profile)`, 'system');
     events.log('WARN', `Creator ${creator.handle} blocked by safety gate (profile)`);
