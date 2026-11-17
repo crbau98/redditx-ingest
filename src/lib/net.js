@@ -272,8 +272,18 @@ function decode(res, buf, url) {
  * Open a validated connection and hand back the raw response (not yet
  * consumed). Follows redirects itself so every hop is re-validated.
  */
-function open(url, { method: method0 = 'GET', headers = {}, timeout = 20000, maxRedirects = 5, body: body0, allowInternal = false, allowHop = null } = {}) {
+function open(url, { method: method0 = 'GET', headers = {}, timeout = 20000, maxRedirects = 5, body: body0, allowInternal = false, allowHop = null, signal = null } = {}) {
   return new Promise((resolve, reject) => {
+    // `signal`: the caller's viewer went away (the media proxy). Abort whatever hop is in flight at once, even before the origin
+    // has sent headers, so its socket is not held until the idle timeout (Crucible v4.22.1 gate, P1).
+    let current = null;
+    if (signal) {
+      if (signal.aborted) return reject(new HttpError('Aborted', { url: String(url), code: 'EABORTED' }));
+      signal.addEventListener('abort', () => {
+        if (current) current.destroy(new Error('aborted by the caller'));
+        reject(new HttpError('Aborted', { url: String(url), code: 'EABORTED' }));
+      }, { once: true });
+    }
     let hops = 0;
     let method = method0;
     let body = body0;
@@ -297,7 +307,7 @@ function open(url, { method: method0 = 'GET', headers = {}, timeout = 20000, max
       }
       if (onion && parsed.protocol !== 'http:') return reject(new HttpError('Onion services are reached over http:// (Tor already encrypts end to end)', { url: target, code: 'EBLOCKED' }));
       const lib = parsed.protocol === 'https:' ? https : http;
-      const req = lib.request(parsed, {
+      const req = current = lib.request(parsed, {
         method,
         headers: hdrs,
         agent: onion ? torHttpAgent : internal ? (parsed.protocol === 'https:' ? internalHttpsAgent : internalHttpAgent) : (parsed.protocol === 'https:' ? (proxiedHttpsAgent || httpsAgent) : httpAgent),

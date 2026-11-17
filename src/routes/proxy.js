@@ -190,15 +190,20 @@ router.get('/proxy', async (req, res) => {
     }
   }
 
+  // The viewer can leave before the origin answers: abort the upstream then too, not only once it is streaming (an aborted
+  // first-frame tile used to hold its origin socket until the 15 s timeout, and 32 of them starved the per-host agent).
+  const viewerGone = new AbortController();
+  res.on('close', () => { if (!res.writableFinished) viewerGone.abort(); });
   let upstream;
   const isCoomerData = (t.host === 'coomer.st' || t.host.endsWith('.coomer.st')) && /^\/data\//i.test(t.pathname || '');
   try {
-    upstream = await net.open(t.url, { headers: proxyHeaders(t.url, hasRange ? { range: req.headers.range } : {}), timeout: isCoomerData ? 6000 : 15000, maxRedirects: 4, allowHop: hopAllowed });
+    upstream = await net.open(t.url, { headers: proxyHeaders(t.url, hasRange ? { range: req.headers.range } : {}), timeout: isCoomerData ? 6000 : 15000, maxRedirects: 4, allowHop: hopAllowed, signal: viewerGone.signal });
   } catch (e) {
+    if (e.code === 'EABORTED' || viewerGone.signal.aborted) return; // nobody is waiting for an answer
     const thumbFallback = e.code !== 'EBLOCKED' ? coomerThumbFallback(t) : null;
     if (thumbFallback) {
       try {
-        upstream = await net.open(thumbFallback, { headers: proxyHeaders(thumbFallback), timeout: 10000, maxRedirects: 3, allowHop: hopAllowed });
+        upstream = await net.open(thumbFallback, { headers: proxyHeaders(thumbFallback), timeout: 10000, maxRedirects: 3, allowHop: hopAllowed, signal: viewerGone.signal });
       } catch (e2) {
         return sendError(res, e2.code === 'EBLOCKED' ? [403, 'Blocked host'] : [502, 'Upstream unreachable']);
       }
