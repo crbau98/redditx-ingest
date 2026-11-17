@@ -240,6 +240,19 @@ function mergeRefusal() { return lastRefusal; }
 function mergeCreators(keepId, goneId, { actor = 'admin', reason = 'merge', linkId = null, force = false } = {}) {
   const keep = repo.creators.get(keepId); const gone = repo.creators.get(goneId);
   if (!keep || !gone || keepId === goneId) return null;
+  // A creator under a safety hold (hidden for human review) or with an underage / nonconsensual report is never merged, not even with
+  // force: folding him into another row would dissolve the hold and point the report at a deleted row (Crucible v4.23.1 gate). The
+  // human act is to resolve the review and restore him first.
+  for (const [role, c] of [['folded', gone], ['kept', keep]]) {
+    const held = db.prepare(`SELECT 1 FROM reports WHERE kind IN ('underage', 'nonconsensual')
+      AND (creator_id = ? OR media_id IN (SELECT id FROM media WHERE creator_id = ?)) AND status = 'open' LIMIT 1`).get(c.id, c.id);
+    const lastStatus = db.prepare(`SELECT action FROM moderation_actions WHERE target_type = 'creator' AND target_id = ?
+      AND (action LIKE '%hide%' OR action LIKE '%block%' OR action LIKE '%restore%' OR action LIKE 'admin-%' OR action LIKE 'safety%' OR action LIKE 'report%')
+      ORDER BY id DESC LIMIT 1`).get(c.id);
+    if (held || (c.status === 'hidden' && lastStatus && lastStatus.action === 'safety-hold')) {
+      return { error: `the ${role} creator ${c.handle} is held for a safety review: resolve the review and restore him first`, status: 409 };
+    }
+  }
   // A blocked or taken-down row folded into a live one would put its posts back on the site under the kept name. Only an explicit
   // force (the admin, knowingly) does that.
   if (!force) {
