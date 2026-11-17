@@ -399,14 +399,14 @@ function purgeRemovedContentNow(ids) {
     }
     if (hasTable('media_tags')) db.prepare(`DELETE FROM media_tags WHERE media_id IN (${gph})`).run(...gone);
     // The stored bytes go too (after this transaction commits): our object-store copies and the proxy's disk cache.
-    for (const r of db.prepare(`SELECT media_url, preview_url, thumbnail_url, thumb_url, hls_url FROM media WHERE id IN (${gph})`).all(...gone)) {
+    for (const r of db.prepare(`SELECT media_url, preview_url, thumbnail_url, thumb_url, hls_url, fallback_url FROM media WHERE id IN (${gph})`).all(...gone)) {
       for (const u of Object.values(r)) if (u) storedUrls.add(u);
     }
     // hash and media_url are NOT NULL, and hash is UNIQUE: they get placeholders that no real hash or URL equals.
     // The text that identifies the post goes as well; the update trigger takes it out of media_fts, so search no longer
     // finds it. source_key and post_key stay: they are opaque ids that keep the post from being imported again.
     db.prepare(`UPDATE media SET phash = NULL, hash = 'purged:' || id, media_url = '', preview_url = NULL,
-      thumbnail_url = NULL, thumb_url = NULL, hls_url = NULL, tint = NULL,
+      thumbnail_url = NULL, thumb_url = NULL, hls_url = NULL, fallback_url = NULL, tint = NULL,
       source_url = NULL, title = NULL, description = NULL, ocr_text = NULL, author = NULL, community = NULL, tags_text = '',
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE publish_state = 'removed' AND id IN (${gph})`).run(...gone);
     purged += gone.length;

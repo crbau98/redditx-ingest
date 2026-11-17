@@ -15,7 +15,7 @@ const BATCH = 200;
 const hasTable = (name) => !!repo.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
 const tick = () => new Promise((res) => setTimeout(res, 0)); // a timer, so pending HTTP is answered between windows
 
-/** Every removed media id that still has a face or alt-source row. */
+/** Every removed media id that still has a face or alt-source row, or a stored full-size rendition (v39 fallback_url). */
 async function findResidue({ window = 0, stats = {} } = {}) {
   const db = repo.db;
   const ids = new Set();
@@ -30,6 +30,12 @@ async function findResidue({ window = 0, stats = {} } = {}) {
       for (const r of stmt.all(from, to)) ids.add(r.id);
     } });
   }
+  // fallback_url arrived after the takedown purge was written: removed rows that kept one (Crucible v4.23 gate, M5)
+  try {
+    const top = (db.prepare('SELECT MAX(seq) AS m FROM media').get() || {}).m || 0;
+    const stmt = db.prepare("SELECT id FROM media WHERE seq > ? AND seq <= ? AND publish_state = 'removed' AND fallback_url IS NOT NULL");
+    await walkWindows({ top, stats, fn: (from, to) => { for (const r of stmt.all(from, to)) ids.add(r.id); } });
+  } catch { /* fallback_url arrives with migration v39 */ }
   return [...ids];
 }
 
