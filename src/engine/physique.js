@@ -66,7 +66,8 @@ function unhideCreator(creator) {
   // a feed someone enabled or disabled since the hide keeps that decision
   const touched = repo.db.prepare("SELECT 1 FROM moderation_actions WHERE target_type = 'feed' AND target_id = ? AND id > ? LIMIT 1");
   for (const id of m ? m[1].split(',').filter(Boolean) : []) {
-    if (repo.feeds.get(id) && !touched.get(String(id), last.id)) repo.feeds.update(id, { enabled: true });
+    // a takedown, a blocklisted or dead account, a female name or a permanent failure keeps the feed off whatever the body filter says
+    if (repo.feeds.get(id) && !touched.get(String(id), last.id) && !require('./feed-revive').resumeBlocker(id)) repo.feeds.update(id, { enabled: true });
   }
   repo.creators.update(creator.id, { status: 'active' });
   repo.logAction('creator', creator.id, 'physique-unhide', 'body filter no longer applies', 'system');
@@ -115,6 +116,7 @@ function reapply(settings) {
     // switched off: feeds this policy paused run again (unless someone changed them since)
     for (const f of repo.db.prepare(`SELECT f.id FROM feeds f WHERE f.enabled = 0 AND (SELECT action FROM moderation_actions a
       WHERE a.target_type = 'feed' AND a.target_id = CAST(f.id AS TEXT) ORDER BY a.id DESC LIMIT 1) = 'physique-feed-off'`).all()) {
+      if (require('./feed-revive').resumeBlocker(f.id, ['physique-feed-off'])) continue; // not the body filter's to switch on
       repo.feeds.update(f.id, { enabled: true });
       repo.logAction('feed', f.id, 'physique-feed-on', 'body filter switched off', 'system');
     }
@@ -171,6 +173,7 @@ async function reapplyAsync(settings, { window = 10000, batch = 200 } = {}) {
   if (!on) {
     for (const f of repo.db.prepare(`SELECT f.id FROM feeds f WHERE f.enabled = 0 AND (SELECT action FROM moderation_actions a
       WHERE a.target_type = 'feed' AND a.target_id = CAST(f.id AS TEXT) ORDER BY a.id DESC LIMIT 1) = 'physique-feed-off'`).all()) {
+      if (require('./feed-revive').resumeBlocker(f.id, ['physique-feed-off'])) continue; // not the body filter's to switch on
       repo.feeds.update(f.id, { enabled: true });
       repo.logAction('feed', f.id, 'physique-feed-on', 'body filter switched off', 'system');
     }
@@ -317,6 +320,7 @@ async function textSweep(settings, { force = false } = {}) {
   for (const f of repo.db.prepare(`SELECT f.id, f.target, f.label FROM feeds f WHERE f.enabled = 0 AND (SELECT action FROM moderation_actions a
       WHERE a.target_type = 'feed' AND a.target_id = CAST(f.id AS TEXT) ORDER BY a.id DESC LIMIT 1) = 'physique-feed-off'`).all()) {
     if (textCheck(f.target, f.label).heavy) continue;
+    if (require('./feed-revive').resumeBlocker(f.id, ['physique-feed-off'])) continue; // not the body filter's to switch on
     repo.feeds.update(f.id, { enabled: true });
     repo.logAction('feed', f.id, 'physique-feed-on', 'the word list no longer matches this feed', 'system');
     res.feedsRestored++;

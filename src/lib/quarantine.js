@@ -55,6 +55,9 @@ function quarantineFeed(feed, reason, { author = null } = {}) {
  */
 function safetyHold(creator, feed, rule) {
   if (!creator || creator.status === 'blocked') return false;
+  // While a hold's review entry is still OPEN a human has not decided: a further page tripping the same rule adds neither a second
+  // report nor a second hold (the page is still quarantined by the caller). After the human resolves it, a new trip is a new hold.
+  if (repo.db.prepare("SELECT 1 AS ok FROM reports WHERE creator_id = ? AND status = 'open' AND reason LIKE 'safety-hold%' LIMIT 1").get(creator.id)) return false;
   const held = repo.db.prepare("SELECT 1 AS ok FROM moderation_actions WHERE target_type = 'creator' AND target_id = ? AND action = 'safety-hold' LIMIT 1").get(creator.id);
   if (held && creator.status === 'hidden') return false;
   const feeds = repo.db.prepare('SELECT id FROM feeds WHERE creator_id = ? AND enabled = 1').all(creator.id).map((f) => f.id);
@@ -67,4 +70,14 @@ function safetyHold(creator, feed, rule) {
   return true;
 }
 
-module.exports = { quarantineFeed, safetyHold };
+/**
+ * Record WHICH feed's evidence blocked a creator ('evidence-feed', right after the block). Recovery reads it to tell a wrong match
+ * (an automatic feed) from a creator's own profile; without it, it has to infer the feed from timing. Never throws.
+ */
+function recordEvidenceFeed(creatorId, feed) {
+  try {
+    repo.logAction('creator', creatorId, 'evidence-feed', JSON.stringify({ feedId: feed.id, platform: feed.platform, target: String(feed.target).slice(0, 200), origin: feed.origin || null }), 'system');
+  } catch { /* an old audit table */ }
+}
+
+module.exports = { quarantineFeed, safetyHold, recordEvidenceFeed };

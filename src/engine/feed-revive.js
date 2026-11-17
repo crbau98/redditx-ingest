@@ -42,15 +42,15 @@ function systemScopeBlock(f, entry) {
 }
 
 /** Why a disabled feed on an active creator should stay off, or null when it should be revived. */
-function stayOffReason(f) {
+function stayOffReason(f, { ignoreActions = null, skipBodyFilter = false } = {}) {
   if (f.platform === 'lemmy') return 'retired platform';
   if (f.origin === 'seed') return 'seed feed';
   if (f.platform === 'telegram') return 'telegram (switched by the joined-channel state)';
   // A feed PRISM attached by itself (discovery, deep search, a bio link, coverage) is revived only when its account IS the creator by
   // handle or by an alias: exact, never containment ("revivemanxo" is not "reviveman"). Page and RSS feeds name no account.
-  if (AUTOMATIC_FEED_ORIGINS.has(f.origin) && f.platform !== 'web' && f.platform !== 'rss' && !accountIsCreator(f)) return 'account name does not match creator';
+  if (AUTOMATIC_FEED_ORIGINS.has(f.origin) && f.creator_id && f.platform !== 'web' && f.platform !== 'rss' && !accountIsCreator(f)) return 'account name does not match creator';
   const last = lastFeedAction(f.id);
-  if (last && STAY_OFF.has(last.action)) return `last action: ${last.action}`;
+  if (last && STAY_OFF.has(last.action) && !(ignoreActions && ignoreActions.has(last.action))) return `last action: ${last.action}`;
   if (require('../lib/deadhosts').deadReason(f.platform, f.target)) return 'dead or wrong-platform host';
   const entry = blockEntry(f);
   if (entry && !systemScopeBlock(f, entry)) return 'account is on the blocklist';
@@ -60,7 +60,7 @@ function stayOffReason(f) {
   const names = namesAround(f);
   if (femaleCheck(names).level) return 'name or profile reads female (male-only scope)';
   if (checkText(...names).level === 'block') return 'safety gate';
-  if (require('../settings').get().physiqueFilter && require('../lib/physique').textCheck(f.target, f.label).heavy) return 'body filter';
+  if (!skipBodyFilter && require('../settings').get().physiqueFilter && require('../lib/physique').textCheck(f.target, f.label).heavy) return 'body filter';
   if (f.consecutive_failures >= 3) {
     const c = classify(f.last_error || '');
     if (c.permanent || !c.transient) return `broken (${c.kind}, ${f.consecutive_failures} failures)`;
@@ -165,4 +165,16 @@ function producedOnActiveCreator(feed) {
   return !!c && c.status === 'active';
 }
 
-module.exports = { accountIsCreator, lastFeedAction, producedOnActiveCreator, reviveFeeds, reviveFor, stayOffReason, STAY_OFF };
+/**
+ * Why a feed that something ELSE paused (the body filter) must not simply be switched back on, or null when it may run. The same checks
+ * as revive: takedown or blocklisted account, dead host, name reads female, safety gate, permanent or chronic failures. `ignore` names the
+ * caller's own pause marker (physique passes 'physique-feed-off', which would otherwise always count as "stay off").
+ */
+function resumeBlocker(feedId, ignore = []) {
+  const f = repo.db.prepare(`SELECT f.*, c.handle AS creator_handle, c.display_name AS creator_name, c.bio AS creator_bio
+    FROM feeds f LEFT JOIN creators c ON c.id = f.creator_id WHERE f.id = ?`).get(feedId);
+  if (!f) return 'feed not found';
+  return stayOffReason(f, { ignoreActions: new Set(ignore), skipBodyFilter: true }); // the body filter decides its own wording rule
+}
+
+module.exports = { resumeBlocker, accountIsCreator, lastFeedAction, producedOnActiveCreator, reviveFeeds, reviveFor, stayOffReason, STAY_OFF };

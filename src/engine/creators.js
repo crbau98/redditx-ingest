@@ -33,6 +33,7 @@ function applyProfile(feed, profile, settings) {
   }
   if (safety.level === 'block') {
     repo.creators.block(creator.id, `safety:${safety.rule} (profile)`, 'system');
+    require('../lib/quarantine').recordEvidenceFeed(creator.id, feed);
     events.log('WARN', `Creator ${creator.handle} blocked by safety gate (profile)`);
     return { ...out, blocked: true };
   }
@@ -49,6 +50,7 @@ function applyProfile(feed, profile, settings) {
   }
   if (gender.level === 'hard') {
     repo.creators.block(creator.id, `scope:${gender.rule} (profile)`, 'system');
+    require('../lib/quarantine').recordEvidenceFeed(creator.id, feed);
     events.log('WARN', `Creator ${creator.handle} blocked by the male-only scope (profile: ${gender.rule})`);
     return { ...out, blocked: true };
   }

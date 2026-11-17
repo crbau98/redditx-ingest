@@ -79,7 +79,7 @@ router.post('/creators/:id/block', (req, res) => {
 // Recover a creator the SYSTEM blocked on a wrong automatic scope block (engine/block-recovery). GET is a dry run: what would be
 // undone and what stays; POST ?apply=1 does it. Refused unless the block was the system's, its reason a scope rule, and no takedown
 // or report touches him. Candidates lists every such creator with whether the evidence came from an automatic feed; no apply-all.
-router.get('/creators/recover-block/candidates', (req, res) => res.json(require('../../engine/block-recovery').candidates({ limit: req.query.limit })));
+router.get('/creators/recover-block/candidates', async (req, res) => { try { res.json(await require('../../engine/block-recovery').candidates({ limit: req.query.limit })); } catch (e) { res.status(500).json({ error: e.message }); } });
 router.get('/creators/:id/recover-block', (req, res) => {
   const out = require('../../engine/block-recovery').dryRun(req.params.id);
   if (!out.creatorId) return bad(res, 'Not found', 404);

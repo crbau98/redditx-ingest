@@ -54,7 +54,7 @@ test('the creator\'s OWN feed (admin, seed, ingest) with the same evidence still
     const c = man(); const f = feed(c.id, 'bluesky', 'user', `holdown${n}.bsky.social`, origin, 3);
     const out = applyProfile(repo.feeds.get(f.id), PROFILE, settings());
     assert.equal(out.blocked, true, origin); assert.equal(repo.creators.get(c.id).status, 'blocked');
-    assert.match(lastCreatorAction(c.id).reason, /^safety:/);
+    assert.match(repo.db.prepare("SELECT reason FROM moderation_actions WHERE target_type = 'creator' AND target_id = ? AND action = 'block' ORDER BY id DESC LIMIT 1").get(c.id).reason, /^safety:/);
   }
 });
 
