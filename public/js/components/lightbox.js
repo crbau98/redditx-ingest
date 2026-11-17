@@ -1,5 +1,5 @@
 import { isDirectSrc, viaProxy } from '../direct-media.js';
-import { h, icon, proxied, fmt, avatar, toast, copyText, openModal, paintCover, armPoster, firstFrameWhenNoPoster, probeImage } from '../dom.js';
+import { h, icon, proxied, fmt, avatar, toast, copyText, openModal, paintCover, armPoster, firstFrameWhenNoPoster, probeImage, loadImage } from '../dom.js';
 import { get, post, reportBroken } from '../api.js';
 import { favorites, follows, prefs, history as viewHistory, tastes, collections, platformLabel, platformColor, bus } from '../store.js';
 import { parse, href, setParam } from '../router.js';
@@ -11,7 +11,7 @@ import { playFlip, heartBurst, haptic } from './fx.js';
 import { makeZoomable } from './zoom.js';
 import { viewerExit } from './transitions.js';
 import { openElsewhere } from './elsewhere.js';
-import { tileImage, stillChain } from '../images.js';
+import { tileImage, stillChain, fallbackStills } from '../images.js';
 
 let S = null; // the single active lightbox session
 const viewed = new Set();
@@ -24,6 +24,7 @@ function warmNext(n) {
   probeImage(proxied(still), null, null);
 }
 const FULL_DWELL_MS = 700; // the full-size file is fetched only after the viewer has stayed this long, or on zoom
+const absUrl = (u) => { try { return new URL(u, location.href).href; } catch { return String(u); } };
 const warmed = new Set(); // full-size image URLs this viewer has finished loading (instant when shown)
 const relCache = new Map(); // media id -> related items already given to the strip
 const relWait = new Map(); // media id -> in-flight sequence list (limit 24), shared with the strip
@@ -111,7 +112,7 @@ function start(items, loadMore) {
 function cancelFull() {
   if (!S) return;
   clearTimeout(S.fullTimer); S.fullTimer = 0; S.fullNow = null;
-  if (S.fullImg) { S.fullImg.onload = null; S.fullImg.onerror = null; S.fullImg.src = ''; S.fullImg = null; }
+  if (S.fullImg) { S.fullImg.cancel(); S.fullImg = null; }
 }
 
 function destroy() {
@@ -445,15 +446,28 @@ function paintStage(it) {
     const img = h('img', { alt: it.title || '', draggable: 'false', src: proxied(first) });
     S.stage.replaceChildren(...keep, img);
     playFlip(img);
+    // Every still of the post, best first, for the moment one of them cannot be shown. The full file is an upgrade over the preview:
+    // when it fails (error, 404, the host's "not found" stub) the preview stays on screen with a quality hint, and
+    // "no longer available" is shown only when every candidate has failed.
+    const order = fallbackStills(it); const failed = new Set();
+    const hint = () => {
+      if (img.isConnected && img.complete && img.naturalWidth > 0 && !S.stage.querySelector('.lb-quality')) {
+        S.stage.append(h('div', { class: 'lb-quality', role: 'status', title: 'The original file is no longer available at its source; this is the best copy that is.' }, 'Preview quality'));
+      }
+    };
+    const show = (src) => { if (img.isConnected) { img.src = src; S.stage.querySelector('.lb-quality')?.remove(); } };
     const loadFull = () => {
       if (!S || !img.isConnected) return;
       S.fullNow = null;
-      const full = new Image();
-      S.fullImg = full;
-      let retried = false;
-      full.onload = () => { warmed.add(it.media_url); if (img.isConnected) img.src = full.src; };
-      full.onerror = () => { if (!retried && isDirectSrc(full.src)) { retried = true; full.src = viaProxy(it.media_url); } };
-      full.src = proxied(it.media_url);
+      S.fullImg = loadImage(it.media_url,
+        (src) => { warmed.add(it.media_url); show(src); },
+        () => {
+          failed.add(it.media_url);
+          // the original is gone: the stored full-size rendition (Reddit's preview source) is the next best thing, then the preview that is already showing
+          if (it.fallback_url && it.fallback_url !== it.media_url && !failed.has(it.fallback_url) && S) {
+            S.fullImg = loadImage(it.fallback_url, (src) => show(src), () => { failed.add(it.fallback_url); hint(); });
+          } else hint();
+        });
     };
     const startFull = () => {
       if (!preview || preview === it.media_url) return;
@@ -465,7 +479,7 @@ function paintStage(it) {
       if (first !== sharp) {
         const mid = new Image();
         mid.onload = () => { if (img.isConnected) img.src = mid.src; startFull(); };
-        mid.onerror = startFull;
+        mid.onerror = () => { failed.add(sharp); startFull(); };
         mid.src = proxied(sharp);
       } else startFull();
     }
@@ -478,15 +492,14 @@ function paintStage(it) {
       return true;
     } });
     img.addEventListener('dblclick', () => { if (img.classList.contains('zoomed')) return; toggleFav(it, true); });
-    let stepped = false;
+    let steps = 0;
     img.addEventListener('error', () => {
-      const full = proxied(it.media_url);
-      const now = img.getAttribute('src');
-      if (!stepped && it.media_url && now !== full && now !== viaProxy(it.media_url)) {
-        stepped = true; delete img.dataset.directFb;
-        img.src = full;
-        return;
-      }
+      const cur = absUrl(img.getAttribute('src')); // (the preview swap stores an absolute URL, the first picture a relative one)
+      const is = (u) => cur === absUrl(proxied(u)) || cur === absUrl(viaProxy(u));
+      const was = order.find(is);
+      if (was) failed.add(was);
+      const next = ++steps <= order.length + 1 ? order.find((u) => !failed.has(u) && !is(u)) : null;
+      if (next) { delete img.dataset.directFb; img.src = proxied(next); return; }
       reportBroken(it.id);
       S.stage.replaceChildren(...keep, h('div', { class: 'lb-loading' }, 'This image is no longer available at its source.'));
     });

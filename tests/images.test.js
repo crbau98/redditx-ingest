@@ -101,7 +101,7 @@ describe('thumbnail or preview for a grid card (images.js)', () => {
     assert.match(reels, /armPoster\(v, stillChain\(s\.it\)\)/);
     assert.match(reels, /const first = s\.it\.thumb_url && s\.it\.thumb_url !== sharp \? s\.it\.thumb_url : sharp/);
     assert.match(reels, /s\.loadFull = \(\) => \{/, 'the full file loads after the slide has been on screen a moment, not beside the preview');
-    assert.match(reels, /const is = \(u\) => cur === proxied\(u\) \|\| cur === viaProxy\(u\)/);
+    assert.match(reels, /const is = \(u\) => cur === abs\(proxied\(u\)\) \|\| cur === abs\(viaProxy\(u\)\)/, 'Reels compares absolute URLs and steps through every still (w14)');
     const suggest = fs.readFileSync(path.join(JS, 'components', 'suggest.js'), 'utf8');
     assert.match(suggest, /const chain = stillChain\(it\)/);
     assert.match(suggest, /items\.slice\(0, 6\)/);
@@ -128,6 +128,6 @@ describe('thumbnail or preview for a grid card (images.js)', () => {
     assert.match(lb, /const first = ready \? it\.media_url : it\.thumb_url && it\.thumb_url !== sharp \? it\.thumb_url : sharp;/);
     assert.match(lb, /const ready = warmed\.has\(it\.media_url\);/, 'a full file already loaded (the preloaded next item, the one just left) is shown at once');
     assert.match(lb, /mid\.onload = \(\) => \{ if \(img\.isConnected\) img\.src = mid\.src; startFull\(\); \};/, 'the full file starts after the preview, not beside it');
-    assert.match(lb, /mid\.onerror = startFull;/, 'a failed preview still gets the full file');
+    assert.match(lb, /mid\.onerror = \(\) => \{ failed\.add\(sharp\); startFull\(\); \};/, 'a failed preview is remembered and still gets the full file');
   });
 });

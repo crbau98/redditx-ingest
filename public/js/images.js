@@ -44,6 +44,22 @@ export function cardImage(item, { proxy, width = 0, viewport = 390, dpr = 1, isV
 export function stillChain(item) {
   if (!item) return [];
   const urls = [item.thumb_url, item.preview_url, item.thumbnail_url];
+  if (item.media_type === 'image') urls.push(item.fallback_url, item.media_url); // a grid tile whose every small still is dead tries the full-size rendition before the file
+  const out = [];
+  for (const u of urls) if (u && !out.includes(u)) out.push(u);
+  return out;
+}
+
+/**
+ * The pictures to fall back through when an image post's file (or one of its stills) cannot be shown, best first: the stored
+ * full-size rendition (`fallback_url`: Reddit's full-resolution preview source), the platform preview, the platform thumbnail, our 360px thumbnail, and last the file itself. The file is an UPGRADE over these, never a
+ * replacement: when it fails (error, 404, or a host's "not found" stub picture) one of the stills stays on screen, and "no
+ * longer available" is for a post where every one of them failed. A signed preview URL (Reddit's `s=` is tied to its width) is
+ * used exactly as stored, never rewritten to another width.
+ */
+export function fallbackStills(item) {
+  if (!item) return [];
+  const urls = [item.fallback_url, item.preview_url, item.thumbnail_url, item.thumb_url]; // the stored full-size rendition first
   if (item.media_type === 'image') urls.push(item.media_url);
   const out = [];
   for (const u of urls) if (u && !out.includes(u)) out.push(u);

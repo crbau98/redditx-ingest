@@ -108,6 +108,24 @@ export function proxied(url) {
 
 
 /**
+ * Load a picture to show it: `onGood(src)` once it decoded (src is the URL that worked, direct or proxy), `onBad()` when it could
+ * not be had. A direct load that fails is retried once through the proxy; a "found" picture that is a host's 404 stub
+ * (isMissingStub) counts as a failure. Returns { cancel() } for a load that is no longer wanted (the viewer moved on).
+ */
+export function loadImage(url, onGood, onBad) {
+  let cur = null; let off = false;
+  const attempt = (src, retried) => {
+    const im = new Image(); cur = im;
+    const fail = () => { if (off) return; if (!retried && isDirectSrc(src)) attempt(viaProxy(src), true); else if (onBad) onBad(); };
+    im.onload = () => { if (off) return; if (isMissingStub(src, im.naturalWidth, im.naturalHeight)) fail(); else if (onGood) onGood(src, im); };
+    im.onerror = fail;
+    im.src = src;
+  };
+  attempt(mediaSrc(url), false);
+  return { cancel() { off = true; if (cur) { cur.onload = null; cur.onerror = null; cur.src = ''; } } };
+}
+
+/**
  * Safety net for <img> and <source> elements: a direct load that errors is retried once through the proxy, so a host
  * that starts refusing hotlinks only costs a fallback, never a broken tile. <video> elements are handled where their
  * source is set (components/video.js) because a failed video must not be reported broken before the proxy has had a go.
