@@ -63,6 +63,14 @@ function addSpec(spec, { creatorId = null, origin = 'admin', trusted, hint, body
     return { status: 'invalid', reason: 'This account is on the blocklist' };
   }
 
+  // A page on an aggregator site (a directory, a ranking, a leak index) is filed on a creator only when its URL names him: those
+  // sites have a page per person, and a search for one man returns their pages about other men (onlypedia / fanscentral pages
+  // about Bigggwild were filed on another creator). An admin's own choice stands.
+  if (creatorId && origin !== 'admin' && require('../lib/aggregators').isAggregator(String(spec.target || ''))) {
+    const c = repo.creators.get(creatorId);
+    if (c && !require('../lib/aggregators').urlNames(c, spec.target, require('../engine/identity').aliasesOf(creatorId).filter((a) => a.source !== 'bio').map((a) => a.alias))) creatorId = null;
+  }
+
   // Male-only: refuse accounts, communities and searches whose own name reads female / feminine.
   const gender = femaleCheck(spec.target, spec.label);
   if (gender.level === 'hard') return { status: 'invalid', reason: `Not male-focused (${gender.rule})` };

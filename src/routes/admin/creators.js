@@ -36,9 +36,26 @@ router.post('/creators', (req, res) => {
 });
 
 router.patch('/creators/:id', (req, res) => {
-  if (!repo.creators.get(req.params.id)) return bad(res, 'Not found', 404);
-  res.json(repo.creators.update(req.params.id, req.body || {}));
+  const before = repo.creators.get(req.params.id);
+  if (!before) return bad(res, 'Not found', 404);
+  const after = repo.creators.update(req.params.id, req.body || {});
+  // a status change by hand is audited (a creator hidden from here used to leave no trace: "hidden with no recorded action")
+  if (after && after.status !== before.status) repo.logAction('creator', before.id, after.status === 'hidden' ? 'admin-hide' : `admin-${after.status}`, 'status set by the admin', 'admin');
+  res.json(after);
 });
+
+/* -------------------------------------------- identity repair (dry run unless apply=1) */
+const repair = () => require('../../engine/identity-repair');
+const wantApply = (req) => req.method === 'POST' && (req.query.apply === '1' || (req.body && (req.body.apply === true || req.body.apply === 1 || req.body.apply === '1')));
+const run = (fn) => async (req, res) => { try { res.json(await fn(req)); } catch (e) { res.status(500).json({ error: e.message }); } };
+for (const m of ['get', 'post']) {
+  router[m]('/identity/repair/queue', run((req) => repair().cleanQueue({ apply: wantApply(req) })));
+  router[m]('/identity/repair/feeds', run((req) => repair().repairFeeds({ apply: wantApply(req), limit: int(req.query.limit, 1, 20000, 2000) })));
+  router[m]('/identity/repair/links', run((req) => repair().repairLinks({ apply: wantApply(req) })));
+  router[m]('/identity/repair/auto-merge', run((req) => repair().autoMerge({ apply: wantApply(req), limit: int(req.query.limit, 1, 5000, 500) })));
+  router[m]('/creators/hidden/unhide', run((req) => repair().unhide({ apply: wantApply(req), limit: int(req.query.limit, 1, 5000, 1000) })));
+}
+router.get('/creators/hidden/report', (req, res) => res.json(repair().hiddenReport({ limit: int(req.query.limit, 1, 500, 50) })));
 
 router.post('/creators/merge', (req, res) => {
   const { keepId, mergeId } = req.body || {};

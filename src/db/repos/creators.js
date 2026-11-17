@@ -158,9 +158,14 @@ const creators = {
    * the SAME site as the stored one replaces it (a changed or dead avatar link would otherwise stay for ever); a link from another
    * site never does, so a creator's accounts on different platforms cannot take the avatar back and forth.
    */
-  enrich(id, { displayName, bio, avatarUrl, bannerUrl, links }) {
+  enrich(id, { displayName, bio, avatarUrl, bannerUrl, links, source = null }) {
     const c = creatorQ.get.get(id);
     if (!c) return;
+    // Links read off a page: never a link into an aggregator site, and from an aggregator page only his own (lib/aggregators).
+    if (links && links.length) {
+      const known = db.prepare("SELECT alias FROM creator_aliases WHERE creator_id = ? AND source != 'bio'").all(id).map((r) => r.alias);
+      links = require('../../lib/aggregators').ownLinks(c, links, { source, known }).keep;
+    }
     const patch = {};
     const validName = displayName && !/^(?:untitled|sin t[íi]tulo|unbenannt|sans titre)$/i.test(String(displayName).trim());
     if (validName && (!c.display_name || c.display_name === c.handle)) patch.displayName = displayName;

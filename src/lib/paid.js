@@ -66,11 +66,18 @@ const NOT_PROSE = new Set(['top', 'best', 'hottest', 'models', 'model', 'ranked'
   'porn', 'blowjob', 'squirt', 'threesome', 'sex', 'nude', 'nudes', 'nsfw', 'adult', 'content', 'videos', 'video',
   'pics', 'photos', 'leaked', 'leak', 'reddit', 'twitter', 'instagram', 'telegram', 'tiktok', 'youtube', 'discord']);
 
+const { PATH_WORDS, FILE_EXT } = require('./handle-words');
+
 function normal(h) {
-  const s = String(h || '').replace(/^@/, '').replace(/[.\-_]+$/, '').toLowerCase();
-  if (!HANDLE.test(s) || RESERVED.has(s) || NOT_HANDLES.has(s) || /^\d+$/.test(s)) return null;
+  const raw = String(h || '').replace(/^@/, '');
+  if (FILE_EXT.test(raw)) return null;
+  const s = raw.replace(/[.\-_]+$/, '').toLowerCase();
+  if (!HANDLE.test(s) || RESERVED.has(s) || NOT_HANDLES.has(s) || PATH_WORDS.has(s) || /^\d+$/.test(s)) return null;
   return s;
 }
+
+/** Is this a usable paid-page handle (the same rules the URL parsers apply)? For callers re-checking stored evidence. */
+function validHandle(h) { return !!normal(h) && plausibleHandle(normal(h)); }
 
 /** fansly.com/<name> (plus /<name>/posts style deep links) → name. */
 function fanslyHandle(input) {
@@ -248,5 +255,5 @@ function creatorPaid(c) {
   return (Array.isArray(links) ? links : []).filter((l) => l && l.url && serviceOf(l.url) && l.service !== 'OnlyFans' && !/onlyfans\.com/i.test(l.url || ''));
 }
 
-module.exports = { isPathNotName, plausibleHandle, SERVICES, serviceOf, isPaidPlatform, fanslyHandle, jffHandle, paidHandle, findPaidHandles, paidLink, creatorPaid, pageUrl, pageLinked, PAID_HOSTS,
+module.exports = { validHandle, PATH_WORDS, isPathNotName, plausibleHandle, SERVICES, serviceOf, isPaidPlatform, fanslyHandle, jffHandle, paidHandle, findPaidHandles, paidLink, creatorPaid, pageUrl, pageLinked, PAID_HOSTS,
   ofHandle, findOnlyFans, freeHint, ofLink, creatorOnlyFans };

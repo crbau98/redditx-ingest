@@ -357,4 +357,4 @@ function stats(settings) {
   return { enabled: enabled(settings), threshold: thr, creatorShare: settings ? settings.physiqueCreatorShare : null, measured: r.measured || 0, overThreshold: r.overThreshold || 0, hidden: r.hidden || 0, creatorsHidden: creators, histogram: buckets };
 }
 
-module.exports = { migrateDefaults, DEFAULT_THRESHOLD, DEFAULT_SHARE, live, screenFeed, publish, stateFor, reviewCreator, reapply, reapplyAsync, textSweep, stats, hideCreator, textCheck, enabled, threshold, REASON, MIN_MEASURED, APPROVED };
+module.exports = { unhideCreator, migrateDefaults, DEFAULT_THRESHOLD, DEFAULT_SHARE, live, screenFeed, publish, stateFor, reviewCreator, reapply, reapplyAsync, textSweep, stats, hideCreator, textCheck, enabled, threshold, REASON, MIN_MEASURED, APPROVED };
