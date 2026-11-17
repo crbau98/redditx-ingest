@@ -66,13 +66,13 @@ const NOT_PROSE = new Set(['top', 'best', 'hottest', 'models', 'model', 'ranked'
   'porn', 'blowjob', 'squirt', 'threesome', 'sex', 'nude', 'nudes', 'nsfw', 'adult', 'content', 'videos', 'video',
   'pics', 'photos', 'leaked', 'leak', 'reddit', 'twitter', 'instagram', 'telegram', 'tiktok', 'youtube', 'discord']);
 
-const { PATH_WORDS, FILE_EXT } = require('./handle-words');
+const { PATH_WORDS, FILE_EXT, MIN_PAID_HANDLE } = require('./handle-words');
 
 function normal(h) {
   const raw = String(h || '').replace(/^@/, '');
   if (FILE_EXT.test(raw)) return null;
   const s = raw.replace(/[.\-_]+$/, '').toLowerCase();
-  if (!HANDLE.test(s) || RESERVED.has(s) || NOT_HANDLES.has(s) || PATH_WORDS.has(s) || /^\d+$/.test(s)) return null;
+  if (!HANDLE.test(s) || s.length < MIN_PAID_HANDLE || RESERVED.has(s) || NOT_HANDLES.has(s) || PATH_WORDS.has(s) || /^\d+$/.test(s)) return null;
   return s;
 }
 

@@ -43,6 +43,24 @@ function junkEvidence(e) {
   return false;
 }
 
+/**
+ * A merge made on junk evidence only (before the parser fix): what is left of it now, and a judgement. The evidence proved nothing,
+ * so the names decide: two handles that could be one man ("likely the same man") or that share nothing ("likely wrong: split by hand").
+ * No snapshot exists for these (they predate snapshots), so a split is manual.
+ */
+function judgeJunkMerge(r, ev) {
+  const kept = r.kept_id ? repo.creators.get(r.kept_id) : null;
+  const goneLabel = kept ? (kept.handle === r.a_label ? r.b_label : r.a_label) : null;
+  const same = possibleSame({ id: r.a_id, handle: r.a_label, links: '[]' }, { id: r.b_id, handle: r.b_label, links: '[]' });
+  const sameNames = same && !/^identity link/.test(same) ? same : null; // the merged link itself is not evidence
+  return {
+    linkId: r.id, a: r.a_label, b: r.b_label, evidence: ev.map((e) => `${e.type} ${e.detail}`), mergedAt: r.updated_at, mergedBy: r.decided_by,
+    kept: kept ? { id: kept.id, handle: kept.handle, media: kept.media_count || 0, status: kept.status } : { id: r.kept_id, gone: true },
+    folded: goneLabel,
+    judgement: sameNames ? `likely the same man (${sameNames}): leave` : 'likely wrong: the only evidence was junk and the names share nothing; split by hand',
+  };
+}
+
 function cleanQueue({ apply = false, actor = 'identity-repair' } = {}) {
   const out = { pending: 0, junkPairs: 0, rejected: 0, trimmed: 0, mergedOnJunk: [], examples: [] };
   const upd = db.prepare("UPDATE identity_links SET evidence = ?, strength = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?");
@@ -60,7 +78,7 @@ function cleanQueue({ apply = false, actor = 'identity-repair' } = {}) {
       const good = ev.filter((e) => !junkEvidence(e));
       if (good.length === ev.length) { if (r.status === 'pending') out.pending++; continue; }
       if (r.status === 'merged') { // already done: listed for the admin, never undone here
-        if (!good.length) out.mergedOnJunk.push({ linkId: r.id, a: r.a_label, b: r.b_label, kept: r.kept_id, evidence: ev.map((e) => `${e.type} ${e.detail}`) });
+        if (!good.length) out.mergedOnJunk.push(judgeJunkMerge(r, ev));
         continue;
       }
       out.pending++; out.junkPairs++;
@@ -173,6 +191,33 @@ function digitsOnly(x, y) {
   return a !== b && a.replace(/\d+/g, '') === b.replace(/\d+/g, '');
 }
 
+/** A handle without its instance or platform domain: "gymmanga@mastodon.social" -> gymmanga, "gymmanga-red.bsky.social" -> gymmangared. */
+function baseHandle(h) {
+  let x = String(h || '').trim().replace(/^@+/, '');
+  if (x.includes('@')) x = x.split('@')[0];
+  x = x.replace(/\.(bsky\.social|bsky\.app|bsky\.team)$/i, '');
+  return compact(x);
+}
+/**
+ * Could these two creator rows be one man (not proof, a reason not to act against one on the other's behalf): the same base handle,
+ * one 5+ letter handle inside the other, the same stem once platform filler is gone, an identity link that is not "different people",
+ * or either one linking an account of the other.
+ */
+function possibleSame(a, b) {
+  if (!a || !b) return null;
+  const x = baseHandle(a.handle); const y = baseHandle(b.handle);
+  if (x && x === y) return `same handle ${x}`;
+  if (x.length >= 5 && y.length >= 5 && (x.includes(y) || y.includes(x))) return `${a.handle} / ${b.handle} share a name`;
+  const kx = mergeKey(x); const ky = mergeKey(y);
+  if (kx.length >= 5 && kx === ky) return `same stem ${kx}`;
+  const [p, q2] = a.id < b.id ? [a.id, b.id] : [b.id, a.id];
+  const link = db.prepare('SELECT status FROM identity_links WHERE a_id = ? AND b_id = ?').get(p, q2);
+  if (link && link.status !== 'rejected') return `identity link (${link.status})`;
+  const linksTo = (from, to) => parse(from.links, []).some((l) => { const h = l && aggregators.linkHandle(l); return h && baseHandle(h) && baseHandle(h) === baseHandle(to.handle); });
+  if (linksTo(a, b) || linksTo(b, a)) return 'one links the other';
+  return null;
+}
+
 /* ------------------------------------------------------------------- feeds */
 
 /** Does creator `id` hold this account himself: a trusted feed of it, an admin / lookup confirmed name, or a claimed paid lead? */
@@ -254,7 +299,14 @@ function foreignLinks(c) {
     const owner = ownerOf(h, c.id);
     if (!owner) continue;
     const theirs = holdsAccount(owner, h);
-    if (theirs && !holdsAccount(c.id, h)) { remove.push({ link: l, kind: 'other-creator', why: `belongs to ${repo.creators.get(owner).handle} (${theirs})` }); continue; }
+    if (theirs && !holdsAccount(c.id, h)) {
+      // the "owner" may be his own other row (gymmanga-red.bsky.social / gymmanga@mastodon.social): then it is a merge question, not a removal
+      const o = repo.creators.get(owner);
+      // (the link being judged is not evidence for itself: his other links and the owner's links are)
+      const maybe = possibleSame({ ...c, links: JSON.stringify(parsed.filter((x) => x !== l)) }, { ...o, links: JSON.stringify(o.links || []) });
+      if (maybe) { review.push({ link: l, kind: 'possible-same-person', why: `${o.handle} holds ${h}, but may be the same man (${maybe})` }); continue; }
+      remove.push({ link: l, kind: 'other-creator', why: `belongs to ${o.handle} (${theirs})` }); continue;
+    }
     review.push({ link: l, kind: 'shared-name', why: `${repo.creators.get(owner).handle} also goes by ${h}` });
   }
   return { remove, review };
@@ -432,4 +484,4 @@ function unhide({ apply = false, actor = 'identity-repair', limit = 1000 } = {})
   return out;
 }
 
-module.exports = { _index: handleIndex, junkEvidence, cleanQueue, repairFeeds, foreignFeedList, repairLinks, foreignLinks, autoMerge, plan, mergeKey, conflict, corroborated, digitsOnly, hiddenReport, unhide, anchors, ownerOf, holdsAccount };
+module.exports = { possibleSame, baseHandle, judgeJunkMerge, _index: handleIndex, junkEvidence, cleanQueue, repairFeeds, foreignFeedList, repairLinks, foreignLinks, autoMerge, plan, mergeKey, conflict, corroborated, digitsOnly, hiddenReport, unhide, anchors, ownerOf, holdsAccount };

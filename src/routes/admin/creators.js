@@ -60,6 +60,14 @@ router.post('/identity/unmerge/:snapshotId', (req, res) => {
   const out = identity.unmerge(req.params.snapshotId, { actor: 'admin', force: req.query.force === '1' });
   return out.error ? res.status(out.status || 400).json({ error: out.error }) : res.json(out);
 });
+// The feeds the body filter paused when it hid a creator who is active again (restored by hand): dry run unless POST ?apply=1.
+// ?handles=a,b or ?ids=x,y narrows it; with neither, every active creator the body filter once hid.
+for (const m of ['get', 'post']) {
+  router[m]('/creators/physique-feeds/restore', (req, res) => {
+    const list = (k) => (typeof req.query[k] === 'string' && req.query[k] ? req.query[k].split(',').map((x) => x.trim()).filter(Boolean).slice(0, 500) : null);
+    res.json(require('../../engine/physique').restorePausedFeeds({ ids: list('ids'), handles: list('handles'), apply: wantApply(req), actor: 'admin' }));
+  });
+}
 router.get('/creators/hidden/report', (req, res) => res.json(repair().hiddenReport({ limit: int(req.query.limit, 1, 500, 50) })));
 
 router.post('/creators/merge', (req, res) => {

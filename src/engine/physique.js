@@ -46,6 +46,13 @@ function stateFor(score, settings) {
 function lastCreatorAction(id) {
   return repo.db.prepare("SELECT id, action, reason FROM moderation_actions WHERE target_type = 'creator' AND target_id = ? ORDER BY id DESC LIMIT 1").get(String(id));
 }
+// Actions that set or change a creator's visibility. Searches, merges and repairs log creator actions too (deep-search, merge,
+// identity-*): those say nothing about who hid him, and must not stop the body filter from undoing its own hide.
+const STATUS_ACTION_SQL = "(action LIKE '%hide%' OR action LIKE '%block%' OR action LIKE '%restore%' OR action LIKE 'admin-%' OR action LIKE 'safety%' OR action LIKE 'report%')";
+/** The last action that set or changed this creator's visibility. */
+function lastStatusAction(id) {
+  return repo.db.prepare(`SELECT id, action, reason FROM moderation_actions WHERE target_type = 'creator' AND target_id = ? AND ${STATUS_ACTION_SQL} ORDER BY id DESC LIMIT 1`).get(String(id));
+}
 
 function hideCreator(creator, why) {
   if (!creator || creator.status !== 'active') return false;
@@ -58,7 +65,7 @@ function hideCreator(creator, why) {
 }
 
 function unhideCreator(creator) {
-  const last = lastCreatorAction(creator.id);
+  const last = lastStatusAction(creator.id);
   if (creator.status !== 'hidden' || !last || last.action !== 'physique-hide') return false; // not ours to undo
   // a safety report (e.g. underage) waiting for a human keeps the creator hidden whatever the body filter says
   if (repo.db.prepare("SELECT 1 FROM reports WHERE creator_id = ? AND status = 'open' LIMIT 1").get(creator.id)) return false;
@@ -71,6 +78,51 @@ function unhideCreator(creator) {
   repo.creators.update(creator.id, { status: 'active' });
   repo.logAction('creator', creator.id, 'physique-unhide', 'body filter no longer applies', 'system');
   return true;
+}
+
+/**
+ * The feeds the body filter paused when it hid a creator (the [feeds:…] list of his last physique-hide), for creators who are active
+ * again but were restored some other way (by hand), so those feeds stayed off. A feed is turned back on only when it still belongs to
+ * him, is off, and nobody has decided anything about it since the hide (a later feed action keeps that decision).
+ * @param {{ids?: string[], handles?: string[], apply?: boolean, actor?: string}} opts no ids/handles = every active creator with such feeds
+ */
+function restorePausedFeeds({ ids = null, handles = null, apply = false, actor = 'admin' } = {}) {
+  const db = repo.db;
+  let creators;
+  if ((ids && ids.length) || (handles && handles.length)) {
+    const byId = (ids || []).map((id) => db.prepare('SELECT id, handle, status FROM creators WHERE id = ?').get(id));
+    const byHandle = (handles || []).map((h) => db.prepare('SELECT id, handle, status FROM creators WHERE lower(handle) = lower(?) ORDER BY media_count DESC LIMIT 1').get(h));
+    creators = [...byId, ...byHandle].filter(Boolean);
+  } else {
+    creators = db.prepare("SELECT DISTINCT c.id, c.handle, c.status FROM creators c JOIN moderation_actions a ON a.target_type = 'creator' AND a.target_id = c.id AND a.action = 'physique-hide' WHERE c.status = 'active'").all();
+  }
+  const touched = db.prepare("SELECT action FROM moderation_actions WHERE target_type = 'feed' AND target_id = ? AND id > ? ORDER BY id DESC LIMIT 1");
+  const out = { apply, creators: 0, feeds: 0, enabled: 0, items: [] };
+  for (const c of creators) {
+    const hide = db.prepare("SELECT id, reason, created_at FROM moderation_actions WHERE target_type = 'creator' AND target_id = ? AND action = 'physique-hide' ORDER BY id DESC LIMIT 1").get(String(c.id));
+    const m = hide && /\[feeds:([^\]]*)\]/.exec(hide.reason || '');
+    if (!m) continue;
+    const item = { id: c.id, handle: c.handle, status: c.status, hiddenAt: hide.created_at, feeds: [] };
+    for (const fid of m[1].split(',').filter(Boolean)) {
+      const f = repo.feeds.get(fid);
+      let state;
+      if (c.status !== 'active') state = 'creator is not active';
+      else if (!f) state = 'feed no longer exists';
+      else if (f.creator_id !== c.id) state = 'feed belongs to another creator now';
+      else if (f.enabled) state = 'already on';
+      else { const t = touched.get(String(fid), hide.id); state = t ? `left off: ${t.action} since the hide` : 'restore'; }
+      item.feeds.push({ id: fid, target: f ? `${f.platform}:${f.target}` : null, state });
+      if (state !== 'restore') continue;
+      out.feeds++;
+      if (apply) {
+        repo.feeds.update(fid, { enabled: true });
+        repo.logAction('feed', fid, 'physique-feed-on', `paused by the body filter when ${c.handle} was hidden; ${c.handle} is active again`, actor);
+        out.enabled++;
+      }
+    }
+    if (item.feeds.length) { out.creators++; out.items.push(item); }
+  }
+  return out;
 }
 
 /** Re-judge one creator from their measured pictures (and their own profile text). */
@@ -357,4 +409,4 @@ function stats(settings) {
   return { enabled: enabled(settings), threshold: thr, creatorShare: settings ? settings.physiqueCreatorShare : null, measured: r.measured || 0, overThreshold: r.overThreshold || 0, hidden: r.hidden || 0, creatorsHidden: creators, histogram: buckets };
 }
 
-module.exports = { unhideCreator, migrateDefaults, DEFAULT_THRESHOLD, DEFAULT_SHARE, live, screenFeed, publish, stateFor, reviewCreator, reapply, reapplyAsync, textSweep, stats, hideCreator, textCheck, enabled, threshold, REASON, MIN_MEASURED, APPROVED };
+module.exports = { lastStatusAction, restorePausedFeeds, unhideCreator, migrateDefaults, DEFAULT_THRESHOLD, DEFAULT_SHARE, live, screenFeed, publish, stateFor, reviewCreator, reapply, reapplyAsync, textSweep, stats, hideCreator, textCheck, enabled, threshold, REASON, MIN_MEASURED, APPROVED };

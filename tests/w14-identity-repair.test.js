@@ -309,3 +309,87 @@ describe('Crucible re-gate: unmerge and merge never bring back a blocked or take
     assert.ok(db.prepare("SELECT 1 FROM moderation_actions WHERE target_id = ? AND action = 'merge-forced'").get(k));
   });
 });
+
+describe('v4.23.0 prod follow-ups', () => {
+  test('two-letter and content-label paid handles are junk: "same-paid Patreon:cw" proves nothing and plans no merge', () => {
+    for (const h of ['cw', 'tw', 'nsfw', '18', 'of']) assert.equal(paid.validHandle(h), false, h);
+    assert.equal(paid.paidHandle('Patreon', 'https://patreon.com/cw'), null);
+    assert.equal(paid.paidHandle('OnlyFans', 'https://onlyfans.com/ab'), null);
+    assert.equal(paid.paidHandle('Patreon', 'https://patreon.com/gymmanga'), 'gymmanga');
+    const a = repo.creators.create({ handle: 'hairypiggydaddy.bsky.social', origin: 'admin' }).id; feed(a, 'bluesky', 'user', 'hairypiggydaddy.bsky.social', 'admin');
+    const b = repo.creators.create({ handle: 'Baraboi1550', origin: 'admin' }).id; feed(b, 'x', 'user', 'Baraboi1550', 'admin');
+    link(a, b, [{ type: 'same-paid', detail: 'Patreon:cw' }]);
+    const p = repair.plan();
+    assert.ok(!p.merges.some((m) => [m.keep.id, ...m.gone.map((g) => g.id)].some((id) => id === a || id === b)));
+    assert.ok(repair.junkEvidence({ type: 'same-paid', detail: 'Patreon:cw' }));
+  });
+
+  test('historical merges made on junk only are listed with the kept row as it is now and a judgement', () => {
+    const k = repo.creators.create({ handle: 'juicedcatboy.bsky.social', origin: 'admin' }).id; media(k, null, 7);
+    repo.creators.refreshStats(k);
+    const [x, y] = k < 'zzzz-gone-lx' ? [k, 'zzzz-gone-lx'] : ['zzzz-gone-lx', k];
+    db.prepare("INSERT INTO identity_links (a_id, b_id, a_label, b_label, evidence, strength, status, kept_id, decided_by) VALUES (?, ?, ?, ?, ?, 4, 'merged', ?, 'identity')")
+      .run(x, y, x === k ? 'juicedcatboy.bsky.social' : 'lxsucker', x === k ? 'lxsucker' : 'juicedcatboy.bsky.social', JSON.stringify([{ type: 'same-paid', detail: 'JustFor.Fans:explore.php' }]), k);
+    const k2 = repo.creators.create({ handle: 'gymbro', origin: 'admin' }).id;
+    const [x2, y2] = k2 < 'zzzz-gone-gb' ? [k2, 'zzzz-gone-gb'] : ['zzzz-gone-gb', k2];
+    db.prepare("INSERT INTO identity_links (a_id, b_id, a_label, b_label, evidence, strength, status, kept_id, decided_by) VALUES (?, ?, ?, ?, ?, 4, 'merged', ?, 'identity')")
+      .run(x2, y2, x2 === k2 ? 'gymbro' : 'gymbro.bsky.social', x2 === k2 ? 'gymbro.bsky.social' : 'gymbro', JSON.stringify([{ type: 'same-paid', detail: 'Patreon:cw' }]), k2);
+    const list = repair.cleanQueue().mergedOnJunk;
+    const wrong = list.find((m) => m.kept.id === k); const fine = list.find((m) => m.kept.id === k2);
+    assert.deepEqual([wrong.kept.handle, wrong.kept.media, wrong.folded], ['juicedcatboy.bsky.social', 7, 'lxsucker']);
+    assert.match(wrong.judgement, /^likely wrong/);
+    assert.match(fine.judgement, /^likely the same man/);
+  });
+
+  test('repair/links: when the "owner" may be the same man (gymmanga-red.bsky.social / gymmanga@mastodon.social) the link is listed, not removed', () => {
+    const red = repo.creators.create({ handle: 'gymmanga-red.bsky.social', origin: 'admin' }).id;
+    repo.creators.update(red, { links: [{ platform: 'external', service: 'Patreon', handle: 'gymmanga', url: 'https://patreon.com/gymmanga' }] });
+    const mast = repo.creators.create({ handle: 'gymmanga@mastodon.social', origin: 'admin' }).id; feed(mast, 'mastodon', 'user', 'gymmanga@mastodon.social', 'admin');
+    const r = repair.repairLinks();
+    assert.ok(!r.items.some((i) => i.id === red), JSON.stringify(r.items.filter((i) => i.id === red)));
+    assert.ok(r.reviewItems.some((i) => i.id === red && i.links.some((l) => /may be the same man/.test(l.why))));
+    repair.repairLinks({ apply: true });
+    assert.equal(repo.creators.get(red).links.length, 1);
+  });
+});
+
+describe('body-filter undo after later non-status actions', () => {
+  const physique = require('../src/engine/physique');
+  const hideBy = (handle) => {
+    const c = repo.creators.create({ handle, origin: 'admin' });
+    const f = feed(c.id, 'reddit', 'user', handle, 'admin');
+    physique.hideCreator(repo.creators.get(c.id), 'body filter: test');
+    return { id: c.id, feedId: f.id };
+  };
+  test('unhideCreator undoes its own hide although a deep search (or a repair) logged an action after it; the paused feed comes back on', async () => {
+    const { id, feedId } = hideBy('physlater');
+    assert.equal(repo.feeds.get(feedId).enabled, 0);
+    repo.logAction('creator', id, 'deep-search', 'x:physlater', 'discovery');
+    repo.logAction('creator', id, 'identity-prune-links', 'x', 'identity-repair');
+    const dry = await repair.unhide();
+    assert.ok(dry.items.some((i) => i.id === id && i.last === 'physique-hide'));
+    const done = await repair.unhide({ apply: true });
+    assert.ok(done.unhidden >= 1);
+    assert.equal(repo.creators.get(id).status, 'active');
+    assert.equal(repo.feeds.get(feedId).enabled, 1);
+    assert.equal(physique.lastStatusAction(id).action, 'physique-unhide');
+  });
+  test('restorePausedFeeds: a creator restored by hand gets the feeds the body filter paused back (dry run first); a feed decided since stays off', () => {
+    const a = hideBy('physbyhand');
+    const b = hideBy('physbyhand2'); const fb2 = feed(b.id, 'x', 'user', 'physbyhand2x', 'admin');
+    physique.hideCreator(repo.creators.get(b.id), 'again'); // not hidden twice: the creator is already hidden
+    repo.creators.update(a.id, { status: 'active' }); repo.creators.update(b.id, { status: 'active' });
+    repo.logAction('feed', b.feedId, 'disable', 'admin kept it off', 'admin');
+    const dry = physique.restorePausedFeeds({ handles: ['physbyhand', 'physbyhand2'] });
+    const st = (cid, fid) => dry.items.find((i) => i.id === cid).feeds.find((f) => f.id === fid).state;
+    assert.equal(st(a.id, a.feedId), 'restore');
+    assert.match(st(b.id, b.feedId), /^left off: disable/);
+    assert.equal(repo.feeds.get(a.feedId).enabled, 0, 'dry run');
+    const r = physique.restorePausedFeeds({ handles: ['physbyhand', 'physbyhand2'], apply: true });
+    assert.equal(r.enabled, 1);
+    assert.equal(repo.feeds.get(a.feedId).enabled, 1); assert.equal(repo.feeds.get(b.feedId).enabled, 0);
+    assert.ok(db.prepare("SELECT 1 FROM moderation_actions WHERE target_id = ? AND action = 'physique-feed-on'").get(String(a.feedId)));
+    assert.equal(physique.restorePausedFeeds({ handles: ['physbyhand'] }).feeds, 0, 'idempotent');
+    void fb2;
+  });
+});
