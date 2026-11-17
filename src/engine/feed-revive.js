@@ -165,4 +165,4 @@ function producedOnActiveCreator(feed) {
   return !!c && c.status === 'active';
 }
 
-module.exports = { producedOnActiveCreator, reviveFeeds, reviveFor, stayOffReason, STAY_OFF };
+module.exports = { accountIsCreator, lastFeedAction, producedOnActiveCreator, reviveFeeds, reviveFor, stayOffReason, STAY_OFF };

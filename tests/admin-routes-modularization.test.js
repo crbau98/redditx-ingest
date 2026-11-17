@@ -38,6 +38,9 @@ GET /library-health
 GET /feeds/idle
 GET /feeds/yield
 GET /feeds/revive
+GET /creators/recover-block/candidates
+GET /creators/:id/recover-block
+POST /creators/:id/recover-block
 GET /coverage
 POST /coverage/run
 POST /feeds/revive
