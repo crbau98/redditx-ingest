@@ -51,6 +51,22 @@ export function stillChain(item) {
 }
 
 /**
+ * The pictures to fall back through when an image post's file (or one of its stills) cannot be shown, best first: the platform
+ * preview, the platform thumbnail, our 360px thumbnail, and last the file itself. The file is an UPGRADE over these, never a
+ * replacement: when it fails (error, 404, or a host's "not found" stub picture) one of the stills stays on screen, and "no
+ * longer available" is for a post where every one of them failed. A signed preview URL (Reddit's `s=` is tied to its width) is
+ * used exactly as stored, never rewritten to another width.
+ */
+export function fallbackStills(item) {
+  if (!item) return [];
+  const urls = [item.preview_url, item.thumbnail_url, item.thumb_url];
+  if (item.media_type === 'image') urls.push(item.media_url);
+  const out = [];
+  for (const u of urls) if (u && !out.includes(u)) out.push(u);
+  return out;
+}
+
+/**
  * The small picture of a post for tiles that are a few dozen CSS px wide (the viewer's filmstrip and dock, related rails,
  * its blurred backdrop, the video poster, a Reels poster, the search strip): the thumbnail when there is one, else the
  * platform preview. Posts that came from a grid have already downloaded their thumbnail, so these tiles then cost no request at all.

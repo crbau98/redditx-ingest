@@ -1,4 +1,4 @@
-import { h, icon, proxied, fmt, avatar, toast, copyText, emptyState, openModal, armPoster, firstFrameWhenNoPoster } from '../dom.js';
+import { h, icon, proxied, fmt, avatar, toast, copyText, emptyState, openModal, armPoster, firstFrameWhenNoPoster, loadImage } from '../dom.js';
 import { isDirectSrc, viaProxy } from '../direct-media.js';
 import { get, post, query as postQuery, reportBroken, prefetch, prefetchQuery } from '../api.js';
 import { navigate, href } from '../router.js';
@@ -8,7 +8,7 @@ import { clampRate } from '../playback-policy.js';
 import { openCollectionPicker } from '../components/collections.js';
 import { openLightbox, lightboxOpen } from '../components/ondemand.js';
 import { heartBurst, ambientBackdrop } from '../components/fx.js';
-import { tileImage, stillChain } from '../images.js';
+import { tileImage, stillChain, fallbackStills } from '../images.js';
 import { planWindow } from '../components/reel-window.js';
 
 const SORTS = [['foryou', 'For you'], ['trending', 'Trending'], ['random', 'Shuffle'], ['recent', 'Newest'], ['top', 'Top']];
@@ -211,26 +211,27 @@ export async function reels(root, { query }) {
       const img = h('img', { alt: s.it.title || '', src: proxied(first), decoding: 'async', draggable: 'false' });
       // The full-size file loads only once this slide has been the one on screen for a moment (see activate): a neighbour
       // that is mounted ahead of time, or a photo swiped past, never downloads it.
+      // The full file is an upgrade over the stills (see images.fallbackStills): when it fails (error, 404, the host's stub) the still on
+      // screen stays, and "no longer available" is for a post where every candidate failed.
+      const order = fallbackStills(s.it); const failed = new Set();
       s.loadFull = () => {
         s.loadFull = null;
         if (!preview || preview === s.it.media_url || !img.isConnected) return;
-        const full = new Image();
-        let retried = false;
-        full.onload = () => { if (img.isConnected) img.src = full.src; };
-        full.onerror = () => { if (!retried && isDirectSrc(full.src)) { retried = true; full.src = viaProxy(s.it.media_url); } };
-        full.src = proxied(s.it.media_url);
+        loadImage(s.it.media_url, (src) => { if (img.isConnected) img.src = src; }, () => { failed.add(s.it.media_url); });
       };
       if (first !== sharp) {
         const mid = new Image();
         mid.onload = () => { if (img.isConnected) img.src = mid.src; };
         mid.src = proxied(sharp);
       }
+      let steps = 0;
       img.addEventListener('error', () => {
-        // compare the attribute, not the resolved URL; a direct load that failed was already retried through the proxy
-        const cur = img.getAttribute('src');
-        const is = (u) => cur === proxied(u) || cur === viaProxy(u);
-        if (sharp && !is(sharp)) { delete img.dataset.directFb; img.src = proxied(sharp); return; }
-        if (s.it.media_url && !is(s.it.media_url)) { delete img.dataset.directFb; img.src = proxied(s.it.media_url); return; }
+        const abs = (u) => { try { return new URL(u, location.href).href; } catch { return String(u); } };
+        const cur = abs(img.getAttribute('src')); // (a direct load that failed was already retried through the proxy)
+        const is = (u) => cur === abs(proxied(u)) || cur === abs(viaProxy(u));
+        const was = order.find(is); if (was) failed.add(was);
+        const next = ++steps <= order.length + 1 ? order.find((u) => !failed.has(u) && !is(u)) : null;
+        if (next) { delete img.dataset.directFb; img.src = proxied(next); return; }
         reportBroken(s.it.id);
         s.stage.replaceChildren(h('div', { class: 'reel-gone' }, 'This item is no longer available at its source.'));
       });

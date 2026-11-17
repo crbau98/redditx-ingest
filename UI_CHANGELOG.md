@@ -1,5 +1,11 @@
 # UI changelog
 
+## 2026-11-17 — A post whose original is gone still shows its best preview
+
+- **Fixed (from a user report on a Reddit post):** when the full-size file failed, the viewer replaced the working preview with "This image is no longer available at its source." (Reels likewise). The original may answer 404 with the host's "not found" stub picture (`i.redd.it`: 1 KB PNG) while its `cf.preview.redd.it` preview loads fine. The full file is now an upgrade over the stills, never a replacement: when it fails (error, 404, or the stub) the viewer and Reels keep the best still (preview, then the platform thumbnail, then our thumbnail), and "no longer available" appears only when every candidate failed (the post is then reported once, as before). The grid already walked every still; it is covered by a test now.
+- **A small "Preview quality" chip** (top-left of the viewer stage) says the original is no longer available and this is the best copy left. Shown only then.
+- A signed preview URL (Reddit's `s=` is tied to its width) is used exactly as stored; no width is rewritten. A larger preview needs the adapter to store it (Halyard).
+
 ## 2026-11-17 — Videos with no thumbnail show their first frame, at the cost of a frame
 
 - **A published video with no still shows its own first frame** (grid, Reels, viewer). In the grid a tile near the screen loads its clip with `preload=metadata` at `#t=0.1`, copies the decoded frame onto a small canvas (`canvas.card-ff`, 360 px wide at most) and releases the `<video>`: that cancels the download and frees the decoder. At most 3 clips load at once; a tile far away gives its canvas back and mounts again when it returns; a clip that fails or takes over 8 s keeps the tinted placeholder and the Video pill. A browser that decodes no frame for a detached video gets the `<video>` mounted in the tile after 2 s so it can paint one; that video keeps its load slot, at most 2 are mounted at once (others keep waiting detached), it is copied to the canvas and released as soon as it has a frame, and the 8 s timeout removes it (aborting the transfer) and leaves the placeholder. Drawing a cross-origin (bucket) video is allowed, reading it back is not, and nothing reads it.
