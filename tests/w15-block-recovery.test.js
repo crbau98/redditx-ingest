@@ -228,7 +228,7 @@ test('applyProfile: the "profile" of an automatic web page feed can no longer bl
   }
 });
 
-test('applyProfile: a female profile read from HIS OWN feed (admin, seed, ingest) still blocks him; safety is unchanged', () => {
+test('applyProfile: a female profile read from HIS OWN feed (admin, seed, ingest) still blocks him; a safety profile from an automatic feed holds him', () => {
   const { applyProfile } = require('../src/engine/creators');
   const settings = require('../src/settings').get();
   for (const origin of ['admin', 'seed', 'ingest']) {
@@ -241,7 +241,7 @@ test('applyProfile: a female profile read from HIS OWN feed (admin, seed, ingest
   const f2 = repo.feeds.upsert({ platform: 'web', kind: 'page', target: `https://x.example/s${++n}`, creatorId: s2.c.id, origin: 'deep-search', runNow: false }).feed;
   const { checkText } = require('../src/lib/safety');
   const word = ['teen', 'schoolboy', 'underage'].find((w) => checkText(`a ${w}`, '').level === 'block');
-  if (word) { applyProfile(repo.feeds.get(f2.id), { displayName: 'x', bio: `${word} content` }, settings); assert.equal(repo.creators.get(s2.c.id).status, 'blocked', 'a safety profile still blocks'); }
+  if (word) { applyProfile(repo.feeds.get(f2.id), { displayName: 'x', bio: `${word} content` }, settings); assert.equal(repo.creators.get(s2.c.id).status, 'hidden', 'a safety profile from an AUTOMATIC feed puts the creator on hold (tests/w15-safety-hold.test.js); his own feed still blocks'); }
 });
 
 test('the whole story: a thefap feed attached by deep search no longer blocks; and a creator it blocked before can be recovered', () => {

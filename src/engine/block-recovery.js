@@ -60,6 +60,7 @@ function ruleOf(reason) {
 function refusals(creator, block) {
   const out = [];
   if (!creator) return ['creator not found'];
+  if (repo.db.prepare("SELECT 1 AS ok FROM moderation_actions WHERE target_type = 'creator' AND target_id = ? AND action = 'safety-hold' LIMIT 1").get(creator.id)) out.push('he is on a safety hold: it stays until a human acts, recover-block never undoes it');
   if (creator.status !== 'blocked') out.push(`creator is ${creator.status}, not blocked`);
   if (!block) { out.push('no block record in the audit'); return out; }
   if (block.actor !== 'system') out.push(`the block was made by ${block.actor}, not the system`);
