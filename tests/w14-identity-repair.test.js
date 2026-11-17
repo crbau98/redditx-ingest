@@ -24,8 +24,10 @@ before(() => {
   // Bigggwild: an active reddit row, an active telegram row, a hidden "OnlyFans Official" row with no recorded reason, a blocked row
   C.reddit = repo.creators.create({ handle: 'bigggwild', origin: 'admin' }).id;
   const fr = feed(C.reddit, 'reddit', 'user', 'bigggwild', 'admin'); media(C.reddit, fr.id, 6);
+  repo.creators.update(C.reddit, { links: [paid.paidLink('OnlyFans', 'bigggwild')] }); // the corroboration: his rows promote one OnlyFans page
   C.tg = repo.creators.create({ handle: 'Bigggwild', displayName: 'big wild guy 🔥', origin: 'ingest' }).id;
   const ft = feed(C.tg, 'telegram', 'channel', 'bigggwild', 'telegram-sync'); media(C.tg, ft.id, 3);
+  repo.creators.update(C.tg, { links: [paid.paidLink('OnlyFans', 'bigggwild')] });
   C.hidden = repo.creators.create({ handle: 'bigggwild OnlyFans Official', origin: 'ingest' }).id;
   repo.creators.update(C.hidden, { status: 'hidden', links: [paid.paidLink('OnlyFans', 'bigggwild')] });
   const fh = feed(C.hidden, 'coomer', 'user', 'onlyfans/bigggwild', 'paid-mirror'); media(C.hidden, fh.id, 9);
@@ -39,6 +41,16 @@ before(() => {
   C.page = feed(C.chasing, 'web', 'page', 'https://onlypedia.org/bigggwild', 'discovered').id;
   repo.creators.update(C.chasing, { links: [paid.paidLink('OnlyFans', 'chasingfit'), paid.paidLink('OnlyFans', 'poppy.lawson'), paid.paidLink('OnlyFans', 'alyssarain'),
     paid.paidLink('OnlyFans', 'kittyquinnxoxo'), { platform: 'external', url: 'https://www.instagram.com/onlypedia' }, { platform: 'external', url: 'https://www.amazon.com/hz/wishlist/ls/ABC' }] });
+  // poppy.lawson is a creator PRISM has (her own paid mirror): her page on chasingfit positively belongs to someone else
+  C.poppy = repo.creators.create({ handle: 'poppy.lawson', origin: 'admin' }).id; feed(C.poppy, 'coomer', 'user', 'onlyfans/poppy.lawson', 'paid-mirror');
+  // Crucible's namesakes: one handle stem, different men, no corroboration
+  const solo = (h, platform) => { const id = repo.creators.create({ handle: h, origin: 'admin' }).id; feed(id, platform, 'user', h, 'admin'); media(id, null, 2); return id; };
+  C.fp = [['michael', 'bluesky'], ['michaelxxx', 'mastodon'], ['brandon92', 'bluesky'], ['brandon87', 'x'], ['thomas', 'bluesky'], ['thomasfree', 'tumblr'],
+    ['realalexander', 'bluesky'], ['alexander', 'mastodon'], ['jordansmith', 'bluesky'], ['jordansmithofficial', 'x'], ['christopher', 'bluesky'], ['christopher', 'mastodon']].map(([h, p]) => solo(h, p));
+  // a chain: A (OF alpha) ~ B (no paid page, richest) ~ C (OF beta), each pair corroborated by a confirmed name
+  C.chainA = solo('marcusrocks', 'bluesky'); C.chainB = solo('marcusrocks', 'mastodon'); C.chainC = solo('marcusrocksvip', 'tumblr'); media(C.chainB, null, 20);
+  repo.creators.update(C.chainA, { links: [paid.paidLink('OnlyFans', 'alpha')] }); repo.creators.update(C.chainC, { links: [paid.paidLink('OnlyFans', 'beta')] });
+  identity.addAlias(C.chainB, 'marcusrocks', { source: 'admin' }); identity.addAlias(C.chainB, 'marcusrocksvip', { source: 'admin' });
   // junk queue pairs, a mixed one, a strong pair, a conflicting pair, a common short name
   C.j1 = repo.creators.create({ handle: 'randomjoe', origin: 'admin' }).id; C.j2 = repo.creators.create({ handle: 'otherguy', origin: 'admin' }).id;
   C.j3 = repo.creators.create({ handle: 'thirdman', origin: 'admin' }).id;
@@ -54,6 +66,10 @@ before(() => {
   C.jake2 = repo.creators.create({ handle: 'Jake', origin: 'admin' }).id; feed(C.jake2, 'x', 'user', 'Jake', 'admin');
   // hidden creators: body filter, an open underage report, no record
   C.phys = repo.creators.create({ handle: 'physhidden', origin: 'admin' }).id; repo.creators.update(C.phys, { status: 'hidden' }); repo.logAction('creator', C.phys, 'physique-hide', 'body filter: x', 'system');
+  C.resolved = repo.creators.create({ handle: 'resolvedunderage', origin: 'admin' }).id; repo.creators.update(C.resolved, { status: 'hidden' });
+  db.prepare("INSERT INTO reports (id, creator_id, kind, status) VALUES ('w14rep2', ?, 'underage', 'resolved')").run(C.resolved);
+  C.mediaRep = repo.creators.create({ handle: 'mediareported', origin: 'admin' }).id; repo.creators.update(C.mediaRep, { status: 'hidden' }); media(C.mediaRep, null, 1);
+  db.prepare("INSERT INTO reports (id, media_id, kind, status) VALUES ('w14rep3', (SELECT id FROM media WHERE creator_id = ? LIMIT 1), 'nonconsensual', 'dismissed')").run(C.mediaRep);
   C.rep = repo.creators.create({ handle: 'reportedone', origin: 'admin' }).id; repo.creators.update(C.rep, { status: 'hidden' }); repo.logAction('creator', C.rep, 'report-hide', 'underage', 'visitor');
   db.prepare("INSERT INTO reports (id, creator_id, kind, status) VALUES ('w14rep', ?, 'underage', 'open')").run(C.rep);
   for (const id of Object.values(C)) if (typeof id === 'string' && repo.creators.get(id)) repo.creators.refreshStats(id);
@@ -110,29 +126,31 @@ describe('3. auto-merge (before the feed repair: it decides who a handle belongs
 });
 
 describe('2. aggregator pollution', () => {
-  test('feeds: his accounts on another creator are re-filed on him; an aggregator page that does not name its creator is detached', async () => {
+  test('feeds: his accounts on another creator are re-filed on him (he holds them himself); what has no proven owner stays and is listed', async () => {
     const dry = await repair.repairFeeds();
     const by = new Map(dry.items.map((f) => [f.id, f]));
     assert.equal(by.get(C.redgifs).reattachTo, C.reddit);
     assert.equal(by.get(C.bsky).reattachTo, C.reddit);
-    assert.ok(by.has(C.page), 'onlypedia page about bigggwild on chasingfit');
+    assert.ok(dry.reviewItems.some((f) => f.id === C.page) && !by.has(C.page), 'the onlypedia page names no account: listed for review, not moved');
     assert.ok(![...by.values()].some((f) => f.target === 'chasingfit'), 'his own account stays');
     assert.equal(repo.feeds.get(C.redgifs).creator_id, C.chasing, 'dry run');
     const r = await repair.repairFeeds({ apply: true });
-    assert.equal(r.applied, dry.foreign);
+    assert.equal(r.applied, dry.reattach);
+    assert.equal(repo.feeds.get(C.page).creator_id, C.chasing, 'a feed with no proven owner stays where it is');
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM media WHERE creator_id IS NULL AND publish_state = 'published'").get().n, 0, 'no published media left without its creator');
     assert.equal(repo.feeds.get(C.redgifs).creator_id, C.reddit);
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM media WHERE feed_id = ? AND creator_id = ?').get(C.redgifs, C.reddit).n, 5, 'its media moved with it');
     assert.equal(repo.creators.get(C.chasing).media_count, 4);
     assert.ok(db.prepare("SELECT 1 FROM moderation_actions WHERE target_id = ? AND action = 'identity-reattach'").get(String(C.redgifs)));
-    assert.equal((await repair.repairFeeds()).foreign, 0, 'idempotent');
+    assert.equal((await repair.repairFeeds()).reattach, 0, 'idempotent');
   });
-  test('links: an aggregator page dump goes, his own paid page stays', () => {
+  test('links: only a page another creator holds goes; links that merely do not carry his name stay', () => {
     const dry = repair.repairLinks();
     const item = dry.items.find((i) => i.id === C.chasing);
-    assert.ok(item && item.remove.length >= 5, JSON.stringify(item));
+    assert.deepEqual(item && item.remove.map((x) => x.handle), ['poppy.lawson'], JSON.stringify(item));
     repair.repairLinks({ apply: true });
     const left = repo.creators.get(C.chasing).links.map((l) => l.handle || l.url);
-    assert.deepEqual(left, ['chasingfit']);
+    assert.deepEqual(left, ['chasingfit', 'alyssarain', 'kittyquinnxoxo', 'https://www.instagram.com/onlypedia', 'https://www.amazon.com/hz/wishlist/ls/ABC']);
     assert.ok(db.prepare("SELECT 1 FROM moderation_actions WHERE target_id = ? AND action = 'identity-prune-links'").get(C.chasing));
     assert.equal(repo.creators.get(C.sam2).links.length, 1, 'one paid page in another name is not a dump');
   });
@@ -163,6 +181,8 @@ describe('4. hidden creators', () => {
     const dry = await (await fetch(`${base}/api/admin/creators/hidden/unhide`, { headers: H })).json();
     const ids = dry.items.map((i) => i.id);
     assert.ok(ids.includes(C.hidden) && ids.includes(C.phys) && !ids.includes(C.rep), JSON.stringify(dry.items));
+    assert.ok(!ids.includes(C.resolved), 'an underage report, even resolved, keeps him hidden');
+    assert.ok(!ids.includes(C.mediaRep), 'a non-consensual report on one of his posts, even dismissed, keeps him hidden');
     assert.equal(repo.creators.get(C.hidden).status, 'hidden', 'GET is a dry run');
     assert.equal((await (await fetch(`${base}/api/admin/creators/hidden/unhide`, { method: 'POST', headers: H, body: '{}' })).json()).apply, false, 'POST without apply is a dry run too');
     const done = await (await fetch(`${base}/api/admin/creators/hidden/unhide?apply=1`, { method: 'POST', headers: H, body: '{}' })).json();
@@ -178,5 +198,69 @@ describe('4. hidden creators', () => {
     const c = repo.creators.create({ handle: 'patchme', origin: 'admin' });
     await fetch(`${base}/api/admin/creators/${c.id}`, { method: 'PATCH', headers: H, body: JSON.stringify({ status: 'hidden' }) });
     assert.ok(db.prepare("SELECT 1 FROM moderation_actions WHERE target_id = ? AND action = 'admin-hide'").get(c.id));
+  });
+});
+
+describe('Crucible gate: no false merges, undo for every merge, own pages kept', () => {
+  test('namesakes without corroboration are never merged; digit-only differences are a conflict; a chain with two paid identities is not folded', () => {
+    const p = repair.plan();
+    const touched = new Set(p.merges.flatMap((m) => [m.keep.id, ...m.gone.map((g) => g.id)]));
+    for (const id of C.fp) assert.ok(!touched.has(id), repo.creators.get(id).handle);
+    assert.ok(repair.digitsOnly('brandon92', 'brandon87') && repair.digitsOnly('michael', 'michael92') && !repair.digitsOnly('michael', 'michael'));
+    for (const id of [C.chainA, C.chainB, C.chainC]) assert.ok(!touched.has(id), 'chain member folded');
+    assert.ok(p.skipped.clusterConflict.some((c) => /distinct paid pages/.test(c.why) && c.rows.length === 3), JSON.stringify(p.skipped.clusterConflict));
+    assert.equal(paid.validHandle('my-own-page'), true, 'a hyphenated real handle'); assert.equal(paid.validHandle('media'), false);
+  });
+
+  test('every merge (manual included) leaves a snapshot; unmerge rebuilds the row with its feeds, media, aliases, leads and followers', async () => {
+    const a = repo.creators.create({ handle: 'undoA', origin: 'admin' }).id; const fa = feed(a, 'reddit', 'user', 'undoA', 'admin'); media(a, fa.id, 3);
+    const b = repo.creators.create({ handle: 'undoB', displayName: 'Undo Bee', bio: 'b bio', origin: 'admin' }).id; const fb = feed(b, 'x', 'user', 'undoB', 'admin'); media(b, fb.id, 2);
+    repo.creators.update(b, { links: [paid.paidLink('OnlyFans', 'undob')] });
+    identity.addAlias(b, 'Bee Stage', { kind: 'name', source: 'admin' });
+    db.prepare("INSERT INTO onlyfans_leads (handle, creator_id, status) VALUES ('undob', ?, 'claimed')").run(b);
+    db.prepare("INSERT INTO push_subscriptions (id, endpoint, p256dh, auth, creator_ids) VALUES ('w14sub', 'https://push.test/w14', 'p', 'a', ?)").run(JSON.stringify([b]));
+    const bMedia = db.prepare('SELECT id FROM media WHERE creator_id = ? ORDER BY id').all(b).map((r) => r.id);
+    const server = require('../src/app').createApp().listen(0); await new Promise((r) => server.once('listening', r));
+    const base = `http://127.0.0.1:${server.address().port}`; const H = { 'x-admin-key': 'test-key', 'content-type': 'application/json' };
+    try {
+      const merged = await (await fetch(`${base}/api/admin/creators/merge`, { method: 'POST', headers: H, body: JSON.stringify({ keepId: a, mergeId: b }) })).json();
+      assert.equal(repo.creators.get(b), null);
+      assert.equal(repo.creators.get(a).media_count, 5);
+      const snaps = await (await fetch(`${base}/api/admin/identity/snapshots?creatorId=${b}`, { headers: H })).json();
+      assert.equal(snaps.items.length, 1); assert.equal(snaps.items[0].media, 2); void merged;
+      const id = snaps.items[0].id;
+      const u = await (await fetch(`${base}/api/admin/identity/unmerge/${id}`, { method: 'POST', headers: H, body: '{}' })).json();
+      assert.equal(u.ok, true, JSON.stringify(u)); assert.equal(u.media, 2); assert.equal(u.feeds, 1);
+      const back = repo.creators.get(b);
+      assert.deepEqual([back.handle, back.display_name, back.bio, back.media_count], ['undoB', 'Undo Bee', 'b bio', 2]);
+      assert.deepEqual(db.prepare('SELECT id FROM media WHERE creator_id = ? ORDER BY id').all(b).map((r) => r.id), bMedia);
+      assert.equal(repo.feeds.get(fb.id).creator_id, b);
+      assert.equal(db.prepare('SELECT creator_id FROM onlyfans_leads WHERE handle = ?').get('undob').creator_id, b);
+      assert.ok(identity.aliasesOf(b).some((x) => x.alias === 'Bee Stage') && !identity.aliasesOf(a).some((x) => x.alias === 'Bee Stage' || x.alias === 'undoB'));
+      assert.deepEqual(repo.creators.get(a).links, [], 'the folded row\'s links left the kept row');
+      assert.equal(repo.creators.get(a).media_count, 3);
+      assert.deepEqual(JSON.parse(db.prepare("SELECT creator_ids FROM push_subscriptions WHERE id = 'w14sub'").get().creator_ids), [b]);
+      const [x, y] = a < b ? [a, b] : [b, a];
+      assert.equal(db.prepare('SELECT status FROM identity_links WHERE a_id = ? AND b_id = ?').get(x, y).status, 'rejected', 'marked different people');
+      assert.ok(db.prepare("SELECT 1 FROM moderation_actions WHERE target_id = ? AND action = 'unmerge'").get(b));
+      assert.equal((await fetch(`${base}/api/admin/identity/unmerge/${id}`, { method: 'POST', headers: H, body: '{}' })).status, 409, 'only once');
+    } finally { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }
+  });
+
+  test('a man\'s own paid pages under other names are never removed; a stage-name account stays on him and is not moved to a namesake', async () => {
+    const mp = repo.creators.create({ handle: 'maxpower', origin: 'admin' }).id;
+    repo.creators.update(mp, { links: [paid.paidLink('OnlyFans', 'mpfitness'), paid.paidLink('Fansly', 'mpfit'), paid.paidLink('JustFor.Fans', 'mp_fit'), { platform: 'external', url: 'https://www.amazon.com/hz/wishlist/ls/X1' }] });
+    const before = repo.creators.get(mp).links.length;
+    assert.ok(!repair.repairLinks().items.some((i) => i.id === mp));
+    repair.repairLinks({ apply: true });
+    assert.equal(repo.creators.get(mp).links.length, before);
+    const d = repo.creators.create({ handle: 'maxpowerreal', origin: 'admin' }).id; const fd = feed(d, 'bluesky', 'user', 'mpofficial.bsky.social', 'discovered'); media(d, fd.id, 4);
+    repo.creators.create({ handle: 'mpofficial', origin: 'admin' }); // a namesake who does not hold that account
+    const r = await repair.repairFeeds();
+    const it = r.reviewItems.find((f) => f.id === fd.id);
+    assert.ok(it && !it.reattachTo && it.candidate === 'mpofficial', JSON.stringify(it));
+    await repair.repairFeeds({ apply: true });
+    assert.equal(repo.feeds.get(fd.id).creator_id, d);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM media WHERE feed_id = ? AND creator_id = ?').get(fd.id, d).n, 4);
   });
 });

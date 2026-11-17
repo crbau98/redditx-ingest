@@ -20,7 +20,7 @@ const repo = require('../db/repo');
 const identity = require('./identity');
 const paid = require('../lib/paid');
 const aggregators = require('../lib/aggregators');
-const { samePerson, stemHandle, accountHandle } = require('./deepsearch');
+const { samePerson, accountHandle } = require('./deepsearch');
 const { PATH_WORDS, FILE_EXT } = require('../lib/handle-words');
 
 const db = repo.db;
@@ -129,9 +129,68 @@ function ownerOf(handle, notId) {
 }
 const resetIndex = () => { handleIx = null; };
 
+/* ------------------------------------------------------------ corroboration */
+/*
+ * A shared handle is a reason to look, never proof: michael / michaelxxx, thomas / thomasfree and two "christopher"s are usually
+ * different men. Folding rows or moving accounts needs one of these, from what the men publish themselves or what an admin said:
+ *   a shared paid page (a valid handle, on both rows' links or claimed leads), mutual bio links, or an alias an admin / a lookup
+ *   confirmed that names the other row.
+ */
+
+/** His paid pages (service:handle): his links' paid pages plus the OnlyFans leads traced to him. */
+function paidPages(c) {
+  const out = new Set();
+  for (const l of parse(c.links, [])) {
+    if (!l) continue;
+    const svc = l.service && paid.SERVICES[l.service] ? l.service : paid.serviceOf(l.url || '');
+    if (!svc || !paid.SERVICES[svc] || !paid.SERVICES[svc].trace) continue;
+    const h = l.handle || paid.paidHandle(svc, l.url || '');
+    if (h && paid.validHandle(h)) out.add(`${svc}:${String(h).toLowerCase()}`);
+  }
+  for (const r of db.prepare("SELECT handle FROM onlyfans_leads WHERE creator_id = ? AND status != 'rejected'").all(c.id)) if (paid.validHandle(r.handle)) out.add(`OnlyFans:${String(r.handle).toLowerCase()}`);
+  return out;
+}
+const confirmedNames = (id) => db.prepare("SELECT alias FROM creator_aliases WHERE creator_id = ? AND source IN ('admin', 'lookup')").all(id).map((r) => r.alias);
+const keysMeet = (x, y) => { const k = new Set(keysOf(x)); return keysOf(y).some((v) => k.has(v)); };
+function mutualBio(a, b) {
+  const [x, y] = a < b ? [a, b] : [b, a];
+  const link = db.prepare('SELECT evidence FROM identity_links WHERE a_id = ? AND b_id = ?').get(x, y);
+  const dirs = new Set(parse(link && link.evidence, []).filter((e) => e.type === 'bio-link').map((e) => e.from));
+  return dirs.has(a) && dirs.has(b);
+}
+/** Why rows a and b are the same man, or null. */
+function corroborated(a, b) {
+  const pa = paidPages(a); const shared = [...paidPages(b)].find((p) => pa.has(p));
+  if (shared) return `same paid page ${shared}`;
+  if (mutualBio(a.id, b.id)) return 'mutual bio links';
+  if (confirmedNames(a.id).some((n) => keysMeet(n, b.handle))) return `${a.handle} has the confirmed name ${b.handle}`;
+  if (confirmedNames(b.id).some((n) => keysMeet(n, a.handle))) return `${b.handle} has the confirmed name ${a.handle}`;
+  return null;
+}
+/** Handles that differ only in their digits (brandon92 / brandon87, michael / michael92) belong to different people. */
+function digitsOnly(x, y) {
+  const a = compact(x); const b = compact(y);
+  return a !== b && a.replace(/\d+/g, '') === b.replace(/\d+/g, '');
+}
+
 /* ------------------------------------------------------------------- feeds */
 
-/** Feeds filed on a creator by a search, discovery or an aggregator page although their own handle (or page URL) is not his. */
+/** Does creator `id` hold this account himself: a trusted feed of it, an admin / lookup confirmed name, or a claimed paid lead? */
+function holdsAccount(id, handle) {
+  for (const f of db.prepare('SELECT platform, target, origin FROM feeds WHERE creator_id = ?').all(id)) {
+    if (trusted(f.origin) && !/^https?:\/\//i.test(f.target) && keysMeet(accountHandle(f.platform, f.target), handle)) return `his own ${f.platform} account`;
+  }
+  if (confirmedNames(id).some((n) => keysMeet(n, handle))) return 'a confirmed name';
+  // a paid lead traced to him (not his links: links are what is being checked, and an aggregator could have written them)
+  if (db.prepare("SELECT handle FROM onlyfans_leads WHERE creator_id = ? AND status != 'rejected'").all(id).some((r) => keysMeet(r.handle, handle))) return 'his claimed paid page';
+  return null;
+}
+
+/**
+ * Feeds filed on a creator by a search, discovery or an aggregator page although their own handle (or page URL) is not his.
+ * `reattachTo` is set only when the account's owner is corroborated (he has it himself: see holdsAccount); everything else is for
+ * review and stays where it is (a stage-name account is often his although the handle is not).
+ */
 function foreignFeedList() {
   const rows = db.prepare(`SELECT f.id, f.platform, f.kind, f.target, f.origin, f.creator_id AS creatorId FROM feeds f
     WHERE f.creator_id IS NOT NULL`).all();
@@ -150,7 +209,9 @@ function foreignFeedList() {
     const his = agg ? aggregators.urlNames(creator, f.target, known) : samePerson(creator, handle, known);
     if (his) continue;
     const owner = handle ? ownerOf(handle, f.creatorId) : null;
-    out.push({ ...f, creatorHandle: creator.handle, handle, aggregator: agg, reattachTo: owner, reattachHandle: owner ? repo.creators.get(owner).handle : null });
+    const proof = owner ? holdsAccount(owner, handle) : null;
+    out.push({ ...f, creatorHandle: creator.handle, handle, aggregator: agg, reattachTo: proof ? owner : null, reattachHandle: proof ? repo.creators.get(owner).handle : null,
+      proof, candidate: owner && !proof ? repo.creators.get(owner).handle : null });
   }
   return out;
 }
@@ -160,14 +221,15 @@ async function repairFeeds({ apply = false, actor = 'identity-repair', limit = 2
   const list = foreignFeedList();
   const counts = list.length ? new Map(db.prepare(`SELECT feed_id, COUNT(*) AS n FROM media WHERE feed_id IN (${list.map(() => '?').join(',')}) GROUP BY feed_id`).all(...list.map((f) => f.id)).map((r) => [r.feed_id, r.n])) : new Map();
   const items = list.map((f) => ({ ...f, mediaCount: counts.get(f.id) || 0 }));
-  const out = { apply, foreign: items.length, reattach: items.filter((f) => f.reattachTo).length, detach: items.filter((f) => !f.reattachTo).length,
-    mediaMoved: 0, applied: 0, items: items.slice(0, 200) };
+  const refile = items.filter((f) => f.reattachTo);
+  const out = { apply, foreign: items.length, reattach: refile.length, review: items.length - refile.length, mediaMoved: 0, applied: 0,
+    items: refile.slice(0, 200), reviewItems: items.filter((f) => !f.reattachTo).slice(0, 200) };
   if (apply) {
-    for (const f of items.slice(0, limit)) {
-      const r = repo.media.reassignFeed(f.id, f.reattachTo || null, { actor });
+    for (const f of refile.slice(0, limit)) {
+      // only ever onto a creator (never onto none): published media is never left without its man
+      const r = repo.media.reassignFeed(f.id, f.reattachTo, { actor });
       if (r) { out.applied++; out.mediaMoved += r.moved; }
-      repo.logAction('feed', f.id, f.reattachTo ? 'identity-reattach' : 'identity-detach',
-        `${f.platform}:${String(f.target).slice(0, 80)} was on ${f.creatorHandle}${f.reattachTo ? `, now on ${f.reattachHandle}` : ', now on no creator'} (handle is not his)`, actor);
+      repo.logAction('feed', f.id, 'identity-reattach', `${f.platform}:${String(f.target).slice(0, 80)} was on ${f.creatorHandle}, now on ${f.reattachHandle} (${f.proof})`, actor);
       await turn();
     }
   }
@@ -176,48 +238,43 @@ async function repairFeeds({ apply = false, actor = 'identity-repair', limit = 2
 
 /* ------------------------------------------------------------------- links */
 
-/** Which of this creator's links are not his, and why. */
-function foreignLinks(c, known) {
-  const links = parse(c.links, []);
-  const foreign = []; const keep = [];
-  const handleLinks = [];
-  for (const l of Array.isArray(links) ? links : []) {
+/**
+ * Which of this creator's links are not his. Removed only on positive evidence: a link into an aggregator site, or an account another
+ * creator holds himself (a trusted feed of it, a confirmed name, a claimed lead) that this creator does not. A link that merely does
+ * not carry his name (his stage-name OnlyFans, his Fansly under another handle, a wishlist) is listed for review, never removed.
+ */
+function foreignLinks(c) {
+  const remove = []; const review = [];
+  const parsed = parse(c.links, []);
+  for (const l of Array.isArray(parsed) ? parsed : []) {
     if (!l) continue;
-    if (l.url && aggregators.isAggregator(l.url)) { foreign.push({ link: l, kind: 'aggregator', why: 'aggregator site' }); continue; }
+    if (l.url && aggregators.isAggregator(l.url)) { remove.push({ link: l, kind: 'aggregator', why: 'aggregator site' }); continue; }
     const h = aggregators.linkHandle(l);
-    if (h && !samePerson(c, h, known)) {
-      const owner = ownerOf(h, c.id);
-      if (owner) { foreign.push({ link: l, kind: 'other-creator', why: `belongs to ${repo.creators.get(owner).handle}` }); continue; }
-      handleLinks.push({ link: l, handle: h });
-      continue;
-    }
-    keep.push({ link: l, handle: h });
+    if (!h) continue;
+    const owner = ownerOf(h, c.id);
+    if (!owner) continue;
+    const theirs = holdsAccount(owner, h);
+    if (theirs && !holdsAccount(c.id, h)) { remove.push({ link: l, kind: 'other-creator', why: `belongs to ${repo.creators.get(owner).handle} (${theirs})` }); continue; }
+    review.push({ link: l, kind: 'shared-name', why: `${repo.creators.get(owner).handle} also goes by ${h}` });
   }
-  // A page dump: three or more links in other people's names (a man has one or two paid pages, not a list of women's): all of them
-  // go, and so do the nameless links that came with them (wishlists, shop pages).
-  if (handleLinks.length >= 3) {
-    for (const x of handleLinks) foreign.push({ link: x.link, kind: 'page-dump', why: `not his handle (${x.handle}); ${handleLinks.length} such links: a page dump` });
-    for (const x of keep.filter((k) => !k.handle)) foreign.push({ link: x.link, kind: 'page-dump-nameless', why: 'names nobody, came with a page dump' });
-  }
-  return foreign;
+  return { remove, review };
 }
 
 function repairLinks({ apply = false, actor = 'identity-repair' } = {}) {
   resetIndex();
-  const out = { apply, creators: 0, links: 0, byReason: {}, items: [] };
+  const out = { apply, creators: 0, links: 0, byReason: {}, review: 0, items: [], reviewItems: [] };
   for (const c of db.prepare("SELECT id, handle, display_name, links FROM creators WHERE links IS NOT NULL AND links != '[]'").all()) {
-    const { known } = anchors(c.id);
-    const foreign = foreignLinks(c, known);
-    if (!foreign.length) continue;
-    out.creators++; out.links += foreign.length;
-    for (const f of foreign) out.byReason[f.kind] = (out.byReason[f.kind] || 0) + 1;
-    if (out.items.length < 100) out.items.push({ id: c.id, handle: c.handle, remove: foreign.map((f) => ({ url: f.link.url || null, handle: f.link.handle || null, why: f.why })) });
+    const { remove, review } = foreignLinks(c);
+    if (review.length) { out.review += review.length; if (out.reviewItems.length < 100) out.reviewItems.push({ id: c.id, handle: c.handle, links: review.map((f) => ({ url: f.link.url || null, why: f.why })) }); }
+    if (!remove.length) continue;
+    out.creators++; out.links += remove.length;
+    for (const f of remove) out.byReason[f.kind] = (out.byReason[f.kind] || 0) + 1;
+    if (out.items.length < 100) out.items.push({ id: c.id, handle: c.handle, remove: remove.map((f) => ({ url: f.link.url || null, handle: f.link.handle || null, why: f.why })) });
     if (apply) {
-      const drop = new Set(foreign.map((f) => f.link));
-      const all = parse(c.links, []);
-      const left = all.filter((l) => !drop.has(l) && !foreign.some((f) => f.link.url && l && l.url === f.link.url));
+      const gone = new Set(remove.map((f) => String(f.link.url || f.link.handle).toLowerCase()));
+      const left = parse(c.links, []).filter((l) => l && !gone.has(String(l.url || l.handle).toLowerCase()));
       repo.creators.update(c.id, { links: left });
-      repo.logAction('creator', c.id, 'identity-prune-links', foreign.map((f) => `${f.link.url || f.link.handle} (${f.why})`).join('; ').slice(0, 900), actor);
+      repo.logAction('creator', c.id, 'identity-prune-links', remove.map((f) => `${f.link.url || f.link.handle} (${f.why})`).join('; ').slice(0, 900), actor);
     }
   }
   return out;
@@ -227,7 +284,8 @@ function repairLinks({ apply = false, actor = 'identity-repair' } = {}) {
 
 const MERGE_SUFFIX = ['official', 'onlyfans', 'fansly', 'justforfans', 'jff', 'of', 'vip', 'free', 'xxx', 'real', 'nsfw'];
 const MERGE_PREFIX = ['the', 'real', 'its', 'im', 'official'];
-/** The key one man's handles share across platforms: compact, platform filler stripped ("bigggwild OnlyFans Official" -> bigggwild). */
+const MIN_KEY = 7;
+/** The key one man's handles share across platforms: compact, platform filler stripped ("bigggwild OnlyFans Official" -> bigggwild). Digits stay. */
 function mergeKey(handle) {
   let s = compact(handle); let prev;
   do {
@@ -235,20 +293,7 @@ function mergeKey(handle) {
     for (const w of MERGE_SUFFIX) if (s.endsWith(w) && s.length - w.length >= 5) s = s.slice(0, -w.length);
     for (const w of MERGE_PREFIX) if (s.startsWith(w) && s.length - w.length >= 5) s = s.slice(w.length);
   } while (s !== prev);
-  return stemHandle(s);
-}
-
-/** His paid pages (service:handle), from his links. */
-function paidPages(c) {
-  const out = new Set();
-  for (const l of parse(c.links, [])) {
-    if (!l) continue;
-    const svc = l.service && paid.SERVICES[l.service] ? l.service : paid.serviceOf(l.url || '');
-    if (!svc || !['OnlyFans', 'Fansly', 'JustFor.Fans'].includes(svc)) continue;
-    const h = l.handle || paid.paidHandle(svc, l.url || '');
-    if (h && paid.validHandle(h)) out.add(`${svc}:${String(h).toLowerCase()}`);
-  }
-  return out;
+  return s;
 }
 
 /** Why these two rows must not be merged automatically, or null. */
@@ -256,6 +301,7 @@ function conflict(a, b) {
   const [x, y] = a.id < b.id ? [a.id, b.id] : [b.id, a.id];
   const link = db.prepare('SELECT status FROM identity_links WHERE a_id = ? AND b_id = ?').get(x, y);
   if (link && link.status === 'rejected') return 'marked different people';
+  if (digitsOnly(a.handle, b.handle)) return `handles differ only in digits (${a.handle} / ${b.handle})`;
   const pa = paidPages(a); const pb = paidPages(b);
   if (pa.size && pb.size && ![...pa].some((p) => pb.has(p))) return `distinct paid pages (${[...pa][0]} / ${[...pb][0]})`;
   return null;
@@ -263,7 +309,7 @@ function conflict(a, b) {
 
 function platformsOf(id) { return db.prepare('SELECT DISTINCT platform FROM feeds WHERE creator_id = ?').all(id).map((r) => r.platform); }
 
-/** Strong pending pairs: the same paid page, or each links the other from his own bio. Junk evidence does not count. */
+/** Strong pending pairs: the same paid page (valid handle), or each links the other from his own bio. */
 function strongPairs() {
   const out = [];
   for (const r of db.prepare("SELECT * FROM identity_links WHERE status = 'pending'").all()) {
@@ -277,41 +323,41 @@ function strongPairs() {
 }
 
 /**
- * The merges due. Same-handle groups of 2-4 rows (more is a common name) on 2+ platforms, and strong pending pairs; joined into
- * clusters. Blocked rows never take part (nothing merges into a blocked creator, and a blocked one is not folded into a live one);
- * a hidden row is reported, not merged (folding it in would publish what was hidden: unhide first, the user decides).
+ * The merges due. A same-handle-key group (2-4 rows, on 2+ platforms, key of MIN_KEY+ letters) gives a pair only with corroboration;
+ * a strong pending pair is corroboration itself. Blocked rows never take part; a hidden row is reported, not merged. Pairs join into
+ * clusters, and a cluster with a conflict between ANY two of its rows (not only against the kept one) is not merged at all.
  */
 function plan() {
   const rows = db.prepare("SELECT id, handle, display_name, status, media_count, links FROM creators WHERE status != 'blocked'").all();
   const byId = new Map(rows.map((r) => [r.id, r]));
-  const parent = new Map(); const why = new Map();
+  const parent = new Map(); const why = [];
   const find = (x) => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
   const add = (x) => { if (!parent.has(x)) parent.set(x, x); };
-  const union = (x, y, reason) => { add(x); add(y); const a = find(x); const b = find(y); if (a !== b) parent.set(a, b); why.set(`${x}|${y}`, reason); };
-  const skipped = { hidden: [], conflict: [], commonName: 0 };
+  const union = (x, y, reason) => { add(x); add(y); const a = find(x); const b = find(y); if (a !== b) parent.set(a, b); why.push([x, y, reason]); };
+  const skipped = { hidden: [], conflict: [], commonName: 0, uncorroborated: 0, clusterConflict: [] };
+  const consider = (a, b, reason) => {
+    if (a.status !== 'active' || b.status !== 'active') { skipped.hidden.push({ key: reason, a: a.handle, aStatus: a.status, b: b.handle, bStatus: b.status }); return; }
+    const c = conflict(a, b);
+    if (c) { skipped.conflict.push({ a: a.handle, b: b.handle, why: c }); return; }
+    union(a.id, b.id, reason);
+  };
 
   const byKey = new Map();
-  for (const r of rows) { const k = mergeKey(r.handle); if (k.length >= 6) { if (!byKey.has(k)) byKey.set(k, []); byKey.get(k).push(r); } }
+  for (const r of rows) { const k = mergeKey(r.handle); if (k.length >= MIN_KEY) { if (!byKey.has(k)) byKey.set(k, []); byKey.get(k).push(r); } }
   for (const [key, list] of byKey) {
     if (list.length < 2) continue;
     if (list.length > 4) { skipped.commonName++; continue; }
     const plats = new Set(list.flatMap((r) => platformsOf(r.id)));
     if (plats.size < 2) continue;
     for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
-      const a = list[i]; const b = list[j];
-      if (a.status !== 'active' || b.status !== 'active') { skipped.hidden.push({ key, a: a.handle, aStatus: a.status, b: b.handle, bStatus: b.status }); continue; }
-      const c = conflict(a, b);
-      if (c) { skipped.conflict.push({ a: a.handle, b: b.handle, why: c }); continue; }
-      union(a.id, b.id, `same handle "${key}" on ${[...plats].join(', ')}`);
+      const proof = corroborated(list[i], list[j]);
+      if (!proof) { skipped.uncorroborated++; continue; }
+      consider(list[i], list[j], `same handle "${key}" + ${proof}`);
     }
   }
   for (const p of strongPairs()) {
     const a = byId.get(p.a); const b = byId.get(p.b);
-    if (!a || !b) continue;
-    if (a.status !== 'active' || b.status !== 'active') { skipped.hidden.push({ key: p.why, a: a.handle, aStatus: a.status, b: b.handle, bStatus: b.status }); continue; }
-    const c = conflict(a, b);
-    if (c) { skipped.conflict.push({ a: a.handle, b: b.handle, why: c }); continue; }
-    union(a.id, b.id, p.why);
+    if (a && b) consider(a, b, p.why);
   }
   const clusters = new Map();
   for (const id of parent.keys()) { const r = find(id); if (!clusters.has(r)) clusters.set(r, []); clusters.get(r).push(id); }
@@ -319,14 +365,12 @@ function plan() {
   for (const ids of clusters.values()) {
     if (ids.length < 2) continue;
     const members = ids.map((id) => byId.get(id)).sort((x, y) => (y.media_count || 0) - (x.media_count || 0) || (x.id < y.id ? -1 : 1));
-    // one cluster must not hold two distinct paid identities either (A~B and B~C can join A and C)
+    let bad = null;
+    for (let i = 0; i < members.length && !bad; i++) for (let j = i + 1; j < members.length && !bad; j++) { const c = conflict(members[i], members[j]); if (c) bad = c; }
+    if (bad) { skipped.clusterConflict.push({ rows: members.map((m) => m.handle), why: bad }); continue; }
     const keep = members[0];
-    const gone = members.slice(1).filter((m) => !conflict(keep, m));
-    if (!gone.length) continue;
-    const evidence = [];
-    for (const [k, v] of why) { const [x, y] = k.split('|'); if (ids.includes(x) && ids.includes(y)) evidence.push(v); }
-    merges.push({ keep: { id: keep.id, handle: keep.handle, media: keep.media_count || 0 }, gone: gone.map((g) => ({ id: g.id, handle: g.handle, media: g.media_count || 0 })),
-      media: members.reduce((s, m) => s + (m.media_count || 0), 0), evidence: [...new Set(evidence)] });
+    merges.push({ keep: { id: keep.id, handle: keep.handle, media: keep.media_count || 0 }, gone: members.slice(1).map((g) => ({ id: g.id, handle: g.handle, media: g.media_count || 0 })),
+      media: members.reduce((s, m) => s + (m.media_count || 0), 0), evidence: [...new Set(why.filter(([x, y]) => ids.includes(x) && ids.includes(y)).map((w) => w[2]))] });
   }
   merges.sort((a, b) => b.media - a.media);
   return { merges, skipped };
@@ -335,13 +379,14 @@ function plan() {
 async function autoMerge({ apply = false, limit = 500, actor = 'identity-auto' } = {}) {
   const { merges, skipped } = plan();
   const out = { apply, clusters: merges.length, rowsFolded: merges.reduce((s, m) => s + m.gone.length, 0), skippedHidden: skipped.hidden.length,
-    skippedConflict: skipped.conflict.length, skippedCommonName: skipped.commonName, top: merges.slice(0, 50),
-    hiddenExamples: skipped.hidden.slice(0, 20), conflictExamples: skipped.conflict.slice(0, 20), merged: 0 };
+    skippedConflict: skipped.conflict.length + skipped.clusterConflict.length, skippedUncorroborated: skipped.uncorroborated, skippedCommonName: skipped.commonName,
+    top: merges.slice(0, 50), hiddenExamples: skipped.hidden.slice(0, 20), conflictExamples: [...skipped.clusterConflict, ...skipped.conflict].slice(0, 20), merged: 0, snapshots: [] };
   if (apply) {
     for (const m of merges.slice(0, limit)) {
       for (const g of m.gone) {
         if (!repo.creators.get(g.id) || !repo.creators.get(m.keep.id)) continue;
-        if (identity.mergeCreators(m.keep.id, g.id, { actor, reason: `auto: ${m.evidence.join('; ').slice(0, 300)}` })) out.merged++;
+        const r = identity.mergeCreators(m.keep.id, g.id, { actor, reason: `auto: ${m.evidence.join('; ').slice(0, 300)}` });
+        if (r) { out.merged++; out.snapshots.push(r.snapshotId); }
         await turn(); // one merge per turn of the loop
       }
     }
@@ -351,24 +396,28 @@ async function autoMerge({ apply = false, limit = 500, actor = 'identity-auto' }
 
 /* ------------------------------------------------------------------ hidden */
 
-const LAST_ACTION = "(SELECT action FROM moderation_actions a WHERE a.target_type = 'creator' AND a.target_id = c.id ORDER BY a.id DESC LIMIT 1)";
+// The last action that set or changed a creator's visibility (identity repairs, merges and searches log actions too: they are not it).
+const STATUS_ACTION = "(a.action LIKE '%hide%' OR a.action LIKE '%block%' OR a.action LIKE '%restore%' OR a.action LIKE 'admin-%' OR a.action LIKE 'safety%' OR a.action LIKE 'report%')";
+const LAST_ACTION = `(SELECT action FROM moderation_actions a WHERE a.target_type = 'creator' AND a.target_id = c.id AND ${STATUS_ACTION} ORDER BY a.id DESC LIMIT 1)`;
+// an underage or non-consensual report about him or any of his posts, in any state (open, resolved, dismissed), keeps him hidden
+const SAFETY_REPORTS = `(SELECT COUNT(*) FROM reports r WHERE r.kind IN ('underage', 'nonconsensual') AND (r.creator_id = c.id OR r.media_id IN (SELECT id FROM media WHERE creator_id = c.id)))`;
+const OPEN_REPORTS = "(SELECT COUNT(*) FROM reports r WHERE r.creator_id = c.id AND r.status = 'open')";
+const HIDDEN_SQL = `SELECT c.id, c.handle, c.media_count AS media, ${LAST_ACTION} AS last, ${OPEN_REPORTS} AS openReports, ${SAFETY_REPORTS} AS safetyReports
+  FROM creators c WHERE c.status = 'hidden' ORDER BY c.media_count DESC`;
+/** Hidden by no recorded status action, or last by the body filter; never with an open report or any underage / non-consensual report. */
+const eligible = (r) => !r.openReports && !r.safetyReports && (!r.last || r.last === 'physique-hide');
+
 function hiddenReport({ limit = 50 } = {}) {
-  const rows = db.prepare(`SELECT c.id, c.handle, c.media_count AS media, ${LAST_ACTION} AS last,
-      (SELECT COUNT(*) FROM reports r WHERE r.creator_id = c.id AND r.status = 'open') AS openReports
-    FROM creators c WHERE c.status = 'hidden' ORDER BY c.media_count DESC`).all();
+  const rows = db.prepare(HIDDEN_SQL).all();
   const byAction = {};
   for (const r of rows) { const k = r.last || 'none'; byAction[k] = (byAction[k] || 0) + 1; }
   const unhideable = rows.filter(eligible);
-  return { hidden: rows.length, byAction, openReports: rows.filter((r) => r.openReports).length, unhideable: unhideable.length,
+  return { hidden: rows.length, byAction, openReports: rows.filter((r) => r.openReports).length, safetyReports: rows.filter((r) => r.safetyReports).length, unhideable: unhideable.length,
     unhideableMedia: unhideable.reduce((s, r) => s + (r.media || 0), 0), top: rows.slice(0, limit).map((r) => ({ ...r, last: r.last || 'none', unhideable: eligible(r) })) };
 }
-/** Hidden by no recorded action, or by the body filter; never with an open report. */
-const eligible = (r) => !r.openReports && (!r.last || r.last === 'physique-hide');
 
 function unhide({ apply = false, actor = 'identity-repair', limit = 1000 } = {}) {
-  const rows = db.prepare(`SELECT c.id, c.handle, c.media_count AS media, ${LAST_ACTION} AS last,
-      (SELECT COUNT(*) FROM reports r WHERE r.creator_id = c.id AND r.status = 'open') AS openReports
-    FROM creators c WHERE c.status = 'hidden' ORDER BY c.media_count DESC`).all().filter(eligible);
+  const rows = db.prepare(HIDDEN_SQL).all().filter(eligible);
   const out = { apply, creators: rows.length, media: rows.reduce((s, r) => s + (r.media || 0), 0), noAction: rows.filter((r) => !r.last).length,
     bodyFilter: rows.filter((r) => r.last === 'physique-hide').length, unhidden: 0, items: rows.slice(0, 100).map((r) => ({ id: r.id, handle: r.handle, media: r.media, last: r.last || 'none' })) };
   if (apply) {
@@ -383,4 +432,4 @@ function unhide({ apply = false, actor = 'identity-repair', limit = 1000 } = {})
   return out;
 }
 
-module.exports = { _index: handleIndex, junkEvidence, cleanQueue, repairFeeds, foreignFeedList, repairLinks, foreignLinks, autoMerge, plan, mergeKey, conflict, hiddenReport, unhide, anchors, ownerOf };
+module.exports = { _index: handleIndex, junkEvidence, cleanQueue, repairFeeds, foreignFeedList, repairLinks, foreignLinks, autoMerge, plan, mergeKey, conflict, corroborated, digitsOnly, hiddenReport, unhide, anchors, ownerOf, holdsAccount };

@@ -248,14 +248,128 @@ function mergeCreators(keepId, goneId, { actor = 'admin', reason = 'merge', link
       q.updLink.run(JSON.stringify(ev), strengthOf(ev, a, b), r.id);
     }
   }
+  const snapId = snapshotMerge(keepId, goneId, { actor, reason, linkId: row.id }); // taken before anything of the fold is written
   addAlias(keepId, gone.handle, { kind: 'handle', source: 'merge' });
   if (gone.display_name) addAlias(keepId, gone.display_name, { kind: 'name', source: 'merge' });
   const out = repo.creators.merge(keepId, goneId);
+  if (!out) db.prepare('DELETE FROM merge_snapshots WHERE id = ?').run(snapId);
   if (out) {
-    repo.logAction('creator', keepId, 'merge', `${gone.handle} folded in (${reason})`, actor);
+    out.snapshotId = snapId;
+    repo.logAction('creator', keepId, 'merge', `${gone.handle} folded in (${reason}; undo: POST /api/admin/identity/unmerge/${snapId})`, actor);
     events.log('INFO', `Merged creator ${gone.handle} into ${keep.handle} (${actor === 'identity' ? 'same accounts and name' : actor})`);
   }
   return out;
+}
+
+/* ------------------------------------------------------- merge snapshots + undo */
+/**
+ * A merge deletes the folded row. Before it does, everything needed to rebuild it is kept: the row itself, the kept row as it was,
+ * the ids of the feeds, media and paid leads that move, the folded row's aliases, the kept row's alias keys before, and the push
+ * subscriptions that followed the folded row. unmerge() puts them back.
+ */
+let snapReady = false;
+function ensureSnapshots() {
+  if (snapReady) return;
+  db.exec(`CREATE TABLE IF NOT EXISTS merge_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, keep_id TEXT NOT NULL, gone_id TEXT NOT NULL, link_id INTEGER,
+      gone_row TEXT NOT NULL, keep_row TEXT NOT NULL, feed_ids TEXT NOT NULL, media_ids TEXT NOT NULL, lead_handles TEXT NOT NULL,
+      gone_aliases TEXT NOT NULL, keep_alias_norms TEXT NOT NULL, push_subs TEXT NOT NULL,
+      actor TEXT, reason TEXT, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), undone_at TEXT, undone_by TEXT)`);
+  db.exec('CREATE INDEX IF NOT EXISTS ix_merge_snapshots_gone ON merge_snapshots(gone_id)');
+  snapReady = true;
+}
+function snapshotMerge(keepId, goneId, { actor = null, reason = null, linkId = null } = {}) {
+  ensureSnapshots();
+  const ids = (sql) => db.prepare(sql).all(goneId).map((r) => r.id);
+  const subs = db.prepare('SELECT id, creator_ids FROM push_subscriptions WHERE creator_ids LIKE ?').all(`%${goneId}%`)
+    .map((r) => { let list = []; try { list = JSON.parse(r.creator_ids || '[]'); } catch { list = []; } return { id: r.id, hadKeep: list.includes(keepId) }; });
+  return db.prepare(`INSERT INTO merge_snapshots (keep_id, gone_id, link_id, gone_row, keep_row, feed_ids, media_ids, lead_handles, gone_aliases, keep_alias_norms, push_subs, actor, reason)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(keepId, goneId, linkId,
+    JSON.stringify(db.prepare('SELECT * FROM creators WHERE id = ?').get(goneId)), JSON.stringify(db.prepare('SELECT * FROM creators WHERE id = ?').get(keepId)),
+    JSON.stringify(ids('SELECT id FROM feeds WHERE creator_id = ?')), JSON.stringify(ids('SELECT id FROM media WHERE creator_id = ?')),
+    JSON.stringify(db.prepare('SELECT handle FROM onlyfans_leads WHERE creator_id = ?').all(goneId).map((r) => r.handle)),
+    JSON.stringify(db.prepare('SELECT * FROM creator_aliases WHERE creator_id = ?').all(goneId)),
+    JSON.stringify(db.prepare('SELECT norm FROM creator_aliases WHERE creator_id = ?').all(keepId).map((r) => r.norm)),
+    JSON.stringify(subs), actor, reason ? String(reason).slice(0, 500) : null).lastInsertRowid;
+}
+
+function snapshots({ limit = 50, creatorId = null } = {}) {
+  ensureSnapshots();
+  const rows = creatorId
+    ? db.prepare('SELECT * FROM merge_snapshots WHERE keep_id = ? OR gone_id = ? ORDER BY id DESC LIMIT ?').all(creatorId, creatorId, limit)
+    : db.prepare('SELECT * FROM merge_snapshots ORDER BY id DESC LIMIT ?').all(limit);
+  return rows.map((r) => { const g = JSON.parse(r.gone_row); const k = JSON.parse(r.keep_row);
+    return { id: r.id, keep: { id: r.keep_id, handle: k.handle }, gone: { id: r.gone_id, handle: g.handle }, media: JSON.parse(r.media_ids).length, feeds: JSON.parse(r.feed_ids).length,
+      actor: r.actor, reason: r.reason, createdAt: r.created_at, undoneAt: r.undone_at, undo: r.undone_at ? null : { method: 'POST', path: `/api/admin/identity/unmerge/${r.id}` } }; });
+}
+
+/**
+ * Undo one merge: the folded row comes back with its own feeds, media, paid leads, aliases and followers; what the merge added to
+ * the kept row (its links, the names it learned, blanks it filled) is taken off again; the pair is recorded as different people so
+ * no automatic pass merges it again. Rows that moved on since (re-filed by hand, deleted) are left where they are.
+ * @returns {{ok: true, restored: string, media: number, feeds: number}|{error: string}}
+ */
+function unmerge(snapshotId, { actor = 'admin' } = {}) {
+  ensureSnapshots();
+  const r = db.prepare('SELECT * FROM merge_snapshots WHERE id = ?').get(Number(snapshotId));
+  if (!r) return { error: 'No such merge snapshot', status: 404 };
+  if (r.undone_at) return { error: `Already undone at ${r.undone_at}`, status: 409 };
+  if (repo.creators.get(r.gone_id)) return { error: 'That creator row exists again', status: 409 };
+  const keep = db.prepare('SELECT * FROM creators WHERE id = ?').get(r.keep_id);
+  const gone = JSON.parse(r.gone_row); const keepBefore = JSON.parse(r.keep_row);
+  const cols = db.prepare('PRAGMA table_info(creators)').all().map((c) => c.name).filter((c) => Object.prototype.hasOwnProperty.call(gone, c));
+  const moveBack = (table, ids, key = 'id') => {
+    let n = 0; const st = db.prepare(`UPDATE ${table} SET creator_id = ? WHERE ${key} = ? AND creator_id IS ?`);
+    for (const id of ids) n += st.run(r.gone_id, id, r.keep_id).changes;
+    return n;
+  };
+  const out = db.transaction(() => {
+    db.prepare(`INSERT INTO creators (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...cols.map((c) => gone[c]));
+    const media = moveBack('media', JSON.parse(r.media_ids));
+    const feeds = moveBack('feeds', JSON.parse(r.feed_ids));
+    moveBack('onlyfans_leads', JSON.parse(r.lead_handles), 'handle');
+    // aliases: the folded row's own come back; the keys the merge added to the kept row go
+    const keepNorms = new Set(JSON.parse(r.keep_alias_norms));
+    const goneAliases = JSON.parse(r.gone_aliases);
+    const added = new Set([...goneAliases.map((a) => a.norm), normAlias(gone.handle), gone.display_name ? normAlias(gone.display_name) : null].filter(Boolean));
+    for (const norm of added) if (!keepNorms.has(norm)) q.delAlias.run(r.keep_id, norm);
+    for (const a of goneAliases) {
+      const c = Object.keys(a);
+      db.prepare(`INSERT OR IGNORE INTO creator_aliases (${c.join(', ')}) VALUES (${c.map(() => '?').join(', ')})`).run(...c.map((k) => (k === 'creator_id' ? r.gone_id : a[k])));
+    }
+    if (keep) {
+      // the kept row: links that came only from the folded row go; blanks the merge filled from it are blank again
+      const parseL = (s) => { try { return JSON.parse(s || '[]'); } catch { return []; } };
+      const key = (l) => String((l && (l.url || l.handle)) || '').toLowerCase();
+      const before = new Set(parseL(keepBefore.links).map(key)); const fromGone = new Set(parseL(gone.links).map(key));
+      const links = parseL(keep.links).filter((l) => before.has(key(l)) || !fromGone.has(key(l)));
+      const patch = { links };
+      for (const [col, k] of [['display_name', 'displayName'], ['bio', 'bio'], ['avatar_url', 'avatarUrl'], ['banner_url', 'bannerUrl']]) {
+        if (keep[col] !== keepBefore[col] && keep[col] === gone[col]) patch[k] = keepBefore[col];
+      }
+      repo.creators.update(r.keep_id, patch);
+    }
+    for (const sub of JSON.parse(r.push_subs)) {
+      const row = db.prepare('SELECT creator_ids FROM push_subscriptions WHERE id = ?').get(sub.id);
+      if (!row) continue;
+      let list = []; try { list = JSON.parse(row.creator_ids || '[]'); } catch { list = []; }
+      if (!sub.hadKeep) list = list.filter((x) => x !== r.keep_id);
+      if (!list.includes(r.gone_id)) list.push(r.gone_id);
+      db.prepare('UPDATE push_subscriptions SET creator_ids = ? WHERE id = ?').run(JSON.stringify(list), sub.id);
+    }
+    // "different people" from now on: no automatic pass folds them again
+    const [a, b] = pair(r.keep_id, r.gone_id);
+    const link = q.link.get(a, b);
+    if (link) db.prepare("UPDATE identity_links SET status = 'rejected', decided_by = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(actor, link.id);
+    else q.decide.run('rejected', actor, q.insLink.run(a, b, a === r.keep_id ? keepBefore.handle : gone.handle, a === r.keep_id ? gone.handle : keepBefore.handle, JSON.stringify([{ type: 'admin', from: null, detail: 'unmerged' }]), 0).lastInsertRowid);
+    db.prepare("UPDATE merge_snapshots SET undone_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), undone_by = ? WHERE id = ?").run(actor, r.id);
+    return { media, feeds };
+  })();
+  repo.creators.refreshStats(r.gone_id);
+  if (keep) repo.creators.refreshStats(r.keep_id);
+  repo.logAction('creator', r.gone_id, 'unmerge', `restored from ${keepBefore.handle} (merge snapshot #${r.id}); ${out.media} media, ${out.feeds} feeds`, actor);
+  events.log('INFO', `Unmerged ${gone.handle} from ${keepBefore.handle}`);
+  return { ok: true, restored: r.gone_id, ...out };
 }
 
 function reject(linkId, actor = 'admin') {
@@ -434,4 +548,4 @@ function counts() {
   return o;
 }
 
-module.exports = { sameHandleGroups, dismissSameHandle, addAlias, aliasesOf, removeAlias, findByAlias, bioAliases, noteLink, noteProfile, settle, merge, mergeCreators, reject, scan, queue, counts, pageKey, WEIGHTS, AUTO_STRENGTH };
+module.exports = { snapshots, unmerge, ensureSnapshots, sameHandleGroups, dismissSameHandle, addAlias, aliasesOf, removeAlias, findByAlias, bioAliases, noteLink, noteProfile, settle, merge, mergeCreators, reject, scan, queue, counts, pageKey, WEIGHTS, AUTO_STRENGTH };

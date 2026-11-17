@@ -68,6 +68,8 @@ POST /identity/repair/auto-merge
 GET /creators/hidden/unhide
 POST /creators/hidden/unhide
 GET /creators/hidden/report
+GET /identity/snapshots
+POST /identity/unmerge/:snapshotId
 POST /creators/normalize-handles
 POST /creators/:id/block
 POST /creators/:id/restore
