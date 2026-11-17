@@ -77,7 +77,7 @@ function normal(h) {
 }
 
 /** Is this a usable paid-page handle (the same rules the URL parsers apply)? For callers re-checking stored evidence. */
-function validHandle(h) { return !!normal(h) && plausibleHandle(normal(h)); }
+function validHandle(h) { return !!normal(h); } // whole-handle rules only: "my-own-page" is a real handle, "media" / "wallet-topup.php" are not
 
 /** fansly.com/<name> (plus /<name>/posts style deep links) → name. */
 function fanslyHandle(input) {

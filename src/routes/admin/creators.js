@@ -55,6 +55,11 @@ for (const m of ['get', 'post']) {
   router[m]('/identity/repair/auto-merge', run((req) => repair().autoMerge({ apply: wantApply(req), limit: int(req.query.limit, 1, 5000, 500) })));
   router[m]('/creators/hidden/unhide', run((req) => repair().unhide({ apply: wantApply(req), limit: int(req.query.limit, 1, 5000, 1000) })));
 }
+router.get('/identity/snapshots', (req, res) => res.json({ items: identity.snapshots({ limit: int(req.query.limit, 1, 500, 50), creatorId: typeof req.query.creatorId === 'string' ? req.query.creatorId : null }) }));
+router.post('/identity/unmerge/:snapshotId', (req, res) => {
+  const out = identity.unmerge(req.params.snapshotId, { actor: 'admin' });
+  return out.error ? res.status(out.status || 400).json({ error: out.error }) : res.json(out);
+});
 router.get('/creators/hidden/report', (req, res) => res.json(repair().hiddenReport({ limit: int(req.query.limit, 1, 500, 50) })));
 
 router.post('/creators/merge', (req, res) => {
