@@ -152,7 +152,7 @@ function similar(id, limit = 12) {
   const key = `${id}|${limit}|${x.n}`;
   let picked = cache.get(key);
   if (!picked) {
-    const cands = nearest(x, r, Math.min(x.n - 1, limit * 6 + 20));
+    const cands = slice('visual:nearest', () => nearest(x, r, Math.min(x.n - 1, limit * 6 + 20))); // one pass over every vector
     const post = x.posts[r];
     const per = new Map(); const posts = new Set(post ? [post] : []);
     picked = [];

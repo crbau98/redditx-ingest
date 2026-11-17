@@ -73,6 +73,25 @@ describe('chunked build', () => {
   });
 });
 
+describe('blockwatch times iterate()', () => {
+  test('a long iterate() is recorded under its SQL text, also when it is cut short', () => {
+    const bw = require('../src/lib/blockwatch');
+    const Database = require('better-sqlite3'); const d = new Database(':memory:');
+    bw.instrumentDb(d);
+    d.exec('CREATE TABLE t (n INTEGER)'); const ins = d.prepare('INSERT INTO t VALUES (?)'); d.transaction(() => { for (let i = 0; i < 3000; i++) ins.run(i); })();
+    bw.start(); bw.reset();
+    let total = 0;
+    for (const r of d.prepare('SELECT a.n FROM t a, t b WHERE a.n < 400 AND b.n < 400 AND (a.n + b.n) % 9 = 0').iterate()) total += r.n;
+    let k = 0; for (const r of d.prepare('SELECT n FROM t').iterate()) { if (++k > 5) break; void r; }
+    const spin = (ms) => { const e = performance.now() + ms; while (performance.now() < e) { /* hold the window */ } };
+    spin(1);
+    bw._noteBlock(5000);
+    const b = bw.lastBlock();
+    assert.ok(total > 0 && b && b.slices.some((s) => /^sql: SELECT a\.n FROM t a, t b/.test(s.label)), JSON.stringify(b && b.slices));
+    bw.stop(); bw.reset(); d.close();
+  });
+});
+
 describe('production requests never build the index', () => {
   test('similar() answers null (tags stand in) until the boot build is installed, then answers by look', () => {
     const dir = require('fs').mkdtempSync(path.join(os.tmpdir(), 'w14-vis-'));

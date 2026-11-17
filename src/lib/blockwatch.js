@@ -82,7 +82,25 @@ function instrumentDb(db) {
       const orig = st[m];
       if (typeof orig === 'function') st[m] = function timedStatement(...a) { return timed(label, orig, this, a); };
     }
-    return st; // iterate() is a generator: each step is short and it is rare here, so it is left alone
+    // iterate(): the time spent inside the database's steps is summed and recorded once, when the iteration ends (done, return or
+    // throw). Untimed, a whole-table iterate() was a multi-second block with no culprit (the visual index's request-path build).
+    const iter = st.iterate;
+    if (typeof iter === 'function') {
+      st.iterate = function timedIterate(...a) {
+        const it = iter.apply(this, a);
+        let spent = 0; let noted = false;
+        const note = () => { if (!noted) { noted = true; noteSlice(label, spent); } };
+        const step = (m) => (...x) => {
+          const t = performance.now();
+          try { const r = it[m](...x); if (r && r.done) { spent += performance.now() - t; note(); return r; } spent += performance.now() - t; return r; }
+          catch (e) { spent += performance.now() - t; note(); throw e; }
+        };
+        const out = { next: step('next'), return: (v) => { const r = it.return ? it.return(v) : { done: true, value: v }; note(); return r; }, throw: step('throw') };
+        out[Symbol.iterator] = () => out;
+        return out;
+      };
+    }
+    return st;
   };
   for (const m of ['exec', 'pragma']) {
     const orig = db[m];
