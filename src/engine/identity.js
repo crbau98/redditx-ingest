@@ -200,22 +200,55 @@ function settle(creatorId) {
   return id;
 }
 
+/**
+ * The takedown that covers this creator row, or null: by its id or handle (creator), any of its names or paid-page handles (handle),
+ * or any of its links (url / domain). Used so a merge or an unmerge never brings a taken-down person back.
+ */
+function takedownFor(row, aliases = []) {
+  if (!row) return null;
+  const td = require('../lib/takedowns');
+  let links = []; try { links = Array.isArray(row.links) ? row.links : JSON.parse(row.links || '[]'); } catch { links = []; }
+  const names = [row.handle, ...aliases.map((a) => a.alias || a)].filter(Boolean);
+  const paidHandles = links.map((l) => l && (l.handle || (paid.serviceOf(l.url || '') ? paid.paidHandle(paid.serviceOf(l.url || ''), l.url || '') : null))).filter(Boolean);
+  for (const t of repo.takedowns.all()) {
+    const v = String(t.value || '');
+    if (t.kind === 'creator' && [row.id, ...names].some((n) => td.creatorMatches(n, v))) return t;
+    if (t.kind === 'handle' && [...names, ...paidHandles].some((n) => td.handleMatches(n, null, v))) return t;
+    if ((t.kind === 'url' || t.kind === 'domain') && links.some((l) => l && l.url && td.checkUrl(l.url, [t]))) return t;
+  }
+  return null;
+}
+
 /** Fold two linked creators into one: the one with more posts stays. */
-function merge(linkId, { keepId = null, actor = 'admin' } = {}) {
+function merge(linkId, { keepId = null, actor = 'admin', force = false } = {}) {
+  lastRefusal = null;
   const row = q.linkById.get(linkId);
   if (!row || row.status !== 'pending') return null; // decided already: a "different people" verdict is never overridden from the queue
   const A = repo.creators.get(row.a_id); const B = repo.creators.get(row.b_id);
   if (!A || !B) return null;
   const keep = keepId === B.id || (!keepId && (B.media_count || 0) > (A.media_count || 0)) ? B : A;
   const gone = keep === A ? B : A;
-  const out = mergeCreators(keep.id, gone.id, { actor, reason: `identity link #${row.id}`, linkId: row.id });
+  const out = mergeCreators(keep.id, gone.id, { actor, reason: `identity link #${row.id}`, linkId: row.id, force });
+  if (out && out.error) { lastRefusal = out.error; return null; } // refused (blocked / taken down): the queue and auto-merge just move on
   return out;
 }
+let lastRefusal = null;
+/** Why the last merge() was refused, for the admin route's error message. */
+function mergeRefusal() { return lastRefusal; }
 
 /** Merge creator `goneId` into `keepId`, keeping both men's names as aliases. Used by the queue and the admin's Merge button. */
-function mergeCreators(keepId, goneId, { actor = 'admin', reason = 'merge', linkId = null } = {}) {
+function mergeCreators(keepId, goneId, { actor = 'admin', reason = 'merge', linkId = null, force = false } = {}) {
   const keep = repo.creators.get(keepId); const gone = repo.creators.get(goneId);
   if (!keep || !gone || keepId === goneId) return null;
+  // A blocked or taken-down row folded into a live one would put its posts back on the site under the kept name. Only an explicit
+  // force (the admin, knowingly) does that.
+  if (!force) {
+    for (const [role, c] of [['folded', gone], ['kept', keep]]) {
+      if (c.status === 'blocked') return { error: `the ${role} creator ${c.handle} is blocked: restore it first, or pass force=1`, status: 409 };
+      const t = takedownFor(c, aliasesOf(c.id));
+      if (t) return { error: `the ${role} creator ${c.handle} is covered by takedown #${t.id} (${t.kind}:${t.value}): pass force=1 to merge anyway`, status: 409 };
+    }
+  }
   // Record the decision (a direct admin merge gets a row of its own), then move gone's other open links over to keep.
   let row = linkId ? q.linkById.get(linkId) : q.link.get(...pair(keepId, goneId));
   if (!row) {
@@ -255,7 +288,7 @@ function mergeCreators(keepId, goneId, { actor = 'admin', reason = 'merge', link
   if (!out) db.prepare('DELETE FROM merge_snapshots WHERE id = ?').run(snapId);
   if (out) {
     out.snapshotId = snapId;
-    repo.logAction('creator', keepId, 'merge', `${gone.handle} folded in (${reason}; undo: POST /api/admin/identity/unmerge/${snapId})`, actor);
+    repo.logAction('creator', keepId, force ? 'merge-forced' : 'merge', `${gone.handle} folded in (${reason}; undo: POST /api/admin/identity/unmerge/${snapId})`, actor);
     events.log('INFO', `Merged creator ${gone.handle} into ${keep.handle} (${actor === 'identity' ? 'same accounts and name' : actor})`);
   }
   return out;
@@ -309,7 +342,7 @@ function snapshots({ limit = 50, creatorId = null } = {}) {
  * no automatic pass merges it again. Rows that moved on since (re-filed by hand, deleted) are left where they are.
  * @returns {{ok: true, restored: string, media: number, feeds: number}|{error: string}}
  */
-function unmerge(snapshotId, { actor = 'admin' } = {}) {
+function unmerge(snapshotId, { actor = 'admin', force = false } = {}) {
   ensureSnapshots();
   const r = db.prepare('SELECT * FROM merge_snapshots WHERE id = ?').get(Number(snapshotId));
   if (!r) return { error: 'No such merge snapshot', status: 404 };
@@ -317,6 +350,14 @@ function unmerge(snapshotId, { actor = 'admin' } = {}) {
   if (repo.creators.get(r.gone_id)) return { error: 'That creator row exists again', status: 409 };
   const keep = db.prepare('SELECT * FROM creators WHERE id = ?').get(r.keep_id);
   const gone = JSON.parse(r.gone_row); const keepBefore = JSON.parse(r.keep_row);
+  // Never bring a taken-down or blocked person back as a live row: the takedown or the block may have come after the merge.
+  if (keep && keep.status === 'blocked') return { error: `the kept creator ${keep.handle} is blocked now: restoring ${gone.handle} from it would put a blocked person back`, status: 409 };
+  const t = takedownFor(gone, JSON.parse(r.gone_aliases)) || (keep ? takedownFor(keep, aliasesOf(keep.id)) : null);
+  if (t) return { error: `takedown #${t.id} (${t.kind}:${t.value}) covers ${gone.handle} or the row it was folded into`, status: 409 };
+  if (gone.status === 'blocked') return { error: `${gone.handle} was blocked when it was merged`, status: 409 };
+  // another creator has taken that handle since: two rows of one name would be the split this repaired
+  const clash = db.prepare("SELECT id, handle FROM creators WHERE lower(handle) = lower(?) AND id != ? AND status != 'blocked'").get(gone.handle, r.keep_id);
+  if (clash && !force) return { error: `another creator (${clash.id}) now has the handle ${clash.handle}: merge or rename it first, or pass force=1`, status: 409 };
   const cols = db.prepare('PRAGMA table_info(creators)').all().map((c) => c.name).filter((c) => Object.prototype.hasOwnProperty.call(gone, c));
   const moveBack = (table, ids, key = 'id') => {
     let n = 0; const st = db.prepare(`UPDATE ${table} SET creator_id = ? WHERE ${key} = ? AND creator_id IS ?`);
@@ -548,4 +589,4 @@ function counts() {
   return o;
 }
 
-module.exports = { snapshots, unmerge, ensureSnapshots, sameHandleGroups, dismissSameHandle, addAlias, aliasesOf, removeAlias, findByAlias, bioAliases, noteLink, noteProfile, settle, merge, mergeCreators, reject, scan, queue, counts, pageKey, WEIGHTS, AUTO_STRENGTH };
+module.exports = { mergeRefusal, takedownFor, snapshots, unmerge, ensureSnapshots, sameHandleGroups, dismissSameHandle, addAlias, aliasesOf, removeAlias, findByAlias, bioAliases, noteLink, noteProfile, settle, merge, mergeCreators, reject, scan, queue, counts, pageKey, WEIGHTS, AUTO_STRENGTH };

@@ -264,3 +264,48 @@ describe('Crucible gate: no false merges, undo for every merge, own pages kept',
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM media WHERE feed_id = ? AND creator_id = ?').get(fd.id, d).n, 4);
   });
 });
+
+describe('Crucible re-gate: unmerge and merge never bring back a blocked or taken-down person', () => {
+  const pair = (tag) => {
+    const k = repo.creators.create({ handle: `${tag}keep`, origin: 'admin' }).id; feed(k, 'reddit', 'user', `${tag}keep`, 'admin'); media(k, null, 2);
+    const g = repo.creators.create({ handle: `${tag}gone`, origin: 'admin' }).id; feed(g, 'x', 'user', `${tag}gone`, 'admin'); media(g, null, 2);
+    repo.creators.update(g, { links: [{ platform: 'external', url: `https://${tag}gone.example/me` }, paid.paidLink('Fansly', `${tag}gone`)] });
+    const out = identity.mergeCreators(k, g, { actor: 'admin' });
+    return { k, g, snap: out.snapshotId };
+  };
+  test('U5: the kept row was taken down (blocked) after the merge: unmerge refuses with a reason, nothing is restored', () => {
+    const { k, g, snap } = pair('tdk');
+    repo.takedowns.add({ kind: 'creator', value: k, reason: 'asked' });
+    const r = identity.unmerge(snap);
+    assert.equal(r.status, 409); assert.match(r.error, /blocked/);
+    assert.equal(repo.creators.get(g), null);
+  });
+  test('a takedown covering the folded row (its paid page or its link) refuses the unmerge while the kept row is still live', () => {
+    const a = pair('tdp'); repo.takedowns.add({ kind: 'handle', value: 'fansly:tdpgone', reason: 'asked' });
+    assert.notEqual(repo.creators.get(a.k).status, 'active', 'a handle takedown of his paid page blocks the kept row too');
+    const b = pair('tdu'); repo.takedowns.add({ kind: 'domain', value: 'tdugone.example', reason: 'asked' });
+    const r = identity.unmerge(b.snap);
+    assert.equal(r.status, 409); assert.match(r.error, /takedown #\d+ \(domain:tdugone\.example\)/);
+    assert.equal(repo.creators.get(b.g), null);
+  });
+  test('U4: another creator has taken the handle since: refused, force=1 restores', () => {
+    const { g, snap } = pair('rtg');
+    repo.creators.create({ handle: 'rtggone', origin: 'admin' });
+    const r = identity.unmerge(snap);
+    assert.equal(r.status, 409); assert.match(r.error, /now has the handle/);
+    assert.equal(identity.unmerge(snap, { force: true }).ok, true);
+    assert.ok(repo.creators.get(g));
+  });
+  test('N6: merging a blocked or taken-down row is refused unless forced (and the forced merge is audited as such)', () => {
+    const k = repo.creators.create({ handle: 'nsixkeep', origin: 'admin' }).id;
+    const b = repo.creators.create({ handle: 'nsixblocked', origin: 'admin' }).id; repo.creators.block(b, 'test', 'admin');
+    const r = identity.mergeCreators(k, b, { actor: 'admin' });
+    assert.equal(r.status, 409); assert.match(r.error, /blocked/); assert.ok(repo.creators.get(b));
+    const t = repo.creators.create({ handle: 'nsixtd', origin: 'admin' }).id;
+    db.prepare("INSERT INTO takedowns (kind, value, reason) VALUES ('handle', 'nsixtd', 'asked')").run(); // a takedown whose sweep has not reached him yet
+    assert.match(identity.mergeCreators(k, t, { actor: 'admin' }).error, /takedown/);
+    const forced = identity.mergeCreators(k, b, { actor: 'admin', force: true });
+    assert.ok(forced && !forced.error && forced.snapshotId);
+    assert.ok(db.prepare("SELECT 1 FROM moderation_actions WHERE target_id = ? AND action = 'merge-forced'").get(k));
+  });
+});

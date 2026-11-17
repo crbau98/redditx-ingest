@@ -57,7 +57,7 @@ for (const m of ['get', 'post']) {
 }
 router.get('/identity/snapshots', (req, res) => res.json({ items: identity.snapshots({ limit: int(req.query.limit, 1, 500, 50), creatorId: typeof req.query.creatorId === 'string' ? req.query.creatorId : null }) }));
 router.post('/identity/unmerge/:snapshotId', (req, res) => {
-  const out = identity.unmerge(req.params.snapshotId, { actor: 'admin' });
+  const out = identity.unmerge(req.params.snapshotId, { actor: 'admin', force: req.query.force === '1' });
   return out.error ? res.status(out.status || 400).json({ error: out.error }) : res.json(out);
 });
 router.get('/creators/hidden/report', (req, res) => res.json(repair().hiddenReport({ limit: int(req.query.limit, 1, 500, 50) })));
@@ -65,8 +65,9 @@ router.get('/creators/hidden/report', (req, res) => res.json(repair().hiddenRepo
 router.post('/creators/merge', (req, res) => {
   const { keepId, mergeId } = req.body || {};
   if (!keepId || !mergeId) return bad(res, 'keepId and mergeId required');
-  const out = identity.mergeCreators(keepId, mergeId, { actor: 'admin' });
+  const out = identity.mergeCreators(keepId, mergeId, { actor: 'admin', force: req.query.force === '1' || (req.body && req.body.force === true) });
   if (!out) return bad(res, 'One or both creators not found', 404);
+  if (out.error) return bad(res, out.error, out.status || 409);
   res.json(out);
 });
 
@@ -86,7 +87,7 @@ router.post('/identities/scan', (req, res) => res.json({ ok: true, ...identity.s
 router.post('/identities/:id', (req, res) => {
   const id = int(req.params.id, 1, Number.MAX_SAFE_INTEGER, 0);
   const { action, keepId } = req.body || {};
-  if (action === 'merge') { const out = identity.merge(id, { keepId, actor: 'admin' }); return out ? res.json({ ok: true, creator: out }) : bad(res, 'Not found or already decided', 404); }
+  if (action === 'merge') { const out = identity.merge(id, { keepId, actor: 'admin', force: req.query.force === '1' }); if (!out && identity.mergeRefusal()) return bad(res, identity.mergeRefusal(), 409); return out ? res.json({ ok: true, creator: out }) : bad(res, 'Not found or already decided', 404); }
   if (action === 'reject') return identity.reject(id, 'admin') ? res.json({ ok: true }) : bad(res, 'Not found or already decided', 404);
   return bad(res, 'action must be merge or reject');
 });

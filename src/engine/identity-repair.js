@@ -386,7 +386,7 @@ async function autoMerge({ apply = false, limit = 500, actor = 'identity-auto' }
       for (const g of m.gone) {
         if (!repo.creators.get(g.id) || !repo.creators.get(m.keep.id)) continue;
         const r = identity.mergeCreators(m.keep.id, g.id, { actor, reason: `auto: ${m.evidence.join('; ').slice(0, 300)}` });
-        if (r) { out.merged++; out.snapshots.push(r.snapshotId); }
+        if (r && !r.error) { out.merged++; out.snapshots.push(r.snapshotId); } else if (r && r.error) (out.refused = out.refused || []).push(r.error);
         await turn(); // one merge per turn of the loop
       }
     }
