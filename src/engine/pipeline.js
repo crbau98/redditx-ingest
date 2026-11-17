@@ -91,7 +91,7 @@ async function hostReachable(host, url, type) {
 const IMAGE_STRIKES_TO_BLOCK = 3;
 
 // Feeds PRISM attached by itself: evidence against one is about THAT account, not the creator it was attached to (lib/feed-origins).
-const { AUTOMATIC_FEED_ORIGINS } = require('../lib/feed-origins');
+const { isAutomaticOrigin } = require('../lib/feed-origins');
 /** Each excluded picture counts against the account that posted it; repeated offenders are blocked for good. */
 function noteImageStrike(item, feed) {
   const handle = cleanHandle(item.author);
@@ -101,7 +101,7 @@ function noteImageStrike(item, feed) {
   const strikes = repo.db.prepare("SELECT COUNT(*) AS n FROM moderation_actions WHERE target_type = 'account' AND target_id = ? AND action = 'image-female'").get(key).n;
   if (strikes < IMAGE_STRIKES_TO_BLOCK) return;
   const reason = `image filter: ${strikes} pictures with women`;
-  if (AUTOMATIC_FEED_ORIGINS.has(feed.origin) && ownedByFeed(item, feed)) return quarantineFeed(item, feed, reason); // the account is wrong, not the creator it was attached to
+  if (isAutomaticOrigin(feed.origin) && ownedByFeed(item, feed)) return quarantineFeed(item, feed, reason); // the account is wrong, not the creator it was attached to
   const creator = (ownedByFeed(item, feed) ? repo.creators.get(feed.creator_id) : null) || repo.creators.byAccount(feed.platform, handle);
   if (creator && creator.status === 'active') {
     // A creator explicitly added by admin/lookup or with >15 published posts is not auto-blocked by 3 face-model false positives.
@@ -113,16 +113,34 @@ function noteImageStrike(item, feed) {
 
 /** Quarantine one automatic feed: off, its account blocklisted, the items it already published held for review. The creator stays. */
 function quarantineFeed(item, feed, reason) {
-  repo.feeds.update(feed.id, { enabled: false });
-  try { repo.logAction('feed', feed.id, 'scope-feed-off', reason, 'system'); } catch { /* an old audit table cannot take feed rows */ }
-  repo.blocklist.add('creator', `${feed.platform}:${String(feed.target).toLowerCase()}`, reason);
   const handle = cleanHandle(item.author);
-  if (handle && !SKIP_AUTHORS.has(handle.toLowerCase())) repo.blocklist.add('creator', `${feed.platform}:${handle.toLowerCase()}`, reason);
+  const her = handle && !SKIP_AUTHORS.has(handle.toLowerCase()) ? handle.toLowerCase() : null;
+  const accounts = [...new Set([String(feed.target).toLowerCase(), ...(her ? [her] : [])])];
+  for (const a of accounts) repo.blocklist.add('creator', `${feed.platform}:${a}`, reason);
+  // Every automatic feed reading this account goes off, not only the one that saw her (Crucible v4.23 gate: a second, discovered
+  // feed on the same account kept publishing her items). A feed a person chose for it stays on: that is a decision about it.
+  const marks = accounts.map(() => '?').join(',');
+  const offFeeds = repo.db.prepare(`SELECT id, origin FROM feeds WHERE platform = ? AND lower(target) IN (${marks})`).all(feed.platform, ...accounts)
+    .filter((f) => f.id === feed.id || isAutomaticOrigin(f.origin));
+  if (!offFeeds.some((f) => f.id === feed.id)) offFeeds.push({ id: feed.id });
   let held = 0;
-  for (const row of repo.db.prepare("SELECT id FROM media WHERE feed_id = ? AND publish_state = 'published' LIMIT 5000").all(feed.id)) {
-    repo.media.setState(row.id, 'review', `${reason} (feed account)`); held++;
+  const hold = (id) => { repo.media.setState(id, 'review', `${reason} (feed account)`); held++; };
+  for (const f of offFeeds) {
+    repo.feeds.update(f.id, { enabled: false });
+    try { repo.logAction('feed', f.id, 'scope-feed-off', reason, 'system'); } catch { /* an old audit table cannot take feed rows */ }
+    for (const row of repo.db.prepare("SELECT id FROM media WHERE feed_id = ? AND publish_state = 'published' LIMIT 5000").all(f.id)) hold(row.id);
   }
-  events.log('WARN', `Feed ${feed.platform}:${feed.target} switched off (${reason}); ${held} item(s) held for review; creator left alone`);
+  // ...and whatever SHE posted that came in through any other feed of this platform (a search, a hashtag): found by author through
+  // the search index (media has no author index), then checked exactly.
+  if (her) {
+    try {
+      const rows = repo.db.prepare(`SELECT m.id FROM media_fts JOIN media m ON m.seq = media_fts.rowid
+        WHERE media_fts MATCH ? AND m.platform = ? AND lower(m.author) = ? AND m.publish_state = 'published' LIMIT 5000`)
+        .all(`author:"${her.replace(/"/g, '""')}"`, feed.platform, her);
+      for (const r of rows) hold(r.id);
+    } catch { /* no search index (very old database): the feed sweep above still ran */ }
+  }
+  events.log('WARN', `Feed ${feed.platform}:${feed.target} switched off (${reason}); ${offFeeds.length} feed(s) on the account off, ${held} item(s) held for review; creator left alone`);
 }
 
 /**
@@ -133,7 +151,7 @@ function blockFemaleCreator(item, feed, rule) {
   const handle = cleanHandle(item.author);
   const key = handle && `${feed.platform}:${handle.toLowerCase()}`;
   const reason = `scope: ${rule || 'female'} (profile)`;
-  if (AUTOMATIC_FEED_ORIGINS.has(feed.origin) && ownedByFeed(item, feed)) return quarantineFeed(item, feed, reason);
+  if (isAutomaticOrigin(feed.origin) && ownedByFeed(item, feed)) return quarantineFeed(item, feed, reason);
   let creator = null;
   if (ownedByFeed(item, feed)) creator = repo.creators.get(feed.creator_id);
   else if (handle) creator = repo.creators.byAccount(feed.platform, handle);
