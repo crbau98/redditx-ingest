@@ -79,11 +79,13 @@ const io = !canHover && 'IntersectionObserver' in window
  * grid, and one live element per tile). Drawing a cross-origin video is allowed (only reading the pixels back is not, and
  * nothing does), so stored media that redirects to the bucket works too.
  * A browser that has the metadata but decodes no frame for a detached element (iOS Safari can be strict about this) gets the
- * <video> mounted in the tile after FF_ADOPT_MS, as it was before: it paints the frame itself.
- * At most FF_PARALLEL clips load at once. A tile far away drops its canvas and mounts again when it comes back. If a clip cannot
- * load (or is too slow, FF_TIMEOUT_MS) the tinted placeholder and the Video pill stay. */
-const FF_PARALLEL = 3; const FF_TIMEOUT_MS = 8000; const FF_ADOPT_MS = 2000; const FF_MAX_W = 360;
-let ffLoading = 0; const ffQueue = [];
+ * <video> mounted in the tile after FF_ADOPT_MS, so it can paint the frame itself. That video keeps its load slot until it has
+ * one (then it is copied to the canvas and released like any other), at most FF_ADOPT_MAX are mounted at once (a further one
+ * keeps waiting detached), and FF_TIMEOUT_MS ends every attempt: removing the src aborts the transfer and the tile keeps the placeholder.
+ * At most FF_PARALLEL clips load at once, adopted or not. A tile far away drops its canvas and mounts again when it comes back.
+ * If a clip cannot load (or is too slow) the tinted placeholder and the Video pill stay. */
+const FF_PARALLEL = 3; const FF_TIMEOUT_MS = 8000; const FF_ADOPT_MS = 2000; const FF_ADOPT_MAX = 2; const FF_MAX_W = 360;
+let ffLoading = 0; let ffAdopted = 0; const ffQueue = [];
 function pumpFirstFrames() {
   while (ffLoading < FF_PARALLEL && ffQueue.length) { const m = ffQueue.shift(); if (m._ffState === 'queued') loadFirstFrame(m); }
 }
@@ -95,26 +97,20 @@ function loadFirstFrame(media) {
   media._ffState = 'loading'; ffLoading++;
   const v = h('video', { muted: true, playsinline: true, preload: 'metadata', 'aria-hidden': 'true', tabindex: '-1' });
   v.muted = true;
-  let timer = 0; let adoptTimer = 0;
-  const finish = (state) => {
+  let timer = 0; let adoptTimer = 0; let adopted = false;
+  const finish = (state) => { // the one exit: frees the slot, aborts the transfer (src removed), unmounts an adopted video
     if (media._ffRelease !== release) return;
     media._ffRelease = null; clearTimeout(timer); clearTimeout(adoptTimer); ffLoading--;
+    if (adopted) { adopted = false; ffAdopted--; }
     v.removeAttribute('src'); try { v.load(); } catch { /* detached */ }
+    v.remove();
     media._ffState = state;
     pumpFirstFrames();
   };
   const release = () => finish(null);
   media._ffRelease = release;
-  const adopt = () => {
-    if (media._ffRelease !== release || !media.isConnected) return;
-    media._ffRelease = null; clearTimeout(timer); ffLoading--; media._ffState = 'done';
-    v.className = 'card-ff'; media._ffVideo = v; media.prepend(v);
-    v.addEventListener('loadeddata', () => { const ph = media.querySelector('.ph'); if (ph) ph.classList.add('done'); }, { once: true });
-    pumpFirstFrames();
-  };
-  v.addEventListener('loadedmetadata', () => { adoptTimer = setTimeout(adopt, FF_ADOPT_MS); }, { once: true });
-  v.addEventListener('loadeddata', () => {
-    if (media._ffRelease !== release) return; // adopted or released meanwhile
+  const onFrame = () => {
+    if (media._ffRelease !== release) return; // released meanwhile
     let ok = false;
     try {
       const w = v.videoWidth; const hh = v.videoHeight;
@@ -127,7 +123,17 @@ function loadFirstFrame(media) {
       }
     } catch { /* cannot paint: the placeholder stays */ }
     finish(ok ? 'done' : 'failed');
-  }, { once: true });
+  };
+  const adopt = () => {
+    if (media._ffRelease !== release || !media.isConnected) return;
+    if (ffAdopted >= FF_ADOPT_MAX) return; // enough mounted already: this one keeps waiting detached until the timeout
+    adopted = true; ffAdopted++;
+    v.className = 'card-ff'; media.prepend(v);
+    if (v.readyState >= 2) { onFrame(); return; } // the frame was already there (its event was missed)
+    v.addEventListener('loadeddata', onFrame, { once: true });
+  };
+  v.addEventListener('loadedmetadata', () => { adoptTimer = setTimeout(adopt, FF_ADOPT_MS); }, { once: true });
+  v.addEventListener('loadeddata', onFrame, { once: true });
   v.addEventListener('error', () => finish('failed'), { once: true });
   timer = setTimeout(() => finish('failed'), FF_TIMEOUT_MS);
   v.src = media._ff;
@@ -137,7 +143,6 @@ function dropFirstFrame(media) {
   if (!media._ff) return;
   if (media._ffRelease) media._ffRelease();
   const c = media.querySelector('canvas.card-ff'); if (c) { c.width = c.height = 0; c.remove(); }
-  const av = media._ffVideo; if (av) { media._ffVideo = null; av.removeAttribute('src'); try { av.load(); } catch { /* detached */ } av.remove(); }
   media._ffState = null;
 }
 const firstFrameIo = 'IntersectionObserver' in window
