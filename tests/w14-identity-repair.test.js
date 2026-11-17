@@ -309,3 +309,46 @@ describe('Crucible re-gate: unmerge and merge never bring back a blocked or take
     assert.ok(db.prepare("SELECT 1 FROM moderation_actions WHERE target_id = ? AND action = 'merge-forced'").get(k));
   });
 });
+
+describe('v4.23.0 prod follow-ups', () => {
+  test('two-letter and content-label paid handles are junk: "same-paid Patreon:cw" proves nothing and plans no merge', () => {
+    for (const h of ['cw', 'tw', 'nsfw', '18', 'of']) assert.equal(paid.validHandle(h), false, h);
+    assert.equal(paid.paidHandle('Patreon', 'https://patreon.com/cw'), null);
+    assert.equal(paid.paidHandle('OnlyFans', 'https://onlyfans.com/ab'), null);
+    assert.equal(paid.paidHandle('Patreon', 'https://patreon.com/gymmanga'), 'gymmanga');
+    const a = repo.creators.create({ handle: 'hairypiggydaddy.bsky.social', origin: 'admin' }).id; feed(a, 'bluesky', 'user', 'hairypiggydaddy.bsky.social', 'admin');
+    const b = repo.creators.create({ handle: 'Baraboi1550', origin: 'admin' }).id; feed(b, 'x', 'user', 'Baraboi1550', 'admin');
+    link(a, b, [{ type: 'same-paid', detail: 'Patreon:cw' }]);
+    const p = repair.plan();
+    assert.ok(!p.merges.some((m) => [m.keep.id, ...m.gone.map((g) => g.id)].some((id) => id === a || id === b)));
+    assert.ok(repair.junkEvidence({ type: 'same-paid', detail: 'Patreon:cw' }));
+  });
+
+  test('historical merges made on junk only are listed with the kept row as it is now and a judgement', () => {
+    const k = repo.creators.create({ handle: 'juicedcatboy.bsky.social', origin: 'admin' }).id; media(k, null, 7);
+    repo.creators.refreshStats(k);
+    const [x, y] = k < 'zzzz-gone-lx' ? [k, 'zzzz-gone-lx'] : ['zzzz-gone-lx', k];
+    db.prepare("INSERT INTO identity_links (a_id, b_id, a_label, b_label, evidence, strength, status, kept_id, decided_by) VALUES (?, ?, ?, ?, ?, 4, 'merged', ?, 'identity')")
+      .run(x, y, x === k ? 'juicedcatboy.bsky.social' : 'lxsucker', x === k ? 'lxsucker' : 'juicedcatboy.bsky.social', JSON.stringify([{ type: 'same-paid', detail: 'JustFor.Fans:explore.php' }]), k);
+    const k2 = repo.creators.create({ handle: 'gymbro', origin: 'admin' }).id;
+    const [x2, y2] = k2 < 'zzzz-gone-gb' ? [k2, 'zzzz-gone-gb'] : ['zzzz-gone-gb', k2];
+    db.prepare("INSERT INTO identity_links (a_id, b_id, a_label, b_label, evidence, strength, status, kept_id, decided_by) VALUES (?, ?, ?, ?, ?, 4, 'merged', ?, 'identity')")
+      .run(x2, y2, x2 === k2 ? 'gymbro' : 'gymbro.bsky.social', x2 === k2 ? 'gymbro.bsky.social' : 'gymbro', JSON.stringify([{ type: 'same-paid', detail: 'Patreon:cw' }]), k2);
+    const list = repair.cleanQueue().mergedOnJunk;
+    const wrong = list.find((m) => m.kept.id === k); const fine = list.find((m) => m.kept.id === k2);
+    assert.deepEqual([wrong.kept.handle, wrong.kept.media, wrong.folded], ['juicedcatboy.bsky.social', 7, 'lxsucker']);
+    assert.match(wrong.judgement, /^likely wrong/);
+    assert.match(fine.judgement, /^likely the same man/);
+  });
+
+  test('repair/links: when the "owner" may be the same man (gymmanga-red.bsky.social / gymmanga@mastodon.social) the link is listed, not removed', () => {
+    const red = repo.creators.create({ handle: 'gymmanga-red.bsky.social', origin: 'admin' }).id;
+    repo.creators.update(red, { links: [{ platform: 'external', service: 'Patreon', handle: 'gymmanga', url: 'https://patreon.com/gymmanga' }] });
+    const mast = repo.creators.create({ handle: 'gymmanga@mastodon.social', origin: 'admin' }).id; feed(mast, 'mastodon', 'user', 'gymmanga@mastodon.social', 'admin');
+    const r = repair.repairLinks();
+    assert.ok(!r.items.some((i) => i.id === red), JSON.stringify(r.items.filter((i) => i.id === red)));
+    assert.ok(r.reviewItems.some((i) => i.id === red && i.links.some((l) => /may be the same man/.test(l.why))));
+    repair.repairLinks({ apply: true });
+    assert.equal(repo.creators.get(red).links.length, 1);
+  });
+});

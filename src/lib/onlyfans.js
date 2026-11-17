@@ -20,12 +20,12 @@ const HANDLE = /^[A-Za-z0-9][A-Za-z0-9_.-]{1,40}$/;
 const NOT_HANDLES = new Set(['link', 'links', 'in', 'is', 'bio', 'below', 'above', 'free', 'now', 'here', 'the', 'my', 'and', 'on', 'at', 'for', 'sale', 'off',
   'promo', 'subscribe', 'sub', 'dm', 'dms', 'open', 'only', 'onlyfans', 'onlyfans.com', 'of', 'check', 'new', 'page', 'account', 'vip', 'click', 'tap', 'see', 'join', 'com']);
 
-const { PATH_WORDS, FILE_EXT } = require('./handle-words');
+const { PATH_WORDS, FILE_EXT, MIN_PAID_HANDLE } = require('./handle-words');
 function normal(h) {
   const raw = String(h || '').replace(/^@/, '');
   if (FILE_EXT.test(raw)) return null; // a page or an asset, never a person
   const s = raw.replace(/[.\-_]+$/, '').toLowerCase();
-  if (!HANDLE.test(s) || RESERVED.has(s) || NOT_HANDLES.has(s) || PATH_WORDS.has(s) || /^\d+$/.test(s)) return null;
+  if (!HANDLE.test(s) || s.length < MIN_PAID_HANDLE || RESERVED.has(s) || NOT_HANDLES.has(s) || PATH_WORDS.has(s) || /^\d+$/.test(s)) return null;
   return s;
 }
 
