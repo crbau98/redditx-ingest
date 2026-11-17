@@ -76,10 +76,11 @@ const feeds = {
     const now = nowIso();
     return db.prepare(`SELECT * FROM feeds WHERE enabled = 1 AND (next_run_at IS NULL OR next_run_at <= ?) ${ex}
                        ORDER BY priority DESC,
+                         CASE WHEN creator_id IN (SELECT substr(key, 8) FROM discovery_state WHERE key LIKE 'viewed.%' AND updated_at >= ?) THEN 0 ELSE 1 END,
                          CASE WHEN next_run_at IS NULL THEN 1e9 ELSE (julianday(?) - julianday(next_run_at))
                            * (CASE WHEN creator_id IS NOT NULL AND kind IN ('user', 'channel', 'page', 'feed') THEN 2.0 ELSE 1.0 END)
                            * (CASE WHEN consecutive_failures > 0 THEN 0.5 ELSE 1.0 END) END DESC,
-                         COALESCE(next_run_at, '') ASC LIMIT ?`).all(now, ...excludePlatforms, ...onlyPlatforms, now, limit);
+                         COALESCE(next_run_at, '') ASC LIMIT ?`).all(now, ...excludePlatforms, ...onlyPlatforms, new Date(Date.now() - 7 * 86400000).toISOString(), now, limit);
   },
 
   finishRun(id, { status, error = null, cursor, nextRunAt, addedItems = 0, failures }) {

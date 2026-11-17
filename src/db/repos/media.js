@@ -69,9 +69,9 @@ const mediaQ = {
   byKey: db.prepare('SELECT id FROM media WHERE source_key = ?'),
   byPost: db.prepare('SELECT 1 AS ok FROM media WHERE post_key = ? LIMIT 1'),
   insert: db.prepare(`INSERT INTO media (id, creator_id, feed_id, platform, source_id, source_key, post_key, position, source_url, community, author, title, description,
-      media_type, media_url, preview_url, thumbnail_url, hls_url, has_audio, width, height, duration, mime_type, score, hash, nsfw_level, scope, publish_state, review_reason, posted_at, phash, physique, attribution_evidence, lean_bias)
+      media_type, media_url, preview_url, thumbnail_url, hls_url, has_audio, width, height, duration, mime_type, score, hash, nsfw_level, scope, publish_state, review_reason, posted_at, phash, physique, attribution_evidence, lean_bias, fallback_url)
     VALUES (@id, @creator_id, @feed_id, @platform, @source_id, @source_key, @post_key, @position, @source_url, @community, @author, @title, @description,
-      @media_type, @media_url, @preview_url, @thumbnail_url, @hls_url, @has_audio, @width, @height, @duration, @mime_type, @score, @hash, @nsfw_level, @scope, @publish_state, @review_reason, @posted_at, @phash, @physique, @attribution_evidence, @lean_bias)`),
+      @media_type, @media_url, @preview_url, @thumbnail_url, @hls_url, @has_audio, @width, @height, @duration, @mime_type, @score, @hash, @nsfw_level, @scope, @publish_state, @review_reason, @posted_at, @phash, @physique, @attribution_evidence, @lean_bias, @fallback_url)`),
   leanSet: db.prepare('UPDATE media SET lean_bias = ? WHERE id = ?'),
   state: db.prepare("UPDATE media SET publish_state = ?, review_reason = COALESCE(?, review_reason), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?"),
   stateExact: db.prepare("UPDATE media SET publish_state = ?, review_reason = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?"),
@@ -356,7 +356,7 @@ const media = {
     const id = uuid();
     const rec = {
       id, creator_id: null, feed_id: null, source_id: null, source_key: null, post_key: null, position: 0, source_url: null,
-      community: null, author: null, title: null, description: null, preview_url: null, thumbnail_url: null, hls_url: null,
+      community: null, author: null, title: null, description: null, preview_url: null, thumbnail_url: null, hls_url: null, fallback_url: null,
       has_audio: 0, width: null, height: null, duration: null, mime_type: null, score: 0, nsfw_level: 'explicit', scope: 'in',
       publish_state: 'published', review_reason: null, posted_at: nowIso(), phash: null, physique: null, attribution_evidence: null, lean_bias: null, ...row,
     };
@@ -431,6 +431,7 @@ const media = {
       countCache.clear(); // a creator filter's totals changed
       logAction('feed', feed.id, 'reassign-media', `${out.moved} item(s) of ${feed.platform}:${String(feed.target).slice(0, 80)} from ${out.from.join(', ') || 'none'} to ${to || 'no creator'}`, actor);
     }
+    if (to) require('../../engine/feed-revive').reviveFor({ feedId: feed.id }); // a feed switched off by its old creator's block comes back on the new one
     return { moved: out.moved, from: out.from, to };
   },
 

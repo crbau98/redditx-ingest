@@ -537,6 +537,7 @@ router.post('/creators/:id/pull', pullLimiter, (req, res) => {
 router.get('/creators/:id', (req, res) => {
   const c = repo.creators.detail(req.params.id);
   if (!c || c.status !== 'active' || c.scope === 'excluded') return res.status(404).json({ error: 'Not found' });
+  require('../engine/viewed').touch(c.id); // viewed creators are filled in first (scheduler and coverage order only; caps unchanged)
   let webMatches = [];
   try { webMatches = require('../lib/face-match').listWebMatches({ creatorId: c.id, status: 'confirmed', limit: 16 }); } catch { /* optional */ }
   res.json({ ...publicCreator(c), accounts: publicAccounts(c.id), topTags: c.topTags, aliases: otherNames(c), webMatches, lastMonitoredAt: c.last_monitored_at || null });

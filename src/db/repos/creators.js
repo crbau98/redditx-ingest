@@ -305,6 +305,7 @@ const creators = {
       db.prepare('DELETE FROM creators WHERE id = ?').run(mergeId);
       creatorQ.stats.run({ id: keepId });
     })();
+    require('../../engine/feed-revive').reviveFor({ creatorId: keepId }); // feeds the merged-away (possibly blocked) record had switched off
     return creators.get(keepId);
   },
 
@@ -340,6 +341,10 @@ const creators = {
       db.prepare("UPDATE media SET publish_state = 'removed', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE creator_id = ? AND publish_state != 'removed'").run(id);
       rememberRemovedHashes(id, reason);
       purgeRemovedFor(id);
+      // Each feed this switches off is logged, so a later move to an active creator can tell it was the block (not the feed) that turned it off.
+      for (const f of db.prepare('SELECT id FROM feeds WHERE creator_id = ? AND enabled = 1').all(id)) {
+        try { logAction('feed', f.id, 'creator-block-off', `creator ${id} blocked: ${String(reason).slice(0, 80)}`, actor); } catch { /* an old audit table only takes media and creator rows: the block itself must still happen */ }
+      }
       db.prepare('UPDATE feeds SET enabled = 0 WHERE creator_id = ?').run(id);
       blocklist.add('creator', id, reason);
       for (const f of creatorQ.feedsOf.all(id)) blocklist.add('creator', `${f.platform}:${String(f.target).toLowerCase()}`, reason);

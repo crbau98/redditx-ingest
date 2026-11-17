@@ -553,6 +553,7 @@ async function processItemInner(rawItem, feed, adapter, settings) {
     media_type: item.mediaType,
     media_url: item.mediaUrl,
     preview_url: item.previewUrl || null,
+    fallback_url: item.fallbackUrl && item.fallbackUrl !== item.mediaUrl ? item.fallbackUrl : null,
     thumbnail_url: item.thumbnailUrl || null,
     hls_url: item.hlsUrl || (isHls ? item.mediaUrl : null),
     has_audio: item.hasAudio ? 1 : 0,

@@ -71,9 +71,11 @@ async function sweep({ probe = false, limit = 1_000_000 } = {}) {
   // pattern-matched: "Service Unavailable" is a 503 outage and "...1404.xml" a file name, and a rate limit, a challenge, a timeout
   // or a dropped connection can pass, so those feeds keep backing off instead of being switched off for good.
   const { classify } = require('./errorclass');
-  for (const f of repo.db.prepare("SELECT id, platform, kind, target, label, consecutive_failures, last_error FROM feeds WHERE enabled = 1 AND consecutive_failures >= 3").all()) {
+  const { producedOnActiveCreator } = require('./feed-revive');
+  for (const f of repo.db.prepare("SELECT id, platform, kind, target, label, consecutive_failures, last_error, items_total, creator_id FROM feeds WHERE enabled = 1 AND consecutive_failures >= 3").all()) {
     const c = classify(f.last_error || '');
-    const isBroken = (c.permanent && f.consecutive_failures >= 3) || (f.consecutive_failures >= 5 && !c.transient);
+    // a feed that produced items on an active creator is only ended when its target is gone for good (404, suspended), not for chronic errors
+    const isBroken = (c.permanent && f.consecutive_failures >= 3) || (f.consecutive_failures >= 5 && !c.transient && !producedOnActiveCreator(f));
     if (isBroken) {
       repo.feeds.update(f.id, { enabled: false });
       repo.logAction('feed', f.id, 'sweep-disable', `${c.kind}, ${f.consecutive_failures} failures`, 'system'); // what the health report lists as switched off by the engine
@@ -655,6 +657,14 @@ function startImageSweep() {
       if (Date.now() - lastRotate > 60 * 60 * 1000) {
         repo.settings.set('deepsearch_rotate_at', String(Date.now()));
         try { deepsearch.rotate({ limit: s.deepPullPerHour }); } catch (e) { events.log('WARN', `Deep-pull rotation: ${e.message}`); }
+      }
+    }
+    // Coverage: look for each popular creator's known handle on the platforms PRISM reads (hourly, bounded by per-platform daily caps).
+    if (s.coverageEnabled && s.coveragePerHour > 0) {
+      const lastCover = parseInt(repo.settings.get('coverage_rotate_at') || '0', 10) || 0;
+      if (Date.now() - lastCover > 60 * 60 * 1000) {
+        repo.settings.set('coverage_rotate_at', String(Date.now()));
+        blockwatch.around('coverage', () => require('./coverage').rotate({ limit: s.coveragePerHour })).catch((e) => events.log('WARN', `Coverage rotation: ${e.message}`));
       }
     }
     if (!s.imageSweep || !s.imageSweepPerTick) return;

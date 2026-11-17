@@ -28,6 +28,7 @@ const config = require('../config');
 // x-ratelimit-reset ~60). A 429 is a wait, not a failure, so hold the call for the whole
 // Retry-After window instead of giving up at the shared 30 s ceiling.
 const REDDIT_WAIT = { maxCooldownWaitMs: 70_000 };
+const BACKFILL_PAGES = 2; // archive pages (100 posts each) of a user's older history read per run
 const http = require('./http').forPlatform('reddit', 1100, { penalty: { ms: 60_000 } });
 // The archive is its own host and limiter key (same key discovery's archive reads use).
 const archiveHttp = require('./http').forPlatform('redditArchive', 300);
@@ -91,6 +92,7 @@ function previewOf(d) {
     .concat((img.resolutions || []).map((r) => ({ url: decodeHtml(r.url), width: r.width })));
   return {
     previewUrl: pickWidth(cands, 640),
+    fullUrl: decodeHtml(img.source.url) || null, // the full-resolution rendition: the fallback when the unsigned original answers 404
     width: img.source.width || null,
     height: img.source.height || null,
     mp4: img.variants && img.variants.mp4 && img.variants.mp4.source && decodeHtml(img.variants.mp4.source.url),
@@ -162,7 +164,7 @@ function parsePost(post, drops) {
       const mediaUrl = video || original || decodeHtml(s.u || s.gif || '');
       if (!mediaUrl) return;
       items.push({
-        ...base, position: i, mediaType: video ? 'video' : 'image', mediaUrl,
+        ...base, position: i, mediaType: video ? 'video' : 'image', mediaUrl, ...(video ? {} : { fallbackUrl: decodeHtml(s.u || '') || null }),
         previewUrl: pickWidth((meta.p || []).map((p) => ({ url: decodeHtml(p.u), width: p.x })), 640) || (video ? null : mediaUrl),
         width: s.x || null, height: s.y || null,
         altText: gi.caption || null,
@@ -206,7 +208,7 @@ function parsePost(post, drops) {
   }
   if (/\.(jpe?g|png|webp|avif|gif)(\?|$)/i.test(url) || hostMatches(host, 'i.redd.it')) {
     const full = toOriginal(url);
-    return [{ ...base, position: 0, mediaType: 'image', mediaUrl: full, previewUrl: prev.previewUrl || url, width: prev.width, height: prev.height }];
+    return [{ ...base, position: 0, mediaType: 'image', mediaUrl: full, previewUrl: prev.previewUrl || url, fallbackUrl: prev.fullUrl || null, width: prev.width, height: prev.height }];
   }
   // A text post has no media to lose; an external link we cannot read does.
   if (src.is_self || !url || /\/comments\//.test(url)) return [];
@@ -606,12 +608,40 @@ module.exports = {
       }
     }
 
+    // History: a user's older posts come from the archive, newest first, BACKFILL_PAGES per run, resuming from `bfBefore` (epoch
+    // seconds) until the archive runs out (`bfDone`). The first run starts behind the oldest post it just read; a cursor from before
+    // history existed starts at the present, so its first slice re-reads the top once (stored posts dedupe) and every later one goes deeper.
+    let bfBefore = cursor.bfBefore || null; let bfDone = !!cursor.bfDone;
+    if (feed.kind === 'user' && !bfDone && !ctx.probe && !(ctx.limit && ctx.limit < 20) && !ctx.aborted()) {
+      if (!bfBefore) {
+        const times = items.map((it) => Date.parse(it.postedAt)).filter(Number.isFinite);
+        bfBefore = first && times.length ? Math.floor(Math.min(...times) / 1000) : Math.floor(Date.now() / 1000);
+      }
+      let at = { before: bfBefore };
+      for (let pg = 0; pg < BACKFILL_PAGES && at && !ctx.aborted(); pg++) {
+        let res;
+        try { res = await viaArchive(feed, { limit: 100, archive: at }); } catch (e) { notes.add(`history paused: ${e.message}`); break; }
+        for (const row of res.children) {
+          for (const it of parsePost(row, drops)) {
+            const key = `${it.sourceId}:${it.position || 0}`;
+            if (seen.has(key)) continue;
+            seen.add(key); items.push(it);
+          }
+        }
+        if (res.after && res.after.archive && res.after.archive.before) { at = res.after.archive; bfBefore = at.before; } else { at = null; bfDone = true; }
+      }
+    }
+
     let profile;
     const profileNotes = [];
     if (feed.kind === 'user' && (ctx.needProfile || first)) profile = await fetchProfile(feed.target, profileNotes);
     profileNotes.forEach((n) => notes.add(n));
     const dropped = Object.entries(drops).sort((a, b) => b[1] - a[1]);
     if (dropped.length) notes.add(`dropped ${dropped.reduce((n, [, v]) => n + v, 0)} post(s): ${dropped.map(([k, v]) => `${k} ×${v}`).join(', ')}`);
-    return { items, cursor: newest ? { newestAt: newest } : undefined, profile, via, notes: [...notes] };
+    const history = feed.kind === 'user' && (bfBefore || bfDone);
+    const nextCursor = newest || history
+      ? { ...(newest ? { newestAt: newest } : {}), ...(history && !bfDone ? { bfBefore } : {}), ...(history && bfDone ? { bfDone: true } : {}) }
+      : undefined;
+    return { items, cursor: nextCursor, profile, via, notes: [...notes], backfillPending: history && !bfDone };
   },
 };
