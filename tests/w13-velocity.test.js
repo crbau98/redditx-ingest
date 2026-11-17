@@ -24,6 +24,9 @@ describe('source contracts', () => {
   });
   test('at most three clips load at once, with a timeout, and a far tile gives its canvas back', () => {
     assert.match(card, /const FF_PARALLEL = 3; const FF_TIMEOUT_MS = 8000;/);
+    assert.match(card, /const FF_ADOPT_MAX = 2;/);
+    assert.match(card, /if \(ffAdopted >= FF_ADOPT_MAX\) return;/, 'a third one keeps waiting detached (a slow decode is not blanked)');
+    assert.doesNotMatch(card, /ffLoading--;[^}]*adopted = true/, 'adopting keeps the slot');
     assert.match(card, /ffLoading < FF_PARALLEL/);
     assert.match(card, /function dropFirstFrame\(media\)/);
     assert.match(card, /if \(media\._ff && media\._ffState\) \{ dropFirstFrame\(media\); if \(firstFrameIo\) firstFrameIo\.observe\(media\); \}/, 'the relief observer releases it and re-arms the mount');
@@ -127,27 +130,56 @@ describe('browser: first frames in the grid', { skip: haveBrowser ? false : 'Pla
     } finally { await ctx.close(); }
   });
 
-  test('a browser that decodes no frame for a detached video gets the <video> mounted in the tile instead (iOS Safari safety net)', async () => {
+  /** A page whose browser reports `loadeddata` only when `allow(video)` says so, with a sampler for grid <video> elements. */
+  async function strictPage(allow) {
     const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
     await ctx.addCookies([{ name: 'prism_age', value: '1', url: base }]);
-    await ctx.addInitScript(() => { // such a browser: a detached element never reports loadeddata
+    await ctx.addInitScript((mode) => {
       const add = HTMLMediaElement.prototype.addEventListener;
-      HTMLMediaElement.prototype.addEventListener = function (type, ...rest) { if (type === 'loadeddata' && !this.isConnected) return undefined; return add.call(this, type, ...rest); };
-    });
+      HTMLMediaElement.prototype.addEventListener = function (type, ...rest) { if (type === 'loadeddata' && (mode === 'never' || (mode === 'detached' && !this.isConnected))) return undefined; return add.call(this, type, ...rest); };
+      if (mode === 'never') { const rs = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'readyState'); Object.defineProperty(HTMLMediaElement.prototype, 'readyState', { get() { return Math.min(rs.get.call(this), 1); } }); } // no frame ever decoded
+      window.__dom = { maxMounted: 0, everMounted: new Set(), maxLoading: 0 }; const live = new Set();
+      const d = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src'); const ra = HTMLMediaElement.prototype.removeAttribute;
+      Object.defineProperty(HTMLMediaElement.prototype, 'src', { ...d, set(v) { if (v) { live.add(this); window.__dom.maxLoading = Math.max(window.__dom.maxLoading, live.size); } d.set.call(this, v); } });
+      HTMLMediaElement.prototype.removeAttribute = function (n) { if (n === 'src') live.delete(this); return ra.call(this, n); };
+      new MutationObserver((muts) => { for (const m of muts) for (const n of m.addedNodes) if (n.nodeType === 1 && n.tagName === 'VIDEO' && m.target.classList && m.target.classList.contains('card-media')) { window.__dom.everMounted.add(n); window.__dom.maxMounted = Math.max(window.__dom.maxMounted, document.querySelectorAll('.card-media video').length); } }).observe(document, { childList: true, subtree: true });
+    }, allow);
     const page = await ctx.newPage();
     await page.route('**/api/proxy**', (route) => {
       const m = /^bytes=(\d*)-(\d*)$/.exec(route.request().headers().range || '');
       if (m && (m[1] || m[2])) { const start = Number(m[1] || 0); const end = m[2] ? Math.min(Number(m[2]), CLIP.length - 1) : CLIP.length - 1; return route.fulfill({ status: 206, contentType: 'video/webm', body: CLIP.subarray(start, end + 1), headers: { 'accept-ranges': 'bytes', 'content-range': `bytes ${start}-${end}/${CLIP.length}` } }); }
       return route.fulfill({ status: 200, contentType: 'video/webm', body: CLIP, headers: { 'accept-ranges': 'bytes' } });
     });
+    await page.goto(`${base}/#/explore`, { waitUntil: 'networkidle' });
+    return { ctx, page };
+  }
+  const dom = (page) => page.evaluate(() => ({ maxMounted: window.__dom.maxMounted, ever: window.__dom.everMounted.size, maxLoading: window.__dom.maxLoading, nowMounted: document.querySelectorAll('.card-media video').length, canvases: document.querySelectorAll('canvas.card-ff').length }));
+
+  test('iOS-style browser (no frame for a detached video): the <video> is adopted into the tile, then painted to a canvas and released', async () => {
+    const { ctx, page } = await strictPage('detached');
     try {
-      await page.goto(`${base}/#/explore`, { waitUntil: 'networkidle' });
-      await page.waitForFunction(() => document.querySelectorAll('.card-media video.card-ff').length >= 1, null, { timeout: 15000 });
-      const s = await state(page);
-      assert.equal(s.frames.length, 0, 'no canvas: the browser decoded nothing for the detached element');
-      assert.ok(s.ffVideos >= 1, 'the clip is mounted in the tile, so the browser paints its first frame itself');
-      const shown = await page.evaluate(() => { const v = document.querySelector('.card-media video.card-ff'); return v ? { ready: v.readyState, t: +v.currentTime.toFixed(2) } : null; });
-      assert.ok(shown && shown.ready >= 2, `and it has a frame (${JSON.stringify(shown)})`);
+      await page.waitForFunction(() => document.querySelectorAll('canvas.card-ff').length >= 1, null, { timeout: 20000 });
+      await page.waitForTimeout(1500);
+      const d = await dom(page);
+      assert.ok(d.ever >= 1, 'a video was adopted into a tile (it had no frame while detached)');
+      assert.ok(d.maxMounted <= 2, `never more than 2 adopted videos mounted (saw ${d.maxMounted})`);
+      assert.ok(d.maxLoading <= 3, `never more than 3 clips loading (saw ${d.maxLoading})`);
+      assert.ok(d.canvases >= 1, 'once it had a frame it was copied to the canvas');
+    } finally { await ctx.close(); }
+  });
+
+  test('a browser that never decodes a frame: adopted videos are capped at 2, hold their slot, give up after the timeout and are removed (aborting the transfer)', async () => {
+    const { ctx, page } = await strictPage('never');
+    try {
+      for (let i = 0; i < 5; i++) { await page.mouse.wheel(0, 700); await page.waitForTimeout(250); } // many tiles queue behind the first three
+      await page.waitForTimeout(16000); // adopt at ~2 s, give up at 8 s, the queue moves on
+      const d = await dom(page);
+      assert.equal(d.maxMounted, 2, `the cap is reached and never exceeded (saw ${d.maxMounted} adopted videos mounted at once)`);
+      assert.equal(d.nowMounted, 0, 'after the timeout every adopted video was removed (its transfer aborted)');
+      assert.ok(d.maxLoading <= 3, `an adopted video keeps its slot: never more than 3 clips loading (saw ${d.maxLoading})`);
+      assert.equal(d.canvases, 0, 'no frame was ever decoded');
+      const tiles = await page.evaluate(() => [...document.querySelectorAll('article.card .card-media')].filter((m) => !m.querySelector('video') && !m.querySelector('img') && m.querySelector('.ph')).length);
+      assert.ok(tiles >= 3, `tiles that gave up keep the placeholder and the pill (${tiles})`);
     } finally { await ctx.close(); }
   });
 
