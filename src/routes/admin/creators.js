@@ -84,6 +84,22 @@ router.post('/creators/:id/block', (req, res) => {
   if (!out) return bad(res, 'Not found', 404);
   res.json(out);
 });
+// Recover a creator the SYSTEM blocked on a wrong automatic scope block (engine/block-recovery). GET is a dry run: what would be
+// undone and what stays; POST ?apply=1 does it. Refused unless the block was the system's, its reason a scope rule, and no takedown
+// or report touches him. Candidates lists every such creator with whether the evidence came from an automatic feed; no apply-all.
+router.get('/creators/recover-block/candidates', (req, res) => res.json(require('../../engine/block-recovery').candidates({ limit: req.query.limit })));
+router.get('/creators/:id/recover-block', (req, res) => {
+  const out = require('../../engine/block-recovery').dryRun(req.params.id);
+  if (!out.creatorId) return bad(res, 'Not found', 404);
+  res.json(out);
+});
+router.post('/creators/:id/recover-block', (req, res) => {
+  const rec = require('../../engine/block-recovery');
+  if (!(req.query.apply === '1' || req.query.apply === 'true' || (req.body && req.body.apply === true))) { const out = rec.dryRun(req.params.id); return out.creatorId ? res.json(out) : bad(res, 'Not found', 404); }
+  const out = rec.apply(req.params.id, { actor: 'admin' });
+  if (!out.creatorId) return bad(res, 'Not found', 404);
+  res.status(out.applied ? 200 : 409).json(out);
+});
 router.post('/creators/:id/restore', (req, res) => {
   if (!repo.creators.get(req.params.id)) return bad(res, 'Not found', 404);
   res.json(repo.creators.update(req.params.id, { status: 'active' }));
