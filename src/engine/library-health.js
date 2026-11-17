@@ -10,20 +10,20 @@
  *   creatorCountDrift      creators whose stored media_count differs from a live count of their published rows (the
  *                          same definition the counter uses), with the largest offenders.
  *
- * One pass over media by rowid in WINDOW-sized ranges with a timer yield between them: no statement sorts or scans the whole
- * table, so the event loop keeps answering while it runs. WINDOW was 20,000 rows (about 230 ms of synchronous work per
- * window on production, 14.7 s in all); `maxChunkMs` in the answer is the longest synchronous chunk this run took.
+ * One pass over media by rowid in time-sized windows with a timer yield between them: no statement sorts or scans the whole
+ * table, so the event loop keeps answering while it runs. The window is sized by measured time (lib/windowed: start small,
+ * grow while each stays under ~30 ms): a fixed 20,000 (then 5,000) rows took up to 1,494 ms in one chunk on production's cold
+ * volume. `maxChunkMs` in the answer is the longest synchronous chunk this run took; `windows` how many it needed.
  *
  * redditPhashNull is split (schema v38): `pending` (the hash sweep or its retry will still try it), `unhashable` (given up
  * on, phash_error says why) and `hidden` (hidden rows are not swept: dedupe compares published and waiting rows only).
  */
 const repo = require('../db/repo');
 
-const WINDOW = 5000;
-const yieldLoop = () => new Promise((res) => setTimeout(res, 0)); // a timer, so pending HTTP is answered between windows
+const { walkWindows } = require('../lib/windowed');
 const nz = (col) => `NULLIF(TRIM(${col}), '')`;
 
-async function report({ window = WINDOW, top = 20 } = {}) {
+async function report({ window = 0, top = 20 } = {}) {
   const db = repo.db;
   const started = Date.now();
   const hasFaces = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'media_faces'").get();
@@ -43,16 +43,15 @@ async function report({ window = WINDOW, top = 20 } = {}) {
   const topSeq = (db.prepare('SELECT MAX(seq) AS m FROM media').get() || {}).m || 0;
   const live = new Map();
   const out = { publishedNoImage: 0, redditPhashNull: 0, redditPhash: { pending: 0, unhashable: 0, hidden: 0 }, removedWithFacesOrAlt: 0 };
-  let maxChunkMs = 0;
-  for (let from = 0; from < topSeq; from += window) {
-    const t0 = Date.now();
-    const c = counts.get(from, from + window);
+  const stats = {};
+  // `window` (tests, benchmarks) pins a fixed size; by default the size follows measured time.
+  await walkWindows({ top: topSeq, stats, ...(window ? { firstSpan: window, minSpan: window, maxSpan: window } : {}), fn: (from, to) => {
+    const c = counts.get(from, to);
     out.publishedNoImage += c.noImage; out.redditPhashNull += c.redditPhashNull; out.removedWithFacesOrAlt += c.removedResidue;
     out.redditPhash.pending += c.rpPending; out.redditPhash.unhashable += c.rpUnhashable; out.redditPhash.hidden += c.rpHidden;
-    for (const r of perCreator.all(from, from + window)) live.set(r.id, (live.get(r.id) || 0) + r.n);
-    maxChunkMs = Math.max(maxChunkMs, Date.now() - t0);
-    await yieldLoop();
-  }
+    for (const r of perCreator.all(from, to)) live.set(r.id, (live.get(r.id) || 0) + r.n);
+  } });
+  let { maxChunkMs } = stats;
   const t1 = Date.now();
   const drift = [];
   for (const c of db.prepare('SELECT id, handle, media_count FROM creators').all()) {
@@ -71,7 +70,7 @@ async function report({ window = WINDOW, top = 20 } = {}) {
       removedWithFacesOrAlt: "publish_state='removed' with any media_faces or media_alt_sources row",
       creatorCountDrift: "creators.media_count != live COUNT of their publish_state='published' rows",
     },
-    scannedThroughSeq: topSeq, ms: Date.now() - started, maxChunkMs, window, generatedAt: new Date().toISOString(),
+    scannedThroughSeq: topSeq, ms: Date.now() - started, maxChunkMs, windows: stats.windows, generatedAt: new Date().toISOString(),
   };
 }
 

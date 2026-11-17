@@ -8,16 +8,18 @@
  *            downloads and decodes is stored as preview_url (its hash too, so dedupe sees it).
  *            A 429 or 5xx from the poster host stops the run (`stoppedOn`) and leaves the row; a timeout or other error skips
  *            the row (`posterSkipped`); only a 404/410 or a picture that does not decode counts as "no poster".
- *   review   anything else: moved to the review queue with reason 'no-image'. Reversible: approving it in Review publishes it
+ *   keep     a video is never sent to review for want of a poster (owner decision 2026-11-17): it stays published and is
+ *            counted as `videoNoPoster`; the grid, Reels and the viewer show its own first frame (public/js/images.js).
+ *   review   an IMAGE post with no usable picture: moved to the review queue with reason 'no-image'. Reversible: approving it in Review publishes it
  *            again; nothing is deleted.
  *
- * The admin route is dry by default (?apply=1 to act). dryRun reports what would happen without any network or write. Finding the rows walks media by rowid in WINDOW ranges with
+ * The admin route is dry by default (?apply=1 to act). dryRun reports what would happen without any network or write. Finding the rows walks media by rowid in windows sized by measured time (lib/windowed) with
  * a timer yield between them (never a whole-table statement); the work runs in batches of BATCH rows with a yield after each.
  */
 const repo = require('../db/repo');
+const { walkWindows } = require('../lib/windowed');
 const imagefilter = require('../lib/imagefilter');
 
-const WINDOW = 5000;
 const BATCH = 25;
 const REASON = 'no-image';
 const tick = () => new Promise((res) => setTimeout(res, 0));
@@ -26,22 +28,19 @@ const NO_IMAGE = `m.publish_state = 'published' AND COALESCE(${nz('m.preview_url
   CASE WHEN m.media_type = 'image' THEN ${nz('m.media_url')} END) IS NULL`;
 
 /** The rows, with the action each would get. */
-async function find({ window = WINDOW, stats = {} } = {}) {
+async function find({ window = 0, stats = {} } = {}) {
   const db = repo.db;
   const top = (db.prepare('SELECT MAX(seq) AS m FROM media').get() || {}).m || 0;
   const stmt = db.prepare(`SELECT m.id, m.creator_id, m.platform, m.media_type, m.media_url, m.hls_url, m.phash FROM media m NOT INDEXED
     WHERE m.seq > ? AND m.seq <= ? AND ${NO_IMAGE}`);
   const rows = [];
-  stats.maxChunkMs = stats.maxChunkMs || 0;
-  for (let from = 0; from < top; from += window) {
-    const t0 = Date.now();
-    for (const r of stmt.all(from, from + window)) {
-      const poster = r.media_type === 'video' ? imagefilter.deriveVideoPosterUrl(r.media_url || r.hls_url) : null;
-      rows.push({ ...r, poster, action: poster ? 'poster' : 'review' });
+  await walkWindows({ top, stats, ...(window ? { firstSpan: window, minSpan: window, maxSpan: window } : {}), fn: (after, to) => {
+    for (const r of stmt.all(after, to)) {
+      const isVideo = r.media_type === 'video';
+      const poster = isVideo ? imagefilter.deriveVideoPosterUrl(r.media_url || r.hls_url) : null;
+      rows.push({ ...r, poster, action: poster ? 'poster' : isVideo ? 'keep' : 'review' });
     }
-    stats.maxChunkMs = Math.max(stats.maxChunkMs, Date.now() - t0);
-    await tick();
-  }
+  } });
   return rows;
 }
 
@@ -49,7 +48,7 @@ async function find({ window = WINDOW, stats = {} } = {}) {
  * @param {{dryRun?: boolean, limit?: number, batch?: number, window?: number}} opts
  * @returns {Promise<{found, posterCandidates, wouldReview, postered, reviewed, posterFailed, remaining, byPlatform, sample, dryRun, batches, ms, maxChunkMs}>}
  */
-async function repair({ dryRun = false, limit = Infinity, batch = BATCH, window = WINDOW } = {}) {
+async function repair({ dryRun = false, limit = Infinity, batch = BATCH, window = 0 } = {}) {
   const started = Date.now();
   const stats = {};
   const rows = await find({ window, stats });
@@ -57,6 +56,7 @@ async function repair({ dryRun = false, limit = Infinity, batch = BATCH, window 
   for (const r of rows) byPlatform[r.platform] = (byPlatform[r.platform] || 0) + 1;
   const out = {
     found: rows.length, posterCandidates: rows.filter((r) => r.action === 'poster').length, wouldReview: rows.filter((r) => r.action === 'review').length,
+    videoNoPoster: rows.filter((r) => r.action === 'keep').length, byType: { image: rows.filter((r) => r.media_type === 'image').length, video: rows.filter((r) => r.media_type === 'video').length },
     postered: 0, reviewed: 0, posterFailed: 0, byPlatform, sample: rows.slice(0, 10).map((r) => ({ id: r.id, platform: r.platform, type: r.media_type, action: r.action })),
     dryRun: !!dryRun, batches: 0,
   };
@@ -74,8 +74,9 @@ async function repair({ dryRun = false, limit = Infinity, batch = BATCH, window 
           if (v && v.status === 'ok' && v.phash) { setPoster.run(r.poster, v.phash, r.id); out.postered++; ok = true; }
           else if (/http (?:429|5\d\d)\b/.test(why)) { out.stoppedOn = `${why} from ${new URL(r.poster).hostname}`; break; } // the host is struggling: stop, leave the row
           else if (!(v && v.status === 'ok') && !/http (?:404|410)\b/.test(why)) { out.posterSkipped = (out.posterSkipped || 0) + 1; continue; } // timeout etc.: not proof there is no poster
-          else out.posterFailed++; // 404/410, or a picture that downloaded but does not decode: there is no poster
+          else { out.posterFailed++; out.videoNoPoster++; continue; } // 404/410 or undecodable: no poster; the video stays published
         }
+        if (!ok && r.media_type === 'video') continue; // 'keep': a video is never demoted for want of a poster
         if (!ok) {
           const t0 = Date.now();
           repo.media.setState(r.id, 'review', REASON, { exact: true, deferStats: true });
@@ -91,7 +92,7 @@ async function repair({ dryRun = false, limit = Infinity, batch = BATCH, window 
     for (const id of touched) { repo.creators.refreshStats(id); await tick(); }
     if (out.postered || out.reviewed) repo.logAction('maintenance', 'no-image', 'repair-no-image', `${out.postered} poster(s) restored, ${out.reviewed} moved to review (no-image)`, 'admin');
   }
-  out.remaining = out.found - out.postered - out.reviewed;
+  out.remaining = out.found - out.postered - out.reviewed - out.videoNoPoster; // videos kept on purpose are not "remaining"
   out.ms = Date.now() - started; out.maxChunkMs = stats.maxChunkMs;
   return out;
 }
