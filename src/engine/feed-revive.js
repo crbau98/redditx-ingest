@@ -91,13 +91,34 @@ const CANDIDATES = `SELECT f.id, f.platform, f.kind, f.target, f.label, f.origin
   WHERE f.enabled = 0 AND c.status = 'active' AND COALESCE(f.items_total, 0) > 0`;
 
 /**
+ * The pool revive does NOT touch: productive feeds that are off because their creator is blocked or hidden. `scanned` above counts
+ * only feeds on ACTIVE creators; without this the report reads as if almost nothing were off. Read-only: lists who blocked each
+ * creator (actor, reason, time) so an admin can tell a right block from a wrong one (a fragment or namesake, like Bigggwild's).
+ */
+function inactiveCreatorFeeds(creatorId = null) {
+  const rows = repo.db.prepare(`SELECT c.id, c.display_name, c.handle, c.status, c.origin, COUNT(*) AS feeds, COALESCE(SUM(f.items_total), 0) AS items
+    FROM feeds f JOIN creators c ON c.id = f.creator_id
+    WHERE f.enabled = 0 AND c.status != 'active' AND COALESCE(f.items_total, 0) > 0 ${creatorId ? 'AND c.id = ?' : ''}
+    GROUP BY c.id ORDER BY items DESC`).all(...(creatorId ? [creatorId] : []));
+  const byStatus = {};
+  for (const r of rows) byStatus[r.status] = (byStatus[r.status] || 0) + r.feeds;
+  const blockOf = repo.db.prepare("SELECT actor, reason, created_at FROM moderation_actions WHERE target_type = 'creator' AND target_id = ? AND action = 'block' ORDER BY id DESC LIMIT 1");
+  const byOrigin = {};
+  for (const r of rows) byOrigin[r.origin || 'none'] = (byOrigin[r.origin || 'none'] || 0) + 1;
+  return {
+    creators: rows.length, feeds: rows.reduce((n, r) => n + r.feeds, 0), items: rows.reduce((n, r) => n + r.items, 0), feedsByCreatorStatus: byStatus, creatorsByOrigin: byOrigin,
+    top: rows.slice(0, 30).map((r) => { const b = r.status === 'blocked' ? blockOf.get(r.id) : null; return { creatorId: r.id, name: r.display_name || r.handle, status: r.status, origin: r.origin, feeds: r.feeds, items: r.items, blockedBy: b ? { actor: b.actor, reason: b.reason, at: b.created_at } : null }; }),
+  };
+}
+
+/**
  * @param {{apply?: boolean, limit?: number, creatorId?: string}} opts apply=false (default) only reports.
  * @returns {{dryRun: boolean, scanned: number, candidates: number, revived: number, byPlatform: object, skipped: object, examples: object[]}}
  */
 function reviveFeeds({ apply = false, limit = 500, creatorId = null } = {}) {
   const cap = Math.max(1, Math.min(5000, Number(limit) || 500));
   const rows = creatorId ? repo.db.prepare(`${CANDIDATES} AND f.creator_id = ? ORDER BY f.items_total DESC`).all(creatorId) : repo.db.prepare(`${CANDIDATES} ORDER BY f.items_total DESC`).all();
-  const out = { dryRun: !apply, scanned: rows.length, candidates: 0, revived: 0, byPlatform: {}, skipped: {}, examples: [] };
+  const out = { dryRun: !apply, scanned: rows.length, candidates: 0, revived: 0, byPlatform: {}, skipped: {}, examples: [], inactiveCreators: inactiveCreatorFeeds(creatorId) };
   const todo = [];
   for (const f of rows) {
     const why = stayOffReason(f);
