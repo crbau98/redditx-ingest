@@ -31,6 +31,12 @@ const scopeBlock = (entry) => /^scope(?::| sweep)/i.test(String(entry.reason || 
 function stayOffReason(f) {
   if (f.origin === 'seed') return 'seed feed';
   if (f.platform === 'telegram') return 'telegram (switched by the joined-channel state)';
+  // A feed that discovery attached to a creator whose own name does not match the account is the foreign-feed problem
+  // (GET /feeds/foreign): switching it back on would restore a wrong attachment. Page and RSS feeds name no account and are not judged.
+  if ((f.origin === 'discovered' || f.origin === 'deep-search') && f.platform !== 'web' && f.platform !== 'rss') {
+    const ds = require('./deepsearch');
+    if (!ds.samePerson({ handle: f.creator_handle, display_name: f.creator_name }, ds.accountHandle(f.platform, f.target))) return 'account name does not match creator';
+  }
   const last = lastFeedAction(f.id);
   if (last && STAY_OFF.has(last.action)) return `last action: ${last.action}`;
   if (require('../lib/deadhosts').deadReason(f.platform, f.target)) return 'dead or wrong-platform host';

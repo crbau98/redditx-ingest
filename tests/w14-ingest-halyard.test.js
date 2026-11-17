@@ -95,6 +95,17 @@ test('revive dry run reports; it never revives admin-disabled, engine-disabled, 
   assert.ok(dry.skipped['last action'] >= 2 && dry.skipped['seed feed'] >= 1 && dry.skipped.broken >= 1);
 });
 
+test('revive leaves a discovered account that does not match its creator (the foreign-feed case) off', () => {
+  const c = creator(`matchman${++n}`);
+  const foreign = feed(c.id, 'coomer', 'user', `onlyfans/somebodyelse${n}`, { items: 50, enabled: 0, origin: 'discovered' });
+  const mine = feed(c.id, 'coomer', 'user', `onlyfans/matchman${n}`, { items: 50, enabled: 0, origin: 'discovered' });
+  const page = feed(c.id, 'web', 'page', `https://fapello.com/anything${n}/`, { items: 5, enabled: 0, origin: 'deep-search' });
+  const dry = revive.reviveFeeds({ apply: false, creatorId: c.id });
+  const ids = new Set(dry.examples.map((e) => e.id));
+  assert.ok(!ids.has(foreign.id), 'mismatched account stays off'); assert.ok(ids.has(mine.id)); assert.ok(ids.has(page.id), 'page feeds name no account');
+  assert.ok(dry.skipped['account name does not match creator'] >= 1);
+});
+
 test('revive apply switches candidates on, staggered, resets errors, and logs each one', () => {
   const c = creator(`ra${++n}`);
   const f = feed(c.id, 'fapello', 'user', `ra${n}`, { items: 4, enabled: 0 });
