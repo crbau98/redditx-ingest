@@ -3,7 +3,7 @@ import { h, icon, proxied, fmt, avatar } from '../dom.js';
 import { favorites, history as viewHistory, prefs, platformLabel, platformColor, bus } from '../store.js';
 import { parse, href } from '../router.js';
 import { rememberFlip, heartBurst } from './fx.js';
-import { cardImage, stillChain } from '../images.js';
+import { cardImage, stillChain, firstFrameSrc } from '../images.js';
 
 /* ---- hover / in-view video previews ------------------------------------
  * Only a couple of <video> elements are ever alive at once, so a grid of
@@ -29,7 +29,7 @@ if (document.readyState === 'complete') armPreviews(); else window.addEventListe
 function startPreview(media, item) {
   if (!prefs.previews || slowLink()) return;
   if (!previewsReady && !canHover) { pending.add(media); return; } // a hover is explicit intent: no wait
-  if (media.querySelector('video') || !item.media_url || /\.m3u8(\?|$)/i.test(item.media_url)) return;
+  if (media.querySelector('video:not(.card-ff)') || !item.media_url || /\.m3u8(\?|$)/i.test(item.media_url)) return;
   while (live.size >= MAX_LIVE) stopPreview([...live][0]);
   const v = h('video', { muted: true, loop: true, playsinline: true, preload: 'metadata', 'aria-hidden': 'true', tabindex: '-1' });
   v.muted = true;
@@ -45,7 +45,7 @@ function startPreview(media, item) {
 function stopPreview(media) {
   if (media._hoverTimer) { clearTimeout(media._hoverTimer); media._hoverTimer = 0; }
   pending.delete(media);
-  const v = media.querySelector('video');
+  const v = media.querySelector('video:not(.card-ff)');
   if (v) { v.pause(); v.removeAttribute('src'); v.load(); v.remove(); }
   live.delete(media);
 }
@@ -56,9 +56,9 @@ function stopPreview(media) {
 let scrollIdle = 0;
 if (!canHover) {
   window.addEventListener('scroll', () => {
-    if (!scrollIdle) for (const m of live) { const v = m.querySelector('video'); if (v) v.pause(); }
+    if (!scrollIdle) for (const m of live) { const v = m.querySelector('video:not(.card-ff)'); if (v) v.pause(); }
     clearTimeout(scrollIdle);
-    scrollIdle = setTimeout(() => { scrollIdle = 0; for (const m of live) { const v = m.querySelector('video'); if (v) v.play().catch(() => {}); } }, 200);
+    scrollIdle = setTimeout(() => { scrollIdle = 0; for (const m of live) { const v = m.querySelector('video:not(.card-ff)'); if (v) v.play().catch(() => {}); } }, 200);
   }, { passive: true });
 }
 
@@ -70,6 +70,22 @@ const io = !canHover && 'IntersectionObserver' in window
       if (e.isIntersecting && e.intersectionRatio > 0.65) { if (!media._dwell) media._dwell = setTimeout(() => { media._dwell = 0; startPreview(media, media._item); }, 450); } else { clearTimeout(media._dwell); media._dwell = 0; stopPreview(media); }
     }
   }, { threshold: [0, 0.65, 1] })
+  : null;
+
+/* ---- first frame for a video with no still -------------------------------
+ * The clip itself, paused at #t=0.1 with preload=metadata, mounted only when the card nears the viewport (a few hundred KB
+ * of range reads per tile, not the whole file). If it cannot load, the tinted placeholder and the Video pill stay. */
+function mountFirstFrame(media) {
+  if (!media._ff || media.querySelector('video.card-ff')) return;
+  const v = h('video', { class: 'card-ff', muted: true, playsinline: true, preload: 'metadata', 'aria-hidden': 'true', tabindex: '-1' });
+  v.muted = true;
+  v.addEventListener('loadeddata', () => { const ph = media.querySelector('.ph'); if (ph) ph.classList.add('done'); }, { once: true });
+  v.addEventListener('error', () => v.remove(), { once: true });
+  v.src = media._ff;
+  media.prepend(v);
+}
+const firstFrameIo = 'IntersectionObserver' in window
+  ? new IntersectionObserver((entries) => { for (const e of entries) if (e.isIntersecting) { firstFrameIo.unobserve(e.target); mountFirstFrame(e.target); } }, { rootMargin: '300px 0px' })
   : null;
 
 /* ---- off-screen media relief for deep masonry feeds ---------------------
@@ -161,7 +177,11 @@ export function mediaCard(item, { open, compact = false, why = null, eager = fal
     });
     media.appendChild(img);
     if (reliefIo) reliefIo.observe(media);
-  } else ph.classList.add('done');
+  } else {
+    ph.classList.add('done');
+    media._ff = firstFrameSrc(item, proxied);
+    if (media._ff) { if (firstFrameIo) firstFrameIo.observe(media); else mountFirstFrame(media); }
+  }
   if (progress > 0) media.appendChild(h('span', { class: 'resume-bar', style: { '--p': String(Math.min(0.96, progress)) }, 'aria-hidden': 'true' }));
   // On full cards the "why" chip rides in the caption over the image; compact cards keep it on the media.
   const whyChip = why ? h('span', { class: 'card-why', title: `Why you are seeing this: ${why}. This comes from what you open and save on this device.` }, icon('sparkle', 'sm'), why) : null;

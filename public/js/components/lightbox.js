@@ -1,5 +1,5 @@
 import { isDirectSrc, viaProxy } from '../direct-media.js';
-import { h, icon, proxied, fmt, avatar, toast, copyText, openModal, paintCover, armPoster, probeImage } from '../dom.js';
+import { h, icon, proxied, fmt, avatar, toast, copyText, openModal, paintCover, armPoster, firstFrameWhenNoPoster, probeImage } from '../dom.js';
 import { get, post, reportBroken } from '../api.js';
 import { favorites, follows, prefs, history as viewHistory, tastes, collections, platformLabel, platformColor, bus } from '../store.js';
 import { parse, href, setParam } from '../router.js';
@@ -417,6 +417,7 @@ function paintStage(it) {
     const poster = tileImage(it);
     const v = h('video', { controls: true, playsinline: true, loop: true, autoplay: true, preload: 'auto', poster: poster ? proxied(poster) : null, 'aria-label': it.title || 'Video' });
     armPoster(v, stillChain(it));
+    firstFrameWhenNoPoster(v);
     v.muted = prefs.muted;
     v.addEventListener('volumechange', () => { prefs.muted = v.muted; });
     v.addEventListener('error', () => {
