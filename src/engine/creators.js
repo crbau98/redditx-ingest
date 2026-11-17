@@ -53,7 +53,10 @@ function applyProfile(feed, profile, settings) {
 
   const externals = [];
   const free = paid.freeHint(profile.bio);
-  for (const l of profile.links || []) {
+  // A profile read from an aggregator page (a directory, a ranking, a leak index) lists other people too: only his own links go on.
+  const source = feed && /^https?:\/\//i.test(String(feed.target || '')) ? feed.target : null;
+  const profileLinks = source ? require('../lib/aggregators').ownLinks(creator, profile.links || [], { source, known: require('./identity').aliasesOf(creator.id).filter((a) => a.source !== 'bio').map((a) => a.alias) }).keep : (profile.links || []);
+  for (const l of profileLinks) {
     if (l.external && l.handle && l.service && paid.SERVICES[l.service] && paid.SERVICES[l.service].trace) {
       externals.push(paid.paidLink(l.service, l.handle, { free }));
       continue;
@@ -81,12 +84,13 @@ function applyProfile(feed, profile, settings) {
     if (r.created) { out.linked++; events.log('INFO', `Linked ${l.platform}:${l.target} to ${creator.handle}`); }
   }
   // "OnlyFans: @name" / "Fansly: @name" / "JFF: @name" written out in the bio, with no link.
-  for (const { service, handle } of paid.findPaidHandles(profile.bio)) {
+  const fromAggregator = !!source && require('../lib/aggregators').isAggregator(source);
+  for (const { service, handle } of fromAggregator ? [] : paid.findPaidHandles(profile.bio)) { // an aggregator page's text names many people
     if (!externals.some((e) => e.handle === handle && (e.service || 'OnlyFans') === service)) {
       externals.push(paid.paidLink(service, handle, { free }));
     }
   }
-  if (externals.length) repo.creators.enrich(creator.id, { links: externals });
+  if (externals.length) repo.creators.enrich(creator.id, { links: externals, source });
   // The paid page is a public page too: read it so the media the platform serves publicly is ingested
   // like the rest of the library, while the page stays on the profile as a link-out card.
   for (const e of externals) {

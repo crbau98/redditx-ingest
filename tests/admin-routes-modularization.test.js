@@ -53,6 +53,17 @@ GET /creators/:id
 POST /creators
 PATCH /creators/:id
 POST /creators/merge
+GET /identity/repair/queue
+POST /identity/repair/queue
+GET /identity/repair/feeds
+POST /identity/repair/feeds
+GET /identity/repair/links
+POST /identity/repair/links
+GET /identity/repair/auto-merge
+POST /identity/repair/auto-merge
+GET /creators/hidden/unhide
+POST /creators/hidden/unhide
+GET /creators/hidden/report
 POST /creators/normalize-handles
 POST /creators/:id/block
 POST /creators/:id/restore

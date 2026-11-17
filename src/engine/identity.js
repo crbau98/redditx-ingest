@@ -298,6 +298,9 @@ function pageKey(url) {
     const seg = (u.pathname.split('/').filter(Boolean)[0] || '').toLowerCase();
     if (host.endsWith('carrd.co') && !seg) return host;
     if (!LINKPAGE_HOSTS.test(host) || seg.length < 3) return null;
+    // a site page or asset on the host (justfor.fans/wallet-topup.php, /images) is not anybody's link page
+    const { PATH_WORDS, FILE_EXT } = require('../lib/handle-words');
+    if (FILE_EXT.test(seg) || PATH_WORDS.has(seg)) return null;
     return `${host}/${seg}`;
   } catch { return null; }
 }
