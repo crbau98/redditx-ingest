@@ -28,6 +28,22 @@ function isAggregator(url) {
   return !!h && DOMAINS.some((d) => h === d || h.endsWith(`.${d}`));
 }
 
+/**
+ * Tube/directory SEARCH (or tag/category listing) on an aggregator host — not a single-person profile page.
+ * These pages mix many creators' media (eporner.com/search/…, spankbang.com/search/…), so attaching them as
+ * enabled feeds pollutes whoever they land on. Profile paths like fanstats.com/handle stay out of this.
+ */
+function isAggregatorSearch(url) {
+  if (!isAggregator(url)) return false;
+  let u;
+  try { u = new URL(/^[a-z]+:\/\//i.test(url) ? url : `https://${url}`); } catch { return false; }
+  const path = (u.pathname || '').toLowerCase();
+  if (/\/search(?:\/|$)/.test(path)) return true;
+  if (/\/(?:tags?|categor(?:y|ies))\//.test(path)) return true;
+  if (/[?&](?:q|query|search|keyword)=/i.test(u.search || '')) return true;
+  return false;
+}
+
 /** The handle a link names, when it names one: a paid page handle, a social/profile handle, or null (a generic URL). */
 function linkHandle(link) {
   if (!link) return null;
@@ -82,4 +98,4 @@ function urlNames(creator, url, known = []) {
   return false;
 }
 
-module.exports = { urlNames, compact, DOMAINS, isAggregator, linkHandle, ownLinks, hostOf };
+module.exports = { urlNames, compact, DOMAINS, isAggregator, isAggregatorSearch, linkHandle, ownLinks, hostOf };

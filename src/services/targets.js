@@ -63,16 +63,24 @@ function addSpec(spec, { creatorId = null, origin = 'admin', trusted, hint, body
     return { status: 'invalid', reason: 'This account is on the blocklist' };
   }
 
+  // Aggregator SEARCH / tag listings (eporner.com/search/…, spankbang.com/search/…): never attach as an enabled feed.
+  // Automatic origins are refused; an admin may record the feed but it stays off until someone turns it on by hand.
+  const agg = require('../lib/aggregators');
+  const aggSearch = agg.isAggregatorSearch(String(spec.target || ''));
+  if (aggSearch && origin !== 'admin') {
+    return { status: 'invalid', reason: 'Aggregator search pages are not attached as feeds' };
+  }
+
   // A page on an aggregator site (a directory, a ranking, a leak index) is filed on a creator only when its URL names him: those
   // sites have a page per person, and a search for one man returns their pages about other men (onlypedia / fanscentral pages
   // about Bigggwild were filed on another creator). An admin's own choice stands.
-  if (creatorId && origin !== 'admin' && require('../lib/aggregators').isAggregator(String(spec.target || ''))) {
+  if (creatorId && origin !== 'admin' && agg.isAggregator(String(spec.target || ''))) {
     const c = repo.creators.get(creatorId);
     // his names: confirmed aliases plus the paid pages he claimed (coverage searches by those, so a page named after his paid
     // handle is his even when his PRISM handle differs)
     const known = require('../engine/identity').aliasesOf(creatorId).filter((a) => a.source !== 'bio').map((a) => a.alias);
     try { for (const r of repo.db.prepare("SELECT handle FROM onlyfans_leads WHERE creator_id = ? AND status != 'rejected'").all(creatorId)) known.push(r.handle); } catch { /* table not there yet */ }
-    if (c && !require('../lib/aggregators').urlNames(c, spec.target, known)) creatorId = null;
+    if (c && !agg.urlNames(c, spec.target, known)) creatorId = null;
   }
 
   // Male-only: refuse accounts, communities and searches whose own name reads female / feminine.
@@ -107,8 +115,10 @@ function addSpec(spec, { creatorId = null, origin = 'admin', trusted, hint, body
     creatorId: creator ? creator.id : (['feed', 'page'].includes(spec.kind) || spec.platform === 'telegram' ? creatorId : null),
     trusted: trusted !== undefined ? trusted : (['search', 'tag'].includes(spec.kind) ? 0 : 1),
     origin, intervalMin: defaultInterval(spec),
+    // Admin may record an aggregator search URL, but it must not start enabled (wrong-media pollution).
+    enabled: aggSearch ? 0 : 1,
   });
-  if (!res.created && !res.feed.enabled) {
+  if (!aggSearch && !res.created && !res.feed.enabled) {
     const dead = res.feed.consecutive_failures >= 3 || (res.feed.last_error && /not found|disabled|unavailable/i.test(res.feed.last_error));
     if (origin === 'admin' || !dead) {
       repo.feeds.update(res.feed.id, { enabled: true, runNow: true, ...(origin === 'admin' ? { resetErrors: true } : {}) });
