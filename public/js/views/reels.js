@@ -204,26 +204,24 @@ export async function reels(root, { query }) {
       for (const ev of ['pause', 'waiting']) v.addEventListener(ev, () => { if (s.prog) s.prog.pause(); });
       s.stage.replaceChildren(v);
     } else {
-      const preview = s.it.preview_url || s.it.thumbnail_url;
-      const sharp = preview || s.it.media_url;
-      // Same order as the viewer: the cached 360px thumb, then the platform preview, then the full file.
-      const first = s.it.thumb_url && s.it.thumb_url !== sharp ? s.it.thumb_url : sharp;
+      // Same order as the viewer (fallbackStills skips profile banners/icons): cached thumb, platform still, then full file.
+      const order = fallbackStills(s.it); const failed = new Set();
+      const first = order[0] || s.it.media_url;
+      const sharp = order.find((u) => u !== s.it.thumb_url) || order[0] || s.it.media_url;
       const img = h('img', { alt: s.it.title || '', src: proxied(first), decoding: 'async', draggable: 'false' });
       // The full-size file loads only once this slide has been the one on screen for a moment (see activate): a neighbour
       // that is mounted ahead of time, or a photo swiped past, never downloads it.
-      // The full file is an upgrade over the stills (see images.fallbackStills): when it fails (error, 404, the host's stub) the still on
-      // screen stays, and "no longer available" is for a post where every candidate failed.
-      const order = fallbackStills(s.it); const failed = new Set();
+      // The full file is an upgrade over the stills: when it fails the still on screen stays; "no longer available" only when every candidate failed.
       s.loadFull = () => {
         s.loadFull = null;
-        if (!preview || preview === s.it.media_url || !img.isConnected) return;
+        if (!sharp || sharp === s.it.media_url || !img.isConnected) return;
         const show = (src) => { if (img.isConnected) img.src = src; };
         loadImage(s.it.media_url, show, () => {
           failed.add(s.it.media_url);
           if (s.it.fallback_url && s.it.fallback_url !== s.it.media_url) loadImage(s.it.fallback_url, show, () => { failed.add(s.it.fallback_url); }); // the stored full-size rendition
         });
       };
-      if (first !== sharp) {
+      if (first !== sharp && sharp) {
         const mid = new Image();
         mid.onload = () => { if (img.isConnected) img.src = mid.src; };
         mid.src = proxied(sharp);
