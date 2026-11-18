@@ -22,6 +22,8 @@ const paid = require('../lib/paid');
 const takedowns = require('../lib/takedowns');
 const { extractLinks } = require('../lib/links');
 const vault = require('../lib/vault');
+const aggregators = require('../lib/aggregators');
+const { samePerson } = require('./deepsearch');
 
 const SKIP_AUTHORS = new Set(['[deleted]', 'deleted', 'automoderator', 'web', 'null', 'undefined', '']);
 const REDGIFS_PAGE = /redgifs\.com\/(?:watch|ifr)\//i;
@@ -151,7 +153,51 @@ function telegramAmbiguous(item, feed) {
   const linksOther = extractLinks(text).some(l => l.ingestable && l.kind === 'user' && (l.platform !== 'telegram' || cleanHandle(l.target).toLowerCase() !== cleanHandle(feed.target).toLowerCase()));
   return !!(item.repostOf || item.forwardFrom || tagsOther || linksOther || paid.findPaidHandles(text).length || !feed.creator_id || feed.origin !== 'admin' || !e || !e.broadcast || e.megagroup || e.sender?.type !== 'channelId' || e.sender.id !== e.channelId);
 }
-const ownedByFeed = (item, feed) => !!feed.creator_id && ['user', 'channel', 'feed', 'page'].includes(feed.kind) && !item.repostOf && !telegramAmbiguous(item, feed);
+/**
+ * Does this feed own the item as the creator's media?
+ *   user / channel / feed  — account and per-creator mirrors (coomer handle, reddit/user, …): yes when attached.
+ *   page                   — aggregator / search URLs: never. Editorial pages: only with per-item proof
+ *                            (author/path names him, or same perceptual hash as an item he already owns).
+ * No face / look-alike path.
+ */
+function pageCreatorAliases(creatorId) {
+  try {
+    return require('./identity').aliasesOf(creatorId).filter((a) => a.source !== 'bio').map((a) => a.alias);
+  } catch { return []; }
+}
+
+/** Per-item proof that a web/page item is this creator's, not just that the feed URL was attached to him. */
+function pageItemProof(item, feed, { phash = null } = {}) {
+  if (!feed.creator_id) return false;
+  const creator = repo.creators.get(feed.creator_id);
+  if (!creator) return false;
+  const known = pageCreatorAliases(feed.creator_id);
+  const author = cleanHandle(item.author);
+  if (author && !SKIP_AUTHORS.has(author.toLowerCase()) && samePerson(creator, author, known)) return true;
+  for (const u of [item.permalink, item.mediaUrl, item.previewUrl, item.sourceUrl, feed.target]) {
+    if (u && aggregators.urlNames(creator, u, known)) return true;
+  }
+  if (phash) {
+    const hit = repo.db.prepare(
+      "SELECT 1 AS ok FROM media WHERE creator_id = ? AND phash = ? AND publish_state IN ('published','review') LIMIT 1",
+    ).get(feed.creator_id, phash);
+    if (hit) return true;
+  }
+  return false;
+}
+
+function pageIsDiscoveryOnly(feed) {
+  const t = String(feed.target || '');
+  return aggregators.isAggregator(t) || aggregators.isSearchPage(t);
+}
+
+function ownedByFeed(item, feed, { phash = null } = {}) {
+  if (!feed.creator_id || item.repostOf || telegramAmbiguous(item, feed)) return false;
+  if (feed.kind === 'user' || feed.kind === 'channel' || feed.kind === 'feed') return true;
+  if (feed.kind !== 'page') return false;
+  if (pageIsDiscoveryOnly(feed)) return false;
+  return pageItemProof(item, feed, { phash });
+}
 
 /**
  * Find an active known creator explicitly tagged or linked in a post's caption/links
@@ -206,7 +252,9 @@ function mentionedKnownCreator(item, feed) {
 /** The creator this item belongs to, if one is already known (never creates one). */
 function knownCreator(item, feed) {
   if (telegramAmbiguous(item, feed)) return null;
-  if (ownedByFeed(item, feed)) return repo.creators.get(feed.creator_id);
+  if (ownedByFeed(item, feed, { phash: item._pipelinePhash || null })) return repo.creators.get(feed.creator_id);
+  // Aggregator / search pages are discovery only: never inherit the attached creator here.
+  if (feed.kind === 'page' && pageIsDiscoveryOnly(feed)) return null;
   if (['rss', 'web', 'linkinbio'].includes(feed.platform)) return mentionedKnownCreator(item, feed);
   const handle = cleanHandle(item.author);
   if (handle && !SKIP_AUTHORS.has(handle.toLowerCase())) {
@@ -240,13 +288,18 @@ function hasAdultCreatorLinks(item) {
 /** Which creator does this item belong to? May create one. */
 function resolveCreator(item, feed, adapter) {
   if (telegramAmbiguous(item, feed)) return null;
-  // Feeds that belong to a specific creator (their profile, their RSS, their page).
-  if (ownedByFeed(item, feed)) {
+  const phash = item._pipelinePhash || null;
+  // Feeds that belong to a specific creator (their profile, their channel, or an editorial page with proof).
+  if (ownedByFeed(item, feed, { phash })) {
     const c = repo.creators.get(feed.creator_id);
     if (c) return c.status === 'active' ? c : { blocked: true };
   }
   const platform = feed.platform;
   if (['rss', 'web', 'linkinbio'].includes(platform) && !item.repostOf) {
+    // Aggregator / tube-search pages: discovery only — never invent ownership or use the attached creator.
+    if (feed.kind === 'page' && pageIsDiscoveryOnly(feed)) return null;
+    // Editorial page already attached to someone, but this item has no proof: leave unassigned (review later).
+    if (feed.kind === 'page' && feed.creator_id) return null;
     const mentioned = mentionedKnownCreator(item, feed);
     if (mentioned) return mentioned;
     // A site/feed with no creator yet becomes its own creator, owned by the feed.
@@ -525,6 +578,7 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   }
 
   // ---- 7. creator -----------------------------------------------------------------
+  item._pipelinePhash = phash;
   const creator = resolveCreator(item, feed, adapter);
   if (creator && creator.blocked) return { outcome: 'blocked', reason: 'creator blocked' };
   if (creator && takedowns.checkItem(item, feed, null, creator)) return { outcome: 'blocked', reason: 'takedown' };
@@ -544,6 +598,11 @@ async function processItemInner(rawItem, feed, adapter, settings) {
   else if (sc.femaleSoft) { state = 'review'; reviewReason = `scope:${sc.rule}`; } // feminine-adjacent wording: a human decides, whatever the feed trust or scope mode
   else if (sc.scope === 'uncertain' && settings.scopeMode === 'strict') { state = 'review'; reviewReason = 'scope:unclear'; }
   else if (telegramAmbiguous(item, feed)) { state = 'review'; reviewReason = 'attribution:telegram-ambiguous'; }
+  else if (!creator && feed.kind === 'page' && feed.creator_id && pageIsDiscoveryOnly(feed)) {
+    state = 'review'; reviewReason = 'attribution:aggregator';
+  } else if (!creator && feed.kind === 'page' && feed.creator_id) {
+    state = 'review'; reviewReason = 'attribution:unproven';
+  }
   const body = physique.live(settings); // the model pass can be slow: judge with the body-filter settings as they are now
   const bodyVerdict = state === 'published' ? physique.stateFor(physiqueScore, body) : null;
   if (bodyVerdict) { state = bodyVerdict.state; reviewReason = bodyVerdict.reason; imagefilter.noteHeavy(); } // kept, hidden: the threshold can move
@@ -625,4 +684,8 @@ async function processItem(rawItem, feed, adapter, settings) {
   return result;
 }
 
-module.exports = { processItem, resolveCreator, knownCreator, mentionedKnownCreator, cleanHandle, _blockFemaleCreator: blockFemaleCreator, _noteImageStrike: noteImageStrike, _hostState: hostState };
+module.exports = {
+  processItem, resolveCreator, knownCreator, mentionedKnownCreator, cleanHandle,
+  ownedByFeed, pageItemProof, pageIsDiscoveryOnly,
+  _blockFemaleCreator: blockFemaleCreator, _noteImageStrike: noteImageStrike, _hostState: hostState,
+};

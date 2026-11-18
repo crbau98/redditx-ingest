@@ -35,12 +35,20 @@ function isAggregator(url) {
  */
 function isAggregatorSearch(url) {
   if (!isAggregator(url)) return false;
+  return isSearchPage(url);
+}
+
+/**
+ * Search / tag / category listing URL (any host). Aggregator profiles like fapello.com/handle stay false;
+ * eporner.com/search/… and example.com/search?q=… are true. Used so kind=page feeds for these never own media.
+ */
+function isSearchPage(url) {
   let u;
   try { u = new URL(/^[a-z]+:\/\//i.test(url) ? url : `https://${url}`); } catch { return false; }
   const path = (u.pathname || '').toLowerCase();
   if (/\/search(?:\/|$)/.test(path)) return true;
-  if (/\/(?:tags?|categor(?:y|ies))\//.test(path)) return true;
-  if (/[?&](?:q|query|search|keyword)=/i.test(u.search || '')) return true;
+  if (/\/(?:tags?|categor(?:y|ies)|results?)\//.test(path)) return true;
+  if (/[?&](?:q|query|search|keyword|keywords)=/i.test(u.search || '')) return true;
   return false;
 }
 
@@ -98,4 +106,4 @@ function urlNames(creator, url, known = []) {
   return false;
 }
 
-module.exports = { urlNames, compact, DOMAINS, isAggregator, isAggregatorSearch, linkHandle, ownLinks, hostOf };
+module.exports = { urlNames, compact, DOMAINS, isAggregator, isAggregatorSearch, isSearchPage, linkHandle, ownLinks, hostOf };
