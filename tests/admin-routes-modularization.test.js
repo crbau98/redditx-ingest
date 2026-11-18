@@ -34,6 +34,7 @@ POST /ai/plan
 POST /ai/triage
 POST /maintenance/purge-removed-residue
 POST /maintenance/repair-no-image
+POST /maintenance/heal-banner-previews
 GET /library-health
 GET /feeds/idle
 GET /feeds/yield
