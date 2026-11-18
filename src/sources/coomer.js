@@ -87,9 +87,11 @@ function itemsFromPost(post, feed) {
   const author = String(post.user || '');
   const text = `${post.title || ''} ${(post.content || post.substring || '').replace(/<[^>]*>/g, ' ')}`.trim();
   const permalink = post.id ? `${BASE}/${svc}/user/${author}/${post.id}` : `${BASE}/${svc}/user/${author}`;
-  // If a post has both an image and a video, use the image's thumbnail as the video's poster; otherwise fall back to the creator's banner.
+  // If a post has both an image and a video, use the image's thumbnail as the video's poster. Never the creator's banner:
+  // that made every video-only post on a creator share one identical card picture, and thumbs.js then stored that banner
+  // as media.prism.invalid/th/... so grids looked broken or all the same. No poster → the UI shows the video's first frame.
   const firstImg = files.find((f) => f && f.path && typeOfFile(f) === 'image');
-  const videoPoster = firstImg ? thumbUrl(firstImg.path) : (author ? bannerUrl(svc, author) : null);
+  const videoPoster = firstImg ? thumbUrl(firstImg.path) : null;
   files.forEach((f, i) => {
     const url = fileUrl(f.path);
     if (!url) return;
@@ -110,9 +112,9 @@ function itemsFromPost(post, feed) {
       mediaUrl: url,
       previewUrl: preview,
       thumbnailUrl: preview,
-      // a video has no poster of its own here: it borrows the post's picture or the creator's banner, shared with its siblings, so the
-      // pipeline must not take the poster's perceptual hash for the video's (it collapsed a creator's videos into one)
-      ...(type === 'video' ? { posterShared: true } : {}),
+      // a video that borrows the post's picture shares that poster with its siblings: the pipeline must not take the
+      // poster's perceptual hash for the video (it collapsed a creator's videos into one). No poster → nothing to mark.
+      ...(type === 'video' && preview ? { posterShared: true } : {}),
       tags: [],
       nsfw: 'explicit',
       trusted: true, // API-provided media URL on coomer's own host; scope trust is decided per feed

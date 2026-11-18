@@ -45,6 +45,17 @@ describe('fallbackStills: the order to fall back through', () => {
   test('a signed preview URL is used exactly as stored, never rewritten to another width', () => {
     assert.equal(img.fallbackStills(it)[0], it.preview_url);
   });
+  test('coomer profile banners and icons are not stills', () => {
+    const banner = 'https://img.coomer.st/banners/onlyfans/bigggwild';
+    const icon = 'https://img.coomer.st/icons/onlyfans/bigggwild';
+    const real = 'https://img.coomer.st/thumbnail/data/ab/cd/x.jpg';
+    assert.equal(img.isProfileChromeUrl(banner), true);
+    assert.equal(img.isProfileChromeUrl(icon), true);
+    assert.equal(img.isProfileChromeUrl(real), false);
+    assert.deepEqual(img.stillChain({ ...it, preview_url: banner, thumbnail_url: icon, thumb_url: null, media_type: 'video' }), []);
+    assert.deepEqual(img.stillChain({ ...it, preview_url: banner, thumbnail_url: real, thumb_url: null }), [real, it.media_url]);
+    assert.deepEqual(img.cardImage({ ...it, preview_url: banner, thumb_url: null, media_type: 'video' }, { proxy: (u) => u, isVideo: true }), { src: null, fallback: null });
+  });
 });
 
 describe('source contracts', () => {

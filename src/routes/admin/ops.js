@@ -53,6 +53,14 @@ router.post('/maintenance/repair-no-image', async (req, res) => {
   const limit = q.limit !== undefined && q.limit !== '' ? int(q.limit, 0, 1000000, 0) : Infinity;
   try { res.json(await require('../../engine/noimage-repair').repair({ dryRun, limit })); } catch (e) { res.status(500).json({ error: e.message }); }
 });
+// Clear coomer/kemono banner|icon previews used as post stills, and the object-store thumbs derived from them (dry by default).
+router.post('/maintenance/heal-banner-previews', async (req, res) => {
+  const q = { ...req.query, ...(req.body || {}) };
+  const dryRun = dryRunOf(req, { defaultDry: true });
+  const limit = q.limit !== undefined && q.limit !== '' ? int(q.limit, 0, 1000000, 0) : Infinity;
+  const creatorId = typeof q.creatorId === 'string' && q.creatorId ? q.creatorId : null;
+  try { res.json(await require('../../engine/banner-heal').heal({ dryRun, limit, creatorId })); } catch (e) { res.status(500).json({ error: e.message }); }
+});
 router.get('/library-health', async (req, res) => {
   try { res.json(await require('../../engine/library-health').report()); } catch (e) { res.status(500).json({ error: e.message }); }
 });
