@@ -70,7 +70,9 @@ describe('thumbnail or preview for a grid card (images.js)', () => {
     const card = fs.readFileSync(path.join(JS, 'components', 'card.js'), 'utf8');
     assert.match(card, /cardImage\(item/, 'the card picks a size-aware first still');
     assert.match(card, /stillChain\(item\)/, 'then walks every remaining still when that URL dies');
-    assert.match(card, /retries\.shift\(\)/, 'each error takes the next still; the last failure leaves the placeholder + report');
+    assert.match(card, /retries\.shift\(\)/, 'each error takes the next still');
+    assert.match(card, /if \(isVideo\) \{ armFirstFrame\(media, item, ph\); return; \}/, 'a video whose every still dies falls through to firstFrameSrc');
+    assert.match(card, /deadStills/, 'a still that 404s on this page is not re-requested by later cards');
   });
   test('every grid card is built through it, with the layout width passed down from the masonry', () => {
     const card = fs.readFileSync(path.join(JS, 'components', 'card.js'), 'utf8');
@@ -99,7 +101,7 @@ describe('thumbnail or preview for a grid card (images.js)', () => {
     const reels = fs.readFileSync(path.join(JS, 'views', 'reels.js'), 'utf8');
     assert.match(reels, /const poster = tileImage\(it\)/);
     assert.match(reels, /armPoster\(v, stillChain\(s\.it\)\)/);
-    assert.match(reels, /const first = s\.it\.thumb_url && s\.it\.thumb_url !== sharp \? s\.it\.thumb_url : sharp/);
+    assert.match(reels, /const first = order\[0\] \|\| s\.it\.media_url/, 'Reels starts from fallbackStills (banners skipped)');
     assert.match(reels, /s\.loadFull = \(\) => \{/, 'the full file loads after the slide has been on screen a moment, not beside the preview');
     assert.match(reels, /const is = \(u\) => cur === abs\(proxied\(u\)\) \|\| cur === abs\(viaProxy\(u\)\)/, 'Reels compares absolute URLs and steps through every still (w14)');
     const suggest = fs.readFileSync(path.join(JS, 'components', 'suggest.js'), 'utf8');
@@ -125,9 +127,27 @@ describe('thumbnail or preview for a grid card (images.js)', () => {
 
   test('the viewer stage shows the cached thumbnail first, then the preview, then the full file', () => {
     const lb = fs.readFileSync(path.join(JS, 'components', 'lightbox.js'), 'utf8');
-    assert.match(lb, /const first = ready \? it\.media_url : it\.thumb_url && it\.thumb_url !== sharp \? it\.thumb_url : sharp;/);
+    assert.match(lb, /const first = ready \? it\.media_url : \(order\[0\] \|\| it\.media_url\);/, 'viewer starts from fallbackStills (banners skipped)');
     assert.match(lb, /const ready = warmed\.has\(it\.media_url\);/, 'a full file already loaded (the preloaded next item, the one just left) is shown at once');
     assert.match(lb, /mid\.onload = \(\) => \{ if \(img\.isConnected\) img\.src = mid\.src; startFull\(\); \};/, 'the full file starts after the preview, not beside it');
     assert.match(lb, /mid\.onerror = \(\) => \{ failed\.add\(sharp\); startFull\(\); \};/, 'a failed preview is remembered and still gets the full file');
+  });
+
+  test('coomer profile banners and banner-derived store thumbs are not stills', () => {
+    const banner = 'https://img.coomer.st/banners/onlyfans/bigggwild';
+    const icon = 'https://img.coomer.st/icons/onlyfans/bigggwild';
+    const real = 'https://img.coomer.st/thumbnail/data/ab/cd/x.jpg';
+    const store = 'https://media.prism.invalid/th/dead.webp';
+    assert.equal(img.isProfileChromeUrl(banner), true);
+    assert.equal(img.isProfileChromeUrl(icon), true);
+    assert.equal(img.isProfileChromeUrl(real), false);
+    assert.equal(img.isStoreThumbUrl(store), true);
+    assert.equal(img.isStoreThumbUrl('/th/x.webp'), true);
+    assert.deepEqual(img.stillChain({ media_type: 'video', preview_url: banner, thumbnail_url: icon, thumb_url: null, media_url: 'https://cdn/v.mp4' }), []);
+    assert.deepEqual(img.stillChain({ media_type: 'video', preview_url: banner, thumb_url: store, media_url: 'https://cdn/v.mp4' }), [], 'store thumb of a banner is skipped so firstFrame runs with no 404');
+    assert.deepEqual(img.stillChain({ media_type: 'video', thumb_url: '/s/t.webp', media_url: 'https://cdn/v.mp4' }), ['/s/t.webp'], 'a real store thumb with no platform still stays');
+    assert.deepEqual(img.stillChain({ ...item, preview_url: banner, thumbnail_url: real, thumb_url: null }), [real, item.media_url]);
+    assert.deepEqual(img.cardImage({ media_type: 'video', preview_url: banner, thumb_url: store, media_url: 'https://cdn/v.mp4' }, { proxy, isVideo: true }), { src: null, fallback: null });
+    assert.ok(img.firstFrameSrc({ media_type: 'video', preview_url: banner, thumb_url: store, media_url: 'https://cdn/v.mp4' }, proxy));
   });
 });

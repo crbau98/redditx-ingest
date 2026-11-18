@@ -1,5 +1,12 @@
 # UI changelog
 
+## 2026-11-18 — Creator grids: skip banner stills, no dead-store-thumb tax
+
+- **Coomer/kemono profile banners and icons are not post stills.** `images.isProfileChromeUrl` drops `/banners/` and `/icons/` on those CDNs from `stillChain` / `fallbackStills` / `cardImage` (same rule as Forge’s ingest + heal). Cards no longer show one identical banner on every video-only tile.
+- **Banner-derived object-store thumbs are skipped for videos.** When the only remaining stills are `media.prism.invalid` / `/th/` paths and every platform still was chrome, the chain is empty so `firstFrameSrc` runs immediately — no per-tile proxy 404 before the frame. A lone store thumb with no platform still is kept (normal thumbs.js poster). Synthetic Bigggwild-shaped grid: 40/40 tiles hit a dead URL first before; 0 after, all first-frame-ready.
+- **Card hardening:** a 404/403 keeps the same `<img>` and aspect box (shimmer stays, no remount); known-dead still URLs are remembered for the page visit so later cards do not re-request them; when every still dies, a video falls through to firstFrame instead of `reportBroken`. Viewer and Reels start from `fallbackStills` (not raw thumb/preview fields).
+- **Demo creator page** (`#/creator/jules_nyc`, 13 cards): phone LCP 420 ms / desktop 320 ms, 0 broken tiles, 0 page errors (local DEMO_ART).
+
 ## 2026-11-17 — A post whose original is gone still shows its best preview
 
 - **Fixed (from a user report on a Reddit post):** when the full-size file failed, the viewer replaced the working preview with "This image is no longer available at its source." (Reels likewise). The original may answer 404 with the host's "not found" stub picture (`i.redd.it`: 1 KB PNG) while its `cf.preview.redd.it` preview loads fine. The full file is now an upgrade over the stills, never a replacement: when it fails (error, 404, or the stub) the viewer and Reels keep the best still (preview, then the platform thumbnail, then our thumbnail), and "no longer available" appears only when every candidate failed (the post is then reported once, as before). The grid already walked every still; it is covered by a test now.

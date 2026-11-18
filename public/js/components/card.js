@@ -197,6 +197,16 @@ export function releaseCard(card) {
   if (img && !media._loaded && !media._parked) img.removeAttribute('src');
 }
 
+// Still URLs that 404/403 on this page visit. Creator grids often share one dead store thumb path shape; after the first
+// failure, later cards skip that URL so they do not each pay a proxy round-trip before the next still or first-frame.
+const deadStills = new Set();
+
+function armFirstFrame(media, item, ph) {
+  ph.classList.add('done');
+  media._ff = firstFrameSrc(item, proxied);
+  if (media._ff) { if (reliefIo) reliefIo.observe(media); if (firstFrameIo) firstFrameIo.observe(media); else mountFirstFrame(media); }
+}
+
 /** One media card. `open(item)` is called when the media is activated. */
 // `width`: the CSS width the card is laid out at, when the caller knows it (masonry columns); without it the card is a rail card.
 // `eager: true` is only the first viewport row (one card per column). Everything else stays lazy
@@ -208,10 +218,10 @@ export function mediaCard(item, { open, compact = false, why = null, eager = fal
   // preview only where the thumbnail would have to be stretched (see images.js). The full file only loads in the viewer.
   const picked = cardImage(item, { proxy: proxied, width, viewport: window.innerWidth, dpr: window.devicePixelRatio || 1, isVideo });
   // Prefer the size-aware pick, then walk every remaining still (thumb → preview → file) so one
-  // dead URL cannot leave a blank tile on a creator page.
+  // dead URL cannot leave a blank tile on a creator page. Known-dead URLs from earlier cards are skipped.
   const retries = [];
   const seen = new Set();
-  const push = (u) => { if (u && !seen.has(u)) { seen.add(u); retries.push(u); } };
+  const push = (u) => { if (u && !seen.has(u) && !deadStills.has(u)) { seen.add(u); retries.push(u); } };
   push(picked.src);
   push(picked.fallback);
   for (const u of stillChain(item)) push(proxied(u));
@@ -231,19 +241,27 @@ export function mediaCard(item, { open, compact = false, why = null, eager = fal
     // The placeholder's shimmer stops as soon as the image is in: a grid of finished cards must not
     // keep animating underneath (it repainted every visible card, every frame, forever).
     img.addEventListener('load', () => { media._loaded = true; img.classList.remove('loading'); ph.classList.add('done'); });
-    // A vanished store thumb, a hotlink-blocked preview, then the file itself: keep stepping until
-    // one loads. Only when every still fails do we leave the tinted placeholder and report broken.
+    // A vanished store thumb (404/403), a hotlink-blocked preview, then the file itself: keep the same <img> and
+    // aspect box, step src only (no remount), and stay on the shimmer until a candidate loads. When every still
+    // fails, a video falls through to firstFrameSrc; an image reports broken and keeps the tinted placeholder.
     img.addEventListener('error', () => {
-      const retry = retries.shift();
-      if (retry && retry !== img.src) { media._src = retry; img.src = retry; return; }
-      media._img = null; img.remove(); ph.classList.add('done'); reportBroken(item.id);
+      deadStills.add(media._src);
+      let retry = retries.shift();
+      while (retry && (retry === img.src || deadStills.has(retry))) retry = retries.shift();
+      if (retry) {
+        img.classList.add('loading'); // keep shimmer; do not flash a broken-image icon between candidates
+        media._src = retry;
+        img.src = retry;
+        return;
+      }
+      media._img = null; img.remove();
+      if (isVideo) { armFirstFrame(media, item, ph); return; }
+      ph.classList.add('done'); reportBroken(item.id);
     });
     media.appendChild(img);
     if (reliefIo) reliefIo.observe(media);
   } else {
-    ph.classList.add('done');
-    media._ff = firstFrameSrc(item, proxied);
-    if (media._ff) { if (reliefIo) reliefIo.observe(media); if (firstFrameIo) firstFrameIo.observe(media); else mountFirstFrame(media); }
+    armFirstFrame(media, item, ph);
   }
   if (progress > 0) media.appendChild(h('span', { class: 'resume-bar', style: { '--p': String(Math.min(0.96, progress)) }, 'aria-hidden': 'true' }));
   // On full cards the "why" chip rides in the caption over the image; compact cards keep it on the media.

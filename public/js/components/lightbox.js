@@ -435,21 +435,15 @@ function paintStage(it) {
     playFlip(v);
     v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
   } else {
-    const preview = it.preview_url || it.thumbnail_url;
-    const sharp = preview || it.media_url;
-    // Grid cards load the 360px thumbnail now, so it is already in the browser's cache: show it at once, then the platform
-    // preview, then the full file (one after the other, so each gets the whole connection). Without a thumbnail the
-    // preview is the first picture, as before. A full file the viewer has already loaded (the next item is preloaded
-    // below, and the one just left) is shown straight away.
+    // Every still of the post, best first (banners/icons skipped in fallbackStills). The full file is an upgrade over the
+    // preview: when it fails the still on screen stays with a quality hint; "no longer available" only when every candidate failed.
+    const order = fallbackStills(it); const failed = new Set();
     const ready = warmed.has(it.media_url);
-    const first = ready ? it.media_url : it.thumb_url && it.thumb_url !== sharp ? it.thumb_url : sharp;
+    const first = ready ? it.media_url : (order[0] || it.media_url);
+    const sharp = order.find((u) => u !== it.thumb_url) || order[0] || it.media_url;
     const img = h('img', { alt: it.title || '', draggable: 'false', src: proxied(first) });
     S.stage.replaceChildren(...keep, img);
     playFlip(img);
-    // Every still of the post, best first, for the moment one of them cannot be shown. The full file is an upgrade over the preview:
-    // when it fails (error, 404, the host's "not found" stub) the preview stays on screen with a quality hint, and
-    // "no longer available" is shown only when every candidate has failed.
-    const order = fallbackStills(it); const failed = new Set();
     const hint = () => {
       if (img.isConnected && img.complete && img.naturalWidth > 0 && !S.stage.querySelector('.lb-quality')) {
         S.stage.append(h('div', { class: 'lb-quality', role: 'status', title: 'The original file is no longer available at its source; this is the best copy that is.' }, 'Preview quality'));
@@ -470,13 +464,13 @@ function paintStage(it) {
         });
     };
     const startFull = () => {
-      if (!preview || preview === it.media_url) return;
+      if (!sharp || sharp === it.media_url) return;
       cancelFull();
       S.fullNow = loadFull;
       S.fullTimer = setTimeout(loadFull, FULL_DWELL_MS);
     };
     if (!ready) {
-      if (first !== sharp) {
+      if (first !== sharp && sharp) {
         const mid = new Image();
         mid.onload = () => { if (img.isConnected) img.src = mid.src; startFull(); };
         mid.onerror = () => { failed.add(sharp); startFull(); };
