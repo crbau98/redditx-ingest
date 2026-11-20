@@ -336,6 +336,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
   entry.startedMs = started;
   entry.forceFinish = (err) => finish('error', { error: err });
 
+  let result = null;
   try {
     if (!adapter || !adapter.kinds.includes(feed.kind)) {
       throw Object.assign(new Error(`No adapter for ${feed.platform}/${feed.kind}`), { skip: true });
@@ -362,7 +363,7 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
       aborted: () => state.stopRequested || !!opts.aborted || finished,
     };
     if (opts.lane !== undefined) budget.charge(feed.platform, opts.lane); // only a run that really goes to the source uses the budget
-    const result = await withTimeout(adapter.fetch(feed, ctx), RUN_TIMEOUT_MS, tag);
+    result = await withTimeout(adapter.fetch(feed, ctx), RUN_TIMEOUT_MS, tag);
     if (feed.platform === 'gff' && result.resolvedTarget && !repo.feeds.find(feed.platform, feed.kind, result.resolvedTarget)) {
       repo.feeds.update(feed.id, { target: result.resolvedTarget });
       feed.target = result.resolvedTarget;
@@ -415,6 +416,9 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
           r = await withTimeout(processItem(raw, feed, adapter, { ...cfg, liveBody: true }), ITEM_TIMEOUT_MS, 'item');
         } catch (e) {
           // A timeout is per item: this one is skipped and the run carries on with the rest.
+          // Free any download-budget reservation the source attached (telegram reserveBytes) so a hung
+          // item does not keep holding the platformDailyMb claim until process restart.
+          try { if (typeof raw.discard === 'function') await raw.discard(); } catch { /* best effort */ }
           r = { outcome: 'skipped', reason: e && e.status === 0 ? `timed out after ${ITEM_TIMEOUT_MS / 1000}s` : `error: ${e.message}` };
         }
         if (r.creatorId) touched.add(r.creatorId);
@@ -536,6 +540,11 @@ async function runFeed(feedOrId, trigger = 'schedule', opts = {}) {
     }
     events.log('ERR', `${tag}: ${e.message}`);
     return finish('error', { error: e.message });
+  } finally {
+    // Free leftover per-item download-budget reservations (telegram) when the run ends early
+    // (abort, item deadline, ownerGone, slice filter) or throws after fetch — otherwise claims
+    // stay until process restart and underspend the day's cap (Crucible w17 nit).
+    try { if (result && typeof result._releaseBudget === 'function') result._releaseBudget(); } catch { /* best effort */ }
   }
 }
 

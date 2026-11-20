@@ -146,3 +146,31 @@ test('N=3 concurrent slots cannot overshoot platformDailyMb (reservation holds t
   assert.ok(charged <= 2 * MB + 2 * 700, `charged ${charged} exceeds 2 MB cap`);
   assert.equal(((budget.status().reserved || {}).telegram || 0), 0, 'no leftover reservation');
 });
+
+test('unprocessed items: _releaseBudget frees leftover reservations (abnormal run end)', async () => {
+  settingsStore.update({ platformDailyMb: 'telegram=50' });
+  repo.settings.set('budget_runs', '');
+  budget._reset();
+  mt._setFactory(async () => client([1, 2, 3].map((i) => video(i, 10 * MB))));
+  const r = await tg.fetchChannel({ target: 'gymbros', trusted: 1, label: 'Gym Bros' }, { cursor: {}, aborted: () => false, limit: 40, needProfile: false });
+  assert.equal(r.items.length, 3);
+  assert.ok(((budget.status().reserved || {}).telegram || 0) >= 30 * MB, 'claims held while items sit unprocessed');
+  assert.equal(typeof r._releaseBudget, 'function');
+  r._releaseBudget();
+  assert.equal(((budget.status().reserved || {}).telegram || 0), 0, 'run-level finally clears leftover claims');
+  // Idempotent: a later discard after release must not double-subtract
+  for (const it of r.items) await it.discard();
+  assert.equal(((budget.status().reserved || {}).telegram || 0), 0);
+});
+
+test('unknown-size videos use a conservative default reservation (no unreserved admit)', async () => {
+  // Crucible residual: 15 videos with size 0 charged ~15 MB against a 2 MB cap when admitted unreserved.
+  settingsStore.update({ platformDailyMb: 'telegram=2' });
+  repo.settings.set('budget_runs', '');
+  budget._reset();
+  mt._setFactory(async () => client(Array.from({ length: 15 }, (_, i) => video(i + 1, 0))));
+  const r = await tg.fetchChannel({ target: 'gymbros', trusted: 1, label: 'Gym Bros' }, { cursor: {}, aborted: () => false, limit: 40, needProfile: false });
+  assert.equal(r.items.length, 0, '10 MB default claim does not fit under a 2 MB cap');
+  assert.equal(((budget.status().reserved || {}).telegram || 0), 0);
+  r._releaseBudget();
+});
