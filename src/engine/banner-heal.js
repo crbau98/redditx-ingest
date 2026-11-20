@@ -7,13 +7,15 @@
  *   missing  thumb_url is media.prism.invalid/th/... and the object is gone — clear thumb_url + tint so a real
  *            still can be built again (or the UI falls through to first-frame / other stills).
  *
- * Dry by default. Optional creatorId scopes the walk. Windowed like library-health.
+ * Dry by default. Optional creatorId scopes the walk. Chunked/resumable via afterSeq + limit: each call walks
+ * from `afterSeq` and stops after `limit` candidate rows (or the table end), returning `nextAfter` so a full
+ * ~400k-media pass can be resumed without timing out on one HTTP request.
  */
 const repo = require('../db/repo');
 const store = require('../lib/objectstore');
-const { walkWindows } = require('../lib/windowed');
 
 const BATCH = 200;
+const WINDOW = 200;
 const tick = () => new Promise((r) => setTimeout(r, 0));
 const BANNER_SQL = `(
   (preview_url IS NOT NULL AND preview_url LIKE '%/banners/%')
@@ -30,48 +32,74 @@ function isBannerUrl(url) {
 }
 
 /**
- * @param {{dryRun?: boolean, limit?: number, creatorId?: string|null, batch?: number, checkStore?: (key: string) => Promise<boolean>}} opts
+ * @param {{dryRun?: boolean, limit?: number, creatorId?: string|null, batch?: number,
+ *          afterSeq?: number, checkStore?: (key: string) => Promise<boolean>}} opts
+ *   afterSeq — resume cursor (exclusive); next call uses returned nextAfter.
+ *   limit    — max candidate rows to clear/report this chunk (Infinity = rest of table from afterSeq).
  */
-async function heal({ dryRun = true, limit = Infinity, creatorId = null, batch = BATCH, checkStore } = {}) {
+async function heal({
+  dryRun = true,
+  limit = Infinity,
+  creatorId = null,
+  batch = BATCH,
+  afterSeq = 0,
+  checkStore,
+} = {}) {
   const started = Date.now();
   const db = repo.db;
   const top = (db.prepare('SELECT MAX(seq) AS m FROM media').get() || {}).m || 0;
+  const start = Math.max(0, Number(afterSeq) || 0);
+  const cap = Math.max(0, Number.isFinite(Number(limit)) ? Number(limit) : Infinity);
   const creatorClause = creatorId ? ' AND creator_id = ?' : '';
   const params = (after, to) => (creatorId ? [after, to, creatorId] : [after, to]);
   const stmt = db.prepare(`SELECT id, creator_id, platform, media_type, preview_url, thumbnail_url, thumb_url, tint, seq
     FROM media NOT INDEXED WHERE seq > ? AND seq <= ? AND publish_state = 'published'
       AND (${BANNER_SQL} OR ${STORE_THUMB_SQL})${creatorClause}`);
-  const stats = {};
-  const raw = [];
-  await walkWindows({
-    top, stats,
-    fn: (after, to) => { for (const r of stmt.all(...params(after, to))) raw.push(r); },
-  });
 
   const exists = checkStore || ((key) => store.has(key));
   const rows = [];
-  for (const r of raw) {
-    const banner = isBannerUrl(r.preview_url) || isBannerUrl(r.thumbnail_url);
-    let missingThumb = false;
-    if (!banner && r.thumb_url) {
-      const key = store.keyOf(r.thumb_url);
-      if (key && key.startsWith('th/')) {
-        const present = await exists(key);
-        if (!present) missingThumb = true;
+  let scannedTo = start;
+  let windows = 0;
+  let maxChunkMs = 0;
+  let hitCap = false;
+
+  let after = start;
+  while (after < top && !hitCap) {
+    const to = Math.min(after + WINDOW, top);
+    const t0 = Date.now();
+    const batchRows = stmt.all(...params(after, to));
+    maxChunkMs = Math.max(maxChunkMs, Date.now() - t0);
+    windows++;
+    for (const r of batchRows) {
+      const banner = isBannerUrl(r.preview_url) || isBannerUrl(r.thumbnail_url);
+      let missingThumb = false;
+      if (!banner && r.thumb_url) {
+        const key = store.keyOf(r.thumb_url);
+        if (key && key.startsWith('th/')) {
+          const present = await exists(key);
+          if (!present) missingThumb = true;
+        }
       }
+      scannedTo = r.seq;
+      if (!banner && !missingThumb) continue;
+      rows.push({
+        ...r,
+        action: banner ? 'clear-banner' : 'clear-missing-thumb',
+        clearPreview: isBannerUrl(r.preview_url),
+        clearThumbnail: isBannerUrl(r.thumbnail_url),
+        clearThumb: true,
+        missingThumb,
+      });
+      if (rows.length >= cap) { hitCap = true; break; }
     }
-    if (!banner && !missingThumb) continue; // store thumb present and no banner: leave alone
-    rows.push({
-      ...r,
-      action: banner ? 'clear-banner' : 'clear-missing-thumb',
-      clearPreview: isBannerUrl(r.preview_url),
-      clearThumbnail: isBannerUrl(r.thumbnail_url),
-      clearThumb: true, // both actions drop thumb_url + tint
-      missingThumb,
-    });
+    if (!hitCap) scannedTo = to;
+    after = to;
+    await tick();
   }
 
-  const todo = rows.slice(0, Math.max(0, Number.isFinite(limit) ? limit : rows.length));
+  const todo = rows;
+  // done only when the table end was reached without filling the chunk (more work would find nothing new).
+  const done = !hitCap && scannedTo >= top;
   const out = {
     found: rows.length,
     bannerPreviews: rows.filter((r) => r.action === 'clear-banner').length,
@@ -85,12 +113,15 @@ async function heal({ dryRun = true, limit = Infinity, creatorId = null, batch =
       action: r.action, preview: r.preview_url, thumb: r.thumb_url, missingThumb: r.missingThumb,
     })),
     ms: 0,
-    maxChunkMs: stats.maxChunkMs,
-    windows: stats.windows,
+    maxChunkMs,
+    windows,
     creatorId: creatorId || null,
+    afterSeq: start,
+    nextAfter: scannedTo,
+    done,
+    limit: Number.isFinite(cap) ? cap : null,
   };
   for (const r of rows) out.byPlatform[r.platform] = (out.byPlatform[r.platform] || 0) + 1;
-  // keep wouldClear alias used by the first tests
   if (dryRun) { out.ms = Date.now() - started; return out; }
 
   const clear = db.prepare(`UPDATE media SET
@@ -114,15 +145,15 @@ async function heal({ dryRun = true, limit = Infinity, creatorId = null, batch =
         out.cleared++;
       }
     })();
-    stats.maxChunkMs = Math.max(stats.maxChunkMs || 0, Date.now() - t0);
+    maxChunkMs = Math.max(maxChunkMs, Date.now() - t0);
     await tick();
   }
   if (out.cleared) {
     repo.logAction('maintenance', 'banner-heal', 'heal-banner-previews',
-      `${out.cleared} row(s): ${out.bannerPreviews} banner preview(s), ${out.missingThumbs} missing thumb(s)`, 'admin');
+      `${out.cleared} row(s): ${out.bannerPreviews} banner preview(s), ${out.missingThumbs} missing thumb(s) (afterSeq ${start}→${scannedTo})`, 'admin');
   }
   out.ms = Date.now() - started;
-  out.maxChunkMs = stats.maxChunkMs;
+  out.maxChunkMs = maxChunkMs;
   return out;
 }
 

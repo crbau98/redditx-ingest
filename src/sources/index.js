@@ -21,6 +21,8 @@ const adapters = [
   require('./xhamster'),
   require('./pornhub'),
   require('./boyfriendtv'),
+  require('./thisvid'),
+  require('./bunkr'),
   webAdapter,
   linkInBioAdapter,
 ];

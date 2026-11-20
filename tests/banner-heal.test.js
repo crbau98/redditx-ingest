@@ -82,3 +82,36 @@ test('admin endpoint is dry unless ?apply=1', async () => {
   assert.equal(row(id).preview_url, null);
   await new Promise((r) => server.close(r));
 });
+
+test('chunked heal: afterSeq+limit resumes; second chunk finishes', async () => {
+  const ids = [];
+  for (let i = 0; i < 5; i++) {
+    const id = `chunk-${i}-${crypto.randomUUID().slice(0, 6)}`;
+    ids.push(id);
+    add(id, { preview: `https://img.coomer.st/banners/onlyfans/chunk${i}` });
+  }
+  const a = await heal.heal({ dryRun: true, creatorId: creator.id, limit: 2, afterSeq: 0 });
+  assert.equal(a.wouldClear, 2);
+  assert.equal(a.done, false);
+  assert.ok(a.nextAfter > a.afterSeq, `cursor advances: ${a.afterSeq} → ${a.nextAfter}`);
+
+  const b = await heal.heal({ dryRun: true, creatorId: creator.id, limit: 2, afterSeq: a.nextAfter });
+  assert.ok(b.wouldClear >= 1);
+  assert.ok(b.afterSeq === a.nextAfter);
+
+  // Drain the rest
+  let cursor = b.nextAfter;
+  let guard = 0;
+  let last;
+  while (guard++ < 20) {
+    last = await heal.heal({ dryRun: true, creatorId: creator.id, limit: 10, afterSeq: cursor });
+    cursor = last.nextAfter;
+    if (last.done) break;
+  }
+  assert.equal(last.done, true);
+  // Apply one chunk for real
+  const wet = await heal.heal({ dryRun: false, creatorId: creator.id, limit: 2, afterSeq: 0 });
+  assert.equal(wet.cleared, 2);
+  assert.equal(wet.done, false);
+});
+
