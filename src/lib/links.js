@@ -293,8 +293,8 @@ function parseProfile(input, hint = {}) {
     }
   }
 
-  // Bunkr public album or single file (file-locker). Search/browse paths stay ordinary web pages.
-  if (/^(?:bunkr(?:r)?)\.[a-z]+$/i.test(h)) {
+  // Bunkr public album or single file (file-locker). Host list matches src/sources/bunkr.js HOSTS — unlisted TLDs stay web pages.
+  if (/(?:^|\.)(?:bunkr\.(?:cr|si|la|ac|fi|black|cat|media|pk|red|site|to|su|is|ws)|bunkrr\.su)$/i.test(h)) {
     const album = url.pathname.match(/^\/a\/([A-Za-z0-9_-]+)\/?$/);
     if (album) {
       const target = `https://${h}/a/${album[1]}`;

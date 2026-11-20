@@ -268,10 +268,10 @@ async function fetchChannel(feed, ctx) {
 
   let newestId = cur.newestId || 0; let oldestId = cur.oldestId || 0; let done = !!cur.done; let backfilled = cur.backfilled || 0;
   const msgs = [];
-  // The day's download budget (settings platformDailyMb). A batch is cut to what is left and the cursors stop at the last message
-  // kept, so the rest is read on a later day instead of being skipped. Nothing is even listed once the budget is spent.
-  const room = { left: budget.bytesLeft('telegram') };
-  if (room.left <= 0) {
+  // The day's download budget (settings platformDailyMb). Each message's projected size is reserved against a shared
+  // counter before it is listed, so concurrent slots cannot each snapshot the same remainder and overshoot the ceiling
+  // (Crucible w17 / v4.25.0). The claim stays until that item's materialize/discard finishes (or the message is skipped).
+  if (budget.bytesLeft('telegram') <= 0) {
     return { items: [], profile, via: 'mtproto', cursor: { ...cur, profiled: true, ...(ch.about ? { about: String(ch.about).slice(0, 500) } : {}) }, notes: ['Telegram daily download budget reached: resumes tomorrow (Admin → Settings → platformDailyMb)'], skipped: {} };
   }
   const fit = (list) => {
@@ -280,9 +280,14 @@ async function fetchChannel(feed, ctx) {
       const d = mt.describeMedia(m);
       // The largest rendition's byte size comes with the message; 1.5 MB is assumed only when Telegram does not report one.
       const size = d && !d.skip ? (Number(d.size) || (d.type === 'image' ? 1.5 * 1048576 : 0)) : 0;
-      if (out.length && size > room.left) break;
-      if (!out.length && room.left <= 0) break;
-      room.left -= size; out.push(m);
+      if (size > 0) {
+        const claim = budget.reserveBytes('telegram', size);
+        if (!claim.ok) break;
+        m._budgetRelease = claim.release;
+      } else if (budget.bytesLeft('telegram') <= 0) {
+        break;
+      }
+      out.push(m);
     }
     return out;
   };
@@ -298,7 +303,7 @@ async function fetchChannel(feed, ctx) {
     const list = fit(r.list);
     msgs.push(...list);
     if (list.length) newestId = list[list.length - 1].id;
-    if (!done && !ctx.aborted() && backfilled < maxBackfill && list.length === r.list.length && room.left > 0) {
+    if (!done && !ctx.aborted() && backfilled < maxBackfill && list.length === r.list.length && budget.bytesLeft('telegram') > 0) {
       const o = await mt.messages(target, { offsetId: oldestId, limit: Math.min(perRun, maxBackfill - backfilled) });
       const older = fit(o.list);
       msgs.push(...older);
@@ -310,11 +315,34 @@ async function fetchChannel(feed, ctx) {
 
   const items = [];
   const skipped = {};
+  const bindRelease = (it, release) => {
+    if (!release) return it;
+    let doneRelease = false;
+    const once = () => { if (!doneRelease) { doneRelease = true; try { release(); } catch { /* ignore */ } } };
+    const prevStage = it.stage;
+    const prevMat = it.materialize;
+    const prevDisc = it.discard;
+    it.stage = async (row) => {
+      try { return await prevStage(row); } catch (e) { once(); throw e; }
+    };
+    it.materialize = async (row) => {
+      try { return await prevMat(row); } finally { once(); }
+    };
+    it.discard = async () => {
+      try { if (prevDisc) await prevDisc(); } finally { once(); }
+    };
+    return it;
+  };
   for (const msg of msgs) {
     const d = mt.describeMedia(msg);
-    if (!d) continue;
-    if (d.skip) { skipped[d.skip] = (skipped[d.skip] || 0) + 1; continue; }
-    items.push(messageToItem(msg, d, ch));
+    const release = msg._budgetRelease;
+    if (!d) { if (release) try { release(); } catch { /* ignore */ } continue; }
+    if (d.skip) {
+      skipped[d.skip] = (skipped[d.skip] || 0) + 1;
+      if (release) try { release(); } catch { /* ignore */ }
+      continue;
+    }
+    items.push(bindRelease(messageToItem(msg, d, ch), release));
   }
   // Surface skip reasons in the feed's notes (the engine stores notes[0] as
   // last_error): silently dropping oversized videos otherwise looks like success.

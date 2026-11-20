@@ -1,25 +1,34 @@
 'use strict';
 /** A channel read is cut to the day's download budget and the cursors stop at the last message kept (nothing is skipped, it waits). */
-const { test, before, after } = require('node:test');
+const { test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const { prepareEnv } = require('./helpers/mock');
 const { s3Server, ACCESS, SECRET, BUCKET } = require('./helpers/s3');
 
-let s3; let mt; let tg; let budget;
+let s3; let mt; let tg; let budget; let settingsStore; let repo;
 before(async () => {
   s3 = await s3Server();
   prepareEnv({ MEDIA_STORE_ENDPOINT: s3.url, MEDIA_STORE_BUCKET: BUCKET, MEDIA_STORE_ACCESS_KEY_ID: ACCESS, MEDIA_STORE_SECRET_ACCESS_KEY: SECRET });
-  mt = require('../src/lib/telegram-mtproto'); tg = require('../src/sources/telegram'); budget = require('../src/services/budget');
+  mt = require('../src/lib/telegram-mtproto');
+  tg = require('../src/sources/telegram');
+  budget = require('../src/services/budget');
+  settingsStore = require('../src/settings');
+  repo = require('../src/db/repo');
+});
+beforeEach(() => {
+  repo.settings.set('budget_runs', '');
+  budget._reset();
+  settingsStore.update({ platformDailyMb: 'telegram=5000' });
 });
 after(async () => { mt._setFactory(null); await s3.close(); });
 
 const MB = 1048576;
 const video = (id, size = 10 * MB) => ({ id, message: `clip ${id}`, date: 1700000000 + id, views: 1, media: { className: 'MessageMediaDocument', document: { className: 'Document', mimeType: 'video/mp4', size, thumbs: [{ className: 'PhotoSize', w: 90, h: 90, size: 500 }], attributes: [{ className: 'DocumentAttributeVideo', duration: 5, w: 640, h: 480 }] } } });
-function client(messages) {
+function client(messages, chanId = 100, username = 'gymbros') {
   return {
     async connect() {}, async checkAuthorization() { return true; }, async disconnect() {},
     async getDialogs() { return []; },
-    async getEntity() { return { className: 'Channel', id: 100, username: 'gymbros', title: 'Gym Bros', broadcast: true }; },
+    async getEntity() { return { className: 'Channel', id: chanId, username, title: username, broadcast: true }; },
     async getMessages(entity, o = {}) {
       let list = messages.slice();
       if (o.minId) list = list.filter((m) => m.id > o.minId);
@@ -28,7 +37,18 @@ function client(messages) {
       return list.slice(0, o.limit || 100);
     },
     async invoke() { return { fullChat: { about: '' } }; }, async downloadProfilePhoto() { return null; },
+    async downloadMedia(msg, o = {}) {
+      const size = (msg.media && msg.media.document && msg.media.document.size) || MB;
+      if (o.thumb !== undefined) return Buffer.alloc(700, 9);
+      if (o.outputFile) { require('fs').writeFileSync(o.outputFile, Buffer.alloc(size, 7)); return o.outputFile; }
+      return Buffer.alloc(size, 3);
+    },
   };
+}
+
+/** Stub bytesLeft but still subtract in-flight reservations (so reserveBytes stays honest under the stub). */
+function stubLeft(n) {
+  budget.bytesLeft = () => Math.max(0, n - ((budget.status().reserved || {}).telegram || 0));
 }
 
 test('five 10 MB videos with 25 MB left: two now, none while the budget is spent, the rest on a later day, no message skipped', async () => {
@@ -36,21 +56,23 @@ test('five 10 MB videos with 25 MB left: two now, none while the budget is spent
   const feed = { target: 'gymbros', trusted: 1, label: 'Gym Bros' };
   const realLeft = budget.bytesLeft;
   try {
-    budget.bytesLeft = () => 25 * MB;
+    stubLeft(25 * MB);
     const a = await tg.fetchChannel(feed, { cursor: {}, aborted: () => false, limit: 40, needProfile: false });
-    assert.deepEqual(a.items.map((i) => i.sourceId.split(':').pop()).length, 2, 'two videos fit in 25 MB');
+    assert.equal(a.items.length, 2, 'two videos fit in 25 MB');
     assert.equal(a.cursor.newestId, 5); assert.equal(a.cursor.oldestId, 4); assert.equal(a.cursor.done, false, 'older messages are still waiting');
+    for (const it of a.items) await it.discard(); // release reservations without downloading
 
-    budget.bytesLeft = () => 0;
+    stubLeft(0);
     const b = await tg.fetchChannel(feed, { cursor: a.cursor, aborted: () => false, limit: 40, needProfile: false });
     assert.equal(b.items.length, 0); assert.deepEqual(b.cursor.newestId, 5); assert.equal(b.cursor.oldestId, 4);
     assert.match(b.notes[0], /daily download budget reached/);
 
-    budget.bytesLeft = () => Infinity; // tomorrow
+    stubLeft(Infinity); // tomorrow
     const c = await tg.fetchChannel(feed, { cursor: b.cursor, aborted: () => false, limit: 40, needProfile: false });
     assert.equal(c.items.length, 3, 'messages 3, 2 and 1 are read now');
     assert.equal(c.cursor.done, true); assert.equal(c.cursor.oldestId, 1);
-  } finally { budget.bytesLeft = realLeft; }
+    for (const it of c.items) await it.discard();
+  } finally { budget.bytesLeft = realLeft; budget._reset(); }
 });
 
 /* ---- 7. every downloaded byte is charged, and photo batches are sized from the real sizes ---- */
@@ -75,16 +97,16 @@ test('describeMedia reports the real byte size of the largest photo rendition (a
 
 test('a photo batch is cut by the real sizes: three 400 KB photos with 1 MB left give two, not a count based on an assumed 1.5 MB', async () => {
   mt._setFactory(async () => counting([1, 2, 3].map((i) => photo(i, 400 * 1024))));
-  const realLeft = budget.bytesLeft; budget.bytesLeft = () => 1048576;
+  const realLeft = budget.bytesLeft;
   try {
+    stubLeft(1048576);
     const r = await tg.fetchChannel({ target: 'gymbros', trusted: 1, label: 'Gym Bros' }, { cursor: {}, aborted: () => false, limit: 40, needProfile: false });
     assert.equal(r.items.length, 2);
-  } finally { budget.bytesLeft = realLeft; }
+    for (const it of r.items) await it.discard();
+  } finally { budget.bytesLeft = realLeft; budget._reset(); }
 });
 
 test('downloaded bytes are charged when they are downloaded: a rejected photo, a video and its poster, and the channel avatar', async () => {
-  require('../src/db/repo').settings.set('budget_runs', ''); budget._reset(); // the day's counter is persisted: start clean
-  const fs = require('fs');
   mt._setFactory(async () => counting([photo(1, 5000), { ...video(2, 20000) }]));
   const r = await tg.fetchChannel({ target: 'gymbros', trusted: 1, label: 'Gym Bros' }, { cursor: {}, aborted: () => false, limit: 40, needProfile: true });
   const charged = () => (budget.status().bytes || {}).telegram || 0;
@@ -98,6 +120,29 @@ test('downloaded bytes are charged when they are downloaded: a rejected photo, a
   assert.equal(charged(), 3000 + 5000 + 700);
   await vid.materialize(vid);                // the video file itself; the poster is reused, not charged twice
   assert.equal(charged(), 3000 + 5000 + 700 + 20000);
-  assert.equal(fs.readdirSync(require('os').tmpdir()).filter((f) => f.startsWith(`prism-tg-${process.pid}`)).length, 0, 'no temp file is left behind');
-  require('../src/db/repo').settings.set('budget_runs', ''); budget._reset();
+  assert.equal(require('fs').readdirSync(require('os').tmpdir()).filter((f) => f.startsWith(`prism-tg-${process.pid}`)).length, 0, 'no temp file is left behind');
+});
+
+test('N=3 concurrent slots cannot overshoot platformDailyMb (reservation holds the remainder)', async () => {
+  settingsStore.update({ platformDailyMb: 'telegram=2' });
+  repo.settings.set('budget_runs', '');
+  budget._reset();
+  let chan = 201;
+  mt._setFactory(async () => {
+    const id = chan++;
+    return client([1, 2, 3, 4, 5].map((i) => video(i, 1 * MB)), id, `ch${id}`);
+  });
+  const ctx = { cursor: {}, aborted: () => false, limit: 40, needProfile: false };
+  const runs = await Promise.all([
+    tg.fetchChannel({ target: 'ch201', trusted: 1, label: 'ch201' }, ctx),
+    tg.fetchChannel({ target: 'ch202', trusted: 1, label: 'ch202' }, ctx),
+    tg.fetchChannel({ target: 'ch203', trusted: 1, label: 'ch203' }, ctx),
+  ]);
+  const listed = runs.reduce((n, r) => n + r.items.length, 0);
+  assert.ok(listed <= 2, `at most 2 videos listed under a 2 MB cap, got ${listed}`);
+  for (const r of runs) for (const it of r.items) { await it.stage(it); await it.materialize(it); }
+  const charged = (budget.status().bytes || {}).telegram || 0;
+  // thumbs may add a few hundred bytes each; stay within a small epsilon of the 2 MB ceiling
+  assert.ok(charged <= 2 * MB + 2 * 700, `charged ${charged} exceeds 2 MB cap`);
+  assert.equal(((budget.status().reserved || {}).telegram || 0), 0, 'no leftover reservation');
 });
