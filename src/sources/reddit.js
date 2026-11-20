@@ -30,8 +30,13 @@ const config = require('../config');
 const REDDIT_WAIT = { maxCooldownWaitMs: 70_000 };
 const BACKFILL_PAGES = 2; // archive pages (100 posts each) of a user's older history read per run
 const http = require('./http').forPlatform('reddit', 1100, { penalty: { ms: 60_000 } });
-// The archive is its own host and limiter key (same key discovery's archive reads use).
-const archiveHttp = require('./http').forPlatform('redditArchive', 300);
+// The archive is its own host and limiter key (same key discovery's archive reads use): throttling it must never
+// hold reddit's own transports. The AIMD hold below parks this key after throttles (see viaArchive).
+const archiveHttp = require('./http').forPlatform('redditArchive', 1000);
+const ARCH_HOLD_BASE = 90_000; // first archive throttle parks the archive key for 90 s...
+const ARCH_HOLD_MAX = 15 * 60_000; // ...doubling per repeated throttle, capped at 15 min
+let archHoldMs = 0; // current AIMD hold (halves on a clean read)
+let archHoldUntil = 0; // when the current hold lapses (0 = no hold)
 const net = require('../lib/net');
 const rss = require('./rss');
 const events = require('../engine/events');
@@ -306,22 +311,38 @@ async function viaArchive(feed, params) {
   const limit = Math.min(params.limit || 100, 100);
   const q = { limit, ...(feed.kind === 'user' ? { author: feed.target } : { subreddit: feed.target }) };
   if (cur.after) { q.after = cur.after; q.sort = 'asc'; } else if (cur.before) q.before = cur.before;
+  // AIMD hold on the ARCHIVE KEY ONLY: a throttle parks redditArchive (starting 90 s, doubling to 15 min) so the next
+  // feed runs stop re-knocking the throttled host; a clean read halves the hold again. Holding reddit itself here is
+  // what turned one throttled archive into "archive 429, rss 404" on every feed (the platform-wide strike poisoned
+  // the other transports) — the archive must never punish reddit's own lanes.
+  const holdLeftMs = () => archHoldUntil - Date.now();
+  if (holdLeftMs() > REDDIT_WAIT.maxCooldownWaitMs) {
+    // Deep hold: the queue wait alone exceeds the ceiling, so reject before anything is sent (cooldown: true =
+    // the engine treats the run as a reschedulable skip, not a failure) and let the ladder try RSS instead.
+    throw Object.assign(new Error('Reddit archive is on an adaptive hold'), { status: 429, retryAfter: holdLeftMs(), cooldown: true });
+  }
   const archiveRateLimit = (detail) => {
-    // "Timeout. Maybe slow down a bit": the archive's dynamic rate limit. A wait, not an empty community.
-    const e = Object.assign(new Error(`Reddit archive is rate limiting: ${String(detail).slice(0, 80)}`), { status: 429, retryAfter: 60_000 });
-    http.strike(e);
+    archHoldMs = Math.min(archHoldMs ? archHoldMs * 2 : ARCH_HOLD_BASE, ARCH_HOLD_MAX);
+    archHoldUntil = Date.now() + archHoldMs;
+    const e = Object.assign(new Error(`Reddit archive is rate limiting: ${String(detail).slice(0, 80)}`), { status: 429, retryAfter: archHoldMs });
+    archiveHttp.strike(e);
     return e;
   };
   let json;
   try {
-    json = await http.json(`${config.baseUrls.redditArchive}/api/posts/search?${qs(q)}`, { ...REDDIT_WAIT, headers: { 'user-agent': config.redditUserAgent } });
+    json = await archiveHttp.json(`${config.baseUrls.redditArchive}/api/posts/search?${qs(q)}`, { ...REDDIT_WAIT, headers: { 'user-agent': config.redditUserAgent } });
   } catch (err) {
+    // A deep hold (> the 70 s queue ceiling) rejects before anything is sent with cooldown: true - pass it on as-is so
+    // the ladder can try RSS and, failing that, the engine reschedules after the hold instead of counting an error.
+    if (err && err.cooldown) throw err;
     // The same limit also arrives as HTTP 422 with {"error":"Timeout. Maybe slow down a bit"} (seen 2026-11-11). Read it as
     // the 429 it is; any other 422 is a real error and still surfaces.
     if (err && err.status === 422 && /slow down|Timeout/i.test(String(err.body || ''))) throw archiveRateLimit(err.body);
     throw err;
   }
   if (json && !Array.isArray(json) && json.error) throw archiveRateLimit(json.error);
+  archHoldMs = Math.max(0, Math.floor(archHoldMs / 2)); // a clean read relaxes the AIMD hold
+  archHoldUntil = 0;
   const rows = Array.isArray(json) ? json : json.data || [];
   // Next page: forward from the last row (asc) or back from the oldest (desc), only after a full page that moved.
   let next = null;
@@ -413,6 +434,11 @@ async function fetchPage(feed, sort, params, dead = new Set()) {
   if (explicitGone >= 2 && gone === failed.length) {
     throw Object.assign(new Error(`${label} not found (every transport says HTTP 404/410: banned, suspended, private or misspelled)`), { status: 404, retryAfter: 0 });
   }
+  // A transport that sat out on a limiter hold made no verdict about the target. When that is all we learned this run
+  // (no page, no empty, no unanimous gone), hand the cooldown error to the engine as-is: the run is a skip with a
+  // reschedule after the hold, never a counted failure (a throttled archive must not march feeds toward retirement).
+  const cooled = errs.find((e) => e.cooldown);
+  if (cooled && !empty && explicitGone < 2) throw cooled;
   if (!firstErr) firstErr = new Error('no Reddit transport available');
   // One actionable line: what failed where. Keep the first failure's status so the engine/breaker can reason about it.
   // Not unanimous, so never report "gone": a lone 404 (an edge block) must not leave status 404/410 on the aggregate error,
@@ -544,6 +570,9 @@ module.exports = {
   kinds: ['community', 'user'],
   intervalMin: { community: 90, user: 240 },
   parsePost, fromRssEntry,
+  // Test hooks: reset/examine the archive AIMD hold between tests (module state survives across test files otherwise).
+  _archHold: () => ({ ms: archHoldMs, until: archHoldUntil }),
+  _resetArchHold: () => { archHoldMs = 0; archHoldUntil = 0; },
   isConfigured() {
     // When redditEnabled is off the engine skips these feeds without counting a failure or tripping the breaker.
     if (!enabled()) return { ok: false, note: OFF_NOTE };

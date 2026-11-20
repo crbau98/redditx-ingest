@@ -100,6 +100,7 @@ limiter.penalize = (key, ms) => { penalties.push({ key, ms }); };
 
 test('a rate-limited archive page (200 with an error) keeps the items already read, adds a note and holds the platform', async () => {
   calls = []; penalties.length = 0;
+  require('../src/sources/reddit')._resetArchHold();
   let hits = 0;
   net.fetchJSON = async (url, opts = {}) => {
     calls.push({ url: String(url), opts });
@@ -112,12 +113,13 @@ test('a rate-limited archive page (200 with an error) keeps the items already re
   const out = await reddit.fetch(feed('community', 'gaybrosgonewild'), { cursor: { newestAt: '2026-11-01T00:00:00.000Z' }, limit: 100, aborted: () => false });
   assert.equal(out.items.filter((i) => i.mediaUrl).length, 100, 'the answered page is returned');
   assert.ok(out.notes.some((n) => /stopped early after 100 items: .*rate limiting/.test(n)), 'the rate limit is reported, not thrown');
-  assert.deepEqual(penalties.map((p) => p.key), ['reddit'], 'the reddit limiter is held');
-  assert.ok(penalties[0].ms >= 60000, 'with the same penalty as a Reddit 429');
+  assert.deepEqual(penalties.map((p) => p.key), ['redditArchive'], 'the archive limiter is held (never the reddit platform)');
+  assert.ok(penalties[0].ms >= 90000, 'with the AIMD base hold, at least as long as a Reddit 429');
 });
 
-test('the archive rate limit as HTTP 422 ("Timeout. Maybe slow down") is read as a 429: items kept, platform held', async () => {
+test('the archive rate limit as HTTP 422 ("Timeout. Maybe slow down") is read as a 429: items kept, archive held', async () => {
   calls = []; penalties.length = 0;
+  require('../src/sources/reddit')._resetArchHold();
   let hits = 0;
   net.fetchJSON = async (url, opts = {}) => {
     calls.push({ url: String(url), opts });
@@ -134,12 +136,13 @@ test('the archive rate limit as HTTP 422 ("Timeout. Maybe slow down") is read as
   const out = await reddit.fetch(feed('community', 'gaybrosgonewild'), { cursor: { newestAt: '2026-11-01T00:00:00.000Z' }, limit: 100, aborted: () => false });
   assert.equal(out.items.filter((i) => i.mediaUrl).length, 100, 'the page answered before the limit is returned');
   assert.ok(out.notes.some((n) => /stopped early after 100 items: .*rate limiting/.test(n)), 'the 422 rate limit is reported, not thrown as a hard error');
-  assert.deepEqual(penalties.map((p) => p.key), ['reddit'], 'the reddit limiter is held');
-  assert.ok(penalties[0].ms >= 60000, 'with the same penalty as a Reddit 429');
+  assert.deepEqual(penalties.map((p) => p.key), ['redditArchive'], 'the archive limiter is held (never the reddit platform)');
+  assert.ok(penalties[0].ms >= 90000, 'with the AIMD base hold, at least as long as a Reddit 429');
 });
 
 test('an archive 422 that is not a rate limit still surfaces as an error', async () => {
   calls = []; penalties.length = 0;
+  require('../src/sources/reddit')._resetArchHold();
   net.fetchJSON = async (url, opts = {}) => {
     calls.push({ url: String(url), opts });
     if (!/arctic-shift/.test(url)) challenge();
@@ -211,4 +214,59 @@ test('a run that never got a page still fails', async () => {
   net.fetchText = async () => { rate(); };
   const reddit = require('../src/sources/reddit');
   await assert.rejects(reddit.fetch(feed('user', 'busy'), { cursor: {}, limit: 25, aborted: () => false }), /429/);
+});
+
+// ---- w17: the archive throttle holds only the archive, never the reddit platform, and a deep hold is a skip ----
+
+test('repeated archive throttles grow an AIMD hold on the archive key only, and RSS still gets its chance', async () => {
+  calls = []; penalties.length = 0;
+  require('../src/sources/reddit')._resetArchHold();
+  net.fetchJSON = async (url) => {
+    calls.push({ url: String(url) });
+    if (/arctic-shift/.test(url)) { const e = new Error('HTTP 422 for arctic-shift'); e.status = 422; e.body = '{"error":"Timeout. Maybe slow down a bit"}'; throw e; }
+    challenge(); // JSON/RSS edges refuse as usual
+  };
+  net.fetchText = async (url) => { calls.push({ url: String(url) }); rate(); };
+  const reddit = require('../src/sources/reddit');
+  reddit._resetArchHold();
+  // First run: archive throttles, RSS rates -> aggregate error; the hold is armed at the base.
+  await assert.rejects(() => reddit.fetch(feed('community', 'gaybrosgonewild'), { cursor: {}, limit: 100, aborted: () => false }));
+  assert.ok(penalties.some((p) => p.key === 'redditArchive'), 'the archive key is struck');
+  const arch = penalties.find((p) => p.key === 'redditArchive');
+  assert.ok(arch.ms >= 90000, 'the archive hold starts at the AIMD base');
+  // reddit may only be struck by its own transports (here: the RSS 429), never by the archive throttle.
+  assert.equal(penalties.filter((p) => p.key === 'reddit').length <= 1, true, 'at most the RSS 429 itself holds reddit');
+  const hold1 = reddit._archHold();
+  assert.equal(hold1.ms, 90000, 'first throttle arms the 90 s base');
+  // Second run: the hold now exceeds the queue ceiling -> the archive refuses cooldown-style before a request,
+  // and the cooldown error carries the reschedule window instead of counting a failure.
+  calls = []; penalties.length = 0;
+  await assert.rejects(
+    () => reddit.fetch(feed('community', 'gaybrosgonewild'), { cursor: {}, limit: 100, aborted: () => false }),
+    (e) => e.cooldown === true && e.retryAfter >= 60000,
+    'a deep hold surfaces as a cooldown the engine can reschedule'
+  );
+  assert.equal(calls.filter((c) => /arctic-shift/.test(c.url)).length, 0, 'a deep hold sends nothing to the archive');
+  reddit._resetArchHold();
+});
+
+test('a throttle that outlasts every other lane does not march the feed toward retirement (cooldown propagates)', async () => {
+  calls = []; penalties.length = 0;
+  require('../src/sources/reddit')._resetArchHold();
+  net.fetchJSON = async (url) => {
+    calls.push({ url: String(url) });
+    if (/arctic-shift/.test(url)) { const e = new Error('HTTP 422 for arctic-shift'); e.status = 422; e.body = '{"error":"Timeout. Maybe slow down a bit"}'; throw e; }
+    challenge();
+  };
+  net.fetchText = async () => { const e = new Error('HTTP 429 for rss'); e.status = 429; e.retryAfter = 60000; throw e; };
+  const reddit = require('../src/sources/reddit');
+  reddit._resetArchHold();
+  await assert.rejects(
+    () => reddit.fetch(feed('user', 'busy'), { cursor: { newestAt: '2026-11-01T00:00:00.000Z' }, limit: 25, aborted: () => false }),
+    (e) => { // the surfaced error must be rate-limit shaped either way: classified rate_limited = transient, never not_found
+      return /rate limit|cooling down|rate limiting/i.test(e.message) || e.status === 429 || e.cooldown === true;
+    },
+    'the run reports a rate limit, not a dead target'
+  );
+  reddit._resetArchHold();
 });
