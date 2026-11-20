@@ -9,7 +9,10 @@
  * PASSIVE cannot restart the log while writes keep arriving, so a WAL under sustained writes grows. Past RESTART_BYTES a RESTART is
  * tried as well, but only ever as a try: the worker runs it with busy_timeout = 0, so when a reader holds a snapshot (the usual reason the
  * WAL is big) or a writer is mid-commit it returns `busy` at once, the writer lock is never held while waiting, and the next try waits
- * longer (RESTART_BACKOFF_MS, doubling to an hour). A RESTART that does run waits for nobody; it copies only the tail PASSIVE left.
+ * longer (RESTART_BACKOFF_MS, doubling to five minutes). A RESTART that does run waits for nobody; it copies only the tail PASSIVE left.
+ * The trigger sits below the journal_size_limit (48 MB vs 64 MB), not far above it: a busy try costs almost nothing, and the 2026-11-18 patrol found
+ * the WAL parked at 256 MB for hours because the old 1 GB trigger never fired while the aggregate worker kept reading. After a successful
+ * reset the first commit truncates the file to the limit, so frequent safe tries are what keep the steady state small.
  *
  * Nothing escalates silently: the WAL size, the last successful checkpoint and the last busy RESTART are in `status()`, and
  * GET /api/admin/health turns them into warnings (the patrol reads those). The admin log gets at most one line an hour.
@@ -22,10 +25,10 @@ const events = require('./events');
 
 const CHECK_MS = 15 * 1000;
 const THRESHOLD = Number(process.env.WAL_CHECKPOINT_MB || 24) * 1048576; // about 6000 pages
-const RESTART_BYTES = Number(process.env.WAL_RESTART_MB || 1024) * 1048576;
+const RESTART_BYTES = Number(process.env.WAL_RESTART_MB || 48) * 1048576;
 const WARN_BYTES = Number(process.env.WAL_WARN_MB || 768) * 1048576;
 const STALE_OK_MS = 10 * 60 * 1000; // a WAL over THRESHOLD with no successful checkpoint for this long is reported
-const RESTART_BACKOFF_MS = [60 * 1000, 5 * 60 * 1000, 15 * 60 * 1000, 60 * 60 * 1000];
+const RESTART_BACKOFF_MS = [45 * 1000, 90 * 1000, 3 * 60 * 1000, 5 * 60 * 1000];
 const WORKER_TIMEOUT_MS = 5 * 60 * 1000;
 
 let timer = null; let inflight = null; let lastWarn = 0;
@@ -97,4 +100,4 @@ function stop() { if (timer) clearInterval(timer); timer = null; }
 /** Test seam: forget back-off state. */
 function _reset() { restartBusyCount = 0; restartNotBefore = 0; lastWarn = 0; Object.assign(stats, { runs: 0, failures: 0, lastAt: null, lastOkAt: null, lastRestartAt: null, lastRestartBusyAt: null, restartBusy: 0 }); }
 
-module.exports = { start, stop, run, tick, walBytes, stats, status, THRESHOLD, RESTART_BYTES, _reset };
+module.exports = { start, stop, run, tick, walBytes, stats, status, THRESHOLD, RESTART_BYTES, RESTART_BACKOFF_MS, _reset };
