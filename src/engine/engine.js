@@ -553,7 +553,9 @@ function noteBioSource(feed, profile) {
 /** Feeds that may run at once per platform. Each adapter's HTTP calls still go through the per-platform limiter
  * (lib/limiter: spaced requests, 429 cool-downs), so more slots overlap the slow part (probing, image checks, writes) without
  * hitting a host harder. Override with the `platformSlots` setting. */
-const DEFAULT_SLOTS = { coomer: 2, bluesky: 4, x: 2, telegram: 1, reddit: 2, redgifs: 1, tumblr: 2, gff: 2, mastodon: 3, misskey: 2, peertube: 2, rss: 4, web: 3, linkinbio: 3 };
+// telegram: 3 slots (was 1). At ~193 s/run × ~559 enabled feeds, one slot needs ~30 h for a full pass;
+// three slots cut that to ~10 h without raising the 5 GB/day download guard (platformDailyMb).
+const DEFAULT_SLOTS = { coomer: 2, bluesky: 4, x: 2, telegram: 3, reddit: 2, redgifs: 1, tumblr: 2, gff: 2, mastodon: 3, misskey: 2, peertube: 2, rss: 4, web: 3, linkinbio: 3 };
 function slotsFor(platform, cfg = settingsStore.get()) {
   const custom = budget.parseCaps(cfg.platformSlots)[platform];
   return Math.max(1, custom !== undefined ? custom : (DEFAULT_SLOTS[platform] || 2));

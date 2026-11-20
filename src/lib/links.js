@@ -283,6 +283,30 @@ function parseProfile(input, hint = {}) {
     }
   }
 
+  // ThisVid member public videos: one man's public list (not /categories or /videos search).
+  if (matches(h, 'thisvid.com')) {
+    const m = url.pathname.match(/^\/members\/(\d+)(?:\/(?:public_videos|favourite_videos)?\/?)?$/i);
+    if (m) {
+      const id = m[1];
+      const target = `https://thisvid.com/members/${id}/public_videos/`;
+      return { platform: 'thisvid', kind: 'user', target: id, ingestable: true, label: `ThisVid · ${id}`, url: target };
+    }
+  }
+
+  // Bunkr public album or single file (file-locker). Search/browse paths stay ordinary web pages.
+  if (/^(?:bunkr(?:r)?)\.[a-z]+$/i.test(h)) {
+    const album = url.pathname.match(/^\/a\/([A-Za-z0-9_-]+)\/?$/);
+    if (album) {
+      const target = `https://${h}/a/${album[1]}`;
+      return { platform: 'bunkr', kind: 'album', target, ingestable: true, label: `Bunkr album · ${album[1]}`, url: target };
+    }
+    const file = url.pathname.match(/^\/f\/([A-Za-z0-9_-]+)\/?$/);
+    if (file) {
+      const target = `https://${h}/f/${file[1]}`;
+      return { platform: 'bunkr', kind: 'file', target, ingestable: true, label: `Bunkr file · ${file[1]}`, url: target };
+    }
+  }
+
   // xHamster gay creator page: an ingestible creator feed. The directory index, pagination and the
   // newest/best sub-tabs stay ordinary web pages (robots.txt disallows most of them anyway).
   if (matches(h, 'xhamster.com')) {

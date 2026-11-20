@@ -57,9 +57,15 @@ router.post('/maintenance/repair-no-image', async (req, res) => {
 router.post('/maintenance/heal-banner-previews', async (req, res) => {
   const q = { ...req.query, ...(req.body || {}) };
   const dryRun = dryRunOf(req, { defaultDry: true });
-  const limit = q.limit !== undefined && q.limit !== '' ? int(q.limit, 0, 1000000, 0) : Infinity;
+  // Default chunk 500 so a full prod pass (~400k media) stays under the request timeout; pass limit=0 for "no cap".
+  const limit = q.limit !== undefined && q.limit !== ''
+    ? (Number(q.limit) === 0 ? Infinity : int(q.limit, 0, 1000000, 500))
+    : 500;
+  const afterSeq = q.afterSeq !== undefined && q.afterSeq !== '' ? int(q.afterSeq, 0, Number.MAX_SAFE_INTEGER, 0)
+    : (q.after !== undefined && q.after !== '' ? int(q.after, 0, Number.MAX_SAFE_INTEGER, 0)
+      : (q.cursor !== undefined && q.cursor !== '' ? int(q.cursor, 0, Number.MAX_SAFE_INTEGER, 0) : 0));
   const creatorId = typeof q.creatorId === 'string' && q.creatorId ? q.creatorId : null;
-  try { res.json(await require('../../engine/banner-heal').heal({ dryRun, limit, creatorId })); } catch (e) { res.status(500).json({ error: e.message }); }
+  try { res.json(await require('../../engine/banner-heal').heal({ dryRun, limit, creatorId, afterSeq })); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 router.get('/library-health', async (req, res) => {
   try { res.json(await require('../../engine/library-health').report()); } catch (e) { res.status(500).json({ error: e.message }); }
