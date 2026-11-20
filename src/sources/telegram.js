@@ -270,16 +270,28 @@ async function fetchChannel(feed, ctx) {
   const msgs = [];
   // The day's download budget (settings platformDailyMb). Each message's projected size is reserved against a shared
   // counter before it is listed, so concurrent slots cannot each snapshot the same remainder and overshoot the ceiling
-  // (Crucible w17 / v4.25.0). The claim stays until that item's materialize/discard finishes (or the message is skipped).
+  // (Crucible w17 / v4.25.0). Claims stay until materialize/discard, or `_releaseBudget` frees leftovers on abnormal ends.
+  // DEFAULT_UNKNOWN_BYTES: when Telegram omits size, assume a conservative video-sized claim so unreserved downloads
+  // cannot blow past the cap (Crucible residual: 15 unknown-size videos charged 15 MB against a 2 MB ceiling).
+  const DEFAULT_IMAGE_BYTES = 1.5 * 1048576;
+  const DEFAULT_UNKNOWN_BYTES = 10 * 1048576;
+  const pendingReleases = [];
+  const releaseAll = () => { while (pendingReleases.length) { try { pendingReleases.pop()(); } catch { /* ignore */ } } };
   if (budget.bytesLeft('telegram') <= 0) {
-    return { items: [], profile, via: 'mtproto', cursor: { ...cur, profiled: true, ...(ch.about ? { about: String(ch.about).slice(0, 500) } : {}) }, notes: ['Telegram daily download budget reached: resumes tomorrow (Admin → Settings → platformDailyMb)'], skipped: {} };
+    return { items: [], profile, via: 'mtproto', cursor: { ...cur, profiled: true, ...(ch.about ? { about: String(ch.about).slice(0, 500) } : {}) }, notes: ['Telegram daily download budget reached: resumes tomorrow (Admin → Settings → platformDailyMb)'], skipped: {}, _releaseBudget: () => {} };
   }
+  const projectedSize = (d) => {
+    if (!d || d.skip) return 0;
+    const reported = Number(d.size);
+    if (reported > 0) return reported;
+    return d.type === 'image' ? DEFAULT_IMAGE_BYTES : DEFAULT_UNKNOWN_BYTES;
+  };
+  try {
   const fit = (list) => {
     const out = [];
     for (const m of list) {
       const d = mt.describeMedia(m);
-      // The largest rendition's byte size comes with the message; 1.5 MB is assumed only when Telegram does not report one.
-      const size = d && !d.skip ? (Number(d.size) || (d.type === 'image' ? 1.5 * 1048576 : 0)) : 0;
+      const size = projectedSize(d);
       if (size > 0) {
         const claim = budget.reserveBytes('telegram', size);
         if (!claim.ok) break;
@@ -319,6 +331,7 @@ async function fetchChannel(feed, ctx) {
     if (!release) return it;
     let doneRelease = false;
     const once = () => { if (!doneRelease) { doneRelease = true; try { release(); } catch { /* ignore */ } } };
+    pendingReleases.push(once);
     const prevStage = it.stage;
     const prevMat = it.materialize;
     const prevDisc = it.discard;
@@ -331,6 +344,7 @@ async function fetchChannel(feed, ctx) {
     it.discard = async () => {
       try { if (prevDisc) await prevDisc(); } finally { once(); }
     };
+    it._budgetRelease = once;
     return it;
   };
   for (const msg of msgs) {
@@ -353,7 +367,14 @@ async function fetchChannel(feed, ctx) {
     cursor: { newestId, oldestId, done, backfilled, profiled: true, ...(ch.about ? { about: String(ch.about).slice(0, 500) } : {}) },
     notes,
     skipped,
+    // Engine calls this in a run-level finally so abort / item-deadline / ownerGone / filtered-out items
+    // cannot leave reservations held until process restart (Crucible w17 nit).
+    _releaseBudget: releaseAll,
   };
+  } catch (e) {
+    releaseAll();
+    throw e;
+  }
 }
 
 async function lookupChannel(target) {
