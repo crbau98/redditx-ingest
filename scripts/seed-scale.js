@@ -36,6 +36,9 @@ const emb = require('../src/lib/embeddings');
 // Bulk load: random-key unique indexes (id, hash, source_key) thrash a small page cache once the table is large.
 db.pragma('cache_size = -600000');
 db.pragma('synchronous = OFF');
+// The serving connection's wal_autocheckpoint = 0 rule (src/db/index.js) applies to this dev file too: without an
+// inline checkpoint the whole seed lands in the WAL (a 300k-row build grew it to ~10 GB before the final TRUNCATE).
+db.pragma('wal_autocheckpoint = 4000');
 
 if (db.prepare('SELECT COUNT(*) AS n FROM media').get().n > 0 || db.prepare('SELECT COUNT(*) AS n FROM creators').get().n > 0) {
   console.error('Refusing to seed: the database already has rows. Point DB_PATH at a new file.');

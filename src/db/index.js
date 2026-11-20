@@ -27,11 +27,12 @@ db.pragma('temp_store = MEMORY');
 // WAL tuning for a write-heavy ingest on a small box. The serving connection NEVER checkpoints inline (wal_autocheckpoint = 0):
 // with the default rule the commit that crossed the page threshold copied up to 4000 pages (16 MB) to the data volume before it
 // returned, on the event loop, and a one-row UPDATE showed up as a 1.4 s block. engine/checkpoint.js runs the checkpoint on a worker
-// thread instead (PASSIVE: it never blocks a writer), and the nightly backup worker checkpoints as well. The WAL is capped at 256 MB
-// after a checkpoint so a long ingestion cannot grow it without bound. Tests and :memory: keep SQLite's own rule.
+// thread instead (PASSIVE: it never blocks a writer), and the nightly backup worker checkpoints as well. After a checkpoint resets
+// the log, the first commit truncates the WAL to journal_size_limit (64 MB, WAL_JOURNAL_LIMIT_MB): the 2026-11-18 patrol found it
+// parked at the old 256 MB limit because a RESTART was only ever tried past 1 GB. Tests and :memory: keep SQLite's own rule.
 if (!READONLY) {
   db.pragma(config.isTest || config.dbPath === ':memory:' || process.env.PRISM_AUTOCHECKPOINT === '1' ? 'wal_autocheckpoint = 4000' : 'wal_autocheckpoint = 0');
-  db.pragma('journal_size_limit = 268435456');
+  db.pragma(`journal_size_limit = ${Math.max(1, Number(process.env.WAL_JOURNAL_LIMIT_MB) || 64) * 1048576}`);
 }
 
 // Deterministic pseudo-random order that is stable for a given seed, so
