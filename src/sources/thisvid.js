@@ -66,6 +66,7 @@ function videoPage(html, fallback = {}) {
   const title = decodeHtml((/video_title:\s*'((?:\\'|[^'])*)'/i.exec(h)
     || /<meta[^>]*property="og:title"[^>]*content="([^"]*)"/i.exec(h)
     || /<title>([^<]*)<\/title>/i.exec(h) || [])[1] || '')
+    .replace(/\\'/g, "'")
     .replace(/\s*-\s*ThisVid\.com\s*$/i, '').trim();
   const poster = absUrl(decodeHtml((/preview_url:\s*'([^']+)'/i.exec(h)
     || /<meta[^>]*property="og:image"[^>]*content="([^"]*)"/i.exec(h) || [])[1] || ''));

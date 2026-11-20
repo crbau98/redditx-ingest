@@ -102,6 +102,14 @@ test('video page reads the signed MP4 and poster from flashvars', () => {
   assert.deepEqual(page.tags, ['muscle', 'amateur']);
 });
 
+test('KVS title backslash escapes are normalized (Bob\\\'s → Bob\'s)', () => {
+  const html = `<html><body><script>var flashvars = {
+    video_id: '1', video_title: 'Bob\\'s Clip', video_categories: 'gay', video_tags: '',
+    video_url: 'https://thisvid.com/get_file/5/x.mp4', preview_url: '//static.thisvid.com/p.jpg',
+  };</script></body></html>`;
+  assert.equal(thisvid._videoPage(html).title, "Bob's Clip");
+});
+
 test('fetch: reads the member list then each allowed video page', async () => {
   pages.clear();
   pages.set(MEMBER, memberHtml({ name: 'Happymouth', videos: ['demo-clip', 'other'] }));

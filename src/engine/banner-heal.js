@@ -49,7 +49,8 @@ async function heal({
   const db = repo.db;
   const top = (db.prepare('SELECT MAX(seq) AS m FROM media').get() || {}).m || 0;
   const start = Math.max(0, Number(afterSeq) || 0);
-  const cap = Math.max(0, Number.isFinite(Number(limit)) ? Number(limit) : Infinity);
+  // limit <= 0 means "no cap" (matches the HTTP route's limit=0 → Infinity); a positive limit chunks the walk.
+  const cap = !Number.isFinite(Number(limit)) || Number(limit) <= 0 ? Infinity : Number(limit);
   const creatorClause = creatorId ? ' AND creator_id = ?' : '';
   const params = (after, to) => (creatorId ? [after, to, creatorId] : [after, to]);
   const stmt = db.prepare(`SELECT id, creator_id, platform, media_type, preview_url, thumbnail_url, thumb_url, tint, seq

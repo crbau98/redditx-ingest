@@ -73,6 +73,8 @@ test('a bunkr album URL pasted anywhere becomes an ingestible feed (lib/links)',
   assert.equal(p.kind, 'album');
   assert.equal(p.ingestable, true);
   assert.equal(links.parseProfile(FILE1).kind, 'file');
+  // Unlisted TLDs must not become dead bunkr feeds (adapter HOSTS is the source of truth).
+  assert.notEqual(links.parseProfile('https://bunkr.xyz/a/snOgRJpi').platform, 'bunkr');
 });
 
 test('album page lists file slugs; file page exposes numeric id', () => {

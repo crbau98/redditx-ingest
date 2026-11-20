@@ -83,6 +83,18 @@ test('admin endpoint is dry unless ?apply=1', async () => {
   await new Promise((r) => server.close(r));
 });
 
+test('direct heal({limit:0}) means no cap (not a one-row walk)', async () => {
+  const ids = [];
+  for (let i = 0; i < 3; i++) {
+    const id = `lim0-${i}-${crypto.randomUUID().slice(0, 6)}`;
+    ids.push(id);
+    add(id, { preview: `https://img.coomer.st/banners/onlyfans/lim0${i}` });
+  }
+  const dry = await heal.heal({ dryRun: true, creatorId: creator.id, limit: 0, afterSeq: 0 });
+  assert.ok(dry.wouldClear >= 3, `limit 0 must not stop after one row: ${dry.wouldClear}`);
+  assert.equal(dry.done, true);
+});
+
 test('chunked heal: afterSeq+limit resumes; second chunk finishes', async () => {
   const ids = [];
   for (let i = 0; i < 5; i++) {
