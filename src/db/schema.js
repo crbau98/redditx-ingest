@@ -1104,6 +1104,20 @@ function v39(db) {
 }
 v39.ddlOnly = true;
 
+/**
+ * v40: the admin sources scoreboard's creator count (repo.runs.scoreboard) read the 7-day ingest window through
+ * ix_media_state and looked up creator_id and platform in the table for EVERY row: ~69k random reads on the production
+ * library, 432 ms warm but one 34.9 s event-loop block when the volume's page cache was cold (2026-11-18 patrol;
+ * reproduced at 2.3 s on a cold local SSD copy of a 300k-row synthetic library). A covering partial index answers the
+ * same query from the index alone: one sequential range scan, no table lookups, ~700 pages instead of ~60k.
+ */
+function v40(db) {
+  db.exec(`CREATE INDEX IF NOT EXISTS ix_media_pub_ingested_creator
+    ON media(ingested_at, platform, creator_id)
+    WHERE publish_state = 'published' AND creator_id IS NOT NULL`);
+}
+v40.ddlOnly = true;
+
 function v35(db) {
   const { orderNames } = require('../lib/creator-names');
   const rows = db.prepare("SELECT id, handle, display_name FROM creators WHERE handle LIKE '% %'").all();
@@ -1116,7 +1130,7 @@ function v35(db) {
   if (n && process.env.NODE_ENV !== 'test') console.log(`[migrate] v35: ${n} creator(s) had handle and display name swapped; fixed`);
 }
 
-const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31, v32, v33, v34, v35, v36, v37, v38, v39];
+const MIGRATIONS = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31, v32, v33, v34, v35, v36, v37, v38, v39, v40];
 
 function migrate(db) {
   const current = db.pragma('user_version', { simple: true });
