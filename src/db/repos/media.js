@@ -273,6 +273,12 @@ function boundedCount(sql, args, cap = COUNT_CAP) {
   return out;
 }
 const relatedCache = new Map(); // tags|mode|limit -> { lib, value } (valid while the library snapshot is the same object)
+// "More like this": the tag co-occurrence join is the expensive step (p95 69 ms, one 130 ms loop block on a 300k-row
+// library). Only the ranked candidate ids are cached, for the same short TTL the aggregates use; visibility is still
+// checked against the database on every request, so a hidden post or a blocked creator drops out at once (the same
+// invariant visual.similar keeps). Repeat looks at one item — the viewer's normal back-and-forth — skip the join.
+const relatedRankCache = new Map(); // media id -> { at, ranked }
+const RELATED_RANK_TTL_MS = 60000;
 
 /** Listeners told when a picture's publish state changes (the perceptual-duplicate index keeps itself current this way). */
 const stateHooks = [];
@@ -585,10 +591,17 @@ const media = {
     take(own, Math.max(3, Math.ceil(limit / 3)));
     if (out.length < limit) {
       // Very common tags would join against most of the library and say little; skip them.
-      const ranked = db.prepare(`SELECT mt2.media_id AS id, SUM(1.0 / ln(2 + t.usage_count)) AS w
-          FROM media_tags mt1 JOIN tags t ON t.id = mt1.tag_id JOIN media_tags mt2 ON mt2.tag_id = mt1.tag_id
-          WHERE mt1.media_id = ? AND mt2.media_id != ? AND t.usage_count <= 5000 AND t.name NOT IN (${PLATFORM_TAGS_SQL}, 'gay', 'nsfw', 'video', 'photo', 'image')
-          GROUP BY mt2.media_id ORDER BY w DESC LIMIT 80`).all(id, id);
+      const hit = relatedRankCache.get(id);
+      let ranked;
+      if (hit && Date.now() - hit.at < RELATED_RANK_TTL_MS) ranked = hit.ranked;
+      else {
+        ranked = db.prepare(`SELECT mt2.media_id AS id, SUM(1.0 / ln(2 + t.usage_count)) AS w
+            FROM media_tags mt1 JOIN tags t ON t.id = mt1.tag_id JOIN media_tags mt2 ON mt2.tag_id = mt1.tag_id
+            WHERE mt1.media_id = ? AND mt2.media_id != ? AND t.usage_count <= 5000 AND t.name NOT IN (${PLATFORM_TAGS_SQL}, 'gay', 'nsfw', 'video', 'photo', 'image')
+            GROUP BY mt2.media_id ORDER BY w DESC LIMIT 80`).all(id, id);
+        if (relatedRankCache.size > 500) relatedRankCache.clear();
+        relatedRankCache.set(id, { at: Date.now(), ranked });
+      }
       if (ranked.length) {
         const byId = new Map(db.prepare(`${MEDIA_SELECT} WHERE m.id IN (${ranked.map(() => '?').join(',')}) AND ${pub}`).all(...ranked.map((r) => r.id)).map((r) => [r.id, r]));
         // Variety: no more than two from any one other creator.
@@ -604,9 +617,14 @@ const media = {
     if (out.length < limit && m.creator_id) {
       const near = require('../../lib/similarity').neighbours(library(), GENERIC_TAGS, m.creator_id, 6).map(([cid]) => cid);
       if (near.length) {
-        take(db.prepare(`SELECT * FROM (SELECT m.*, c.handle AS creator_handle, c.display_name AS creator_name, c.avatar_url AS creator_avatar,
-            ROW_NUMBER() OVER (PARTITION BY m.creator_id ORDER BY m.score DESC) AS rn
-          FROM media m LEFT JOIN creators c ON c.id = m.creator_id WHERE m.creator_id IN (${near.map(() => '?').join(',')}) AND ${pub}) WHERE rn <= 2 ORDER BY rn, score DESC`).all(...near).map((r) => { delete r.rn; return r; }));
+        // Two best per similar creator, through ix_media_creator_top: six bounded seeks (a few rows each) instead of
+        // one ROW_NUMBER window over every row those creators ever posted (75 ms on a 300k-row library when the near
+        // creators are prolific, on every call). Same rows, same order: rn 1..2 per creator, then rn, score DESC.
+        const q = db.prepare(`${MEDIA_SELECT} WHERE m.creator_id = ? AND ${pub} ORDER BY m.score DESC LIMIT 2`);
+        const nearRows = [];
+        for (const cid of near) q.all(cid).forEach((r, i) => nearRows.push({ r, rn: i + 1 }));
+        nearRows.sort((a, b) => a.rn - b.rn || b.r.score - a.r.score);
+        take(nearRows.map((x) => x.r));
       }
     }
     if (out.length < limit) take(own);
@@ -681,5 +699,5 @@ const media = {
     return o;
   },
 };
-  return { ftsQuery, serializeMedia, cachedCount, relatedCache, notifyBlocked, notifyState, media };
+  return { ftsQuery, serializeMedia, cachedCount, relatedCache, relatedRankCache, notifyBlocked, notifyState, media };
 };
