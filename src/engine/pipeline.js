@@ -103,7 +103,7 @@ function noteImageStrike(item, feed) {
   const strikes = repo.db.prepare("SELECT COUNT(*) AS n FROM moderation_actions WHERE target_type = 'account' AND target_id = ? AND action = 'image-female'").get(key).n;
   if (strikes < IMAGE_STRIKES_TO_BLOCK) return;
   const reason = `image filter: ${strikes} pictures with women`;
-  if (isAutomaticOrigin(feed.origin) && ownedByFeed(item, feed)) return quarantineFeed(item, feed, reason); // the account is wrong, not the creator it was attached to
+  if (isAutomaticOrigin(feed.origin) && feedImplicated(item, feed)) return quarantineFeed(item, feed, reason); // the account is wrong, not the creator it was attached to
   const creator = (ownedByFeed(item, feed) ? repo.creators.get(feed.creator_id) : null) || repo.creators.byAccount(feed.platform, handle);
   if (creator && creator.status === 'active') {
     // A creator explicitly added by admin/lookup or with >15 published posts is not auto-blocked by 3 face-model false positives.
@@ -121,6 +121,17 @@ function quarantineFeed(item, feed, reason) {
 }
 
 /**
+ * Does female evidence on this automatic feed implicate the FEED (quarantine it) rather than the creator?
+ * Media-owning feeds own the item (accounts, mirrors); a `page` feed never owns items since v4.23.6 (proof required),
+ * but it was still attached to the creator by an automatic origin (cbir, coverage, …) — the feed itself is the bad
+ * unit there and must quarantine even though its items are held/reviewed separately.
+ */
+function feedImplicated(item, feed) {
+  if (feed.kind === 'page') return !!feed.creator_id || ownedByFeed(item, feed);
+  return ownedByFeed(item, feed);
+}
+
+/**
  * Block the creator behind an item whose own profile text is female / feminine, and remember the account.
  * Only when the evidence is on the creator's OWN profile. For a feed PRISM attached on its own, the feed is quarantined instead.
  */
@@ -128,7 +139,7 @@ function blockFemaleCreator(item, feed, rule) {
   const handle = cleanHandle(item.author);
   const key = handle && `${feed.platform}:${handle.toLowerCase()}`;
   const reason = `scope: ${rule || 'female'} (profile)`;
-  if (isAutomaticOrigin(feed.origin) && ownedByFeed(item, feed)) return quarantineFeed(item, feed, reason);
+  if (isAutomaticOrigin(feed.origin) && feedImplicated(item, feed)) return quarantineFeed(item, feed, reason);
   let creator = null;
   if (ownedByFeed(item, feed)) creator = repo.creators.get(feed.creator_id);
   else if (handle) creator = repo.creators.byAccount(feed.platform, handle);
